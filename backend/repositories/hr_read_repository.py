@@ -57,6 +57,14 @@ def list_formation_modules(
                        m.voice_type, m.voice_updated_at,
                        m.teacher_name, m.teacher_color, m.asset_namespace,
                        m.immutable,
+                       m.nb_days, m.schedule_schema_version, m.schedule_hash,
+                       m.schedule_locked_at, m.reusable_at,
+                       (
+                           SELECT COUNT(*)
+                           FROM formation_module_days module_day
+                           WHERE module_day.module_id = m.id
+                             AND module_day.center_account_id = m.center_account_id
+                       ) AS module_day_count,
                        (
                            SELECT COUNT(*)
                            FROM formation_module_assets asset
@@ -203,13 +211,7 @@ def list_platforms(
                         WHERE cs.platform_id = pc.id
                           AND cs.status IN ('planned', 'active')
                           AND cs.scheduled_at >= NOW()
-                    ) AS remaining_session_count,
-                    (
-                        SELECT COUNT(*)
-                        FROM deletion_requests dr
-                        WHERE dr.platform_id = pc.id
-                          AND dr.status = 'pending'
-                    ) AS pending_deletion_count
+                    ) AS remaining_session_count
                 FROM platform_config pc
                 LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
                 LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id

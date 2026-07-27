@@ -48,7 +48,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
             ],
         }
 
-        with patch.object(cgs, "_anthropic_post", return_value=words(99)):
+        with patch.object(cgs, "_deepseek_post", return_value=words(99)):
             calibrated_text, calibration = cgs._calibrate_structured_course_sections(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -65,7 +65,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         section = {"kind": "opening", "title": "Intro", "target_words": 100}
         short_text = words(60)
 
-        with patch.object(cgs, "_anthropic_post", return_value=short_text):
+        with patch.object(cgs, "_deepseek_post", return_value=short_text):
             calibrated_text, calibration = cgs._calibrate_structured_section_text(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan={
@@ -93,7 +93,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         }
         current_text = f"{words(80)}\n\nConclusion {words(5)}"
 
-        with patch.object(cgs, "_anthropic_post", return_value=words(60)):
+        with patch.object(cgs, "_deepseek_post", return_value=words(60)):
             repaired_text, repair = cgs._repair_structured_course_text_to_budget(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -113,7 +113,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         }
         current_text = f"{words(80)}\n\nConclusion {words(5)}"
 
-        with patch.object(cgs, "_anthropic_post", side_effect=[words(500), words(60)]):
+        with patch.object(cgs, "_deepseek_post", side_effect=[words(500), words(60)]):
             repaired_text, repair = cgs._repair_structured_course_text_to_budget(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -172,7 +172,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
             },
         ]
 
-        with patch.object(cgs, "_anthropic_post", side_effect=[words(80), words(60)]):
+        with patch.object(cgs, "_deepseek_post", side_effect=[words(80), words(60)]):
             repaired_text, repaired_sections, repair = cgs._repair_structured_course_sections_to_budget(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -248,7 +248,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         with (
             patch.dict("os.environ", {"FORMATION_STRUCTURED_COURSE_DEFICIT_REPAIR_MAX_ATTEMPTS": "0"}),
             patch.object(cgs, "_calibrate_structured_section_text", side_effect=keep_section_text),
-            patch.object(cgs, "_anthropic_post", return_value=words(60)),
+            patch.object(cgs, "_deepseek_post", return_value=words(60)),
         ):
             calibrated_text, calibration = cgs._calibrate_structured_course_sections(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
@@ -313,7 +313,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
             ],
         }
 
-        with patch.object(cgs, "_anthropic_post", side_effect=[words(150), words(245)]):
+        with patch.object(cgs, "_deepseek_post", side_effect=[words(150), words(245)]):
             calibrated_text, calibration = cgs._calibrate_structured_course_sections(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,

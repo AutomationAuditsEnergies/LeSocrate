@@ -11,6 +11,9 @@ from typing import Any
 import uuid
 
 from database.postgres import get_postgres_connection
+from repositories.teacher_asset_repository import (
+    get_module_audio_manifest_readiness,
+)
 
 
 def _enqueue_fulfillment_in_transaction(cur, order: dict[str, Any]) -> dict[str, Any]:
@@ -190,23 +193,45 @@ def get_center_billing_account(center_account_id: int) -> dict[str, Any] | None:
 
 
 def get_reusable_module(module_id: int, center_account_id: int) -> dict[str, Any] | None:
+    module = None
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT m.id, m.tp_name, m.rncp_code, j.total_hours,
                        m.source_platform_id, m.source_pipeline_job_id, m.status,
-                       m.voice_type,
+                       m.voice_type, m.nb_days, m.schedule_schema_version,
+                       m.schedule_hash, m.schedule_locked_at, m.reusable_at,
                        (SELECT COUNT(*) FROM cours_folders cf
-                        WHERE cf.platform_id = m.source_platform_id) AS nb_folders
+                        WHERE cf.platform_id = m.source_platform_id) AS nb_folders,
+                       (SELECT COUNT(*) FROM formation_module_days md
+                        WHERE md.module_id = m.id
+                          AND md.center_account_id = m.center_account_id) AS module_day_count
                 FROM formation_modules m
                 LEFT JOIN formation_pipeline_jobs j ON j.id = m.source_pipeline_job_id
                 WHERE m.id = %s
                   AND m.center_account_id = %s
+                  AND m.status = 'validated'
+                  AND m.immutable = TRUE
+                  AND m.reusable_at IS NOT NULL
+                  AND m.reusable_at <= NOW()
+                  AND m.archived_at IS NULL
+                  AND m.voice_type IS DISTINCT FROM 'mock'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM cours_folders reusable_folder
+                      WHERE reusable_folder.platform_id = m.source_platform_id
+                  )
                 """,
                 (int(module_id), int(center_account_id)),
             )
-            return cur.fetchone()
+            module = cur.fetchone()
+    if not module:
+        return None
+    readiness = get_module_audio_manifest_readiness(int(module["id"]))
+    if not readiness.get("ready"):
+        return None
+    return module
 
 
 def create_order(values: dict[str, Any]) -> tuple[dict[str, Any], bool]:

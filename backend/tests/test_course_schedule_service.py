@@ -266,6 +266,69 @@ class CourseScheduleServiceTest(unittest.TestCase):
         self.assertTrue(plan["changes"][0]["new_scheduled_at"].startswith("2026-07-17T14:30"))
         self.assertEqual(len(plan["changes"]), 1)
 
+    def test_v2_postponement_preview_is_rejected_before_legacy_weekday_normalization(self):
+        rows = [{
+            "id": 22,
+            "session_index": 2,
+            "scheduled_at": "2030-07-16 09:00:00",
+            "status": "planned",
+            "module_day_id": 301,
+            "local_date": "2030-07-16",
+        }]
+        with (
+            patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(css, "get_course_schedule_summary", return_value={
+                "schedule_schema_version": 2,
+                "weekly_course_count": 0,
+                "weekdays": [],
+                "start_time": "09:00",
+            }),
+            patch.object(css.schedule_repo, "list_course_sessions", return_value=rows),
+            patch.object(
+                css,
+                "_normalize_weekdays",
+                side_effect=AssertionError("legacy normalization must not run"),
+            ) as normalize_weekdays,
+        ):
+            with self.assertRaisesRegex(ValueError, "planning V2"):
+                css.preview_course_session_postponement(
+                    12,
+                    22,
+                    mode="next_occurrence",
+                )
+
+        normalize_weekdays.assert_not_called()
+
+    def test_v2_postponement_is_rejected_without_mutating_sessions(self):
+        rows = [{
+            "id": 22,
+            "session_index": 2,
+            "scheduled_at": "2030-07-16 09:00:00",
+            "status": "planned",
+            "module_day_id": 301,
+            "local_date": "2030-07-16",
+        }]
+        with (
+            patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(css.schedule_repo, "get_course_session_postponement_by_key", return_value=None),
+            patch.object(css, "get_course_schedule_summary", return_value={
+                "weekly_course_count": 0,
+                "weekdays": [],
+                "start_time": "09:00",
+            }),
+            patch.object(css.schedule_repo, "list_course_sessions", return_value=rows),
+            patch.object(css.schedule_repo, "apply_course_session_postponement") as apply_postponement,
+        ):
+            with self.assertRaisesRegex(ValueError, "pas encore pris en charge"):
+                css.postpone_course_session(
+                    12,
+                    22,
+                    mode="next_occurrence",
+                    idempotency_key="v2-report-22",
+                )
+
+        apply_postponement.assert_not_called()
+
     def test_fixed_09_policy_rejects_custom_postponement_time(self):
         now = FRANCE_TZ.localize(datetime(2026, 7, 16, 8, 0))
         rows = [

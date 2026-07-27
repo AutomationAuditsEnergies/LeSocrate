@@ -24,10 +24,10 @@ from services.content_pipeline.artifacts import (
     save_script_review_markdown,
     script_review_markdown_locator,
 )
-from utils.anthropic_client import (
+from utils.deepseek_client import (
     DEEPSEEK_DEFAULT_MODEL,
-    AnthropicAPIError,
-    AnthropicRateLimitError,
+    DeepSeekAPIError,
+    DeepSeekRateLimitError,
     post_message,
 )
 
@@ -195,7 +195,7 @@ def build_script_annotations_markdown(folder_id: int) -> tuple[str, str]:
         "",
         "## Consigne pour l'agent de correction",
         "",
-        "Relire les annotations dans l'ordre, retrouver chaque extrait dans le script TTS source, appliquer le commentaire sans changer le niveau RNCP ni le ton oral, puis marquer les segments corriges comme dirty avant de relancer la generation audio. Utiliser DeepSeek via le client Anthropic-compatible deja configure si une correction automatique est lancee.",
+        "Relire les annotations dans l'ordre, retrouver chaque extrait dans le script TTS source, appliquer le commentaire sans changer le niveau RNCP ni le ton oral, puis marquer les segments corriges comme dirty avant de relancer la generation audio. Utiliser le client DeepSeek deja configure si une correction automatique est lancee.",
         "",
         "## Annotations",
         "",
@@ -340,8 +340,8 @@ def delete_script_annotation(folder_id: int, annotation_id: int) -> dict:
 def correct_paragraph_with_llm(paragraph: str, selected_text: str, comment: str) -> str:
     """Réécrit `paragraph` en appliquant `comment` sur `selected_text`.
 
-    Retourne le paragraphe corrigé en texte brut. Lève AnthropicAPIError /
-    AnthropicRateLimitError si l'appel échoue.
+    Retourne le paragraphe corrigé en texte brut. Lève DeepSeekAPIError /
+    DeepSeekRateLimitError si l'appel échoue.
     """
     paragraph = (paragraph or "").strip()[:MAX_PARAGRAPH_CHARS]
     selected_text = (selected_text or "").strip()[:MAX_SELECTED_TEXT_CHARS]
@@ -387,7 +387,7 @@ def _attach_correction(annotation_id: int, folder_id: int, job_id: int, *,
         corrected = correct_paragraph_with_llm(paragraph, selected_text, comment)
         new_status = "proposed" if corrected else "error"
         error_msg = "" if corrected else "DeepSeek a renvoyé une réponse vide"
-    except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+    except (DeepSeekAPIError, DeepSeekRateLimitError) as exc:
         corrected = ""
         new_status = "error"
         error_msg = str(exc)

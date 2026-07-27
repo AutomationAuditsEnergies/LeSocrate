@@ -35,6 +35,14 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
         app.secret_key = "tenant-scope-test"
         app.register_blueprint(formation_bp)
         self.client = app.test_client()
+        self.permission_patch = patch(
+            "routes.formation_routes.can_access_formation_pipeline",
+            return_value=True,
+        )
+        self.permission_patch.start()
+
+    def tearDown(self):
+        self.permission_patch.stop()
 
     def _login(self, account_type="training_center", account_id=10):
         with self.client.session_transaction() as session:
@@ -193,7 +201,7 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
         self.assertEqual(public_response.status_code, 403)
         self.assertEqual(unknown_response.status_code, 403)
 
-    def test_superadmin_types_are_unscoped(self):
+    def test_legacy_and_superadmin_types_cannot_access_pipeline(self):
         for account_type in ("legacy_admin", "superadmin"):
             with self.subTest(account_type=account_type):
                 self._login(account_type=account_type, account_id=None)
@@ -205,11 +213,11 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
                 ):
                     response = self.client.get("/api/formation/42")
 
-                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.status_code, 403)
                 belongs.assert_not_called()
 
     def test_folder_job_mismatch_is_hidden_before_text_blob_docx_or_reports(self):
-        self._login(account_type="superadmin", account_id=None)
+        self._login(account_type="training_center", account_id=10)
         urls = (
             "/api/formation/42/content/99/text",
             "/api/formation/42/content/99/artifact/content-plan.json",
@@ -218,6 +226,9 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             "/api/formation/42/content/99/humanization-report",
         )
         with patch(
+            "repositories.pipeline_repository.pipeline_job_belongs_to_center",
+            return_value=True,
+        ), patch(
             "repositories.pipeline_repository.course_folder_belongs_to_job",
             return_value=False,
         ) as belongs, patch("routes.formation_routes.get_job") as get_job:
@@ -241,7 +252,7 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
         self.assertNotIn("database unavailable", response.get_data(as_text=True))
         get_job.assert_not_called()
 
-    def test_center_list_is_filtered_and_superadmin_list_is_global(self):
+    def test_center_list_is_filtered_and_legacy_admin_is_forbidden(self):
         self._login(account_id=10)
         with patch(
             "repositories.pipeline_repository.list_pipeline_jobs",
@@ -258,11 +269,26 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             "repositories.pipeline_repository.list_pipeline_jobs",
             return_value=[{"id": 42}, {"id": 43}],
         ) as list_jobs:
-            superadmin_response = self.client.get("/api/formation/list")
+            legacy_response = self.client.get("/api/formation/list")
 
-        self.assertEqual(superadmin_response.status_code, 200)
-        self.assertEqual(len(superadmin_response.get_json()["jobs"]), 2)
-        list_jobs.assert_called_once_with()
+        self.assertEqual(legacy_response.status_code, 403)
+        list_jobs.assert_not_called()
+
+    def test_center_without_pipeline_permission_is_forbidden_before_business_logic(self):
+        self._login(account_id=10)
+        with patch(
+            "routes.formation_routes.can_access_formation_pipeline",
+            return_value=False,
+        ), patch(
+            "repositories.pipeline_repository.pipeline_job_belongs_to_center",
+        ) as belongs, patch(
+            "routes.formation_routes.get_job",
+        ) as get_job:
+            response = self.client.get("/api/formation/42")
+
+        self.assertEqual(response.status_code, 403)
+        belongs.assert_not_called()
+        get_job.assert_not_called()
 
     def test_center_list_without_account_id_is_fail_closed(self):
         self._login(account_id=None)
@@ -271,6 +297,23 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         list_jobs.assert_not_called()
+
+    def test_legacy_claude_code_mission_routes_are_removed(self):
+        self._login(account_id=10)
+        urls = (
+            "/api/formation/42/missions/kb/export",
+            "/api/formation/42/missions/kb/import",
+            "/api/formation/42/missions/kb/execute",
+            "/api/formation/42/missions/kb/logs",
+            "/api/formation/42/missions/pending",
+        )
+
+        responses = [
+            self.client.get(url) if url.endswith(("logs", "pending")) else self.client.post(url)
+            for url in urls
+        ]
+
+        self.assertEqual([response.status_code for response in responses], [404] * len(urls))
 
 
 class PipelineTenantScopeRepositoryTest(unittest.TestCase):
@@ -318,7 +361,8 @@ class PipelineTenantScopeRepositoryTest(unittest.TestCase):
             INSERT INTO cours_folders VALUES
                 (101, 1, 'Jour A', 0, 41),
                 (102, 2, 'Jour B', 0, 42),
-                (103, 1, 'Orphelin', 1, NULL);
+                (103, 1, 'Orphelin', 1, NULL),
+                (104, 2, 'Lien job incohérent', 2, 41);
             """
         )
         conn.commit()
@@ -349,6 +393,7 @@ class PipelineTenantScopeRepositoryTest(unittest.TestCase):
         self.assertTrue(repo.course_folder_belongs_to_job(101, 41))
         self.assertFalse(repo.course_folder_belongs_to_job(101, 42))
         self.assertFalse(repo.course_folder_belongs_to_job(103, 41))
+        self.assertFalse(repo.course_folder_belongs_to_job(104, 41))
         self.assertFalse(repo.course_folder_belongs_to_job(999, 41))
 
     def test_list_jobs_filters_by_center_and_can_combine_platform(self):

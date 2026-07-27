@@ -14,11 +14,28 @@ class FormationArtifactRouteTest(unittest.TestCase):
         app.secret_key = "test"
         app.register_blueprint(formation_bp)
         self.client = app.test_client()
+        self.route_patches = [
+            patch(
+                "routes.formation_routes.can_access_formation_pipeline",
+                return_value=True,
+            ),
+            patch(
+                "repositories.pipeline_repository.pipeline_job_belongs_to_center",
+                return_value=True,
+            ),
+        ]
+        for route_patch in self.route_patches:
+            route_patch.start()
+
+    def tearDown(self):
+        for route_patch in reversed(self.route_patches):
+            route_patch.stop()
 
     def test_artifact_route_uses_pipeline_repository_folder_lookup(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
-            sess["admin_account_type"] = "legacy_admin"
+            sess["admin_account_type"] = "training_center"
+            sess["admin_account_id"] = 12
 
         with patch(
             "routes.formation_routes.get_job",
@@ -51,7 +68,8 @@ class FormationArtifactRouteTest(unittest.TestCase):
     def test_content_list_uses_pipeline_repository_counts(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
-            sess["admin_account_type"] = "legacy_admin"
+            sess["admin_account_type"] = "training_center"
+            sess["admin_account_id"] = 12
 
         job = {
             "id": 8,
@@ -112,7 +130,8 @@ class FormationArtifactRouteTest(unittest.TestCase):
     def test_docx_route_uses_migrated_docx_service(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
-            sess["admin_account_type"] = "legacy_admin"
+            sess["admin_account_type"] = "training_center"
+            sess["admin_account_id"] = 12
 
         with patch(
             "routes.formation_routes.get_job",

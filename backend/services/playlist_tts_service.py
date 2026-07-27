@@ -1,9 +1,12 @@
-"""
-Pipeline TTS complète : PDFs d'un dossier → 19 fichiers MP3 conformes à la playlist.
+"""Pipeline TTS historique V1 : PDFs d'un dossier → 19 fichiers MP3.
 
-Étapes :
+Les dossiers V2 n'empruntent jamais ce générateur : ils passent par
+``content_generation_service.generate_audio_from_script`` avec leur manifeste
+immuable. Ce module reste volontairement fixe pour relire les formations V1.
+
+Étapes V1 :
 1. Télécharger et concaténer tous les PDFs du dossier
-2. Appeler Claude pour reformuler en 7 blocs cours (calibration 165,7 mots/min)
+2. Appeler DeepSeek pour reformuler en 7 blocs cours (calibration 165,7 mots/min)
 3. Générer les textes Q&A et pauses
 4. TTS fish.audio pour chaque fichier
 5. Ajuster la durée avec pydub (silence padding)
@@ -16,7 +19,7 @@ import re
 from pydub import AudioSegment
 from pydub.generators import Sine
 from utils.logger import get_logger
-from utils.anthropic_client import default_model, post_message as _llm_post
+from utils.deepseek_client import default_model, post_message as _llm_post
 from services.tts_service import convert_to_speech, extract_text_from_pdf, extract_text_from_file
 from services.azure_blob_service import (
     upload_blob, download_blob, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS,
@@ -30,7 +33,7 @@ LLM_MODEL = default_model()
 
 WORDS_PER_MINUTE = 165.7  # Fish Audio mesuré : 11 959 mots = 72,2 min à speed=0.90
 
-# Les 19 fichiers de la playlist avec leurs durées en secondes
+# Les 19 fichiers immuables du contrat historique V1
 PLAYLIST_SPEC = [
     # (filename, duration_seconds, type, bloc_number)
     # === BLOC 1 ===
@@ -177,7 +180,7 @@ def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_
     return output.getvalue()
 
 
-# ─── Claude API : reformulation bloc par bloc ───────────────────────────────
+# ─── DeepSeek API : reformulation bloc par bloc ─────────────────────────────
 
 def _count_words_excluding_tags(text):
     """Compte les mots en excluant les tags [entre crochets] du décompte."""
@@ -185,13 +188,13 @@ def _count_words_excluding_tags(text):
     return len(cleaned.split())
 
 
-def _call_claude_reformulate(course_text, progress_callback=None):
+def _call_deepseek_reformulate(course_text, progress_callback=None):
     """
-    Appelle Claude pour reformuler le cours en 7 blocs.
+    Appelle DeepSeek pour reformuler le cours en 7 blocs.
 
     Logique :
     - On avance dans le texte source séquentiellement
-    - Claude reformule fidèlement le contenu, il ne DOIT PAS inventer ou étirer
+    - DeepSeek reformule fidèlement le contenu, sans inventer ni étirer
     - Si le contenu s'épuise avant le bloc 7, les blocs restants sont vides
     - Si du contenu reste après le bloc 7, on le signale dans le résultat
     """
@@ -202,7 +205,7 @@ def _call_claude_reformulate(course_text, progress_callback=None):
     logger.info(f"📝 Texte source: {total_source_words} mots")
 
     # On découpe le source en 7 parts proportionnelles aux durées
-    # Mais c'est juste une SUGGESTION — Claude utilise ce qu'il y a, pas plus
+    # C'est une suggestion : DeepSeek utilise le contenu disponible, pas plus.
     total_duration = sum(COURS_DURATIONS_MIN.values())
     cursor = 0  # position dans le texte source
 
@@ -530,7 +533,7 @@ def count_words_in_folder(platform_id, folder_id):
 # ─── Pipeline principale ────────────────────────────────────────────────────
 
 def _generate_mock_blocs():
-    """Retourne 7 blocs courts factices (aucun appel Claude) pour les tests."""
+    """Retourne 7 blocs courts factices, sans appel DeepSeek, pour les tests."""
     mock_topics = [
         "l'introduction du cours", "les fondamentaux", "les méthodes pratiques",
         "les études de cas", "la réglementation", "l'évaluation", "la conclusion",
@@ -583,7 +586,7 @@ def _generate_silence_mp3(duration_sec=1):
 
 def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None, mock=False):
     """
-    Pipeline complète : génère les 19 fichiers MP3 pour un dossier de cours.
+    Pipeline V1 : génère les 19 fichiers MP3 historiques d'un dossier.
 
     Args:
         platform_id: ID de la plateforme
@@ -634,20 +637,23 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
     total_words = len(course_text.split())
     logger.info(f"📝 Texte total: {total_words} mots")
 
-    # ── Étape 3 : reformulation via Claude (ou mock) ──
+    # ── Étape 3 : reformulation via DeepSeek (ou mock) ──
     if mock:
-        progress(3, total_steps, "[MOCK] Génération de blocs factices (0 appel Claude)...")
+        progress(3, total_steps, "[MOCK] Génération de blocs factices (0 appel DeepSeek)...")
         blocs = _generate_mock_blocs()
         remaining_source_words = 0
         logger.info("🧪 MODE MOCK playlist — blocs factices générés")
     else:
-        progress(3, total_steps, f"Reformulation du cours en 7 blocs via Claude ({total_words} mots source)...")
+        progress(3, total_steps, f"Reformulation du cours en 7 blocs via DeepSeek ({total_words} mots source)...")
 
-        def claude_progress(msg):
+        def deepseek_progress(msg):
             # Reformatter le message pour ne pas afficher "(45min)" qui prête à confusion
             progress(3, total_steps, msg)
 
-        blocs, remaining_source_words = _call_claude_reformulate(course_text, progress_callback=claude_progress)
+        blocs, remaining_source_words = _call_deepseek_reformulate(
+            course_text,
+            progress_callback=deepseek_progress,
+        )
 
     # Mapper les blocs par numéro (exclure les blocs vides)
     blocs_by_number = {b["bloc_number"]: b["content"] for b in blocs if b.get("content")}

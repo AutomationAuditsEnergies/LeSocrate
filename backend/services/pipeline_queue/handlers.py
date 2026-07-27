@@ -178,7 +178,6 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
         message=f"Étape auto-pilot démarrée : {step}",
         data={
             "tts_mode": job.get("auto_pilot_tts_mode"),
-            "use_claude_code": bool(job.get("auto_pilot_use_cc")),
             "generate_audio": bool(job.get("auto_pilot_generate_audio")),
             "expected_step": expected_step,
         },

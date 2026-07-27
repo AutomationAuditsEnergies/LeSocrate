@@ -8,7 +8,6 @@ import AppLoader from './components/AppLoader.jsx'
 // Code splitting : les grosses pages restent chargées à la demande, mais les
 // routes du flux apprenant sont préchargées depuis la page d'accueil pour éviter
 // le flash de fallback après validation du formulaire.
-const loadAdminPage = () => import('./pages/Admin.jsx')
 const loadAttentePage = () => import('./pages/Attente.jsx')
 const loadLoginCentrePage = () => import('./pages/LoginCentre.jsx')
 const loadVideoPage = () => import('./pages/Video.jsx')
@@ -17,17 +16,15 @@ const loadClassEntryPage = () => import('./pages/ClassEntry.jsx')
 
 const INTERNAL_ADMIN_TYPES = ['legacy_admin']
 const CENTER_DASHBOARD_TYPES = ['legacy_admin', 'training_center']
+const PIPELINE_ACCOUNT_TYPES = ['training_center']
+const PIPELINE_PERMISSIONS = ['formation_pipeline']
 
-const Admin = lazy(loadAdminPage)
 const Attente = lazy(loadAttentePage)
 const DebugCours = lazy(() => import('./pages/DebugCours.jsx'))
-const Intro = lazy(() => import('./pages/Intro.jsx'))
 const LoginCentre = lazy(loadLoginCentrePage)
 const Landing = lazy(() => import('./pages/Landing.jsx'))
 const Video = lazy(loadVideoPage)
 const TestSlides = lazy(() => import('./pages/TestSlides.jsx'))
-const GeneratedSlides = lazy(() => import('./pages/GeneratedSlides.jsx'))
-const Recorder = lazy(() => import('./pages/Recorder.jsx'))
 const HRDashboard = lazy(loadHRDashboardPage)
 const ScheduleConfig = lazy(() => import('./pages/ScheduleConfig.jsx'))
 const FormationPipeline = lazy(() => import('./pages/FormationPipeline.jsx'))
@@ -286,21 +283,12 @@ export default function App() {
             path="/connexion-centre"
             element={(
               <LoginCentre
-                preloadAdminRoute={loadAdminPage}
                 preloadDashboardRoute={loadHRDashboardPage}
               />
             )}
           />
 
           {/* Routes protégées admin */}
-          <Route
-            path="/admin"
-            element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
-                <Admin />
-              </ProtectedAdminRoute>
-            }
-          />
           <Route
             path="/debug"
             element={
@@ -309,7 +297,6 @@ export default function App() {
               </ProtectedAdminRoute>
             }
           />
-          <Route path="/recorder" element={<Recorder />} />
           <Route
             path="/dashboard-centre"
             element={<CenterDashboardRoute />}
@@ -326,21 +313,15 @@ export default function App() {
           <Route
             path="/formation-pipeline"
             element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
+              <ProtectedAdminRoute
+                allowedAccountTypes={PIPELINE_ACCOUNT_TYPES}
+                requiredPermissions={PIPELINE_PERMISSIONS}
+              >
                 <FormationPipeline />
               </ProtectedAdminRoute>
             }
           />
-          <Route path="/intro" element={<Intro />} />
           <Route path="/test-slides" element={<TestSlides />} />
-          <Route
-            path="/generated-slides"
-            element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
-                <GeneratedSlides />
-              </ProtectedAdminRoute>
-            }
-          />
           <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

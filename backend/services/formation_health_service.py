@@ -2,7 +2,7 @@
 Service de santé / pre-flight de la pipeline formation.
 
 Deux fonctions principales :
-- `compute_preflight(job_id, use_claude_code, tts_mode)` : audit AVANT lancement.
+- `compute_preflight(job_id, tts_mode)` : audit AVANT lancement.
   Vérifie que la config + les dépendances externes sont OK pour que la pipeline
   ait une chance de tourner one-shot.
 - `compute_health(job_id)` : audit APRÈS lancement. Vérifie que la pipeline a
@@ -14,12 +14,12 @@ Ces deux fonctions sont appelables depuis :
 - l'auto-pilot lui-même (pre-flight bloque le run, health-check finalise)
 
 Conçu pour être bon-marché (pas de gros calls externes en pre-flight, juste des
-HEAD/test). Le coût d'un échec en pre-flight = 1 appel Anthropic (1 token) +
-quelques HEAD Azure.
+HEAD/test). Le pre-flight vérifie explicitement la configuration DeepSeek et
+les accès Azure avant tout lancement.
 """
 
+import json
 import os
-import shutil
 from typing import Optional
 
 from repositories.pipeline_repository import (
@@ -33,28 +33,118 @@ from repositories.pipeline_repository import (
     get_pipeline_job,
     list_health_course_folder_rows,
 )
-from utils.anthropic_client import default_model
+from utils.deepseek_client import default_model
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def _expected_structured_segment_count(job: dict, daily_programs: list) -> int:
-    """Return the segment count produced by the current structured pipeline.
+def _expected_structured_segment_contract(
+    job: dict,
+    daily_programs: list,
+) -> dict:
+    """Resolve the authoritative expected structured segment contract.
 
     The legacy pipeline generated three passes per sub-part. The structured
     generator persists one final segment per sub-part, so multiplying by three
     makes successful PostgreSQL pipelines look incomplete.
+
+    V2 never infers its course count from ``nb_days * 7`` or from generated
+    pedagogical text. Its locked schedule snapshot is the source of truth.
     """
+    try:
+        schema_version = int(job.get("schedule_schema_version") or 1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("schedule_schema_version invalide") from exc
+
+    if schema_version == 2:
+        snapshot = job.get("schedule_snapshot_json") or job.get("schedule_snapshot")
+        if isinstance(snapshot, str):
+            try:
+                snapshot = json.loads(snapshot)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Le snapshot V2 verrouillé contient un JSON invalide") from exc
+        if not isinstance(snapshot, dict):
+            raise ValueError("Le snapshot V2 verrouillé est absent")
+        if job.get("schedule_locked_at") in (None, ""):
+            raise ValueError("Le snapshot V2 n'est pas verrouillé")
+
+        from repositories.day_schedule_repository import (
+            _canonical_pipeline_snapshot,
+        )
+
+        try:
+            canonical_snapshot, expected_hash = _canonical_pipeline_snapshot(snapshot)
+        except Exception as exc:
+            raise ValueError("Le snapshot V2 verrouillé est invalide") from exc
+
+        stored_hash = str(job.get("schedule_hash") or "").strip()
+        if not stored_hash or stored_hash != expected_hash:
+            raise ValueError("Le hash du snapshot V2 verrouillé est invalide")
+        day_count = int(canonical_snapshot["day_count"])
+        declared_days = job.get("nb_days")
+        if declared_days not in (None, "") and int(declared_days) != day_count:
+            raise ValueError(
+                "Le nombre de journées du pipeline ne correspond pas au snapshot V2"
+            )
+
+        course_counts = []
+        for day_index, day in enumerate(canonical_snapshot["days"], start=1):
+            course_count = sum(
+                1
+                for block in day.get("blocks") or []
+                if block.get("block_type") == "course"
+            )
+            if not 4 <= course_count <= 10:
+                raise ValueError(
+                    f"Le manifeste V2 de la journée {day_index} contient "
+                    f"{course_count} cours au lieu de 4 à 10"
+                )
+            course_counts.append(course_count)
+        return {
+            "schema_version": 2,
+            "source": "locked_schedule_snapshot",
+            "day_count": day_count,
+            "course_counts": course_counts,
+            "expected_segments": sum(course_counts),
+            "schedule_hash": expected_hash,
+        }
+
+    if schema_version != 1:
+        raise ValueError(
+            f"schedule_schema_version non pris en charge : {schema_version}"
+        )
+
     expected = 0
     for day_data in daily_programs:
         if not isinstance(day_data, dict):
             continue
         sub_parts = day_data.get("sub_parts")
         expected += max(1, len(sub_parts) if sub_parts else 6)
-    if expected:
-        return expected
-    return int(job.get("nb_days") or 0) * 7
+    if not expected:
+        expected = int(job.get("nb_days") or 0) * 7
+    return {
+        "schema_version": 1,
+        "source": (
+            "legacy_daily_programs"
+            if daily_programs
+            else "legacy_seven_courses_per_day"
+        ),
+        "day_count": int(job.get("nb_days") or 0),
+        "course_counts": [],
+        "expected_segments": expected,
+        "schedule_hash": None,
+    }
+
+
+def _expected_structured_segment_count(job: dict, daily_programs: list) -> int:
+    """Backward-compatible integer facade over the explicit contract."""
+    return int(
+        _expected_structured_segment_contract(
+            job,
+            daily_programs,
+        )["expected_segments"]
+    )
 
 
 def _humanization_is_embedded(job: dict) -> bool:
@@ -66,7 +156,6 @@ def _humanization_is_embedded(job: dict) -> bool:
 
 def compute_preflight(
     job_id: int,
-    use_claude_code: bool = False,
     tts_mode: str = "gtts",
 ) -> dict:
     """Audit pre-launch : valide config + connectivité externe.
@@ -77,9 +166,8 @@ def compute_preflight(
         "blocking": ["check1", "check2"],    # checks fatals (bloquent le run)
         "warnings": ["check3"],               # checks soft (run possible mais à risque)
         "checks": {
+            "llm_provider": {ok, detail},
             "llm_api_key": {ok, detail},
-            "claude_code_cli": {ok, detail, applicable},
-            "local_dev_flag": {ok, detail, applicable},
             "azure_tts_blob": {ok, detail},
             "azure_audio_blob": {ok, detail},
             "fish_audio_key": {ok, detail, applicable},
@@ -106,79 +194,29 @@ def compute_preflight(
         "detail": f"status={job['status']}, plateforme {job['platform_id']}",
     }
 
-    # Clé LLM API — requis si CC=False (étapes API) OU pour la review en
-    # mode API. Supporte Anthropic et DeepSeek via le client compatible Anthropic.
-    configured_model = default_model()
-    provider_hint = (
-        os.environ.get("FORMATION_LLM_PROVIDER")
-        or os.environ.get("LLM_PROVIDER")
-        or ""
-    ).strip().lower()
-    provider = (
-        "deepseek"
-        if provider_hint == "deepseek" or configured_model.lower().startswith("deepseek")
-        else "anthropic"
-    )
-    if provider == "deepseek":
-        api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-        ok = bool(api_key)
-        checks["llm_api_key"] = {
-            "ok": ok,
-            "detail": (
-                f"DeepSeek configuré ({configured_model})"
-                if ok
-                else "DEEPSEEK_API_KEY absente pour DeepSeek"
-            ),
-        }
+    # Fournisseur unique : la pipeline utilise l'API DeepSeek et sa clé est
+    # toujours bloquante.
+    try:
+        configured_model = default_model()
+    except ValueError as exc:
+        checks["llm_provider"] = {"ok": False, "detail": str(exc)}
+        blocking.append("llm_provider")
     else:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        ok = bool(api_key and api_key.startswith("sk-ant-"))
-        checks["llm_api_key"] = {
-            "ok": ok,
-            "detail": (
-                f"Anthropic configuré ({configured_model})"
-                if ok
-                else "ANTHROPIC_API_KEY absente ou format inattendu"
-            ),
+        checks["llm_provider"] = {
+            "ok": True,
+            "detail": f"DeepSeek uniquement ({configured_model})",
         }
-
-    if not checks["llm_api_key"]["ok"]:
-        if not use_claude_code:
-            blocking.append("llm_api_key")
-        else:
-            warnings.append("llm_api_key")
-
-    # Mode Claude Code : LOCAL_DEV + binary `claude`
-    cc_applicable = bool(use_claude_code)
-    if cc_applicable:
-        local_dev = os.getenv("LOCAL_DEV", "").lower() == "true"
-        checks["local_dev_flag"] = {
-            "ok": local_dev,
-            "applicable": True,
-            "detail": (
-                "LOCAL_DEV=true détecté"
-                if local_dev
-                else "LOCAL_DEV non set ou différent de 'true' — execute_mission_locally lèvera PermissionError"
-            ),
-        }
-        if not local_dev:
-            blocking.append("local_dev_flag")
-
-        claude_path = shutil.which("claude")
-        checks["claude_code_cli"] = {
-            "ok": bool(claude_path),
-            "applicable": True,
-            "detail": (
-                f"binary trouvé : {claude_path}"
-                if claude_path
-                else "binary `claude` introuvable dans le PATH du backend"
-            ),
-        }
-        if not claude_path:
-            blocking.append("claude_code_cli")
-    else:
-        checks["local_dev_flag"] = {"ok": True, "applicable": False, "detail": "non requis (mode API)"}
-        checks["claude_code_cli"] = {"ok": True, "applicable": False, "detail": "non requis (mode API)"}
+    api_key_ok = bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())
+    checks["llm_api_key"] = {
+        "ok": api_key_ok,
+        "detail": (
+            "DEEPSEEK_API_KEY présente"
+            if api_key_ok
+            else "DEEPSEEK_API_KEY absente"
+        ),
+    }
+    if not api_key_ok:
+        blocking.append("llm_api_key")
 
     # Azure TTS blob (DOCX + MP3 TTS Fish Audio)
     azure_tts_ok, azure_tts_detail = _check_azure_blob("AZURE_TTS_STORAGE_CONNECTION_STRING")
@@ -270,19 +308,58 @@ def compute_health(job_id: int) -> dict:
             "checks": {"job_state": {"ok": False, "detail": f"Job {job_id} introuvable"}},
         }
 
-    nb_days = job.get("nb_days") or 0
     audio_deferred = (
         job.get("status") == "text_ready"
         or not bool(job.get("auto_pilot_generate_audio", 0))
     )
     try:
-        import json
-        from services.formation_pipeline_service import COURSE_AUDIO_SLOTS
         daily_programs = json.loads(job.get("daily_programs") or "[]")
     except Exception:
-        COURSE_AUDIO_SLOTS = [None] * 7
         daily_programs = []
-    expected_total_segments = _expected_structured_segment_count(job, daily_programs)
+    try:
+        segment_contract = _expected_structured_segment_contract(
+            job,
+            daily_programs,
+        )
+    except Exception as exc:
+        detail = str(exc) or exc.__class__.__name__
+        logger.error(
+            "PIPELINE_HEALTH_SCHEDULE_CONTRACT_INVALID job_id=%s error=%s",
+            job_id,
+            detail,
+        )
+        return {
+            "ok": False,
+            "blocking": ["schedule_contract"],
+            "warnings": [],
+            "checks": {
+                "schedule_contract": {
+                    "ok": False,
+                    "detail": detail,
+                    "schema_version": job.get("schedule_schema_version"),
+                },
+            },
+        }
+
+    expected_total_segments = int(segment_contract["expected_segments"])
+    nb_days = int(segment_contract["day_count"])
+    checks["schedule_contract"] = {
+        "ok": True,
+        "detail": (
+            f"V2 verrouillé : {segment_contract['day_count']} journée(s), "
+            f"{expected_total_segments} cours "
+            f"({', '.join(str(count) for count in segment_contract['course_counts'])})"
+            if segment_contract["schema_version"] == 2
+            else
+            f"V1 historique : {expected_total_segments} cours attendus"
+        ),
+        "schema_version": segment_contract["schema_version"],
+        "source": segment_contract["source"],
+        "day_count": segment_contract["day_count"],
+        "course_counts": segment_contract["course_counts"],
+        "expected_segments": expected_total_segments,
+        "schedule_hash": segment_contract["schedule_hash"],
+    }
 
     # Inventaire des cours_folders + cg_jobs + segments. On audite uniquement
     # le folder canonique de chaque journée attendue : des doublons peuvent

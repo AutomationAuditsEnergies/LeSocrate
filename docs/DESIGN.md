@@ -103,7 +103,7 @@ components:
 
 # Design System: Le Socrate · HR Dashboard
 
-> **Scope.** This document describes the visual system for the **operator-side surface only** (`/hr-dashboard`, `/formation-pipeline`, `/schedule-config`, `/admin`, `/debug`). The apprenant-side surfaces (`/`, `/intro`, `/attente`, `/video`, `/recorder`) follow a different system rooted in Poppins/Fredoka and Spline-driven aesthetics — out of scope here. If a future task asks for a learner-facing screen, do **not** apply this DESIGN.md to it.
+> **Scope.** This document describes the visual system for the **operator-side surface only** (`/dashboard-centre`, `/formation-pipeline`, `/schedule-config`, `/debug`). The apprenant-side surfaces (`/`, `/attente`, `/video`) follow a different system rooted in Poppins/Fredoka and Spline-driven aesthetics — out of scope here. If a future task asks for a learner-facing screen, do **not** apply this DESIGN.md to it.
 
 ## 1. Overview
 

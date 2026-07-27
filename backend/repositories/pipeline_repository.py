@@ -30,6 +30,10 @@ PIPELINE_JOB_COLUMNS = [
     "rncp_code",
     "total_hours",
     "nb_days",
+    "schedule_schema_version",
+    "schedule_snapshot_json",
+    "schedule_hash",
+    "schedule_locked_at",
     "reac_text",
     "rc_text",
     "rome_text",
@@ -178,6 +182,35 @@ def _as_sqlite_row_connection():
     conn = get_db_connection()
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _ensure_sqlite_schedule_contract_columns(conn) -> None:
+    """Upgrade old direct SQLite fixtures before selecting the V2 contract.
+
+    Normal application startup performs this migration in ``database.db``.
+    Repository tests and maintenance scripts can, however, open an older
+    standalone database directly. Keeping this small compatibility guard at
+    the read boundary prevents those V1 databases from failing before the
+    normal migration entrypoint has run.
+    """
+
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(formation_pipeline_jobs)")
+    columns = {str(row[1]) for row in cursor.fetchall()}
+    if not columns:
+        return
+    for column, definition in (
+        ("schedule_schema_version", "INTEGER NOT NULL DEFAULT 1"),
+        ("schedule_snapshot_json", "TEXT"),
+        ("schedule_hash", "TEXT"),
+        ("schedule_locked_at", "TIMESTAMP"),
+    ):
+        if column not in columns:
+            cursor.execute(
+                f"ALTER TABLE formation_pipeline_jobs "
+                f"ADD COLUMN {column} {definition}"
+            )
+    conn.commit()
 
 
 def _is_transient_postgres_error(exc: Exception) -> bool:
@@ -721,6 +754,7 @@ def link_pipeline_platform_to_job(platform_id: int, job_id: int) -> None:
 def _fetch_sqlite_job_payload(job_id: int) -> dict[str, Any] | None:
     conn = _as_sqlite_row_connection()
     try:
+        _ensure_sqlite_schedule_contract_columns(conn)
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT {', '.join(PIPELINE_JOB_COLUMNS)} FROM formation_pipeline_jobs WHERE id = ?",
@@ -2569,6 +2603,8 @@ def list_due_audio_generation_sessions(
             cs.platform_id,
             cs.session_index,
             cs.scheduled_at,
+            cs.module_day_id,
+            cs.local_date,
             cs.audio_generation_status,
             cs.audio_generation_started_at,
             cs.audio_generation_attempts,
@@ -2789,13 +2825,20 @@ def course_folder_belongs_to_job(folder_id: int, job_id: int) -> bool:
 
     This narrow predicate is used by the HTTP boundary before any route can
     read text, reports, DOCX data or Blob artifacts for a caller-controlled
-    folder identifier.
+    folder identifier. Both identifiers and the platform must agree: legacy
+    rows with a stale ``formation_job_id`` must never cross tenant boundaries.
     """
     ph = _placeholder()
     query = f"""
         SELECT 1
-        FROM cours_folders
-        WHERE id = {ph} AND formation_job_id = {ph}
+        FROM cours_folders cf
+        JOIN formation_pipeline_jobs j
+          ON j.id = cf.formation_job_id
+         AND j.platform_id = cf.platform_id
+        JOIN platform_config p ON p.id = j.platform_id
+        WHERE cf.id = {ph}
+          AND j.id = {ph}
+          AND p.center_account_id IS NOT NULL
         LIMIT 1
     """
     if _pipeline_primary_backend() == "postgres":
@@ -3475,9 +3518,11 @@ def finalize_pipeline_module(
                 center_account_id = platform_row["center_account_id"]
                 teacher_name = platform_row.get("teacher_name")
                 teacher_color = platform_row.get("teacher_color")
+                canonical_reuse_candidate = str(
+                    platform_row.get("creation_request_id") or ""
+                ).startswith("teacher-order-")
                 canonical_reuse_allowed = bool(
-                    audio_ready
-                    and str(platform_row.get("creation_request_id") or "").startswith("teacher-order-")
+                    audio_ready and canonical_reuse_candidate
                 )
                 cur.execute(
                     "UPDATE platform_config SET status = 'ready', updated_at = NOW() WHERE id = %s",
@@ -3638,6 +3683,41 @@ def finalize_pipeline_module(
                     """,
                     (teacher_name, teacher_color, module_id),
                 )
+                if audio_ready:
+                    cur.execute(
+                        """
+                        UPDATE formation_modules
+                        SET reusable_at = COALESCE(
+                            reusable_at,
+                            (
+                                SELECT (
+                                    (
+                                        MAX(
+                                            COALESCE(
+                                                cs.local_date,
+                                                (cs.scheduled_at AT TIME ZONE 'Europe/Paris')::date
+                                            )
+                                        ) + 1
+                                    )::timestamp
+                                    AT TIME ZONE 'Europe/Paris'
+                                )
+                                FROM course_sessions cs
+                                WHERE cs.platform_id = %s
+                            )
+                        )
+                        WHERE id = %s
+                        RETURNING reusable_at
+                        """,
+                        (platform_id, module_id),
+                    )
+                    reusable_row = cur.fetchone()
+                    reusable_at = (
+                        reusable_row.get("reusable_at")
+                        if reusable_row
+                        else None
+                    )
+                else:
+                    reusable_at = None
 
                 result = {
                     "platform_id": platform_id,
@@ -3649,7 +3729,9 @@ def finalize_pipeline_module(
                     "voice_type": voice_type if audio_ready else None,
                     "center_account_id": int(center_account_id) if center_account_id is not None else None,
                     "canonical_fingerprint": canonical_fingerprint if audio_ready else None,
+                    "canonical_reuse_candidate": canonical_reuse_candidate,
                     "canonical_reuse_allowed": canonical_reuse_allowed,
+                    "reusable_at": reusable_at,
                 }
 
         if _sqlite_pipeline_mirror_required():
@@ -5027,6 +5109,12 @@ def _job_result(row: dict[str, Any] | sqlite3.Row | None) -> dict[str, Any] | No
         "rncp_code": data.get("rncp_code"),
         "total_hours": data.get("total_hours"),
         "nb_days": data.get("nb_days"),
+        "schedule_schema_version": int(
+            data.get("schedule_schema_version") or 1
+        ),
+        "schedule_snapshot_json": data.get("schedule_snapshot_json"),
+        "schedule_hash": data.get("schedule_hash"),
+        "schedule_locked_at": data.get("schedule_locked_at"),
         "reac_text": data.get("reac_text"),
         "rc_text": data.get("rc_text"),
         "rome_text": data.get("rome_text"),
@@ -5275,6 +5363,7 @@ def get_pipeline_job(job_id: int) -> dict[str, Any] | None:
 
     conn = _as_sqlite_row_connection()
     try:
+        _ensure_sqlite_schedule_contract_columns(conn)
         cursor = conn.cursor()
         cursor.execute(
             f"""

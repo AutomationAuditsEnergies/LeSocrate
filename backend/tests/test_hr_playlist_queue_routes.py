@@ -101,6 +101,47 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json()["work_item_id"], "existing-work")
 
+    def test_generate_v2_course_item_enables_slide_sync_by_default(self):
+        queued = SimpleNamespace(
+            id="work-course-audio",
+            run_id="requested-run",
+            status="queued",
+            terminal=False,
+        )
+
+        def enqueue(**kwargs):
+            queued.run_id = kwargs["run_id"]
+            return queued
+
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.get_course_folder_identity",
+            return_value={
+                "id": 118,
+                "platform_id": 16,
+                "formation_job_id": 13,
+                "name": "Jour 1",
+            },
+        ), patch.dict(
+            sys.modules,
+            {"services.content_generation_service": self._content_module()},
+        ), patch(
+            "services.pipeline_queue.enqueue_work_item",
+            side_effect=enqueue,
+        ) as enqueue_mock:
+            response = self.client.post(
+                "/api/hr/cours-folders/118/generate-playlist-item",
+                json={
+                    "filename": "course_01.mp3",
+                    "voice_type": "gtts",
+                },
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = enqueue_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload["filename"], "course_01.mp3")
+        self.assertTrue(payload["sync_slides"])
+        self.assertTrue(payload["auto_generate_slides"])
+
     def test_playlist_status_reads_persisted_progress(self):
         persisted = SimpleNamespace(
             id="work-running",

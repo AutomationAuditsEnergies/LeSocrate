@@ -124,7 +124,6 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
             "pipeline_auto_pilot_step": None,
             "pipeline_auto_pilot_error": None,
             "pipeline_auto_pilot_enabled": False,
-            "pending_deletion_count": 2,
         }]
 
         with patch("routes.hr_routes.HR_ENABLED", True), patch(
@@ -166,7 +165,7 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         self.assertEqual(platform["center_platform_number"], 1)
         self.assertEqual(platform["teacher_preparation"]["status"], "preparing")
         self.assertEqual(platform["course_schedule"]["next_session"]["audio_status"], "scheduled")
-        self.assertIn("2 demande(s) de suppression", platform["alerts"])
+        self.assertFalse(any("suppression" in alert for alert in platform["alerts"]))
         self.assertFalse(platform["blob_stats_loaded"])
         list_platforms.assert_called_once_with(42, scope_to_center=True)
 
@@ -313,6 +312,38 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 410)
         self.assertIn("Reporter cette séance", response.get_json()["error"])
+
+    def test_v2_postponement_endpoints_return_an_explicit_conflict(self):
+        message = (
+            "Le report des journées pour les formations au planning V2 "
+            "n’est pas encore pris en charge."
+        )
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.preview_course_session_postponement",
+            side_effect=ValueError(message),
+        ), patch(
+            "routes.hr_routes.postpone_course_session",
+            side_effect=ValueError(message),
+        ):
+            preview_response = self.client.post(
+                "/api/hr/platforms/12/sessions/92/postpone/preview",
+                json={"mode": "next_occurrence"},
+            )
+            postpone_response = self.client.post(
+                "/api/hr/platforms/12/sessions/92/postpone",
+                json={"mode": "next_occurrence"},
+                headers={"Idempotency-Key": "v2-report-92"},
+            )
+
+        for response in (preview_response, postpone_response):
+            with self.subTest(path=response.request.path):
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(
+                    response.get_json(),
+                    {"success": False, "error": message},
+                )
 
     def test_postponement_requires_an_idempotency_key(self):
         with patch("routes.hr_routes.HR_ENABLED", True), patch(

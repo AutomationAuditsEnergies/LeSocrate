@@ -25,7 +25,7 @@ function inferSurface() {
   if (pathname === '/landing' || (pathname === '/' && new URLSearchParams(search).get('p') === '3')) {
     return 'landing'
   }
-  if (['/admin', '/debug', '/schedule-config', '/formation-pipeline'].includes(pathname)) {
+  if (['/debug', '/schedule-config', '/formation-pipeline'].includes(pathname)) {
     return 'dark'
   }
   return 'light'

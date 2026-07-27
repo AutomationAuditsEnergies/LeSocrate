@@ -21,7 +21,11 @@ si une Q&A ou une pause arrive, c'est le cours qui l'annonce sobrement.
 """
 
 import re
-from utils.anthropic_client import default_model, post_message as _llm_post, AnthropicAPIError
+from utils.deepseek_client import (
+    DeepSeekAPIError,
+    default_model,
+    post_message as _llm_post,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -362,7 +366,7 @@ def generate_closing(
             f"{len(text.split())} mots générés"
         )
         return text
-    except (AnthropicAPIError, Exception) as e:
+    except (DeepSeekAPIError, Exception) as e:
         logger.warning(
             f"   ⚠️ Closing bloc {bloc_num} (gap {gap_sec:.0f}s, {registre}) "
             f"échec LLM ({type(e).__name__}: {str(e)[:120]}), fallback"

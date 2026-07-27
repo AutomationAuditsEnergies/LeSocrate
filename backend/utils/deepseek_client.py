@@ -1,20 +1,9 @@
-"""
-Client HTTP mutualisé pour les LLM compatibles Anthropic (/v1/messages).
+"""Client HTTP DeepSeek mutualisé via le protocole Anthropic-compatible.
 
-Fournit :
-  - `AnthropicRateLimitError` : exception typée sur 429 portant `wait_seconds`
-  - `parse_retry_after(resp)` : extrait le délai conseillé par le provider
-  - `post_message(...)` : wrapper requests avec gestion 429 + logs unifiés
-
-Utilisé par `knowledge_base_service` et `formation_pipeline_service` pour que
-les deux couches partagent exactement le même comportement anti-rate-limit.
-Un service qui attrape `AnthropicRateLimitError` doit dormir `e.wait_seconds`
-avant de retenter (plutôt qu'un sleep aveugle qui cascade en 429).
+Toutes les requêtes partent vers l'API DeepSeek avec ``DEEPSEEK_API_KEY``.
 """
 
 import os
-import shutil
-import subprocess
 import threading
 import time
 from contextlib import contextmanager
@@ -26,83 +15,47 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 _LLM_SEMAPHORES = {}
 _LLM_SEMAPHORES_LOCK = threading.Lock()
 
 
 def default_model() -> str:
-    """
-    Modèle par défaut pour la pipeline formation.
-
-    Priorité :
-      1. FORMATION_LLM_MODEL (nouveau nom générique)
-      2. FORMATION_CLAUDE_MODEL (compatibilité existante)
-      3. deepseek-v4-flash si DEEPSEEK_API_KEY est configurée sans clé Anthropic
-      4. Claude Sonnet historique
-    """
-    configured = os.environ.get("FORMATION_LLM_MODEL") or os.environ.get("FORMATION_CLAUDE_MODEL")
-    if configured:
-        return configured
-    provider = (
-        os.environ.get("FORMATION_LLM_PROVIDER")
-        or os.environ.get("LLM_PROVIDER")
-        or ""
-    ).strip().lower()
-    if provider == "deepseek":
-        return DEEPSEEK_DEFAULT_MODEL
-    if os.getenv("DEEPSEEK_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
-        return DEEPSEEK_DEFAULT_MODEL
-    return ANTHROPIC_DEFAULT_MODEL
-
-
-def _resolve_provider(model: str) -> str:
-    provider = (
-        os.environ.get("FORMATION_LLM_PROVIDER")
-        or os.environ.get("LLM_PROVIDER")
-        or ""
-    ).strip().lower()
-    if provider in ("deepseek", "anthropic"):
-        return provider
-    if (model or "").lower().startswith("deepseek"):
-        return "deepseek"
-    if os.getenv("DEEPSEEK_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
-        return "deepseek"
-    return "anthropic"
+    """Retourne le modèle DeepSeek configuré, ou V4 Flash par défaut."""
+    configured = (os.environ.get("FORMATION_LLM_MODEL") or "").strip()
+    return _normalize_model_alias(configured) if configured else DEEPSEEK_DEFAULT_MODEL
 
 
 def _normalize_model_alias(model: str) -> str:
     alias = (model or "").strip().lower()
-    if alias == "flash":
+    if alias in ("flash", "haiku"):
         return "deepseek-v4-flash"
-    if alias == "pro":
+    if alias in ("pro", "sonnet"):
         return "deepseek-v4-pro"
-    if alias == "haiku":
-        return "claude-haiku-4-5-20251001"
-    if alias == "sonnet":
-        resolved = default_model()
-        return resolved if resolved.lower() != "sonnet" else ANTHROPIC_DEFAULT_MODEL
-    return model
+    if alias.startswith("claude-haiku"):
+        return "deepseek-v4-flash"
+    if alias.startswith(("claude-sonnet", "claude-opus")):
+        return "deepseek-v4-pro"
+    normalized = (model or "").strip()
+    if not normalized.lower().startswith("deepseek"):
+        raise ValueError(
+            f"Modèle non pris en charge: {model!r}. "
+            "La formation utilise uniquement DeepSeek."
+        )
+    return normalized
 
 
 def _provider_config(model: str) -> dict:
-    provider = _resolve_provider(model)
-    if provider == "deepseek":
-        base_url = os.environ.get("DEEPSEEK_ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
-        return {
-            "provider": "DeepSeek",
-            "url": f"{base_url.rstrip('/')}/v1/messages",
-            "api_key": os.getenv("DEEPSEEK_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
-            "missing_key": "DEEPSEEK_API_KEY",
-        }
-
-    base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    del model  # Le fournisseur n'est plus déduit du modèle.
+    base_url = (
+        os.environ.get("DEEPSEEK_ANTHROPIC_BASE_URL")
+        or "https://api.deepseek.com/anthropic"
+    ).strip()
     return {
-        "provider": "Anthropic",
+        "provider": "DeepSeek",
         "url": f"{base_url.rstrip('/')}/v1/messages",
-        "api_key": os.getenv("ANTHROPIC_API_KEY"),
-        "missing_key": "ANTHROPIC_API_KEY",
+        "api_key": (os.getenv("DEEPSEEK_API_KEY") or "").strip(),
+        "missing_key": "DEEPSEEK_API_KEY",
     }
 
 
@@ -128,9 +81,8 @@ def _deepseek_concurrency_limit(model: str) -> int:
 
 
 def _provider_concurrency_limit(provider: str, model: str) -> int:
-    if provider == "DeepSeek":
-        return _deepseek_concurrency_limit(model)
-    return max(0, _int_env("ANTHROPIC_MAX_CONCURRENT", 0))
+    del provider
+    return _deepseek_concurrency_limit(model)
 
 
 def _new_semaphore(limit: int):
@@ -178,16 +130,16 @@ def _deepseek_user_id() -> str:
     return safe[:512]
 
 
-class AnthropicRateLimitError(Exception):
-    """429 d'Anthropic — porte le nombre de secondes à attendre avant retry."""
+class DeepSeekRateLimitError(Exception):
+    """Erreur DeepSeek 429 portant le nombre de secondes avant retry."""
 
     def __init__(self, wait_seconds: float, message: str = ""):
-        super().__init__(message or f"Rate limit Anthropic, attendre {wait_seconds:.0f}s")
+        super().__init__(message or f"Rate limit DeepSeek, attendre {wait_seconds:.0f}s")
         self.wait_seconds = wait_seconds
 
 
-class AnthropicAPIError(Exception):
-    """Erreur HTTP non-429 d'Anthropic — porte le statut + message déterministe.
+class DeepSeekAPIError(Exception):
+    """Erreur HTTP non-429 DeepSeek avec statut et message déterministe.
 
     Utile pour distinguer les erreurs *retryables* (network, timeout, 5xx) des
     erreurs *déterministes* (400 invalid_request_error, 401 auth, 403 perms).
@@ -196,7 +148,7 @@ class AnthropicAPIError(Exception):
 
     def __init__(self, status_code: int, error_type: str = "", message: str = ""):
         full = f"{error_type}: {message}" if error_type else message
-        super().__init__(full or f"Anthropic API {status_code}")
+        super().__init__(full or f"DeepSeek API {status_code}")
         self.status_code = status_code
         self.error_type = error_type
         self.message = message
@@ -242,8 +194,8 @@ def parse_retry_after(resp) -> float:
         except ValueError:
             pass
 
-    # Anthropic expose plusieurs buckets ; on prend le reset le plus tardif
-    # parmi ceux qui sont épuisés (remaining=0).
+    # L'interface Anthropic-compatible peut exposer ces buckets ; on prend le
+    # reset le plus tardif parmi ceux qui sont épuisés (remaining=0).
     candidates = []
     for bucket in ("output-tokens", "input-tokens", "tokens", "requests"):
         remaining = resp.headers.get(f"anthropic-ratelimit-{bucket}-remaining")
@@ -262,79 +214,22 @@ def parse_retry_after(resp) -> float:
     return 60.0
 
 
-def _is_local_dev() -> bool:
-    return os.getenv("LOCAL_DEV", "").lower() == "true"
-
-
-def _messages_to_prompt(messages: list) -> str:
-    """Convertit le format messages Anthropic en prompt texte pour claude -p."""
-    parts = []
-    for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            content = "\n".join(
-                b.get("text", "") for b in content
-                if isinstance(b, dict) and b.get("type") == "text"
-            )
-        if role == "system":
-            parts.insert(0, content)
-        else:
-            parts.append(content)
-    return "\n\n".join(p for p in parts if p)
-
-
-def _call_via_claude_cli(messages: list, model: str, timeout: int = 600) -> str:
-    """Route l'appel vers le binaire `claude` (forfait OAuth) au lieu de l'API HTTP.
-
-    Strips ANTHROPIC_API_KEY du child_env pour forcer l'auth OAuth du forfait.
-    """
-    prompt = _messages_to_prompt(messages)
-    child_env = os.environ.copy()
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-        child_env.pop(k, None)
-
-    cmd = ["claude", "-p", prompt, "--model", model, "--dangerously-skip-permissions"]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, env=child_env
-        )
-        if result.returncode != 0:
-            err = (result.stderr or result.stdout or "")[:400]
-            raise AnthropicAPIError(500, "cli_error", err)
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        raise AnthropicAPIError(500, "timeout", f"Claude CLI timeout après {timeout}s")
-    except FileNotFoundError:
-        raise AnthropicAPIError(500, "cli_not_found", "Binaire `claude` introuvable dans le PATH")
-
-
 def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature=None) -> str:
     """
-    Appelle POST /v1/messages et retourne le texte du premier bloc de la réponse.
+    Appelle l'interface DeepSeek compatible ``POST /v1/messages``.
 
-    - Cap automatique de `max_tokens` à 8000 pour Haiku (limite modèle).
-    - Lève `AnthropicRateLimitError(wait_seconds)` sur 429, avec délai parsé
+    - Lève `DeepSeekRateLimitError(wait_seconds)` sur 429, avec délai parsé
       depuis les headers.
-    - Lève `AnthropicAPIError` sur les autres erreurs HTTP.
+    - Lève `DeepSeekAPIError` sur les autres erreurs HTTP.
     """
     if not model:
         raise ValueError("post_message: 'model' est requis")
 
     model = _normalize_model_alias(model)
 
-    # LOCAL_DEV=true → forfait Claude Code (OAuth) — uniquement pour les modèles Claude
-    if _is_local_dev() and shutil.which("claude") and not model.lower().startswith("deepseek"):
-        logger.info(f"🖥️  LOCAL_DEV: routing via claude CLI (model={model})")
-        return _call_via_claude_cli(messages, model, timeout)
-
     config = _provider_config(model)
     if not config["api_key"]:
         raise ValueError(f"{config['missing_key']} non définie pour {config['provider']}")
-
-    # Cap par modèle : Haiku 4.5 max 8192 tokens output, Sonnet 4 beaucoup plus.
-    if "haiku" in model.lower():
-        max_tokens = min(max_tokens, 8000)
 
     payload = {
         "model": model,
@@ -343,16 +238,15 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
     }
     if temperature is not None:
         payload["temperature"] = temperature
-    if config["provider"] == "DeepSeek":
-        user_id = _deepseek_user_id()
-        if user_id:
-            payload["metadata"] = {"user_id": user_id}
-        thinking = os.environ.get("DEEPSEEK_THINKING", "disabled").strip().lower()
-        if thinking in ("enabled", "disabled"):
-            payload["thinking"] = {"type": thinking}
-        effort = os.environ.get("DEEPSEEK_REASONING_EFFORT", "").strip().lower()
-        if thinking == "enabled" and effort in ("high", "max"):
-            payload["output_config"] = {"effort": effort}
+    user_id = _deepseek_user_id()
+    if user_id:
+        payload["metadata"] = {"user_id": user_id}
+    thinking = os.environ.get("DEEPSEEK_THINKING", "disabled").strip().lower()
+    if thinking in ("enabled", "disabled"):
+        payload["thinking"] = {"type": thinking}
+    effort = os.environ.get("DEEPSEEK_REASONING_EFFORT", "").strip().lower()
+    if thinking == "enabled" and effort in ("high", "max"):
+        payload["output_config"] = {"effort": effort}
 
     max_attempts = _llm_http_max_attempts()
     transient_errors = (
@@ -384,7 +278,7 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
                     f"⏳ {config['provider']} 429 ({model}, max_tokens={max_tokens}) — "
                     f"retry conseillé dans {wait:.0f}s : {error_body}"
                 )
-                raise AnthropicRateLimitError(wait)
+                raise DeepSeekRateLimitError(wait)
 
             if not resp.ok:
                 try:
@@ -394,7 +288,7 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
                 logger.error(
                     f"❌ {config['provider']} API {resp.status_code} ({model}, max_tokens={max_tokens}) : {error_body}"
                 )
-                # Extrait un message lisible depuis le JSON Anthropic standard :
+                # Extrait un message lisible depuis le JSON d'erreur DeepSeek :
                 #   {"type": "error", "error": {"type": "...", "message": "..."}}
                 err_type = ""
                 err_msg = ""
@@ -405,7 +299,7 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
                         err_msg = err.get("message", "") or ""
                 if not err_msg:
                     err_msg = str(error_body)[:300]
-                api_error = AnthropicAPIError(resp.status_code, err_type, err_msg)
+                api_error = DeepSeekAPIError(resp.status_code, err_type, err_msg)
                 if (
                     api_error.is_deterministic
                     or not _is_retryable_http_status(resp.status_code)
@@ -430,7 +324,7 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
                         return block.get("text", "")
                     if isinstance(block, dict) and "text" in block:
                         return block.get("text", "")
-            raise AnthropicAPIError(200, "invalid_response", f"Réponse {config['provider']} sans bloc texte")
+            raise DeepSeekAPIError(200, "invalid_response", f"Réponse {config['provider']} sans bloc texte")
         except transient_errors as exc:
             if attempt >= max_attempts:
                 raise
@@ -441,4 +335,4 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
             )
             _sleep(wait)
 
-    raise AnthropicAPIError(500, "retry_exhausted", f"{config['provider']} retry épuisé")
+    raise DeepSeekAPIError(500, "retry_exhausted", f"{config['provider']} retry épuisé")

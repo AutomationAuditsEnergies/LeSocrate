@@ -53,7 +53,8 @@ def _finalize_module_if_ready(folder_id: int, voice_type: str) -> dict | None:
         cursor = conn.cursor()
         cursor.execute(
             f"""
-            SELECT cf.platform_id, cf.formation_job_id, j.tp_name, j.rncp_code
+            SELECT cf.platform_id, cf.formation_job_id, j.tp_name, j.rncp_code,
+                   COALESCE(j.schedule_schema_version, 1) AS schedule_schema_version
             FROM cours_folders cf
             LEFT JOIN formation_pipeline_jobs j ON j.id = cf.formation_job_id
             WHERE cf.id = {ph}
@@ -68,8 +69,10 @@ def _finalize_module_if_ready(folder_id: int, voice_type: str) -> dict | None:
             formation_job_id = row["formation_job_id"]
             tp_name = row["tp_name"]
             rncp = row["rncp_code"]
+            schedule_schema_version = int(row["schedule_schema_version"] or 1)
         else:
-            platform_id, formation_job_id, tp_name, rncp = row
+            platform_id, formation_job_id, tp_name, rncp, schedule_schema_version = row
+            schedule_schema_version = int(schedule_schema_version or 1)
         if not formation_job_id:
             return None
         cursor.execute(
@@ -91,9 +94,30 @@ def _finalize_module_if_ready(folder_id: int, voice_type: str) -> dict | None:
     container = BlobServiceClient.from_connection_string(tts_connection).get_container_client(
         "audiostts"
     )
-    missing = []
+    manifest_issues = []
     for candidate_folder_id in folder_ids:
         prefix = f"platform-{platform_id}/folder-{candidate_folder_id}/playlist/"
+        if schedule_schema_version == 2:
+            from services.day_playlist_service import required_audio_filenames
+
+            expected_names = set(required_audio_filenames(candidate_folder_id))
+            available_names = {
+                os.path.basename(blob.name)
+                for blob in container.list_blobs(name_starts_with=prefix)
+                if blob.name.endswith(".mp3")
+            }
+            missing_names = sorted(expected_names - available_names)
+            extra_names = sorted(available_names - expected_names)
+            if missing_names or extra_names:
+                issue = {
+                    "folder_id": candidate_folder_id,
+                }
+                if missing_names:
+                    issue["missing_files"] = missing_names
+                if extra_names:
+                    issue["extra_files"] = extra_names
+                manifest_issues.append(issue)
+            continue
         course_count = sum(
             1
             for blob in container.list_blobs(name_starts_with=prefix)
@@ -101,9 +125,21 @@ def _finalize_module_if_ready(folder_id: int, voice_type: str) -> dict | None:
             and blob.name.endswith(".mp3")
         )
         if course_count < 7:
-            missing.append({"folder_id": candidate_folder_id, "course_mp3": course_count})
-    if missing:
-        return {"ready": False, "missing": missing}
+            manifest_issues.append({
+                "folder_id": candidate_folder_id,
+                "course_mp3": course_count,
+            })
+    if manifest_issues:
+        # Keep the historic ``missing`` response key for callers while V2
+        # entries can now describe either side of an exact-manifest mismatch.
+        return {"ready": False, "missing": manifest_issues}
+
+    if schedule_schema_version == 2:
+        # Reuse the canonical V2 finalizer once every immutable day manifest is
+        # present. The legacy SQL below intentionally remains V1-only.
+        from routes.formation_routes import _finalize_audio_ready_state
+
+        return _finalize_audio_ready_state(int(formation_job_id), voice_type)
 
     with _pipeline_connection() as (conn, ph, is_postgres):
         cursor = conn.cursor()
@@ -235,6 +271,25 @@ def _validate_item_identity(item: WorkItem, payload: dict[str, Any]) -> tuple[in
     return folder_id, platform_id
 
 
+def _folder_schedule_schema_version(folder_id: int) -> int:
+    with _pipeline_connection() as (conn, ph, is_postgres):
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT COALESCE(j.schedule_schema_version, 1) AS schedule_schema_version
+            FROM cours_folders cf
+            LEFT JOIN formation_pipeline_jobs j ON j.id = cf.formation_job_id
+            WHERE cf.id = {ph}
+            """,
+            (int(folder_id),),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return 1
+        value = row["schedule_schema_version"] if is_postgres else row[0]
+        return int(value or 1)
+
+
 def _publish(platform_id: int, folder_id: int, filenames=None, *, archive=False) -> dict:
     try:
         result = publish_playlist_audio_to_platform(
@@ -276,6 +331,19 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
 
     payload = dict(item.payload or {})
     folder_id, platform_id = _validate_item_identity(item, payload)
+    schedule_schema_version = _folder_schedule_schema_version(folder_id)
+    if (
+        item.task_type == "hr_playlist_generate"
+        and schedule_schema_version == 2
+        and (
+            not bool(payload.get("has_script"))
+            or bool(payload.get("playlist_mock"))
+        )
+    ):
+        raise PermanentWorkError(
+            "Une journée V2 doit être synthétisée depuis son script et son "
+            "manifeste immuable ; la playlist historique fixe est interdite."
+        )
     progress_state = _base_progress(item, payload)
 
     def on_progress(step, total, message):
@@ -364,7 +432,19 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
             "parallel_breaks": bool(payload.get("parallel_breaks")),
             "preserve_existing": preserve_existing,
         }
-        publish_filenames = None if include_breaks else result["files"]
+        if schedule_schema_version == 2:
+            # V2 is an immutable manifest contract. ``generated["files"]`` is
+            # only the subset synthesized during this run, so it must never be
+            # used as the publication allow-list. Passing the complete locked
+            # manifest also makes the publisher ignore any stale source MP3.
+            from services.day_playlist_service import required_audio_filenames
+
+            publish_filenames = sorted(required_audio_filenames(folder_id))
+        else:
+            # Preserve the historical V1 behavior: a full run publishes every
+            # MP3 found under the folder prefix, while course-only runs publish
+            # the generated subset.
+            publish_filenames = None if include_breaks else result["files"]
         result["publish"] = _publish(
             platform_id,
             folder_id,
@@ -374,7 +454,12 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
         module_finalize = _finalize_module_if_ready(folder_id, voice_type)
         if module_finalize:
             result["module_finalize"] = module_finalize
-        scope_label = "19 audios" if include_breaks else "7 cours"
+        file_count = len(result.get("files") or [])
+        scope_label = (
+            f"{file_count} audios"
+            if include_breaks
+            else f"{file_count} cours"
+        )
         message = (
             f"✅ Terminé ({voice_label}, {scope_label}) : {result['generated']} généré(s), "
             f"{result.get('skipped', 0)} conservé(s)"

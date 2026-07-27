@@ -13,7 +13,7 @@ import os
 import re
 from typing import Any
 
-from utils.anthropic_client import default_model, post_message as _llm_post
+from utils.deepseek_client import default_model, post_message as _llm_post
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

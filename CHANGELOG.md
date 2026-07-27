@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-07-26
+
+### feat(planning): journées pédagogiques modulables et pipeline audio dynamique
+
+Les centres peuvent désormais composer et conserver une bibliothèque de
+templates de journées en blocs `cours → questions-réponses → pause`, avec pause
+finale facultative et pause déjeuner de 60 à 120 minutes. Le planificateur
+responsive permet de préremplir un calendrier, de corriger librement les dates
+cochées puis d'affecter un template à chaque journée. La validation verrouille
+un snapshot immuable du déroulé pédagogique ; les templates déjà utilisés
+restent consultables, duplicables ou archivables sans pouvoir être modifiés.
+
+Le contrat de planning V2 remplace les hypothèses fixes de 7 cours et 19 MP3 par
+un manifeste exact propre à chaque journée. Les budgets de texte suivent la
+durée de chaque cours avec 30 secondes de marge, le TTS parcourt le manifeste à
+H-24, et les lecteurs apprenant/administration respectent l'ordre et les durées
+verrouillés. Les modules historiques continuent d'utiliser leur playlist V1.
+
+La réutilisation d'un module durable conserve ses journées et ses assets audio
+immuables, exige le même nombre de nouvelles dates, et n'est proposée qu'après
+la fin du module source lorsque son manifeste est complet. Une nouvelle
+formation refuse toute première date située à moins de 48 heures ; une
+réutilisation déjà générée ne relance pas le TTS.
+
+### refactor(pipeline): retrait du legacy et accès Lyon explicite
+
+La plateforme de référence conserve uniquement les parcours encore utilisés :
+les pages `/recorder`, `/admin`, `/generated-slides` et `/intro` sont retirées,
+ainsi que les API d'upload audio du Recorder et les cinq routes de missions
+Claude Code locales. La connexion centre mène directement au dashboard et les
+téléchargements de la pipeline utilisent désormais le client authentifié.
+
+`/formation-pipeline` devient une capacité serveur explicite des comptes centre.
+La permission est accordée une seule fois au compte Lyon
+`newpiprod@gmail.com` lors de l'introduction de la colonne, puis chaque
+révocation est conservée. Toutes les routes formation relisent la permission et
+le rattachement du job au centre avant d'exécuter leur logique ; les anciens
+comptes admin et les autres centres échouent en mode fermé. La migration ne
+rattache au compte Lyon que les plateformes orphelines qui possèdent déjà un
+job de pipeline.
+
+La pipeline Formation3 utilise désormais DeepSeek uniquement : suppression du
+fallback Anthropic, de tous les chemins runtime vers le runner Claude CLI, du
+SDK Anthropic et des sélecteurs Claude dans l'interface. Le client partagé est
+renommé `deepseek_client`. Le workflow exige `DEEPSEEK_API_KEY`, fixe le
+fournisseur DeepSeek et supprime l'ancienne clé Anthropic d'Azure au prochain
+déploiement. Les noms de modèles historiques stockés en base sont convertis
+vers les profils DeepSeek Pro/Flash afin que les jobs existants restent
+reprenables. Le fichier historique des missions reste temporairement présent
+car les diagnostics de jobs existants y lisent encore leurs artefacts ; aucun
+endpoint ne peut lancer son subprocess local.
+
 ## 2026-07-21
 
 ### feat(hr-dashboard): recrutement manuel avec identité professeur en direct

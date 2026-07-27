@@ -25,7 +25,7 @@ function getSupabaseErrorMessage(error, fallback) {
   return error?.message || fallback
 }
 
-export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }) {
+export default function LoginCentre({ preloadDashboardRoute }) {
   const initialPasswordRecoveryMode = (() => {
     if (typeof window === 'undefined') return false
     const searchParams = new URLSearchParams(window.location.search)
@@ -147,13 +147,8 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
           localStorage.setItem('center_account_email', data.account.username || '')
           localStorage.setItem('center_account_name', data.account.center_name || '')
         }
-        if (data.account?.type === 'legacy_admin') {
-          preloadAdminRoute?.().catch(() => {})
-          navigate('/admin')
-        } else {
-          preloadDashboardRoute?.().catch(() => {})
-          navigate('/dashboard-centre')
-        }
+        preloadDashboardRoute?.().catch(() => {})
+        navigate('/dashboard-centre')
         return
       }
 

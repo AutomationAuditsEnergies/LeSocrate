@@ -10,21 +10,20 @@ import state
 from repositories.course_schedule_repository import get_audio_generation_session
 from services.audio_service import (
     get_course_session_audio_info,
-    get_current_audio_info,
+    get_course_session_playlist,
+    get_current_audio_info,  # Compatibilité des anciens monkeypatchs/imports.
+    get_current_playback_context,
     get_playlist,
+    is_explicit_schedule_occurrence,
 )
 from services.script_slide_generation_service import get_latest_script_slide_deck_for_audio
 from services.platform_storage_service import issue_platform_audio_read_url
-from services.time_service import get_heure_debut_cours
 from utils.auth_tokens import issue_auth_token, verify_auth_token
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 video_bp = Blueprint("video", __name__)
-BREAK_AUDIO_TYPES = {"qa", "pause", "pause_midi"}
-
-
 class StudentCourseAccessError(Exception):
     def __init__(self, status_code=401):
         super().__init__("Accès au cours refusé")
@@ -138,12 +137,41 @@ def _student_audio_info(context):
     return get_course_session_audio_info(
         context["platform_id"],
         occurrence.get("scheduled_at"),
+        occurrence=occurrence,
     )
 
 
 def _safe_audio_key(filename):
     path = unquote(urlsplit(str(filename or "")).path)
     return path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+
+
+def _v2_occurrence_scope(context, audio_info):
+    """Validate the folder/day/prefix ownership of one V2 audio segment."""
+    occurrence = context["occurrence"]
+    raw_module_day_id = occurrence.get("module_day_id")
+    if raw_module_day_id is None:
+        if is_explicit_schedule_occurrence(occurrence):
+            raise RuntimeError("Journée pédagogique V2 non liée")
+        return None
+    try:
+        module_day_id = _positive_int(raw_module_day_id)
+        audio_module_day_id = _positive_int(audio_info.get("module_day_id"))
+        folder_id = _positive_int(audio_info.get("folder_id"))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Portée audio V2 incomplète") from exc
+    if audio_module_day_id != module_day_id:
+        raise RuntimeError("Journée durable incohérente")
+
+    prefix = str(occurrence.get("audio_storage_prefix") or "").strip("/")
+    expected_prefix = f"course-sessions/{int(context['course_session_id'])}"
+    if not prefix or not hmac.compare_digest(prefix, expected_prefix):
+        raise RuntimeError("Préfixe audio V2 absent ou incohérent")
+    return {
+        "folder_id": folder_id,
+        "module_day_id": module_day_id,
+        "audio_storage_prefix": expected_prefix,
+    }
 
 
 def _occurrence_audio_key(context, audio_info):
@@ -156,6 +184,10 @@ def _occurrence_audio_key(context, audio_info):
     basename = _safe_audio_key(audio_info.get("filename"))
     if not basename:
         raise RuntimeError("Clé audio absente")
+    v2_scope = _v2_occurrence_scope(context, audio_info)
+    if v2_scope is not None:
+        return f"{v2_scope['audio_storage_prefix']}/{basename}"
+
     prefix = str(context["occurrence"].get("audio_storage_prefix") or "").strip("/")
     if not prefix:
         return basename
@@ -259,9 +291,13 @@ def _sanitize_deck_audio_references(value):
     return clean
 
 
-def _next_playlist_audio(platform_id, current_audio_id):
+def _next_playlist_audio(platform_id, current_audio_id, occurrence=None):
     try:
-        playlist = get_playlist(platform_id)
+        playlist = (
+            get_course_session_playlist(platform_id, occurrence)
+            if is_explicit_schedule_occurrence(occurrence)
+            else get_playlist(platform_id)
+        )
         for index, item in enumerate(playlist):
             if item.get("id") == current_audio_id and index + 1 < len(playlist):
                 return playlist[index + 1]
@@ -315,7 +351,11 @@ def video_status():
 
         # Le cours est en cours
         logger.info(f"▶️ Cours en cours: {audio_info['title']}")
-        next_audio = _next_playlist_audio(context["platform_id"], audio_info.get("id"))
+        next_audio = _next_playlist_audio(
+            context["platform_id"],
+            audio_info.get("id"),
+            context["occurrence"],
+        )
         remaining = max(0, int(audio_info.get("duration", 0)) - int(offset or 0))
         result = {
             "authenticated": True,
@@ -335,12 +375,11 @@ def video_status():
             "next_audio_duration": next_audio.get("duration", 0) if next_audio else 0,
             "cours_termine": False,
         }
-        if str(audio_info.get("type") or "").lower() not in BREAK_AUDIO_TYPES:
-            result["audio_stream_token"] = _issue_audio_stream_ticket(
-                context,
-                audio_info,
-                remaining,
-            )
+        result["audio_stream_token"] = _issue_audio_stream_ticket(
+            context,
+            audio_info,
+            remaining,
+        )
         return _private_json(result)
 
     except StudentCourseAccessError as exc:
@@ -370,9 +409,15 @@ def video_slides():
 
         # The client cannot select a filename: the server resolves the current
         # audio from the authenticated occurrence on every request.
+        v2_scope = _v2_occurrence_scope(context, audio_info)
+        deck_lookup = {
+            "platform_id": context["platform_id"],
+        }
+        if v2_scope is not None:
+            deck_lookup.update(v2_scope)
         deck = get_latest_script_slide_deck_for_audio(
             audio_info.get("filename"),
-            platform_id=context["platform_id"],
+            **deck_lookup,
         )
         if not deck:
             return _private_json(
@@ -422,11 +467,6 @@ def audio_stream():
                 {"authenticated": True, "error": "Cours terminé"},
                 410,
             )
-
-        if str(audio_info.get("type") or "").lower() in BREAK_AUDIO_TYPES:
-            response = Response(status=204)
-            response.headers["Cache-Control"] = "private, no-store"
-            return response
 
         audio_key = _occurrence_audio_key(context, audio_info)
         if not audio_key:
@@ -529,10 +569,12 @@ def cours_status():
         logger.debug("📊 Demande statut cours")
 
         platform_id = _get_public_platform_id()
-        audio_info, offset, temps_restant = get_current_audio_info(platform_id)
+        playback = get_current_playback_context(platform_id)
+        audio_info = playback["audio_info"]
+        temps_restant = playback["time_remaining"]
 
         if audio_info is None and temps_restant > 0:
-            heure_debut_cours = get_heure_debut_cours(platform_id)
+            heure_debut_cours = playback["course_start"]
             result = {
                 "status": "waiting",
                 "temps_restant": temps_restant,
@@ -555,27 +597,3 @@ def cours_status():
     except Exception as e:
         logger.error(f"❌ Erreur API cours-status: {e}")
         return jsonify({"status": "error", "message": "Erreur serveur"}), 500
-
-
-@video_bp.route("/api/intro")
-def intro():
-    """Retourne les informations pour la page d'introduction"""
-    try:
-        context = _student_course_context()
-        nom = context["nom"]
-        prenom = context["prenom"]
-        logger.info(f"📺 Demande page intro par {nom} {prenom}")
-
-        return _private_json(
-            {
-                "authenticated": True,
-                "user": {"nom": nom, "prenom": prenom},
-                "message": "Page d'introduction",
-            }
-        )
-
-    except StudentCourseAccessError as exc:
-        return _student_access_error(exc)
-    except Exception as e:
-        logger.error(f"❌ Erreur API intro: {e}")
-        return _private_json({"success": False, "error": "Erreur serveur"}, 500)

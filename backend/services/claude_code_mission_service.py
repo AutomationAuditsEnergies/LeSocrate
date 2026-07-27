@@ -28,7 +28,7 @@ from utils.logger import get_logger
 
 class _RateLimitError(RuntimeError):
     """Levée quand un subprocess Claude Code a échoué à cause d'un 429
-    Anthropic. Permet à _execute_chunked de retry avec backoff dédié."""
+    fournisseur. Permet à _execute_chunked de retry avec backoff dédié."""
     pass
 
 logger = get_logger(__name__)
@@ -72,19 +72,20 @@ _CHUNKED_STEPS = {"content", "humanization_review", "review"}
 _EXECUTION_STATE = {}
 
 
-def _course_audio_slots_prompt() -> str:
-    from services.formation_pipeline_service import COURSE_AUDIO_SLOTS
-    return "\n".join(
-        f"- {slot['label']} · données internes: {slot['start']}-{slot['end']}, "
-        f"{slot['duration_min']} min, fichier {slot['filename']}. "
-        "Le nom pédagogique ne doit jamais reprendre ces données."
-        for slot in COURSE_AUDIO_SLOTS
+def _course_audio_slots_prompt(schedule_days: list[dict] | None = None) -> str:
+    from services.formation_pipeline_service import (
+        _course_audio_slots_prompt as _pipeline_slots_prompt,
     )
 
+    return _pipeline_slots_prompt(schedule_days)
 
-def _normalize_day_audio_slots(day_data: dict) -> dict:
+
+def _normalize_day_audio_slots(
+    day_data: dict,
+    schedule_day: dict | None = None,
+) -> dict:
     from services.formation_pipeline_service import _normalize_day_audio_slots as _normalize
-    return _normalize(day_data)
+    return _normalize(day_data, schedule_day=schedule_day)
 
 
 def mission_dir(job_id: int, step_key: str) -> str:
@@ -319,7 +320,37 @@ Objectif : ~16 000 tokens de markdown structuré.
 
 
 def _build_daily_mission(target, job, model):
-    slots = _course_audio_slots_prompt()
+    from services.formation_pipeline_service import _v2_schedule_days
+
+    schedule_days = _v2_schedule_days(job)
+    slots = _course_audio_slots_prompt(schedule_days)
+    if schedule_days:
+        course_counts = [
+            len(day.get("course_blocks") or [
+                block
+                for block in day.get("blocks") or []
+                if block.get("block_type") == "course"
+            ])
+            for day in schedule_days
+        ]
+        day_contract = (
+            "Chaque journée doit contenir exactement le nombre de cours indiqué "
+            "par son manifeste immuable : "
+            + ", ".join(
+                f"journée {index} = {count} cours"
+                for index, count in enumerate(course_counts, start=1)
+            )
+            + "."
+        )
+        example_tail = (
+            "... autant d'objets cours que le manifeste de cette journée"
+        )
+    else:
+        day_contract = (
+            "Chaque journée a exactement 7 cours alignés sur la playlist "
+            "audio interne historique."
+        )
+        example_tail = "... 7 cours au total"
     _write(
         target,
         "task.md",
@@ -329,8 +360,8 @@ def _build_daily_mission(target, job, model):
 
 Tu lis `input.md` qui contient le programme global (Markdown).
 
-Découpe en **{job['nb_days']} journées** de 7h chacune. Chaque journée a exactement
-7 cours alignés sur la playlist audio interne.
+Découpe en **{job['nb_days']} journées** complètes.
+{day_contract}
 
 Cours audio internes à respecter strictement pour chaque journée :
 {slots}
@@ -371,7 +402,7 @@ Produis un **JSON array** avec une entrée par journée :
           "handoff": "lien naturel avec le Q&A, la pause ou le cours suivant"
         }}
       }},
-      ... 7 cours au total
+      {example_tail}
     ]
   }},
   ...
@@ -387,6 +418,33 @@ Produis un **JSON array** avec une entrée par journée :
 def _build_content_mission(target, job, model):
     budget = _content_segment_word_budget()
     target_words = budget["target_words"]
+    try:
+        daily_programs = json.loads(job.get("daily_programs") or "[]")
+    except (TypeError, ValueError):
+        daily_programs = []
+    course_counts = [
+        len(day.get("sub_parts") or [])
+        for day in daily_programs
+        if isinstance(day, dict) and day.get("sub_parts")
+    ]
+    if course_counts:
+        course_contract = (
+            "Les sous-parties sont les cours internes de chaque journée "
+            "(respectivement "
+            + ", ".join(str(count) for count in course_counts)
+            + " cours) ; utilise leurs métadonnées techniques pour calibrer "
+            "le volume, sans les verbaliser côté apprenant."
+        )
+        segment_example = (
+            "... 3 segments par cours, pour tous les cours de la journée"
+        )
+    else:
+        course_contract = (
+            "Les sous-parties sont les 7 cours internes historiques de la "
+            "journée ; utilise leurs métadonnées techniques pour calibrer le "
+            "volume, sans les verbaliser côté apprenant."
+        )
+        segment_example = "... 21 segments par journée"
     _write(
         target,
         "task.md",
@@ -398,8 +456,7 @@ Tu lis `input.md` qui contient les {job['nb_days']} programmes journée (JSON).
 
 Pour chaque journée × chaque sous-partie × chaque passe (3 passes par sous-partie :
 Fondation / Pratique / Maîtrise), génère environ {target_words} mots de texte oral TTS-ready.
-Les sous-parties sont les 7 cours internes de la journée ; utilise leurs
-métadonnées techniques pour calibrer le volume, sans les verbaliser côté apprenant.
+{course_contract}
 
 **Applique strictement les règles de génération** contenues dans `rules.md`.
 
@@ -414,7 +471,7 @@ Sortie attendue dans `output.md` : un **JSON** de la forme :
         {{ "sub_part_index": 0, "passe": 1, "text": "... ~{target_words} mots ..." }},
         {{ "sub_part_index": 0, "passe": 2, "text": "... ~{target_words} mots ..." }},
         {{ "sub_part_index": 0, "passe": 3, "text": "... ~{target_words} mots ..." }},
-        ... 21 segments par journée
+        {segment_example}
       ]
     }},
     ...
@@ -766,21 +823,31 @@ def _import_daily(job_id, output, generated_via):
     réimport daily peut ne concerner que quelques journées ajoutées, pas un
     remplacement total ; invalider automatiquement tous les segments serait
     trop agressif."""
+    job = _get_job_row(job_id)
+    if not job:
+        raise ValueError(f"Job pipeline {job_id} introuvable")
+    tp_name = job.get("tp_name")
+    try:
+        from services.formation_pipeline_service import (
+            _clean_json,
+            _normalize_daily_payload,
+            _v2_schedule_days,
+        )
+
+        schedule_days = _v2_schedule_days(job)
+        nb_days = len(schedule_days) if schedule_days else int(job.get("nb_days") or 0)
+        parsed_data = _clean_json(output)
+        parsed = _normalize_daily_payload(
+            parsed_data,
+            1,
+            nb_days,
+            tp_name or "formation",
+            schedule_days=schedule_days,
+        )
+    except Exception as e:
+        raise ValueError(f"JSON invalide dans output.md : {e}")
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT tp_name, nb_days FROM formation_pipeline_jobs WHERE id = ?", (job_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        raise ValueError(f"Job pipeline {job_id} introuvable")
-    tp_name, nb_days = row[0], int(row[1] or 0)
-    try:
-        from services.formation_pipeline_service import _clean_json, _normalize_daily_payload
-        parsed_data = _clean_json(output)
-        parsed = _normalize_daily_payload(parsed_data, 1, nb_days, tp_name or "formation")
-    except Exception as e:
-        conn.close()
-        raise ValueError(f"JSON invalide dans output.md : {e}")
     cursor.execute(
         "UPDATE formation_pipeline_jobs SET daily_programs = ?, "
         "daily_programs_generated_via = ?, "
@@ -1277,8 +1344,8 @@ def _run_subprocess(mission_dir: str, model: str, log_path: str, log_mode: str =
     cwd = os.path.dirname(_REVIEW_QUEUE_ROOT)
     chunk_label = os.path.basename(mission_dir)
 
-    # IMPORTANT — env propre sans ANTHROPIC_API_KEY pour utiliser le FORFAIT
-    # Claude Code (login OAuth local), pas l'API à la carte. Sans ce strip,
+    # IMPORTANT — env propre sans credentials API pour utiliser le forfait
+    # Claude Code (login OAuth local), pas l'API à la carte. Sans ce nettoyage,
     # la CLI hérite de la clé API du shell et tape sur le compte API à la
     # carte — qui peut être à zéro alors que le forfait est dispo.
     # Cas réel observé : "Credit balance is too low" en billing_error alors
@@ -1325,8 +1392,8 @@ def _run_subprocess(mission_dir: str, model: str, log_path: str, log_mode: str =
 
     # Soft-success : si output.md existe et n'est pas vide, considérer la
     # mission comme réussie même si returncode != 0. Cas réel observé : Claude
-    # Code écrit output.md via un sub-agent, puis un dernier appel ping
-    # Anthropic et tape un 429. Le main agent propage le 429 → returncode=1,
+    # Code écrit output.md via un sub-agent, puis un dernier appel ping au
+    # fournisseur tape un 429. Le main agent propage le 429 → returncode=1,
     # mais le travail est fait. Sans ce soft-success, on rejouerait pour rien
     # (avec en plus le rate limit qui s'aggrave).
     output_exists = os.path.exists(output_path)
@@ -1362,7 +1429,7 @@ def _run_subprocess(mission_dir: str, model: str, log_path: str, log_mode: str =
 
         if is_rate_limit:
             raise _RateLimitError(
-                f"Rate limit Anthropic 429 sur {chunk_label} "
+                f"Rate limit fournisseur 429 sur {chunk_label} "
                 f"(attente automatique avant retry)"
             )
         raise RuntimeError(
@@ -1427,7 +1494,16 @@ def _ensure_content_pipeline_structure(job: dict) -> list:
     cg_job_ids = []
 
     try:
-        normalized_daily_programs = [_normalize_day_audio_slots(day) for day in daily_programs]
+        from services.formation_pipeline_service import _v2_schedule_days
+
+        schedule_days = _v2_schedule_days(job)
+        normalized_daily_programs = [
+            _normalize_day_audio_slots(
+                day,
+                schedule_day=(schedule_days[index] if schedule_days else None),
+            )
+            for index, day in enumerate(daily_programs)
+        ]
         from services.formation_pipeline_service import _format_slot_generation_source
         for i, day_data in enumerate(normalized_daily_programs):
             day_num = day_data.get("day_number", i + 1)
@@ -1510,7 +1586,14 @@ def _list_content_chunks(job: dict) -> list:
     cursor = conn.cursor()
     chunks = []
     try:
-        for i, day_data in enumerate(_normalize_day_audio_slots(day) for day in daily_programs):
+        from services.formation_pipeline_service import _v2_schedule_days
+
+        schedule_days = _v2_schedule_days(job)
+        for i, raw_day in enumerate(daily_programs):
+            day_data = _normalize_day_audio_slots(
+                raw_day,
+                schedule_day=(schedule_days[i] if schedule_days else None),
+            )
             day_num = day_data.get("day_number", i + 1)
             cg_job_id = cg_job_ids[i]
             cursor.execute(
@@ -1520,7 +1603,9 @@ def _list_content_chunks(job: dict) -> list:
             )
             done = set((r[0], r[1]) for r in cursor.fetchall())
 
-            for sub_idx, sp in enumerate(day_data.get("sub_parts", [])):
+            day_sub_parts = day_data.get("sub_parts", [])
+            total_courses = len(day_sub_parts)
+            for sub_idx, sp in enumerate(day_sub_parts):
                 sub_part_name = sp.get("name", f"Sous-partie {sub_idx + 1}")
                 module_content = _format_slot_generation_source(sp)
                 for passe in (1, 2, 3):
@@ -1533,6 +1618,7 @@ def _list_content_chunks(job: dict) -> list:
                         "folder_name": day_data.get("title") or day_data.get("name") or f"Jour {day_num}",
                         "cg_job_id": cg_job_id,
                         "sub_idx": sub_idx,
+                        "total_courses": total_courses,
                         "sub_part_name": sub_part_name,
                         "module_content": module_content,
                         "passe": passe,
@@ -1906,6 +1992,7 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
         "folder_name": chunk.get("folder_name") or "",
         "sub_part_index": chunk.get("sub_idx"),
         "passe": chunk.get("passe"),
+        "total_courses": chunk.get("total_courses"),
     }
     prompt += "\n\n" + _build_course_position_context(
         **generation_context,
@@ -2701,7 +2788,7 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
     with open(log_path, "w", encoding="utf-8") as f:
         f.write(f"# Mission {step_key} chunked — {total} chunks — {meta['exported_at']}\n")
 
-    # Configuration anti-rate-limit Anthropic (429). Le bootstrap Claude Code
+    # Configuration anti-rate-limit du runner local (429). Le bootstrap
     # à lui seul consomme ~47k tokens d'input par invocation, donc 2 chunks
     # consécutifs dépassent toujours le quota Haiku 50k/min. Le sleep entre
     # chunks aère ce quota ; le retry exponentiel rattrape les 429 résiduels.
@@ -3428,7 +3515,7 @@ _VOLUME_SAFETY_MAX_PASSES = 5  # Boucle anti-déficit bornée sur la cible audio
 
 def _build_volume_safety_prompt_api(job: dict, segment: dict) -> str:
     """Construit le prompt complet (task + input + rules) pour l'enrichissement
-    en mode API direct. Pas de fichiers, tout dans un seul message Claude."""
+    en mode API direct. Pas de fichiers, tout dans un seul message DeepSeek."""
     sub_part_name = segment["sub_part_name"]
     passe = segment["passe"]
     word_count_now = segment["word_count"]
@@ -3502,15 +3589,15 @@ additionnel :"). Environ {addition_words} mots, maximum 2500 mots.
 
 def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dict:
     """Version API de `run_volume_safety` : même invariant de budget audio dynamique,
-    même algorithme multi-passes, mais via `_anthropic_post` au lieu de
-    subprocess `claude`. Consomme du crédit Anthropic — choisi par le mode
-    auto-pilot quand `use_claude_code=False`.
+    même algorithme multi-passes via l'API DeepSeek.
 
     Append-only : le texte original reste intact. Le snapshot
     text_content_pre_review reste valide.
     """
-    from utils.anthropic_client import (
-        AnthropicRateLimitError, default_model, post_message as _anthropic_post
+    from utils.deepseek_client import (
+        DeepSeekRateLimitError,
+        default_model,
+        post_message as _deepseek_post,
     )
 
     if model is None:
@@ -3634,13 +3721,13 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                     seg["word_count"],
                 )
                 prompt = _build_volume_safety_prompt_api(job, seg)
-                addition = _anthropic_post(
+                addition = _deepseek_post(
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=8000,
                     model=model,
                 ).strip()
 
-                # Strip fence markdown si Claude a quand même fencé
+                # Retirer un éventuel bloc de code ajouté par DeepSeek.
                 if addition.startswith("```"):
                     lines = addition.split("\n")
                     if len(lines) > 2 and lines[-1].strip().startswith("```"):
@@ -3698,7 +3785,7 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                     new_words,
                     int((time.time() - segment_started_at) * 1000),
                 )
-            except AnthropicRateLimitError as e:
+            except DeepSeekRateLimitError as e:
                 logger.warning(
                     "PIPELINE_VOLUME_API_SEGMENT_RATE_LIMIT job=%s folder=%s segment_id=%s pass=%s wait_seconds=%s duration_ms=%s",
                     job_id,

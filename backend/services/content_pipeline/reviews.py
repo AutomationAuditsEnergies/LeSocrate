@@ -51,6 +51,7 @@ def structured_review_context_for_segment(
     courses = structured_plan.get("courses") if isinstance(structured_plan, dict) else None
     if not isinstance(courses, list) or not courses:
         return ""
+    total_courses = len(courses)
 
     marker_course_number = extract_audio_block_number(segment_text)
     course_number = marker_course_number or int(sub_idx or 0) + 1
@@ -70,7 +71,7 @@ def structured_review_context_for_segment(
 ═══════════════════════════════════════════════════════════════════
 PLAN JSON VERROUILLÉ DU COURS — CONTEXTE REVIEW
 ═══════════════════════════════════════════════════════════════════
-Tu révises le cours {course_number}/7 : {course_plan.get('course_title') or ''}.
+Tu révises le cours {course_number}/{total_courses} : {course_plan.get('course_title') or ''}.
 Ce segment correspond à UN cours canonique complet, pas à un morceau arbitraire.
 
 Le plan ci-dessous fait autorité. Tu peux corriger une phrase, une transition,

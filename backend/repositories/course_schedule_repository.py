@@ -70,6 +70,20 @@ def format_schedule_datetime(value):
     return value
 
 
+def _ensure_sqlite_v2_session_columns(cursor) -> None:
+    """Keep direct repository users compatible with pre-V2 SQLite fixtures."""
+    cursor.execute("PRAGMA table_info(course_sessions)")
+    columns = {str(row[1]) for row in cursor.fetchall()}
+    for column, column_type in (
+        ("module_day_id", "INTEGER"),
+        ("local_date", "TEXT"),
+    ):
+        if column not in columns:
+            cursor.execute(
+                f"ALTER TABLE course_sessions ADD COLUMN {column} {column_type}"
+            )
+
+
 def replace_course_schedule(
     *,
     platform_id: int,
@@ -85,6 +99,7 @@ def replace_course_schedule(
     guard_lower_bound=None,
     guard_upper_bound=None,
     sqlite_connection=None,
+    schedule_schema_version: int = 1,
 ) -> dict[str, Any]:
     """Replace future planned sessions without deleting course history.
 
@@ -100,6 +115,57 @@ def replace_course_schedule(
                     "SELECT pg_advisory_xact_lock(hashtext(%s))",
                     (f"course-schedule:{int(platform_id)}",),
                 )
+                cur.execute(
+                    """
+                    SELECT session_index, scheduled_at, module_day_id, local_date
+                    FROM course_sessions
+                    WHERE platform_id = %s
+                      AND local_date IS NOT NULL
+                    ORDER BY session_index ASC
+                    """,
+                    (platform_id,),
+                )
+                explicit_rows = [dict(row) for row in cur.fetchall()]
+                if explicit_rows:
+                    if int(schedule_schema_version or 1) < 2:
+                        raise ValueError(
+                            "Le calendrier validé de cette formation est immuable."
+                        )
+                    same_schedule = len(explicit_rows) == len(sessions)
+                    if same_schedule:
+                        for existing, requested in zip(explicit_rows, sessions):
+                            existing_at = format_schedule_datetime(
+                                existing["scheduled_at"]
+                            )
+                            requested_at = format_schedule_datetime(
+                                requested["scheduled_at"]
+                            )
+                            requested_module_day_id = requested.get("module_day_id")
+                            if (
+                                int(existing["session_index"])
+                                != int(requested["session_index"])
+                                or existing_at != requested_at
+                                or str(existing["local_date"])
+                                != str(requested.get("local_date"))
+                                or (
+                                    requested_module_day_id is not None
+                                    and int(existing.get("module_day_id") or 0)
+                                    != int(requested_module_day_id)
+                                )
+                            ):
+                                same_schedule = False
+                                break
+                    if same_schedule:
+                        return {
+                            "deleted_sessions": 0,
+                            "retained_sessions": len(explicit_rows),
+                            "locked_future_sessions": len(explicit_rows),
+                            "inserted_sessions": 0,
+                            "idempotent": True,
+                        }
+                    raise ValueError(
+                        "Le calendrier validé de cette formation est immuable."
+                    )
                 if guard_lower_bound is not None and guard_upper_bound is not None:
                     cur.execute(
                         """
@@ -197,16 +263,21 @@ def replace_course_schedule(
                         """
                         INSERT INTO course_sessions (
                             platform_id, session_index, scheduled_at, status,
+                            module_day_id, local_date,
                             session_password, session_password_generated_at,
                             created_at, updated_at
                         )
-                        VALUES (%s, %s, %s, 'planned', %s, %s, %s, %s)
+                        VALUES (
+                            %s, %s, %s, 'planned', %s, %s, %s, %s, %s, %s
+                        )
                         """,
                         [
                             (
                                 platform_id,
                                 retained_max_index + offset,
                                 item["scheduled_at"],
+                                item.get("module_day_id"),
+                                item.get("local_date"),
                                 item["session_password"],
                                 now,
                                 now,
@@ -226,8 +297,54 @@ def replace_course_schedule(
     conn = sqlite_connection or get_db_connection()
     try:
         cursor = conn.cursor()
+        _ensure_sqlite_v2_session_columns(cursor)
         now_sqlite = _sqlite_datetime(now)
         replacement_boundary = _sqlite_datetime(replace_after or now)
+        cursor.execute(
+            """
+            SELECT session_index, scheduled_at, module_day_id, local_date
+            FROM course_sessions
+            WHERE platform_id = ?
+              AND local_date IS NOT NULL
+            ORDER BY session_index ASC
+            """,
+            (platform_id,),
+        )
+        explicit_rows = cursor.fetchall()
+        if explicit_rows:
+            if int(schedule_schema_version or 1) < 2:
+                raise ValueError(
+                    "Le calendrier validé de cette formation est immuable."
+                )
+            same_schedule = len(explicit_rows) == len(sessions)
+            if same_schedule:
+                for existing, requested in zip(explicit_rows, sessions):
+                    requested_module_day_id = requested.get("module_day_id")
+                    existing_module_day_id = existing[2]
+                    if (
+                        int(existing[0]) != int(requested["session_index"])
+                        or str(existing[1])
+                        != str(_sqlite_datetime(requested["scheduled_at"]))
+                        or str(existing[3]) != str(requested.get("local_date"))
+                        or (
+                            requested_module_day_id is not None
+                            and int(existing_module_day_id or 0)
+                            != int(requested_module_day_id)
+                        )
+                    ):
+                        same_schedule = False
+                        break
+            if same_schedule:
+                return {
+                    "deleted_sessions": 0,
+                    "retained_sessions": len(explicit_rows),
+                    "locked_future_sessions": len(explicit_rows),
+                    "inserted_sessions": 0,
+                    "idempotent": True,
+                }
+            raise ValueError(
+                "Le calendrier validé de cette formation est immuable."
+            )
         cursor.execute(
             """
             INSERT INTO course_schedule_config (
@@ -297,16 +414,19 @@ def replace_course_schedule(
             """
             INSERT INTO course_sessions (
                 platform_id, session_index, scheduled_at, status,
+                module_day_id, local_date,
                 session_password, session_password_generated_at,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, 'planned', ?, ?, ?, ?)
+            VALUES (?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     platform_id,
                     retained_max_index + offset,
                     _sqlite_datetime(item["scheduled_at"]),
+                    item.get("module_day_id"),
+                    item.get("local_date"),
                     item["session_password"],
                     now_sqlite,
                     now_sqlite,
@@ -448,7 +568,7 @@ def get_course_schedule_summary(platform_id: int, *, sqlite_connection=None) -> 
 def list_course_sessions(platform_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
     """Return the product-facing session state for one owned platform."""
     safe_limit = max(1, min(int(limit or 50), 1000))
-    columns = """
+    base_columns = """
         id, platform_id, session_index, scheduled_at, status,
         audio_generation_status, audio_generation_started_at,
         audio_generation_completed_at, audio_generation_attempts,
@@ -462,7 +582,7 @@ def list_course_sessions(platform_id: int, *, limit: int = 50) -> list[dict[str,
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT {columns}
+                    SELECT {base_columns}, module_day_id, local_date
                     FROM course_sessions
                     WHERE platform_id = %s
                     ORDER BY session_index ASC
@@ -475,9 +595,16 @@ def list_course_sessions(platform_id: int, *, limit: int = 50) -> list[dict[str,
     try:
         conn.row_factory = __import__("sqlite3").Row
         cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(course_sessions)")
+        sqlite_columns = {str(row[1]) for row in cursor.fetchall()}
+        v2_columns = (
+            "module_day_id, local_date"
+            if {"module_day_id", "local_date"}.issubset(sqlite_columns)
+            else "NULL AS module_day_id, NULL AS local_date"
+        )
         cursor.execute(
             f"""
-            SELECT {columns}
+            SELECT {base_columns}, {v2_columns}
             FROM course_sessions
             WHERE platform_id = ?
             ORDER BY session_index ASC
@@ -496,6 +623,7 @@ def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str,
     ph = "%s" if postgres else "?"
     query = f"""
         SELECT cs.id, cs.platform_id, cs.session_index, cs.scheduled_at,
+               cs.module_day_id, cs.local_date,
                cs.status, cs.audio_generation_status,
                cs.audio_generation_started_at, cs.audio_generation_completed_at,
                cs.audio_generation_attempts, cs.audio_generation_next_retry_at,
@@ -503,6 +631,12 @@ def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str,
                pc.name,
                COALESCE(
                    pc.source_formation_id,
+                   (
+                       SELECT fm.source_pipeline_job_id
+                       FROM formation_modules fm
+                       WHERE fm.id = pc.source_module_id
+                       LIMIT 1
+                   ),
                    (
                        SELECT j.id FROM formation_pipeline_jobs j
                        WHERE j.platform_id = cs.platform_id

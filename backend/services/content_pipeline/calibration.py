@@ -14,15 +14,18 @@ def course_section_budget_defaults(
     *,
     words_per_minute: float,
     is_last_day: bool,
+    is_last_course: bool | None = None,
 ) -> dict:
     """Split one course word budget into opening, parts, and conclusions."""
     target_words = max(900, int(target_words or 0))
     parts_count = max(2, min(4, int(parts_count or 3)))
+    if is_last_course is None:
+        is_last_course = int(course_number or 0) == 7
     if course_number == 1:
         opening = min(900, max(520, int(target_words * 0.11)))
         conclusion = min(780, max(560, int(target_words * 0.09)))
         day_conclusion = 0
-    elif course_number == 7:
+    elif is_last_course:
         opening = min(520, max(300, int(target_words * 0.06)))
         day_conclusion = int(round(float(words_per_minute or 0) * 2.0))
         conclusion = min(650, max(430, int(target_words * 0.08)))

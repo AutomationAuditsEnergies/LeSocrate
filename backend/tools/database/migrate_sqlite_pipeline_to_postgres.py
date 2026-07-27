@@ -15,6 +15,7 @@ Then run this script:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -37,8 +38,13 @@ from tools.database.migration_utils import (  # noqa: E402
 
 PIPELINE_TABLES = [
     "formation_pipeline_jobs",
+    "formation_modules",
+    "day_schedule_templates",
+    "day_schedule_template_blocks",
+    "formation_module_days",
     "formation_knowledge_base",
     "cours_folders",
+    "formation_module_assets",
     "cours_documents",
     "content_generation_jobs",
     "content_generation_segments",
@@ -46,7 +52,6 @@ PIPELINE_TABLES = [
     "content_script_rules",
     "content_review_reports",
     "formation_pipeline_events",
-    "formation_modules",
     "script_slide_decks",
 ]
 
@@ -64,16 +69,24 @@ BOOL_COLUMNS = {
     "formation_knowledge_base": {"dirty"},
     "content_generation_jobs": {"from_scratch"},
     "content_generation_segments": {"dirty", "reviewed", "humanized"},
+    "formation_modules": {"immutable", "canonical_reuse_allowed"},
+    "formation_module_days": {"immutable"},
+    "formation_module_assets": {"immutable"},
 }
 
 JSON_COLUMNS = {
-    "formation_pipeline_jobs": {"daily_programs"},
+    "formation_pipeline_jobs": {"daily_programs", "schedule_snapshot_json"},
     "formation_knowledge_base": {
         "etudes_de_cas",
         "pieges_frequents",
         "vocabulaire_metier",
         "liens_connexes",
     },
+    "formation_modules": {"canonical_signature_json"},
+    "day_schedule_templates": {"blocks_snapshot_json"},
+    "day_schedule_template_blocks": {"metadata_json"},
+    "formation_module_days": {"blocks_snapshot_json"},
+    "formation_module_assets": {"generation_params_json"},
     "content_generation_jobs": {"sub_parts", "module_contents"},
     "content_review_reports": {"summary_json", "report_json"},
     "formation_pipeline_events": {"data_json"},
@@ -86,10 +99,41 @@ JSON_COLUMNS = {
     },
 }
 
+# psycopg must receive a JSON adapter for actual JSONB target columns.  The
+# generic JSON normalization above still validates and canonicalizes text-only
+# JSON columns used by the historical pipeline.
+JSONB_COLUMNS = {
+    "formation_pipeline_jobs": {"schedule_snapshot_json"},
+    "formation_modules": {"canonical_signature_json"},
+    "day_schedule_templates": {"blocks_snapshot_json"},
+    "day_schedule_template_blocks": {"metadata_json"},
+    "formation_module_days": {"blocks_snapshot_json"},
+    "formation_module_assets": {"generation_params_json"},
+}
+
 TIMESTAMP_COLUMNS = {
-    "formation_pipeline_jobs": {"auto_pilot_locked_at", "created_at", "updated_at"},
+    "formation_pipeline_jobs": {
+        "auto_pilot_locked_at",
+        "schedule_locked_at",
+        "created_at",
+        "updated_at",
+    },
     "formation_knowledge_base": {"created_at", "updated_at"},
     "cours_folders": {"created_at"},
+    "day_schedule_templates": {
+        "used_at",
+        "locked_at",
+        "deleted_at",
+        "created_at",
+        "updated_at",
+    },
+    "day_schedule_template_blocks": {"created_at"},
+    "formation_module_days": {"locked_at", "created_at"},
+    "formation_module_assets": {
+        "last_verified_at",
+        "created_at",
+        "updated_at",
+    },
     "cours_documents": {"created_at"},
     "content_generation_jobs": {"created_at", "updated_at"},
     "content_generation_segments": {"created_at"},
@@ -99,6 +143,8 @@ TIMESTAMP_COLUMNS = {
     "formation_pipeline_events": {"created_at"},
     "formation_modules": {
         "voice_updated_at",
+        "schedule_locked_at",
+        "reusable_at",
         "created_at",
         "validated_at",
         "archived_at",
@@ -316,6 +362,30 @@ def normalize_row(
     )
 
 
+def prepare_postgres_row(
+    table: str,
+    columns: list[str],
+    values: list[object],
+) -> list[object]:
+    """Adapt validated JSON text to PostgreSQL JSONB parameters."""
+    jsonb_columns = JSONB_COLUMNS.get(table, set())
+    if not jsonb_columns:
+        return values
+
+    from psycopg.types.json import Jsonb
+
+    prepared = list(values)
+    for column in jsonb_columns:
+        if column not in columns:
+            continue
+        index = columns.index(column)
+        value = prepared[index]
+        if value is None:
+            continue
+        prepared[index] = Jsonb(json.loads(str(value)))
+    return prepared
+
+
 def apply_schema(database_url: str) -> None:
     import psycopg
 
@@ -327,14 +397,26 @@ def apply_schema(database_url: str) -> None:
 
 
 def truncate_pipeline_tables(pg_conn: Any) -> None:
+    """Clear pipeline rows without cascading into the already imported core.
+
+    ``formation_module_days`` is referenced by ``course_sessions``.  A
+    ``TRUNCATE ... CASCADE`` would therefore erase the core occurrences loaded
+    by the first migration.  Null the temporary bindings, delete children in
+    reverse FK order, then reset only the pipeline sequences.
+    """
     from psycopg import sql
 
     with pg_conn.cursor() as cur:
         cur.execute(
-            sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(
-                sql.SQL(", ").join(sql.Identifier(table) for table in PIPELINE_TABLES)
-            )
+            "UPDATE course_sessions SET module_day_id = NULL "
+            "WHERE module_day_id IS NOT NULL"
         )
+        for table in reversed(PIPELINE_TABLES):
+            cur.execute(
+                sql.SQL("DELETE FROM {}").format(sql.Identifier(table))
+            )
+    for table in PIPELINE_TABLES:
+        bump_sequence(pg_conn, table)
 
 
 def bump_sequence(pg_conn: Any, table: str) -> None:
@@ -455,11 +537,15 @@ def copy_table(
             cur.executemany(
                 insert_stmt,
                 [
-                    normalize_row(
+                    prepare_postgres_row(
                         table,
                         columns,
-                        row,
-                        assumed_timezone=assumed_timezone,
+                        normalize_row(
+                            table,
+                            columns,
+                            row,
+                            assumed_timezone=assumed_timezone,
+                        ),
                     )
                     for row in rows
                 ],
@@ -473,6 +559,73 @@ def copy_table(
         return 0
     print(f"- {table}: source={source_count}, cible_verifiee={verified}")
     return source_count
+
+
+def restore_course_session_module_days(
+    sqlite_conn: sqlite3.Connection,
+    pg_conn: Any,
+) -> int:
+    """Restore V2 occurrence bindings after their durable parents are copied.
+
+    The core migration intentionally imports these values as NULL.  Each
+    restoration is guarded by the existence of both the target occurrence and
+    its formation_module_days parent; any mismatch aborts the surrounding
+    PostgreSQL transaction.
+    """
+    source_columns = sqlite_columns(sqlite_conn, "course_sessions")
+    if "module_day_id" not in source_columns:
+        print("- course_sessions.module_day_id: colonne V1 absente, aucune restauration")
+        return 0
+
+    rows = sqlite_conn.execute(
+        """
+        SELECT id, module_day_id
+        FROM course_sessions
+        WHERE module_day_id IS NOT NULL
+        ORDER BY id ASC
+        """
+    ).fetchall()
+    if not rows:
+        print("- course_sessions.module_day_id: 0 liaison V2")
+        return 0
+
+    restored = 0
+    with pg_conn.cursor() as cur:
+        for row in rows:
+            session_id = int(row["id"])
+            module_day_id = int(row["module_day_id"])
+            cur.execute(
+                """
+                UPDATE course_sessions AS session
+                SET module_day_id = %s
+                WHERE session.id = %s
+                  AND EXISTS (
+                      SELECT 1
+                      FROM formation_module_days AS module_day
+                      WHERE module_day.id = %s
+                  )
+                RETURNING session.id, session.module_day_id
+                """,
+                (module_day_id, session_id, module_day_id),
+            )
+            restored_row = cur.fetchone()
+            if (
+                restored_row is None
+                or int(restored_row[0]) != session_id
+                or int(restored_row[1]) != module_day_id
+            ):
+                raise MigrationValidationError(
+                    "Restauration course_sessions.module_day_id impossible: "
+                    f"session={session_id}, module_day={module_day_id}. "
+                    "Vérifiez que les parents V2 ont tous été importés."
+                )
+            restored += 1
+
+    print(
+        "- course_sessions.module_day_id: "
+        f"source={len(rows)}, cible_verifiee={restored}"
+    )
+    return restored
 
 
 def main() -> int:
@@ -538,6 +691,7 @@ def main() -> int:
                     assumed_timezone=assumed_timezone,
                     batch_size=args.batch_size,
                 )
+            restore_course_session_module_days(sqlite_conn, pg_conn)
             pg_conn.commit()
     finally:
         sqlite_conn.close()

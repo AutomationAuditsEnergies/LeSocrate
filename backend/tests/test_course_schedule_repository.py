@@ -540,6 +540,80 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
+    def test_audio_retry_resolves_pipeline_from_reused_source_module(self):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        try:
+            conn = sqlite3.connect(tmp.name)
+            conn.executescript(
+                """
+                CREATE TABLE platform_config (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    source_formation_id INTEGER,
+                    source_module_id INTEGER
+                );
+                CREATE TABLE formation_pipeline_jobs (
+                    id INTEGER PRIMARY KEY,
+                    platform_id INTEGER NOT NULL
+                );
+                CREATE TABLE formation_modules (
+                    id INTEGER PRIMARY KEY,
+                    source_pipeline_job_id INTEGER
+                );
+                CREATE TABLE course_sessions (
+                    id INTEGER PRIMARY KEY,
+                    platform_id INTEGER NOT NULL,
+                    session_index INTEGER NOT NULL,
+                    scheduled_at TEXT NOT NULL,
+                    module_day_id INTEGER,
+                    local_date TEXT,
+                    status TEXT NOT NULL,
+                    audio_generation_status TEXT,
+                    audio_generation_started_at TEXT,
+                    audio_generation_completed_at TEXT,
+                    audio_generation_attempts INTEGER NOT NULL DEFAULT 0,
+                    audio_generation_next_retry_at TEXT,
+                    audio_storage_prefix TEXT
+                );
+                INSERT INTO formation_pipeline_jobs (id, platform_id)
+                VALUES (44, 7), (99, 12);
+                INSERT INTO formation_modules (id, source_pipeline_job_id)
+                VALUES (8, 44);
+                INSERT INTO platform_config (
+                    id, name, source_formation_id, source_module_id
+                ) VALUES (12, 'Réutilisation CRCD #1', NULL, 8);
+                INSERT INTO course_sessions (
+                    id, platform_id, session_index, scheduled_at,
+                    module_day_id, local_date, status,
+                    audio_generation_status, audio_generation_attempts,
+                    audio_storage_prefix
+                ) VALUES (
+                    9, 12, 1, '2026-09-01 09:00:00',
+                    401, '2026-09-01', 'planned',
+                    'error', 1, 'course-sessions/9'
+                );
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(
+                    repo,
+                    "get_db_connection",
+                    side_effect=lambda: sqlite3.connect(tmp.name),
+                ),
+            ):
+                session = repo.get_audio_generation_session(12, 9)
+
+            self.assertEqual(session["formation_job_id"], 44)
+            self.assertEqual(session["module_day_id"], 401)
+            self.assertEqual(session["local_date"], "2026-09-01")
+        finally:
+            os.unlink(tmp.name)
+
     def test_audio_failures_receive_exponential_retry_deadlines(self):
         db_path = _make_schedule_db()
         try:

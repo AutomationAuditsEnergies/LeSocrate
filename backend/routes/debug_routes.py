@@ -1,8 +1,7 @@
 # debug_routes.py - Routes de debug pour le développement (API JSON)
 from flask import Blueprint, request, session, jsonify
 import state
-from services.audio_service import get_current_audio_info, get_playlist
-from services.time_service import get_heure_debut_cours, get_current_simulated_time
+from services.audio_service import get_current_playback_context
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,11 +43,13 @@ def debug_cours_info():
         platform_id = _get_platform_id()
         logger.info(f"🐛 Accès API debug cours-info P{platform_id}")
 
-        # Récupérer toutes les infos
-        playlist = get_playlist(platform_id)
-        heure_debut_cours = get_heure_debut_cours(platform_id)
-        heure_actuelle_simulee = get_current_simulated_time(platform_id)
-        audio_info, offset, temps_restant = get_current_audio_info(platform_id)
+        playback = get_current_playback_context(platform_id)
+        playlist = playback["playlist"]
+        heure_debut_cours = playback["course_start"]
+        heure_actuelle_simulee = playback["now"]
+        audio_info = playback["audio_info"]
+        offset = playback["offset"]
+        temps_restant = playback["time_remaining"]
 
         # Calculer le temps écoulé
         temps_ecoule_total = 0
@@ -71,6 +72,16 @@ def debug_cours_info():
             "duree_totale_cours_minutes": duree_totale_cours // 60,
             "nombre_audios": len(playlist),
         }
+        if playback["schedule_schema_version"] == 2:
+            occurrence = playback["occurrence"] or {}
+            debug_info.update(
+                {
+                    "schedule_schema_version": 2,
+                    "course_session_id": occurrence.get("id"),
+                    "module_day_id": occurrence.get("module_day_id"),
+                    "folder_id": playlist[0].get("folder_id") if playlist else None,
+                }
+            )
 
         if audio_info:
             debug_info.update(
@@ -117,11 +128,22 @@ def debug_playlist():
         platform_id = _get_platform_id()
         logger.info(f"🐛 Accès API debug playlist P{platform_id}")
 
-        return jsonify({
+        playback = get_current_playback_context(platform_id)
+        payload = {
             "success": True,
             "platform_id": platform_id,
-            "playlist": get_playlist(platform_id),
-        }), 200
+            "playlist": playback["playlist"],
+        }
+        if playback["schedule_schema_version"] == 2:
+            occurrence = playback["occurrence"] or {}
+            payload.update(
+                {
+                    "schedule_schema_version": 2,
+                    "course_session_id": occurrence.get("id"),
+                    "module_day_id": occurrence.get("module_day_id"),
+                }
+            )
+        return jsonify(payload), 200
 
     except Exception as e:
         logger.error(f"❌ Erreur API debug playlist: {e}")

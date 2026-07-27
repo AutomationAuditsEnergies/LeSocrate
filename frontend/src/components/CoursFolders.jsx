@@ -9,30 +9,6 @@ const Icon = ({ name, className = '' }) => (
 
 const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
 
-const COURS_DURATIONS_MAP = { 1: 45, 2: 45, 3: 55, 4: 45, 5: 60, 6: 60, 7: 50 }
-
-const AUDIO_PLAYLIST_ITEMS = [
-  { filename: 'cours_9h00_9h45.mp3', type: 'cours', label: '9h00 → 9h45' },
-  { filename: 'qa_9h45_9h55.mp3', type: 'qa', label: '9h45 → 9h55' },
-  { filename: 'pause_9h55_10h05.mp3', type: 'pause', label: '9h55 → 10h05' },
-  { filename: 'cours_10h05_10h50.mp3', type: 'cours', label: '10h05 → 10h50' },
-  { filename: 'qa_10h50_11h00.mp3', type: 'qa', label: '10h50 → 11h00' },
-  { filename: 'pause_11h00_11h05.mp3', type: 'pause', label: '11h00 → 11h05' },
-  { filename: 'cours_11h05_12h00.mp3', type: 'cours', label: '11h05 → 12h00' },
-  { filename: 'qa_12h00_12h10.mp3', type: 'qa', label: '12h00 → 12h10' },
-  { filename: 'pause_12h10_12h20.mp3', type: 'pause', label: '12h10 → 12h20' },
-  { filename: 'pause_midi_13h15_14h45.mp3', type: 'pause', label: 'Midi 13h15 → 14h45' },
-  { filename: 'cours_12h20_13h05.mp3', type: 'cours', label: '12h20 → 13h05' },
-  { filename: 'qa_13h05_13h15.mp3', type: 'qa', label: '13h05 → 13h15' },
-  { filename: 'cours_14h45_15h45.mp3', type: 'cours', label: '14h45 → 15h45' },
-  { filename: 'qa_15h45_16h00.mp3', type: 'qa', label: '15h45 → 16h00' },
-  { filename: 'cours_16h00_17h00.mp3', type: 'cours', label: '16h00 → 17h00' },
-  { filename: 'qa_17h00_17h15.mp3', type: 'qa', label: '17h00 → 17h15' },
-  { filename: 'pause_17h15_17h25.mp3', type: 'pause', label: '17h15 → 17h25' },
-  { filename: 'cours_17h25_18h15.mp3', type: 'cours', label: '17h25 → 18h15' },
-  { filename: 'qa_18h15_18h30.mp3', type: 'qa', label: '18h15 → 18h30' },
-]
-
 const AUDIO_FILTERS = [
   { value: 'cours', label: 'Cours' },
   { value: 'qa', label: 'Q&A' },
@@ -46,14 +22,43 @@ const AUDIO_TYPE_META = {
   pause: { label: 'Pause', icon: 'free_breakfast', color: '#f59e0b', lightBg: '#fffbeb', darkBg: '#92400e22', lightBorder: '#fde68a', darkBorder: '#b45309' },
 }
 
+const normalizeAudioType = (fileType = '', filename = '') => {
+  const normalizedType = String(fileType || '').toLowerCase()
+  if (normalizedType === 'cours' || normalizedType === 'course') return 'cours'
+  if (normalizedType === 'qa') return 'qa'
+  if (normalizedType === 'pause' || normalizedType === 'pause_midi') return 'pause'
+  const basename = String(filename || '').toLowerCase()
+  if (/^(cours|course)(?:_|-)/.test(basename)) return 'cours'
+  if (/^(qa|qr)(?:_|-)/.test(basename)) return 'qa'
+  return 'pause'
+}
+
+const audioPlaylistLabel = (item = {}) => {
+  const minutes = Math.round(Number(item.duration_seconds || 0) / 60)
+  const type = normalizeAudioType(item.type, item.filename)
+  const typeLabel = type === 'cours' ? 'Cours' : type === 'qa' ? 'Q&A' : 'Pause'
+  return minutes > 0 ? `${typeLabel} · ${minutes} min` : typeLabel
+}
+
+const courseDurationLabel = (items = [], courseIndex) => {
+  const courseItem = items.find(item => (
+    normalizeAudioType(item.type, item.filename) === 'cours'
+    && Number(item.course_index) === Number(courseIndex)
+  ))
+  const durationSeconds = Number(courseItem?.duration_seconds || 0)
+
+  return durationSeconds > 0
+    ? `${Math.round(durationSeconds / 60)}min`
+    : 'durée variable'
+}
+
 const PLAYLIST_VOICE_OPTIONS = [
   { value: 'gtts', label: 'gTTS', icon: 'bolt', hint: 'rapide, économique' },
   { value: 'fish_audio', label: 'Fish Audio', icon: 'graphic_eq', hint: 'voix premium payante' },
 ]
 
 const isCourseAudioFilename = (filename = '') => (
-  AUDIO_PLAYLIST_ITEMS.some(item => item.filename === filename && item.type === 'cours')
-  || /^cours_.*\.mp3$/i.test(filename)
+  /^(cours|course)(?:_|-).*\.mp3$/i.test(filename)
 )
 
 const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
@@ -97,6 +102,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [wordAnalysis, setWordAnalysis] = useState(null) // résultat analyse mots
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
+  const [audioPlaylistItems, setAudioPlaylistItems] = useState([]) // manifeste V1/V2 attendu
   const [deletingAudioFile, setDeletingAudioFile] = useState('')
   const [dragFolderIdx, setDragFolderIdx] = useState(null)
   const [dragOverFolderIdx, setDragOverFolderIdx] = useState(null)
@@ -1064,6 +1070,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setTtsStatus(null)
     setWordAnalysis(null)
     setGeneratedAudios([])
+    setAudioPlaylistItems([])
     setContentJob(null)
     setProgramText('')
     stopContentPolling()
@@ -1077,6 +1084,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setSelectedFolder(null)
     setDocuments([])
     setTtsStatus(null)
+    setAudioPlaylistItems([])
     stopContentPolling()
     if (pollingRef.current) {
       clearInterval(pollingRef.current)
@@ -1353,7 +1361,14 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     try {
       const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/generated-audios`)
       const data = await resp.json()
-      if (data.success) setGeneratedAudios(data.audios)
+      if (data.success) {
+        setGeneratedAudios(Array.isArray(data.audios) ? data.audios : [])
+        setAudioPlaylistItems(
+          Array.isArray(data.audio_playlist_items)
+            ? data.audio_playlist_items
+            : [],
+        )
+      }
     } catch (e) {
       console.error('Erreur chargement audios générés:', e)
     }
@@ -1395,7 +1410,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder || mockUploading) return
 
     // Garde-fou : si des audios existent déjà dans le dossier, demander confirmation
-    const existingCours = generatedAudios.filter(a => a.filename?.startsWith('cours_'))
+    const existingCours = generatedAudios.filter(a => isCourseAudioFilename(a.filename))
     if (existingCours.length > 0) {
       const confirmed = window.confirm(
         `⚠️ Attention\n\n` +
@@ -1736,10 +1751,20 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const playlistRunning = playlistJob?.status === 'running'
   const selectedPlaylistVoice = PLAYLIST_VOICE_OPTIONS.find(option => option.value === playlistVoiceType) || PLAYLIST_VOICE_OPTIONS[0]
   const canGeneratePlaylistAudio = Boolean(dirtyBlocs?.has_script)
+  const expectedCourseCount = Math.max(
+    0,
+    Number(dirtyBlocs?.total_blocs)
+      || audioPlaylistItems.filter(item => normalizeAudioType(item.type, item.filename) === 'cours').length
+      || Number(scriptModal?.blocs?.length)
+      || 0,
+  )
+  const expectedCourseLabel = expectedCourseCount
+    ? `${expectedCourseCount} cours`
+    : 'les cours'
   const playlistActionLabel = playlistRunning
     ? 'Pipeline audio en cours...'
     : canGeneratePlaylistAudio
-      ? 'Générer les 7 cours du dossier'
+      ? `Générer ${expectedCourseLabel} du dossier`
       : 'Script texte requis'
 
   return (
@@ -2030,7 +2055,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                   <div className="max-h-72 overflow-y-auto p-2">
                     {(() => {
                       const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
-                      const visibleItems = AUDIO_PLAYLIST_ITEMS.filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
+                      const manifestItems = audioPlaylistItems.length
+                        ? audioPlaylistItems
+                        : generatedAudios.map(audio => ({
+                          filename: audio.filename,
+                          type: normalizeAudioType('', audio.filename),
+                          duration_seconds: 0,
+                        }))
+                      const visibleItems = manifestItems
+                        .map(item => ({
+                          ...item,
+                          type: normalizeAudioType(item.type, item.filename),
+                        }))
+                        .filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
                       return visibleItems.map((item) => {
                         const audio = generatedMap[item.filename]
                         const meta = AUDIO_TYPE_META[item.type] || AUDIO_TYPE_META.cours
@@ -2062,9 +2099,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                             <div className="flex-1 min-w-0">
                               <p className="flex items-center gap-2 text-xs font-medium" style={{ color: audio ? colors.textSecondary : colors.textMuted }}>
                                 <Icon name={meta.icon} style={{ color: colors.textMuted, fontSize: '16px' }} />
-                                <span>{item.label}</span>
+                                <span>{audioPlaylistLabel(item)}</span>
                                 <span style={{ color: colors.textMuted, fontWeight: 600 }}>
-                                  · {meta.label}
+                                  · {item.filename}
                                 </span>
                               </p>
                             </div>
@@ -2129,7 +2166,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                   <div className="flex items-center gap-2 mb-1">
                     <Icon name="check_circle" style={{ color: '#22c55e' }} />
                     <p className="text-sm font-bold" style={{ color: darkMode ? '#86efac' : '#166534' }}>
-                      {playlistJob.result.filled_blocs || playlistJob.result.generated}/7 blocs générés
+                      {playlistJob.result.filled_blocs || playlistJob.result.generated}
+                      {expectedCourseCount ? `/${expectedCourseCount}` : ''} cours générés
                       {playlistJob.result.errors > 0 && ` · ${playlistJob.result.errors} erreur(s)`}
                     </p>
                   </div>
@@ -2270,7 +2308,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                     title="Compléter les cours audio manquants sans écraser les MP3 déjà présents"
                   >
                     <Icon name={selectedPlaylistVoice.icon} style={{ fontSize: '14px' }} />
-                    Générer les 7 cours
+                    Générer {expectedCourseLabel}
                   </button>
                   <button
                     type="button"
@@ -2491,7 +2529,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                           >
                             <p className="font-semibold mb-1">
                               {d.bloc_number ? (
-                                <>Cours {d.bloc_number}/7{d.filename ? <span style={{ color: colors.textMuted, fontWeight: 400 }}> · {d.filename}</span> : null}</>
+                                <>Cours {d.bloc_number}{expectedCourseCount ? `/${expectedCourseCount}` : ''}{d.filename ? <span style={{ color: colors.textMuted, fontWeight: 400 }}> · {d.filename}</span> : null}</>
                               ) : (
                                 <>{d.sub_part_name}{d.passe ? ` · passe ${d.passe}` : ''}</>
                               )}
@@ -3292,7 +3330,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                 <div>
                   <h3 className="text-base font-semibold" style={{ color: colors.text }}>Script reformulé par Claude</h3>
                   <p className="text-xs" style={{ color: colors.textMuted }}>
-                    {scriptModal.filled_blocs}/7 blocs · {scriptModal.source_words} mots source
+                    {scriptModal.filled_blocs}
+                    {expectedCourseCount ? `/${expectedCourseCount}` : ''} blocs · {scriptModal.source_words} mots source
                     {scriptModal.remaining_source_words > 50 && ` · ${scriptModal.remaining_source_words} mots surplus`}
                   </p>
                 </div>
@@ -3320,7 +3359,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                         Bloc {bloc.bloc_number}
                       </span>
                       <span className="text-xs" style={{ color: colors.textMuted }}>
-                        {COURS_DURATIONS_MAP[bloc.bloc_number]}min
+                        {courseDurationLabel(audioPlaylistItems, bloc.bloc_number)}
                       </span>
                       {bloc.skipped ? (
                         <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fee2e2', color: '#ef4444' }}>Vide</span>

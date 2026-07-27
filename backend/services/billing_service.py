@@ -6,10 +6,12 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from config import FRANCE_TZ
+from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
 from repositories.billing_repository import (
     apply_stripe_webhook_event,
     attach_checkout_session,
@@ -20,6 +22,13 @@ from repositories.billing_repository import (
     get_reusable_module,
     record_webhook_failure,
     retry_order_fulfillment,
+)
+from repositories.day_schedule_repository import get_template, mark_template_used
+from services.dynamic_day_schedule_service import (
+    SCHEDULE_SCHEMA_VERSION,
+    ScheduleValidationError,
+    compile_module_schedule,
+    validate_new_module_lead_time,
 )
 
 
@@ -52,6 +61,306 @@ WEEKDAY_IDS = {
     "jeudi": 3,
     "vendredi": 4,
 }
+
+
+def _schedule_schema_version(schedule: Any) -> int:
+    if not isinstance(schedule, Mapping):
+        return 1
+    raw = schedule.get(
+        "schedule_schema_version",
+        schedule.get("schema_version"),
+    )
+    if raw in (None, ""):
+        return 2 if "selected_dates" in schedule else 1
+    try:
+        version = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise BillingError("La version du planning est invalide.") from exc
+    if version not in (1, SCHEDULE_SCHEMA_VERSION):
+        raise BillingError("La version du planning n’est pas prise en charge.")
+    return version
+
+
+def _normalize_template_assignments(assignments: Any) -> dict[Any, int]:
+    if isinstance(assignments, Mapping):
+        raw_items = assignments.items()
+    elif isinstance(assignments, Sequence) and not isinstance(
+        assignments,
+        (str, bytes),
+    ):
+        raw_items = []
+        for index, assignment in enumerate(assignments):
+            if not isinstance(assignment, Mapping):
+                raise BillingError(
+                    f"L’affectation de template n°{index + 1} est invalide."
+                )
+            raw_items.append(
+                (
+                    assignment.get("date"),
+                    assignment.get(
+                        "template_id",
+                        assignment.get("template_key"),
+                    ),
+                )
+            )
+    else:
+        raise BillingError(
+            "Chaque date doit être affectée à un template de journée."
+        )
+
+    normalized: dict[Any, int] = {}
+    for raw_date, raw_template_id in raw_items:
+        if raw_date in normalized:
+            raise BillingError(
+                "Une date ne peut recevoir qu’une seule affectation de template."
+            )
+        try:
+            template_id = int(raw_template_id)
+        except (TypeError, ValueError) as exc:
+            raise BillingError("Un identifiant de template est invalide.") from exc
+        if template_id <= 0:
+            raise BillingError("Un identifiant de template est invalide.")
+        normalized[raw_date] = template_id
+    return normalized
+
+
+def _normalize_template_hashes(
+    template_hashes: Any,
+    template_ids: Sequence[int],
+) -> dict[int, str]:
+    if not isinstance(template_hashes, Mapping):
+        raise BillingError(
+            "Rechargez les templates de journée avant de valider le planning."
+        )
+    expected_ids = {int(template_id) for template_id in template_ids}
+    normalized: dict[int, str] = {}
+    for raw_template_id, raw_hash in template_hashes.items():
+        try:
+            template_id = int(raw_template_id)
+        except (TypeError, ValueError) as exc:
+            raise BillingError("Un identifiant de template est invalide.") from exc
+        blocks_hash = str(raw_hash or "").strip().lower()
+        if (
+            template_id not in expected_ids
+            or not re.fullmatch(r"[0-9a-f]{64}", blocks_hash)
+        ):
+            raise BillingError(
+                "La version confirmée d’un template de journée est invalide."
+            )
+        normalized[template_id] = blocks_hash
+    if set(normalized) != expected_ids:
+        raise BillingError(
+            "La version confirmée de chaque template est requise."
+        )
+    return normalized
+
+
+def _day_start_at(day: Mapping[str, Any]) -> datetime:
+    try:
+        day_date = datetime.strptime(str(day["date"]), "%Y-%m-%d").date()
+        first_start_minute = int(day["blocks"][0]["start_minute"])
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise BillingError("La première journée compilée est invalide.") from exc
+    try:
+        return FRANCE_TZ.localize(
+            datetime.combine(
+                day_date,
+                time(first_start_minute // 60, first_start_minute % 60),
+            ),
+            is_dst=None,
+        )
+    except (AmbiguousTimeError, NonExistentTimeError) as exc:
+        raise BillingError(
+            "L’heure choisie n’existe pas sans ambiguïté à cette date."
+        ) from exc
+
+
+def _normalize_v2_new_schedule(
+    schedule: Any,
+    *,
+    center_account_id: int,
+) -> dict[str, Any]:
+    if not isinstance(schedule, Mapping):
+        raise BillingError("Le planning détaillé de la formation est requis.")
+    selected_dates = schedule.get("selected_dates")
+    assignments = _normalize_template_assignments(
+        schedule.get("template_assignments")
+    )
+    template_ids = sorted(set(assignments.values()))
+    template_hashes = _normalize_template_hashes(
+        schedule.get("template_hashes"),
+        template_ids,
+    )
+    templates: dict[int, dict[str, Any]] = {}
+    for template_id in template_ids:
+        template = get_template(center_account_id, template_id)
+        if not template:
+            raise BillingError(
+                f"Le template de journée {template_id} est introuvable pour ce centre.",
+                status_code=404,
+            )
+        if str(template.get("blocks_hash") or "").strip().lower() != (
+            template_hashes[template_id]
+        ):
+            raise BillingError(
+                "Un template a changé depuis votre confirmation. "
+                "Rechargez le planning avant de continuer.",
+                status_code=409,
+            )
+        templates[template_id] = {
+            "name": template.get("name"),
+            "blocks": template.get("blocks") or [],
+        }
+    try:
+        snapshot = compile_module_schedule(
+            selected_dates,
+            assignments,
+            templates,
+        )
+        validate_new_module_lead_time(
+            _billing_now(),
+            _day_start_at(snapshot["days"][0]),
+        )
+    except ScheduleValidationError as exc:
+        raise BillingError(str(exc)) from exc
+
+    return {
+        **snapshot,
+        "schedule_schema_version": SCHEDULE_SCHEMA_VERSION,
+        "selected_dates": [day["date"] for day in snapshot["days"]],
+        "template_assignments": {
+            day["date"]: int(day["template_key"])
+            for day in snapshot["days"]
+        },
+        "template_hashes": {
+            str(template_id): blocks_hash
+            for template_id, blocks_hash in template_hashes.items()
+        },
+    }
+
+
+def _normalize_v2_reuse_schedule(
+    schedule: Any,
+    *,
+    module: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(schedule, Mapping):
+        raise BillingError("Les nouvelles dates de la formation sont requises.")
+    selected_dates = schedule.get("selected_dates")
+    if (
+        isinstance(selected_dates, (str, bytes))
+        or not isinstance(selected_dates, Sequence)
+        or not selected_dates
+    ):
+        raise BillingError("Sélectionnez les dates de toutes les journées.")
+
+    normalized_dates: list[str] = []
+    for index, raw_date in enumerate(selected_dates):
+        try:
+            parsed = datetime.strptime(str(raw_date), "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise BillingError(
+                f"La date n°{index + 1} est invalide."
+            ) from exc
+        canonical = parsed.isoformat()
+        if canonical != str(raw_date):
+            raise BillingError(
+                f"La date n°{index + 1} doit respecter le format YYYY-MM-DD."
+            )
+        normalized_dates.append(canonical)
+    if len(set(normalized_dates)) != len(normalized_dates):
+        raise BillingError("Une même date ne peut pas être sélectionnée deux fois.")
+    normalized_dates.sort()
+
+    expected_days = int(
+        module.get("nb_days")
+        or module.get("module_day_count")
+        or module.get("nb_folders")
+        or 0
+    )
+    if expected_days <= 0:
+        raise BillingError(
+            "Le nombre de journées de ce module est introuvable.",
+            status_code=409,
+        )
+    if len(normalized_dates) != expected_days:
+        raise BillingError(
+            f"Ce module doit être replacé sur exactement {expected_days} journées."
+        )
+
+    module_schema_version = int(module.get("schedule_schema_version") or 1)
+    if module_schema_version < SCHEDULE_SCHEMA_VERSION:
+        raise BillingError(
+            "Ce module historique conserve son calendrier de réutilisation classique.",
+            status_code=409,
+        )
+    if module_schema_version >= SCHEDULE_SCHEMA_VERSION:
+        if int(module.get("module_day_count") or 0) != expected_days:
+            raise BillingError(
+                "Le déroulé durable de ce module est incomplet.",
+                status_code=409,
+            )
+        reusable_at = module.get("reusable_at")
+        if reusable_at is None:
+            raise BillingError(
+                "Ce module ne peut pas encore être réutilisé.",
+                status_code=409,
+            )
+        if not isinstance(reusable_at, datetime):
+            try:
+                reusable_at = datetime.fromisoformat(str(reusable_at))
+            except ValueError as exc:
+                raise BillingError(
+                    "La date de réutilisation du module est invalide.",
+                    status_code=409,
+                ) from exc
+        if reusable_at.tzinfo is None:
+            reusable_at = FRANCE_TZ.localize(reusable_at)
+        if reusable_at.astimezone(FRANCE_TZ) > _billing_now():
+            raise BillingError(
+                "Ce module sera réutilisable après la fin de sa formation initiale.",
+                status_code=409,
+            )
+
+    return {
+        "schema_version": SCHEDULE_SCHEMA_VERSION,
+        "schedule_schema_version": SCHEDULE_SCHEMA_VERSION,
+        "selected_dates": normalized_dates,
+        "day_count": expected_days,
+    }
+
+
+def _authoritative_reuse_schedule_version(
+    schedule: Any,
+    *,
+    module: Mapping[str, Any],
+) -> int:
+    """Require the promotion calendar to use the durable module's contract."""
+    try:
+        module_version = int(module.get("schedule_schema_version") or 1)
+    except (TypeError, ValueError) as exc:
+        raise BillingError(
+            "La version du planning durable de ce module est invalide.",
+            status_code=409,
+        ) from exc
+    if module_version not in (1, SCHEDULE_SCHEMA_VERSION):
+        raise BillingError(
+            "La version du planning durable de ce module n’est pas prise en charge.",
+            status_code=409,
+        )
+
+    payload_version = _schedule_schema_version(schedule)
+    if payload_version == module_version:
+        return module_version
+    if module_version == SCHEDULE_SCHEMA_VERSION:
+        raise BillingError(
+            "Ce module durable V2 exige un calendrier de réutilisation V2.",
+            status_code=409,
+        )
+    raise BillingError(
+        "Ce module historique V1 conserve son calendrier de réutilisation classique.",
+        status_code=409,
+    )
 
 
 def _center_is_exempt(center: dict[str, Any]) -> bool:
@@ -279,26 +588,42 @@ def _normalize_project(data: dict[str, Any], center_account_id: int) -> tuple[st
         formation = dict(project.get("new_formation") or {})
         formation["tp_name"] = str(formation.get("tp_name") or "").strip()[:200]
         formation["rncp_code"] = str(formation.get("rncp_code") or "").strip()[:80]
-        try:
-            formation["total_hours"] = int(formation.get("total_hours") or 0)
-        except (TypeError, ValueError):
-            formation["total_hours"] = 0
-        if (
-            not formation["tp_name"]
-            or not formation["rncp_code"]
-            or formation["total_hours"] <= 0
-            or formation["total_hours"] % 7 != 0
-        ):
-            raise BillingError("La formation, le code RNCP et la durée sont requis.")
-        formation["schedule"] = _normalize_schedule(
-            formation.get("schedule"),
-            total_training_days=formation["total_hours"] // 7,
-        )
+        schedule_version = _schedule_schema_version(formation.get("schedule"))
+        if not formation["tp_name"] or not formation["rncp_code"]:
+            raise BillingError("La formation et le code RNCP sont requis.")
+        if schedule_version == SCHEDULE_SCHEMA_VERSION:
+            formation["schedule"] = _normalize_v2_new_schedule(
+                formation.get("schedule"),
+                center_account_id=center_account_id,
+            )
+            training_days = int(formation["schedule"]["day_count"])
+            # ``ai_teacher_orders`` and a few legacy diagnostics still require
+            # an integer total_hours. V2 never derives a day count or a price
+            # from it; the immutable snapshot is authoritative.
+            formation["total_hours"] = training_days * 7
+        else:
+            try:
+                formation["total_hours"] = int(formation.get("total_hours") or 0)
+            except (TypeError, ValueError):
+                formation["total_hours"] = 0
+            if (
+                formation["total_hours"] <= 0
+                or formation["total_hours"] % 7 != 0
+            ):
+                raise BillingError(
+                    "La formation, le code RNCP et la durée sont requis."
+                )
+            training_days = formation["total_hours"] // 7
+            formation["schedule"] = _normalize_schedule(
+                formation.get("schedule"),
+                total_training_days=training_days,
+            )
         project["new_formation"] = formation
         details = {
             "training_title": formation["tp_name"],
             "rncp_code": formation["rncp_code"],
             "total_hours": formation["total_hours"],
+            "training_days": training_days,
             "source_module_id": None,
         }
     else:
@@ -315,15 +640,28 @@ def _normalize_project(data: dict[str, Any], center_account_id: int) -> tuple[st
         ):
             raise BillingError("Cet ancien professeur n’est pas réutilisable.", status_code=404)
         total_hours = max(7, int(module.get("total_hours") or 0))
-        project["schedule"] = _normalize_schedule(
+        schedule_version = _authoritative_reuse_schedule_version(
             project.get("schedule"),
-            total_training_days=max(1, (total_hours + 6) // 7),
+            module=module,
         )
+        if schedule_version == SCHEDULE_SCHEMA_VERSION:
+            project["schedule"] = _normalize_v2_reuse_schedule(
+                project.get("schedule"),
+                module=module,
+            )
+            training_days = int(project["schedule"]["day_count"])
+        else:
+            training_days = max(1, (total_hours + 6) // 7)
+            project["schedule"] = _normalize_schedule(
+                project.get("schedule"),
+                total_training_days=training_days,
+            )
         project["module_id"] = module_id
         details = {
             "training_title": module["tp_name"],
             "rncp_code": module.get("rncp_code"),
             "total_hours": total_hours,
+            "training_days": training_days,
             "source_module_id": module_id,
         }
     canonical = json.dumps(
@@ -347,7 +685,7 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
         raise BillingError("Compte centre introuvable ou désactivé.", status_code=403)
     operation_type, project, details = _normalize_project(data, center_account_id)
     product = get_product_catalog()[operation_type]
-    training_days = max(1, (int(details["total_hours"]) + 6) // 7)
+    training_days = int(details["training_days"])
     catalog_amount_cents = int(product["unit_amount_cents"]) * training_days
     exempt = _center_is_exempt(center)
     if not exempt and not product["configured"]:
@@ -374,6 +712,34 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
     })
     if not created and order["request_fingerprint"] != details["request_fingerprint"]:
         raise BillingError("Cette demande existe déjà avec un autre contenu.", status_code=409)
+    new_schedule = (project.get("new_formation") or {}).get("schedule") or {}
+    if (
+        operation_type == "new_teacher"
+        and _schedule_schema_version(new_schedule) == SCHEDULE_SCHEMA_VERSION
+    ):
+        template_ids = {
+            int(template_id)
+            for template_id in (
+                new_schedule.get("template_assignments") or {}
+            ).values()
+        }
+        for template_id in sorted(template_ids):
+            expected_hash = str(
+                (new_schedule.get("template_hashes") or {}).get(
+                    str(template_id)
+                )
+                or ""
+            )
+            if not mark_template_used(
+                center_account_id,
+                template_id,
+                expected_blocks_hash=expected_hash,
+            ):
+                raise BillingError(
+                    f"Le template de journée {template_id} n’est plus "
+                    "disponible dans la version confirmée.",
+                    status_code=409,
+                )
     if order.get("fulfillment_status") in {"queued", "running", "fulfilled"}:
         return {"order": order, "next_action": "track"}
     if order.get("payment_status") in {"paid", "not_required"}:

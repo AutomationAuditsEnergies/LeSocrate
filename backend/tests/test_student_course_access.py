@@ -272,6 +272,89 @@ class StudentCourseAccessTest(unittest.TestCase):
         self.assertTrue(storage_response.closed)
         self.assertEqual(stream.headers["Cache-Control"], "private, no-store")
 
+    def test_v2_slide_lookup_is_scoped_to_occurrence_folder_day_and_prefix(self):
+        self._set_student_session()
+        occurrence = self.occurrences[(self.PLATFORM_ID, self.SESSION_J1)]
+        occurrence["module_day_id"] = 404
+        audio = {
+            **self._audio(),
+            "folder_id": 52,
+            "module_day_id": 404,
+            "schedule_schema_version": 2,
+        }
+        deck = {
+            "deck_id": 52,
+            "folder_id": 52,
+            "audio_sync": {
+                "timings": [{"audio_filename": "course_01.mp3", "start_time": 0}],
+            },
+            "slides": [{"slide_id": "s1", "audio_filename": "course_01.mp3"}],
+        }
+        with patch.object(
+            video_routes,
+            "get_course_session_audio_info",
+            return_value=(audio, 0, 0),
+        ), patch.object(
+            video_routes,
+            "get_latest_script_slide_deck_for_audio",
+            return_value=deck,
+        ) as get_deck:
+            response = self.client.get("/api/video/slides")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        get_deck.assert_called_once_with(
+            audio["filename"],
+            platform_id=self.PLATFORM_ID,
+            folder_id=52,
+            module_day_id=404,
+            audio_storage_prefix=f"course-sessions/{self.SESSION_J1}",
+        )
+
+    def test_v2_occurrence_without_storage_prefix_never_uses_root_audio(self):
+        self._set_student_session()
+        occurrence = self.occurrences[(self.PLATFORM_ID, self.SESSION_J1)]
+        occurrence.update({"module_day_id": 404, "audio_storage_prefix": None})
+        audio = {
+            **self._audio(),
+            "folder_id": 52,
+            "module_day_id": 404,
+            "schedule_schema_version": 2,
+        }
+        with patch.object(
+            video_routes,
+            "get_course_session_audio_info",
+            return_value=(audio, 0, 0),
+        ), patch.object(video_routes.http_requests, "get") as storage_get:
+            response = self.client.get("/api/audio/stream")
+
+        self.assertEqual(response.status_code, 500, response.get_json())
+        self.issue_audio_url.assert_not_called()
+        storage_get.assert_not_called()
+
+    def test_v1_occurrence_without_storage_prefix_keeps_root_audio(self):
+        self._set_student_session()
+        occurrence = self.occurrences[(self.PLATFORM_ID, self.SESSION_J1)]
+        occurrence["audio_storage_prefix"] = None
+        audio = self._audio()
+        storage_response = _StorageResponse()
+        with patch.object(
+            video_routes,
+            "get_course_session_audio_info",
+            return_value=(audio, 0, 0),
+        ), patch.object(
+            video_routes.http_requests,
+            "get",
+            return_value=storage_response,
+        ):
+            response = self.client.get("/api/audio/stream")
+
+        self.assertEqual(response.status_code, 200, response.get_json(silent=True))
+        self.issue_audio_url.assert_called_once()
+        self.assertEqual(
+            self.issue_audio_url.call_args.args,
+            (self.PLATFORM_ID, "cours_01.mp3"),
+        )
+
     def test_current_audio_ticket_streams_without_a_third_party_cookie(self):
         self._set_student_session()
         audio = self._audio()
@@ -392,22 +475,33 @@ class StudentCourseAccessTest(unittest.TestCase):
         self.assertEqual(expired_response.status_code, 401)
         storage_get.assert_not_called()
 
-    def test_break_status_never_issues_or_downloads_audio(self):
+    def test_break_status_issues_and_streams_its_timed_audio(self):
         self._set_student_session()
         pause_audio = {**self._audio(), "id": 2, "type": "pause", "title": "Pause"}
+        storage_response = _StorageResponse()
         with patch.object(
             video_routes,
             "get_course_session_audio_info",
             return_value=(pause_audio, 30, 0),
         ), patch.object(
             video_routes, "get_playlist", return_value=[pause_audio]
-        ), patch.object(video_routes.http_requests, "get") as storage_get:
+        ), patch.object(
+            video_routes.http_requests,
+            "get",
+            return_value=storage_response,
+        ) as storage_get:
             status = self.client.get("/api/video/status")
-            stream = self.client.get("/api/audio/stream")
+            stream = self.client.get(
+                "/api/audio/stream",
+                query_string={
+                    "stream_token": status.get_json()["audio_stream_token"],
+                },
+            )
 
-        self.assertNotIn("audio_stream_token", status.get_json())
-        self.assertEqual(stream.status_code, 204)
-        storage_get.assert_not_called()
+        self.assertTrue(status.get_json().get("audio_stream_token"))
+        self.assertEqual(stream.status_code, 200)
+        self.assertEqual(stream.data, b"audio-bytes")
+        storage_get.assert_called_once()
 
     def test_after_course_audio_and_deck_are_closed(self):
         self._set_student_session()
@@ -432,16 +526,14 @@ class StudentCourseAccessTest(unittest.TestCase):
 
     def test_j2_link_during_j1_never_opens_j1_audio(self):
         self._set_student_session(course_session_id=self.SESSION_J2)
-        j1_audio = self._audio()
         with patch.object(
             video_routes,
             "get_course_session_audio_info",
             return_value=(None, 0, 7 * 24 * 3600),
         ) as occurrence_audio, patch.object(
             video_routes,
-            "get_current_audio_info",
-            return_value=(j1_audio, 300, 0),
-        ) as platform_audio, patch.object(
+            "get_current_playback_context",
+        ) as platform_playback, patch.object(
             video_routes.http_requests, "get"
         ) as storage_get:
             status = self.client.get("/api/video/status")
@@ -450,15 +542,24 @@ class StudentCourseAccessTest(unittest.TestCase):
         self.assertEqual(status.get_json()["status"], "waiting")
         self.assertEqual(stream.status_code, 425, stream.get_json())
         self.assertTrue(all(call.args[1] == self.j2_at for call in occurrence_audio.call_args_list))
-        platform_audio.assert_not_called()
+        platform_playback.assert_not_called()
         storage_get.assert_not_called()
 
     def test_public_status_never_discloses_audio_metadata(self):
         audio = self._audio()
         with patch.object(
             video_routes,
-            "get_current_audio_info",
-            return_value=(audio, 300, 0),
+            "get_current_playback_context",
+            return_value={
+                "schedule_schema_version": 1,
+                "occurrence": None,
+                "playlist": [audio],
+                "course_start": self.j1_at,
+                "now": self.j1_at + timedelta(seconds=300),
+                "audio_info": audio,
+                "offset": 300,
+                "time_remaining": 0,
+            },
         ):
             response = self.client.get(
                 "/api/cours-status",
@@ -468,6 +569,41 @@ class StudentCourseAccessTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(response.get_json(), {"status": "playing"})
         self.assertNotIn("blob.core.windows.net", response.get_data(as_text=True))
+
+    def test_public_status_uses_v2_occurrence_playback_when_available(self):
+        audio = {
+            **self._audio(),
+            "folder_id": 52,
+            "module_day_id": 404,
+            "schedule_schema_version": 2,
+        }
+        playback = {
+            "schedule_schema_version": 2,
+            "occurrence": {
+                "id": self.SESSION_J1,
+                "module_day_id": 404,
+                "scheduled_at": self.j1_at,
+            },
+            "playlist": [audio],
+            "course_start": self.j1_at,
+            "now": self.j1_at + timedelta(seconds=300),
+            "audio_info": audio,
+            "offset": 300,
+            "time_remaining": 0,
+        }
+        with patch.object(
+            video_routes,
+            "get_current_playback_context",
+            return_value=playback,
+        ) as playback_resolver:
+            response = self.client.get(
+                "/api/cours-status",
+                headers={"X-Platform-Id": str(self.PLATFORM_ID)},
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json(), {"status": "playing"})
+        playback_resolver.assert_called_once_with(self.PLATFORM_ID)
 
     def test_admin_slide_workbench_is_not_a_student_deck_backdoor(self):
         self._set_student_session()

@@ -985,6 +985,171 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         }:
             self.assertNotIn(forbidden, template_ids)
 
+    def test_day_program_legacy_template_preserves_ten_dynamic_course_items(self):
+        items = [f"Thème {index}" for index in range(1, 11)]
+
+        normalized = slides._normalize_slide_data(
+            "day_program_7_steps",
+            {
+                "title": "Programme",
+                "active_item": 10,
+                "items": items,
+            },
+            fallback_title="Programme",
+            fallback_text="",
+        )
+
+        self.assertEqual(normalized["items"], items)
+        self.assertEqual(normalized["active_item"], 10)
+
+    def test_v2_audio_lookup_uses_only_the_scoped_day_folder(self):
+        wrong_day_deck = {
+            "deck_id": 51,
+            "folder_id": 51,
+            "audio_sync": {
+                "timings": [{"audio_filename": "course_01.mp3"}],
+            },
+            "slides": [],
+        }
+        expected_deck = {
+            "deck_id": 52,
+            "folder_id": 52,
+            "audio_sync": {
+                "timings": [{"audio_filename": "course_01.mp3"}],
+            },
+            "slides": [],
+        }
+        decks = {51: wrong_day_deck, 52: expected_deck}
+
+        with patch.object(
+            slides,
+            "_ensure_slide_deck_tables",
+        ), patch.object(
+            slides,
+            "resolve_folder_asset_origin",
+            return_value=None,
+        ), patch.object(
+            slides,
+            "get_latest_script_slide_deck",
+            side_effect=lambda folder_id: decks.get(folder_id),
+        ) as exact_lookup, patch.object(
+            slides,
+            "list_script_slide_deck_rows_for_audio_lookup",
+        ) as broad_lookup:
+            result = slides.get_latest_script_slide_deck_for_audio(
+                "course_01.mp3",
+                platform_id=7,
+                folder_id=52,
+                module_day_id=404,
+                audio_storage_prefix="course-sessions/701",
+            )
+
+        self.assertIs(result, expected_deck)
+        exact_lookup.assert_called_once_with(52)
+        broad_lookup.assert_not_called()
+
+    def test_v2_audio_lookup_fails_closed_when_scope_is_incomplete(self):
+        with patch.object(
+            slides,
+            "_ensure_slide_deck_tables",
+        ), patch.object(
+            slides,
+            "get_latest_script_slide_deck",
+        ) as exact_lookup, patch.object(
+            slides,
+            "list_script_slide_deck_rows_for_audio_lookup",
+        ) as broad_lookup:
+            result = slides.get_latest_script_slide_deck_for_audio(
+                "course_01.mp3",
+                platform_id=7,
+                folder_id=52,
+                module_day_id=404,
+                audio_storage_prefix=None,
+            )
+
+        self.assertIsNone(result)
+        exact_lookup.assert_not_called()
+        broad_lookup.assert_not_called()
+
+    def test_v2_reused_folder_resolves_the_canonical_source_deck(self):
+        source_deck = {
+            "deck_id": 51,
+            "folder_id": 51,
+            "audio_sync": {
+                "timings": [{"audio_filename": "course_01.mp3"}],
+            },
+            "slides": [],
+        }
+        with patch.object(
+            slides,
+            "_ensure_slide_deck_tables",
+        ), patch.object(
+            slides,
+            "resolve_folder_asset_origin",
+            return_value={
+                "requested_folder_id": 152,
+                "source_folder_id": 51,
+                "module_id": 404,
+            },
+        ) as resolve_origin, patch.object(
+            slides,
+            "get_latest_script_slide_deck",
+            return_value=source_deck,
+        ) as exact_lookup, patch.object(
+            slides,
+            "list_script_slide_deck_rows_for_audio_lookup",
+        ) as broad_lookup:
+            result = slides.get_latest_script_slide_deck_for_audio(
+                "course_01.mp3",
+                platform_id=17,
+                folder_id=152,
+                module_day_id=404,
+                audio_storage_prefix="course-sessions/1701",
+            )
+
+        self.assertIs(result, source_deck)
+        resolve_origin.assert_called_once_with(152)
+        exact_lookup.assert_called_once_with(51)
+        broad_lookup.assert_not_called()
+
+    def test_v1_audio_lookup_keeps_the_legacy_broad_search(self):
+        row = object()
+        legacy_deck = {
+            "deck_id": 9,
+            "folder_id": 9,
+            "audio_sync": {
+                "timings": [{"audio_filename": "cours_9h00_9h45.mp3"}],
+            },
+            "slides": [],
+        }
+        with patch.object(
+            slides,
+            "_ensure_slide_deck_tables",
+        ), patch.object(
+            slides,
+            "list_script_slide_deck_rows_for_audio_lookup",
+            return_value=[row],
+        ) as broad_lookup, patch.object(
+            slides,
+            "_decode_deck_row",
+            return_value=legacy_deck,
+        ), patch.object(
+            slides,
+            "get_latest_script_slide_deck",
+        ) as exact_lookup:
+            result = slides.get_latest_script_slide_deck_for_audio(
+                "cours_9h00_9h45.mp3",
+                platform_id=None,
+            )
+
+        self.assertIs(result, legacy_deck)
+        broad_lookup.assert_called_once_with(
+            platform_ids=[],
+            job_ids=[],
+            limit=200,
+        )
+        exact_lookup.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

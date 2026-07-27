@@ -139,6 +139,15 @@ def ensure_module_asset_manifest(
         raise ValueError("Namespace durable du professeur IA absent")
 
     requested_folder_ids = sorted({int(folder_id) for folder_id in source_folder_ids})
+    from services.day_playlist_service import required_audio_filenames
+
+    required_audio_paths_by_folder = {
+        folder_id: {
+            f"playlist/{filename}"
+            for filename in required_audio_filenames(folder_id)
+        }
+        for folder_id in requested_folder_ids
+    }
     for source_folder_id in requested_folder_ids:
         prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/"
         for container_name in (CONTAINER_DOCUMENTS, CONTAINER_AUDIOS):
@@ -186,16 +195,20 @@ def ensure_module_asset_manifest(
             continue
         logical_key = str(asset.get("logical_key") or "")
         relative_path = logical_key.split(":", 3)[-1].lstrip("/")
-        if relative_path in CANONICAL_AUDIO_PLAYLIST_PATHS:
+        if relative_path in required_audio_paths_by_folder.get(
+            int(asset["source_folder_id"]),
+            CANONICAL_AUDIO_PLAYLIST_PATHS,
+        ):
             playlist_paths_by_folder.setdefault(int(asset["source_folder_id"]), set()).add(
                 relative_path
             )
     incomplete_folders = [
         folder_id
         for folder_id in requested_folder_ids
-        if not CANONICAL_AUDIO_PLAYLIST_PATHS.issubset(
-            playlist_paths_by_folder.get(folder_id, set())
-        )
+        if not required_audio_paths_by_folder.get(
+            folder_id,
+            CANONICAL_AUDIO_PLAYLIST_PATHS,
+        ).issubset(playlist_paths_by_folder.get(folder_id, set()))
     ]
     if incomplete_folders:
         raise RuntimeError(

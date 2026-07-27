@@ -29,10 +29,10 @@ from services.content_pipeline.artifacts import (
     save_script_review_markdown,
     script_review_markdown_locator,
 )
-from utils.anthropic_client import (
+from utils.deepseek_client import (
     DEEPSEEK_DEFAULT_MODEL,
-    AnthropicAPIError,
-    AnthropicRateLimitError,
+    DeepSeekAPIError,
+    DeepSeekRateLimitError,
     post_message,
 )
 
@@ -179,7 +179,7 @@ def extract_rules_from_annotations(folder_id: int) -> dict:
             model=RULES_MODEL,
             timeout=240,
         )
-    except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+    except (DeepSeekAPIError, DeepSeekRateLimitError) as exc:
         logger.warning(f"⚠️ Extraction règles DeepSeek échouée folder={folder_id}: {exc}")
         raise ValueError(f"Erreur DeepSeek : {exc}")
 
@@ -502,7 +502,7 @@ def review_chunks_with_rules(
                     model=REVIEW_MODEL,
                     timeout=180,
                 )
-            except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+            except (DeepSeekAPIError, DeepSeekRateLimitError) as exc:
                 summary["chunks_failed"] += 1
                 summary["details"].append({
                     "bloc_number": bloc_num,
@@ -792,11 +792,15 @@ def review_blocs_with_rules(
     if not rules_markdown:
         raise ValueError("Aucune règle apprise — lance d'abord l'extraction")
 
-    from services.content_generation_service import get_course_script_plan_for_ui
+    from services.content_generation_service import (
+        get_course_script_plan_for_ui,
+        resolve_folder_content_course_count,
+    )
     plan = get_course_script_plan_for_ui(folder_id)
     blocs = [b for b in (plan.get("course_blocs") or []) if (b.get("text") or "").strip()]
     if not blocs:
         raise ValueError("Aucun bloc cours disponible — la pipeline a-t-elle généré le texte ?")
+    total_courses = resolve_folder_content_course_count(folder_id)
 
     # Charge les segments source une fois (pour le mapping patches → segments)
     segments_rows = _list_completed_segment_tuples(context["job_id"])
@@ -839,7 +843,7 @@ def review_blocs_with_rules(
         bloc_num = int(bloc.get("bloc_number") or 0)
         filename = bloc.get("filename") or f"bloc_{bloc_num}"
         bloc_text = (bloc.get("text") or "").strip()
-        bloc_label = f"Cours {bloc_num}/7 ({filename})"
+        bloc_label = f"Cours {bloc_num}/{total_courses} ({filename})"
 
         with state_lock:
             summary["blocs_examined"] += 1
@@ -869,7 +873,7 @@ def review_blocs_with_rules(
                 model=REVIEW_MODEL,
                 timeout=600,
             )
-        except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+        except (DeepSeekAPIError, DeepSeekRateLimitError) as exc:
             with state_lock:
                 summary["blocs_failed"] += 1
                 summary["segments_failed"] += 1
@@ -1169,7 +1173,7 @@ def review_segments_with_rules(
                     model=REVIEW_MODEL,
                     timeout=600,
                 )
-            except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+            except (DeepSeekAPIError, DeepSeekRateLimitError) as exc:
                 with state_lock:
                     summary["segments_failed"] += 1
                     summary["details"].append({

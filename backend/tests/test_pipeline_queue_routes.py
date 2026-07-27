@@ -5,7 +5,10 @@ from unittest.mock import patch
 
 from flask import Flask
 
-from routes.formation_routes import formation_bp
+from routes.formation_routes import (
+    _normalize_pipeline_model_choice,
+    formation_bp,
+)
 
 
 def _job(**overrides):
@@ -31,7 +34,24 @@ class PipelineQueueRouteTest(unittest.TestCase):
         self.client = app.test_client()
         with self.client.session_transaction() as session:
             session["is_admin"] = True
-            session["admin_account_type"] = "legacy_admin"
+            session["admin_account_type"] = "training_center"
+            session["admin_account_id"] = 42
+        self.route_patches = [
+            patch(
+                "routes.formation_routes.can_access_formation_pipeline",
+                return_value=True,
+            ),
+            patch(
+                "repositories.pipeline_repository.pipeline_job_belongs_to_center",
+                return_value=True,
+            ),
+        ]
+        for route_patch in self.route_patches:
+            route_patch.start()
+
+    def tearDown(self):
+        for route_patch in reversed(self.route_patches):
+            route_patch.stop()
 
     def test_run_auto_enqueues_durable_work_item(self):
         item = SimpleNamespace(
@@ -100,6 +120,18 @@ class PipelineQueueRouteTest(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload["queue_work_item_cancelled"])
         self.assertEqual(payload["queue_work_item_id"], "work-cancelled")
+
+    def test_historical_claude_model_names_resume_on_deepseek_profiles(self):
+        self.assertEqual(_normalize_pipeline_model_choice("sonnet"), "pro")
+        self.assertEqual(
+            _normalize_pipeline_model_choice("claude-sonnet-4-20250514"),
+            "pro",
+        )
+        self.assertEqual(_normalize_pipeline_model_choice("haiku"), "flash")
+        self.assertEqual(
+            _normalize_pipeline_model_choice("claude-haiku-4-5-20251001"),
+            "flash",
+        )
 
 
 if __name__ == "__main__":

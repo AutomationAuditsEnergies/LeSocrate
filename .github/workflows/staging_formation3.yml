@@ -94,7 +94,6 @@ jobs:
       INTERNAL_ADMIN_PASSWORD_HASH: ${{ secrets.SAAS_INTERNAL_ADMIN_PASSWORD_HASH || secrets.INTERNAL_ADMIN_PASSWORD_HASH }}
       SECRET_KEY: ${{ secrets.SAAS_SECRET_KEY || secrets.SECRET_KEY }}
       AUTO_LOGOUT_WEBHOOK_SECRET: ${{ secrets.SAAS_AUTO_LOGOUT_WEBHOOK_SECRET || secrets.AUTO_LOGOUT_WEBHOOK_SECRET }}
-      ANTHROPIC_API_KEY: ${{ secrets.SAAS_ANTHROPIC_API_KEY || secrets.ANTHROPIC_API_KEY }}
       DEEPSEEK_API_KEY: ${{ secrets.SAAS_DEEPSEEK_API_KEY || secrets.DEEPSEEK_API_KEY }}
       FISH_AUDIO_API_KEY: ${{ secrets.SAAS_FISH_AUDIO_API_KEY || secrets.FISH_AUDIO_API_KEY }}
       FISH_AUDIO_VOICE_ID: ${{ secrets.SAAS_FISH_AUDIO_VOICE_ID || secrets.FISH_AUDIO_VOICE_ID }}
@@ -158,7 +157,7 @@ jobs:
             fi
           done
 
-          for key in ANTHROPIC_API_KEY FISH_AUDIO_API_KEY AZURE_AUDIO_STORAGE_CONNECTION_STRING; do
+          for key in DEEPSEEK_API_KEY FISH_AUDIO_API_KEY AZURE_AUDIO_STORAGE_CONNECTION_STRING; do
             if [ -z "${!key:-}" ]; then
               missing+=("${key}")
               printf 'PIPELINE_DEPENDENCY_MISSING target=%s key=%s\n' "${APP_NAME}" "${key}" >&2
@@ -365,6 +364,7 @@ jobs:
               STUDENT_AUDIO_DELIVERY_MODE=redirect_sas \
               HR_DASHBOARD_ENABLED=true \
               HR_DASHBOARD_REPAIR_ON_LOAD=false \
+              FORMATION_LLM_PROVIDER=deepseek \
               FORMATION_CONTENT_DAY_WORKERS=3 \
               FORMATION_CONTENT_DAY_WORKERS_MAX=8 \
               FORMATION_STRUCTURED_COURSE_WORKERS=7 \
@@ -390,7 +390,6 @@ jobs:
           [ -n "${INTERNAL_ADMIN_PASSWORD_HASH:-}" ] && secret_settings+=("INTERNAL_ADMIN_PASSWORD_HASH=${INTERNAL_ADMIN_PASSWORD_HASH}")
           [ -n "${SECRET_KEY:-}" ] && secret_settings+=("SECRET_KEY=${SECRET_KEY}")
           [ -n "${AUTO_LOGOUT_WEBHOOK_SECRET:-}" ] && secret_settings+=("AUTO_LOGOUT_WEBHOOK_SECRET=${AUTO_LOGOUT_WEBHOOK_SECRET}")
-          [ -n "${ANTHROPIC_API_KEY:-}" ] && secret_settings+=("ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
           [ -n "${DEEPSEEK_API_KEY:-}" ] && secret_settings+=("DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")
           [ -n "${FISH_AUDIO_API_KEY:-}" ] && secret_settings+=("FISH_AUDIO_API_KEY=${FISH_AUDIO_API_KEY}")
           [ -n "${FISH_AUDIO_VOICE_ID:-}" ] && secret_settings+=("FISH_AUDIO_VOICE_ID=${FISH_AUDIO_VOICE_ID}")
@@ -410,6 +409,14 @@ jobs:
               --settings "${secret_settings[@]}" \
               >/dev/null
           fi
+
+          # Formation3 utilise uniquement DeepSeek. Supprimer explicitement
+          # l'ancienne clé Azure pour empêcher tout retour silencieux à Anthropic.
+          az webapp config appsettings delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --setting-names ANTHROPIC_API_KEY \
+            >/dev/null
 
           az webapp config set \
             --resource-group "${RESOURCE_GROUP}" \

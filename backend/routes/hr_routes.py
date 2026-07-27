@@ -371,11 +371,143 @@ def create_hr_blueprint(socketio):
             return jsonify({"success": False, "error": str(exc)}), 400
         return jsonify({"success": True, **result}), 200
 
+    def _day_schedule_center_id():
+        denied = _require_admin()
+        if denied:
+            return None, denied
+        center_account_id = _training_center_account_id()
+        if (
+            _admin_account_type() != "training_center"
+            or center_account_id is None
+        ):
+            return None, (
+                jsonify({"success": False, "error": "Compte centre requis"}),
+                403,
+            )
+        return center_account_id, None
+
+    def _validated_schedule_blocks(payload):
+        from services.dynamic_day_schedule_service import compile_day_schedule
+
+        compiled = compile_day_schedule({"blocks": payload.get("blocks")})
+        return compiled["blocks"]
+
+    @hr_bp.route("/api/hr/day-schedule-templates", methods=["GET"])
+    def list_day_schedule_templates_route():
+        center_account_id, denied = _day_schedule_center_id()
+        if denied:
+            return denied
+        from repositories.day_schedule_repository import list_templates
+
+        return jsonify({
+            "success": True,
+            "templates": list_templates(center_account_id),
+        }), 200
+
+    @hr_bp.route("/api/hr/day-schedule-templates", methods=["POST"])
+    def create_day_schedule_template_route():
+        center_account_id, denied = _day_schedule_center_id()
+        if denied:
+            return denied
+        data = request.get_json(silent=True) or {}
+        try:
+            blocks = _validated_schedule_blocks(data)
+            from repositories.day_schedule_repository import create_template
+
+            template = create_template(
+                center_account_id,
+                data.get("name"),
+                blocks,
+                schedule_schema_version=2,
+            )
+        except Exception as exc:
+            from services.dynamic_day_schedule_service import (
+                ScheduleValidationError,
+            )
+
+            if isinstance(exc, ScheduleValidationError):
+                return jsonify({
+                    "success": False,
+                    "error": str(exc),
+                    "validation": exc.as_dict(),
+                }), 400
+            if isinstance(exc, ValueError):
+                return jsonify({"success": False, "error": str(exc)}), 400
+            raise
+        return jsonify({"success": True, "template": template}), 201
+
+    @hr_bp.route(
+        "/api/hr/day-schedule-templates/<int:template_id>",
+        methods=["PATCH"],
+    )
+    def update_day_schedule_template_route(template_id):
+        center_account_id, denied = _day_schedule_center_id()
+        if denied:
+            return denied
+        data = request.get_json(silent=True) or {}
+        try:
+            blocks = (
+                _validated_schedule_blocks(data)
+                if "blocks" in data
+                else None
+            )
+            from repositories.day_schedule_repository import (
+                TemplateImmutableError,
+                update_template,
+            )
+
+            template = update_template(
+                center_account_id,
+                template_id,
+                name=data.get("name") if "name" in data else None,
+                blocks=blocks,
+            )
+            if template is None:
+                return _tenant_resource_not_found()
+        except Exception as exc:
+            from repositories.day_schedule_repository import (
+                TemplateImmutableError,
+            )
+            from services.dynamic_day_schedule_service import (
+                ScheduleValidationError,
+            )
+
+            if isinstance(exc, TemplateImmutableError):
+                return jsonify({
+                    "success": False,
+                    "error": str(exc),
+                    "code": "template_immutable",
+                }), 409
+            if isinstance(exc, ScheduleValidationError):
+                return jsonify({
+                    "success": False,
+                    "error": str(exc),
+                    "validation": exc.as_dict(),
+                }), 400
+            if isinstance(exc, ValueError):
+                return jsonify({"success": False, "error": str(exc)}), 400
+            raise
+        return jsonify({"success": True, "template": template}), 200
+
+    @hr_bp.route(
+        "/api/hr/day-schedule-templates/<int:template_id>",
+        methods=["DELETE"],
+    )
+    def delete_day_schedule_template_route(template_id):
+        center_account_id, denied = _day_schedule_center_id()
+        if denied:
+            return denied
+        from repositories.day_schedule_repository import soft_delete_template
+
+        if not soft_delete_template(center_account_id, template_id):
+            return _tenant_resource_not_found()
+        return jsonify({"success": True, "deleted": True}), 200
+
     @hr_bp.before_request
     def check_hr_enabled():
         from flask import request as req
         # Ces endpoints restent accessibles même si HR est désactivé
-        always_allowed = {"hr.get_hr_enabled", "hr.check_upload_permission", "hr.recorder_audio_list", "hr.auto_schedule"}
+        always_allowed = {"hr.get_hr_enabled", "hr.auto_schedule"}
         if req.endpoint in always_allowed:
             return None
         if not HR_ENABLED:
@@ -460,7 +592,6 @@ def create_hr_blueprint(socketio):
             ("platform_id", "platform"),
             ("folder_id", "folder"),
             ("document_id", "document"),
-            ("request_id", "deletion_request"),
             ("module_id", "module"),
         )
         for argument_name, resource_type in resource_keys:
@@ -649,6 +780,38 @@ def create_hr_blueprint(socketio):
     # autonome (sortie d'une pipeline), indépendant des plateformes qui le
     # consomment. Le module pointe vers sa plateforme source (d'où sont clonés
     # les blobs pour chaque nouvelle promo).
+    def _formation_module_is_reusable(module):
+        base_ready = (
+            module.get("status") == "validated"
+            and int(module.get("nb_folders") or 0) > 0
+            and module.get("voice_type") != "mock"
+        )
+        schema_version = int(module.get("schedule_schema_version") or 1)
+        if not base_ready or schema_version < 2:
+            return base_ready
+
+        expected_days = int(module.get("nb_days") or 0)
+        if (
+            expected_days <= 0
+            or int(module.get("module_day_count") or 0) != expected_days
+            or int(module.get("nb_folders") or 0) < expected_days
+            or int(module.get("asset_count") or 0) <= 0
+        ):
+            return False
+        reusable_at = module.get("reusable_at")
+        if not reusable_at:
+            return False
+        if not isinstance(reusable_at, datetime):
+            try:
+                reusable_at = datetime.fromisoformat(
+                    str(reusable_at).replace("Z", "+00:00")
+                )
+            except ValueError:
+                return False
+        if reusable_at.tzinfo is None:
+            reusable_at = FRANCE_TZ.localize(reusable_at)
+        return reusable_at.astimezone(FRANCE_TZ) <= datetime.now(FRANCE_TZ)
+
     @hr_bp.route("/api/hr/formation-modules", methods=["GET"])
     def list_formation_modules():
         """Modules formation disponibles (regroupement canonique des pipelines terminées)."""
@@ -680,16 +843,20 @@ def create_hr_blueprint(socketio):
                     "teacher_color": row.get("teacher_color") or "violet",
                     "asset_namespace": row.get("asset_namespace") or "",
                     "immutable": bool(row.get("immutable")),
+                    "nb_days": row.get("nb_days"),
+                    "schedule_schema_version": int(
+                        row.get("schedule_schema_version") or 1
+                    ),
+                    "schedule_hash": row.get("schedule_hash"),
+                    "schedule_locked_at": row.get("schedule_locked_at"),
+                    "reusable_at": row.get("reusable_at"),
+                    "module_day_count": int(row.get("module_day_count") or 0),
                     "asset_count": int(row.get("asset_count") or 0),
                     "active_use_count": int(row.get("active_use_count") or 0),
                     "completed_use_count": int(row.get("completed_use_count") or 0),
                     "storage_mode": "shared",
                     "schedule": row.get("schedule"),
-                    "reusable": (
-                        row.get("status") == "validated"
-                        and row.get("nb_folders", 0) > 0
-                        and row.get("voice_type") != "mock"
-                    ),
+                    "reusable": _formation_module_is_reusable(row),
                 } for row in rows]
                 return jsonify({"success": True, "modules": modules}), 200
 
@@ -717,7 +884,14 @@ def create_hr_blueprint(socketio):
                            SELECT COUNT(*) FROM platform_config usage_platform
                            WHERE (usage_platform.source_module_id = m.id OR usage_platform.id = m.source_platform_id)
                              AND usage_platform.lifecycle_status IN ('completed', 'archived')
-                       ) AS completed_use_count
+                       ) AS completed_use_count,
+                       m.nb_days, m.schedule_schema_version, m.schedule_hash,
+                       m.schedule_locked_at, m.reusable_at,
+                       (
+                           SELECT COUNT(*) FROM formation_module_days module_day
+                           WHERE module_day.module_id = m.id
+                             AND module_day.center_account_id = m.center_account_id
+                       ) AS module_day_count
                 FROM formation_modules m
                 LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
                 WHERE m.status != 'archived'
@@ -768,13 +942,21 @@ def create_hr_blueprint(socketio):
                 "teacher_color": r[13] or "violet",
                 "asset_namespace": r[14] or "",
                 "immutable": bool(r[15]),
+                "nb_days": r[19],
+                "schedule_schema_version": int(r[20] or 1),
+                "schedule_hash": r[21],
+                "schedule_locked_at": r[22],
+                "reusable_at": r[23],
+                "module_day_count": int(r[24] or 0),
                 "asset_count": int(r[16] or 0),
                 "active_use_count": int(r[17] or 0),
                 "completed_use_count": int(r[18] or 0),
                 "storage_mode": "shared",
                 "schedule": schedules_by_platform.get(r[6]),
-                "reusable": r[4] == "validated" and r[8] > 0 and r[10] != "mock",
+                "reusable": False,
             } for r in rows]
+            for module in modules:
+                module["reusable"] = _formation_module_is_reusable(module)
             return jsonify({"success": True, "modules": modules}), 200
         except Exception as e:
             logger.error(f"❌ Erreur list formation-modules: {e}")
@@ -1113,9 +1295,6 @@ def create_hr_blueprint(socketio):
                 """, platform_params)
                 rows = cursor.fetchall()
 
-                # Compter demandes en attente par plateforme
-                cursor.execute("SELECT platform_id, COUNT(*) FROM deletion_requests WHERE status='pending' GROUP BY platform_id")
-                pending_counts = dict(cursor.fetchall())
                 conn.close()
             else:
                 rows = [(
@@ -1148,11 +1327,6 @@ def create_hr_blueprint(socketio):
                     row.get("total_session_count"),
                     row.get("remaining_session_count"),
                 ) for row in postgres_dashboard_rows]
-                pending_counts = {
-                    row["id"]: row.get("pending_deletion_count", 0)
-                    for row in postgres_dashboard_rows
-                }
-
             # Stats Azure : optionnelles, car scanner les containers peut bloquer
             # le chargement initial du dashboard si Azure Storage répond lentement.
             audio_count_p1 = None
@@ -1288,10 +1462,6 @@ def create_hr_blueprint(socketio):
                         alerts.append("PDF manquant")
                     if include_blob_stats and audio_count == 0:
                         alerts.append("Aucun audio")
-                pending = pending_counts.get(pid, 0)
-                if pending > 0:
-                    alerts.append(f"{pending} demande(s) de suppression")
-
                 effective_status = p_status or "ready"
                 if effective_status == "pending":
                     pipeline_done = (
@@ -2528,252 +2698,6 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur suppression PDF HR: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    # ─── GET /api/recorder/audio-list (PAS d'auth admin) ─────────────────
-    @hr_bp.route("/api/recorder/audio-list", methods=["GET"])
-    def recorder_audio_list():
-        """Liste les audios du container de ce backend (accessible sans session admin)"""
-        try:
-            connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
-            if not connection_string:
-                return jsonify({"success": False, "audios": []}), 200
-
-            container_name = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
-            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-            container_client = blob_service_client.get_container_client(container_name)
-
-            account_name = blob_service_client.account_name
-            account_key = blob_service_client.credential.account_key
-            expiry = datetime.now(timezone.utc) + timedelta(hours=1)
-
-            audios = []
-            for blob in sorted(container_client.list_blobs(), key=lambda b: b.name):
-                sas_token = generate_blob_sas(
-                    account_name=account_name,
-                    container_name=container_name,
-                    blob_name=blob.name,
-                    account_key=account_key,
-                    permission=BlobSasPermissions(read=True),
-                    expiry=expiry,
-                )
-                url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob.name}?{sas_token}"
-                audios.append({"name": blob.name, "size": blob.size, "url": url})
-
-            return jsonify({"success": True, "audios": audios}), 200
-
-        except Exception as e:
-            logger.warning(f"⚠️ Erreur recorder audio-list: {e}")
-            return jsonify({"success": False, "audios": []}), 200
-
-    # ─── GET /api/hr/upload-permission/<platform_id> (PAS d'auth admin) ──
-    @hr_bp.route("/api/hr/upload-permission/<int:platform_id>", methods=["GET"])
-    def check_upload_permission(platform_id):
-        """Vérifie si l'upload est autorisé pour une plateforme (appelé par Recorder)"""
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT upload_locked FROM platform_config WHERE id = ?", (platform_id,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if not row:
-                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
-
-            return jsonify({
-                "success": True,
-                "upload_allowed": not bool(row[0]),
-                "upload_locked": bool(row[0]),
-            }), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur check permission: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    # ─── POST /api/hr/deletion-requests (PAS d'auth admin) ──────────────
-    @hr_bp.route("/api/hr/deletion-requests", methods=["POST"])
-    def create_deletion_request():
-        """Créer une demande de suppression (depuis Recorder)"""
-        try:
-            data = request.get_json()
-            platform_id = data.get("platform_id")
-            filename = data.get("filename", "").strip()
-            requester_name = data.get("requester_name", "").strip()
-            reason = data.get("reason", "").strip()
-
-            if not platform_id or not filename or not requester_name:
-                return jsonify({"success": False, "error": "platform_id, filename et requester_name requis"}), 400
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO deletion_requests (platform_id, filename, requester_name, reason, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
-                (platform_id, filename, requester_name, reason, _now_str()),
-            )
-            conn.commit()
-            request_id = cursor.lastrowid
-            conn.close()
-
-            logger.info(f"📨 Demande suppression #{request_id} : {filename} par {requester_name}")
-
-            return jsonify({
-                "success": True,
-                "message": "Demande de suppression envoyée",
-                "request_id": request_id,
-            }), 201
-
-        except Exception as e:
-            logger.error(f"❌ Erreur création demande suppression: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    # ─── GET /api/hr/deletion-requests (admin) ───────────────────────────
-    @hr_bp.route("/api/hr/deletion-requests", methods=["GET"])
-    def list_deletion_requests():
-        """Lister les demandes de suppression (filtrage optionnel par status)"""
-        denied = _require_admin()
-        if denied:
-            return denied
-
-        try:
-            status_filter = request.args.get("status", "pending")
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            scope_sql, scope_params = _platform_access_clause("pc")
-
-            select_sql = """
-                SELECT dr.id, dr.platform_id, dr.filename, dr.requester_name,
-                       dr.reason, dr.status, dr.created_at, dr.resolved_at
-                FROM deletion_requests dr
-                JOIN platform_config pc ON pc.id = dr.platform_id
-            """
-
-            if status_filter == "all":
-                cursor.execute(
-                    select_sql + f" WHERE {scope_sql} ORDER BY dr.created_at DESC",
-                    scope_params,
-                )
-            else:
-                cursor.execute(
-                    select_sql
-                    + f" WHERE {scope_sql} AND dr.status = ? ORDER BY dr.created_at DESC",
-                    [*scope_params, status_filter],
-                )
-
-            rows = cursor.fetchall()
-            conn.close()
-
-            requests_list = []
-            for row in rows:
-                requests_list.append({
-                    "id": row[0],
-                    "platform_id": row[1],
-                    "filename": row[2],
-                    "requester_name": row[3],
-                    "reason": row[4],
-                    "status": row[5],
-                    "created_at": row[6],
-                    "resolved_at": row[7],
-                })
-
-            return jsonify({"success": True, "requests": requests_list}), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur liste demandes suppression: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    # ─── POST /api/hr/deletion-requests/<id>/approve ─────────────────────
-    @hr_bp.route("/api/hr/deletion-requests/<int:request_id>/approve", methods=["POST"])
-    def approve_deletion(request_id):
-        """Approuver une demande de suppression (supprime le blob Azure)"""
-        denied = _require_admin()
-        if denied:
-            return denied
-
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT platform_id, filename, status FROM deletion_requests WHERE id = ?",
-                (request_id,),
-            )
-            row = cursor.fetchone()
-
-            if not row:
-                conn.close()
-                return jsonify({"success": False, "error": "Demande introuvable"}), 404
-
-            platform_id, filename, status = row
-
-            if status != "pending":
-                conn.close()
-                return jsonify({"success": False, "error": f"Demande déjà {status}"}), 400
-
-            # Supprimer le blob Azure si P1
-            blob_deleted = False
-            if platform_id == 1:
-                _, container_client = _get_azure_audio_clients()
-                if container_client:
-                    try:
-                        container_client.delete_blob(filename)
-                        blob_deleted = True
-                        logger.info(f"🗑️ Blob supprimé via demande #{request_id}: {filename}")
-                    except Exception as blob_err:
-                        logger.warning(f"⚠️ Blob introuvable ou déjà supprimé: {blob_err}")
-
-            now = _now_str()
-            cursor.execute(
-                "UPDATE deletion_requests SET status = 'approved', resolved_at = ? WHERE id = ?",
-                (now, request_id),
-            )
-            conn.commit()
-            conn.close()
-
-            return jsonify({
-                "success": True,
-                "message": f"Demande #{request_id} approuvée" + (" — fichier supprimé" if blob_deleted else ""),
-                "blob_deleted": blob_deleted,
-            }), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur approbation demande: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    # ─── POST /api/hr/deletion-requests/<id>/reject ──────────────────────
-    @hr_bp.route("/api/hr/deletion-requests/<int:request_id>/reject", methods=["POST"])
-    def reject_deletion(request_id):
-        """Rejeter une demande de suppression"""
-        denied = _require_admin()
-        if denied:
-            return denied
-
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT status FROM deletion_requests WHERE id = ?", (request_id,))
-            row = cursor.fetchone()
-
-            if not row:
-                conn.close()
-                return jsonify({"success": False, "error": "Demande introuvable"}), 404
-
-            if row[0] != "pending":
-                conn.close()
-                return jsonify({"success": False, "error": f"Demande déjà {row[0]}"}), 400
-
-            now = _now_str()
-            cursor.execute(
-                "UPDATE deletion_requests SET status = 'rejected', resolved_at = ? WHERE id = ?",
-                (now, request_id),
-            )
-            conn.commit()
-            conn.close()
-
-            logger.info(f"❌ Demande #{request_id} rejetée")
-
-            return jsonify({"success": True, "message": f"Demande #{request_id} rejetée"}), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur rejet demande: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── POST /api/hr/platforms/<id>/backup-and-unlock ───────────────────
@@ -4405,9 +4329,17 @@ def create_hr_blueprint(socketio):
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
             platform_id = row[0]
 
-            # Extraction des sous-parties (synchrone ~5s)
-            from services.content_generation_service import extract_sub_parts
-            extracted = extract_sub_parts(program_text)
+            # Extraction des cours selon le manifeste exact du dossier.
+            from services.content_generation_service import (
+                extract_sub_parts,
+                resolve_folder_content_course_count,
+            )
+
+            course_count = resolve_folder_content_course_count(folder_id)
+            extracted = extract_sub_parts(
+                program_text,
+                course_count=course_count,
+            )
             program_title = extracted["title"]
             sub_parts = extracted["sub_parts"]
 
@@ -5099,7 +5031,7 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur update break script: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    # ─── Pipeline playlist complète (19 fichiers) ─────────────────────────
+    # ─── Pipeline playlist complète (manifeste V1 ou V2) ──────────────────
 
     _HR_AUDIO_QUEUE_SCOPE_PREFIX = "hr_audio"
 
@@ -5159,7 +5091,7 @@ def create_hr_blueprint(socketio):
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-playlist", methods=["POST"])
     def generate_playlist(folder_id):
-        """Lance la génération des 19 fichiers MP3 de la playlist pour un dossier."""
+        """Lance la génération du manifeste MP3 exact d'un dossier."""
         denied = _require_admin()
         if denied:
             return denied
@@ -5331,7 +5263,11 @@ def create_hr_blueprint(socketio):
                 }), 400
 
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio"
-            is_course_audio = filename.startswith("cours_") and filename.endswith(".mp3")
+            normalized_filename = filename.lower()
+            is_course_audio = (
+                normalized_filename.endswith(".mp3")
+                and normalized_filename.startswith(("cours_", "course_"))
+            )
             sync_slides = bool(req_body.get("sync_slides", is_course_audio)) and is_course_audio
             auto_generate_slides = bool(req_body.get("auto_generate_slides", sync_slides))
             slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
@@ -5408,7 +5344,7 @@ def create_hr_blueprint(socketio):
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-script", methods=["GET"])
     def get_playlist_script(folder_id):
-        """Retourne le script reformulé par Claude pour un dossier."""
+        """Retourne le script reformulé par DeepSeek pour un dossier."""
         denied = _require_admin()
         if denied:
             return denied
@@ -5487,7 +5423,7 @@ def create_hr_blueprint(socketio):
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generated-audios", methods=["GET"])
     def get_generated_audios(folder_id):
-        """Liste les fichiers MP3 cours générés pour un dossier (dans audiostts)."""
+        """Liste le manifeste attendu et les MP3 déjà générés d'un dossier."""
         denied = _require_admin()
         if denied:
             return denied
@@ -5498,9 +5434,29 @@ def create_hr_blueprint(socketio):
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
             platform_id = int(folder["platform_id"])
+            from services.day_playlist_service import resolve_folder_playlist
+
+            playlist_contract = resolve_folder_playlist(folder_id)
+            audio_playlist_items = [
+                {
+                    "filename": filename,
+                    "duration_seconds": int(duration_seconds),
+                    "type": file_type,
+                    "course_index": int(course_index),
+                }
+                for filename, duration_seconds, file_type, course_index
+                in playlist_contract.get("playlist_items") or []
+            ]
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             if not tts_conn:
-                return jsonify({"success": True, "audios": []}), 200
+                return jsonify({
+                    "success": True,
+                    "audios": [],
+                    "schedule_schema_version": int(
+                        playlist_contract.get("schema_version") or 1
+                    ),
+                    "audio_playlist_items": audio_playlist_items,
+                }), 200
 
             origin = resolve_folder_asset_origin(folder_id) or {}
             source_platform_id = int(origin.get("source_platform_id") or platform_id)
@@ -5520,7 +5476,14 @@ def create_hr_blueprint(socketio):
                         "last_modified": blob.last_modified.strftime("%Y-%m-%d %H:%M") if blob.last_modified else None,
                     })
 
-            return jsonify({"success": True, "audios": audios}), 200
+            return jsonify({
+                "success": True,
+                "audios": audios,
+                "schedule_schema_version": int(
+                    playlist_contract.get("schema_version") or 1
+                ),
+                "audio_playlist_items": audio_playlist_items,
+            }), 200
 
         except Exception as e:
             logger.error(f"❌ Erreur get_generated_audios: {e}")
@@ -6173,9 +6136,13 @@ def create_hr_blueprint(socketio):
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/fill-from-folder", methods=["POST"])
     def fill_from_folder(platform_id):
         """
-        Copie les 19 fichiers MP3 d'un dossier de cours vers le container audio de la plateforme.
-        - priorité : fichiers générés du dossier depuis audiostts/platform-X/folder-Y/playlist/
-        - fallback : Q&A + pauses statiques depuis audioqapause si manquants
+        Copie la playlist exacte d'un dossier vers le container audio de la plateforme.
+        Un dossier V2 utilise son manifeste immuable dynamique ; un dossier
+        historique conserve les 19 noms canoniques.
+
+        Tous les fichiers requis sont validés et lus en mémoire avant
+        l'archivage des audios publics. Le fallback ``audioqapause`` reste
+        strictement réservé aux playlists V1 historiques.
         """
         denied = _require_admin()
         if denied:
@@ -6242,64 +6209,177 @@ def create_hr_blueprint(socketio):
             # Résoudre chaque fichier via le manifeste du professeur. Un clone
             # inter-centres lit ainsi la copie canonique immuable et ne dépend
             # plus du chemin historique de la plateforme qui l'a générée.
-            playlist_blob_paths = []
-            for relative_path in sorted(CANONICAL_AUDIO_PLAYLIST_PATHS):
+            from services.day_playlist_service import resolve_folder_playlist
+
+            playlist_contract = resolve_folder_playlist(folder_id)
+            schedule_schema_version = int(
+                playlist_contract.get("schema_version") or 1
+            )
+            if schedule_schema_version not in (1, 2):
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        "Version de planning audio non prise en charge : "
+                        f"{schedule_schema_version}"
+                    ),
+                }), 409
+
+            playlist_items = list(playlist_contract.get("playlist_items") or [])
+            if not playlist_items:
+                return jsonify({
+                    "success": False,
+                    "error": "Le manifeste audio du dossier est vide",
+                }), 409
+
+            # Construire le plan de copie dans l'ordre exact du manifeste.
+            # En V2, aucune liste historique ni aucun fichier statique ne doit
+            # pouvoir compléter silencieusement le snapshot immuable.
+            copy_plan = []
+            seen_filenames = set()
+            invalid_manifest_files = []
+            has_course = False
+            for item in playlist_items:
+                try:
+                    filename, _duration, file_type, _course_index = item
+                except (TypeError, ValueError):
+                    invalid_manifest_files.append(str(item))
+                    continue
+                filename = str(filename or "").strip()
+                file_type = str(file_type or "").strip().lower()
+                safe_filename = os.path.basename(filename)
+                relative_path = f"playlist/{safe_filename}"
+                if (
+                    not filename
+                    or filename != safe_filename
+                    or safe_filename in seen_filenames
+                    or (
+                        schedule_schema_version == 1
+                        and relative_path not in CANONICAL_AUDIO_PLAYLIST_PATHS
+                    )
+                ):
+                    invalid_manifest_files.append(filename or "(vide)")
+                    continue
+                seen_filenames.add(safe_filename)
+                has_course = has_course or file_type in ("course", "cours")
+                copy_plan.append({
+                    "filename": safe_filename,
+                    "file_type": file_type,
+                    "relative_path": relative_path,
+                })
+
+            if invalid_manifest_files or len(copy_plan) != len(playlist_items):
+                return jsonify({
+                    "success": False,
+                    "error": "Le manifeste audio du dossier est invalide",
+                    "invalid_files": invalid_manifest_files,
+                }), 409
+            if not has_course:
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        "Aucun fichier cours généré dans ce dossier. "
+                        "Lancez d'abord la pipeline."
+                    ),
+                }), 404
+
+            prepared_files = []
+            missing_required_files = []
+            unreadable_required_files = []
+            for planned in copy_plan:
+                filename = planned["filename"]
                 blob_path = resolve_folder_blob_path(
                     folder_id,
                     CONTAINER_AUDIOS,
-                    relative_path,
+                    planned["relative_path"],
                     fallback_platform_id=source_platform_id,
                 )
-                if playlist_cc.get_blob_client(blob_path).exists():
-                    playlist_blob_paths.append(blob_path)
-            cours_blobs = [
-                path for path in playlist_blob_paths
-                if path.split("/")[-1].startswith("cours_")
-            ]
+                source_client = playlist_cc.get_blob_client(blob_path)
+                audio_bytes = None
+                source_kind = "playlist"
+                source_error = None
+                try:
+                    if source_client.exists():
+                        audio_bytes = source_client.download_blob().readall()
+                except Exception as exc:
+                    source_error = exc
+                if audio_bytes is not None and not audio_bytes:
+                    source_error = ValueError("fichier audio vide")
+                    audio_bytes = None
 
-            if not cours_blobs:
-                return jsonify({"success": False, "error": "Aucun fichier cours généré dans ce dossier. Lancez d'abord la pipeline."}), 404
+                # Compatibilité V1 uniquement : les Q&R et pauses historiques
+                # peuvent toujours provenir du container statique.
+                if (
+                    audio_bytes is None
+                    and schedule_schema_version == 1
+                    and planned["file_type"] in ("qa", "pause", "pause_midi")
+                ):
+                    try:
+                        audio_bytes = (
+                            qa_pause_cc.get_blob_client(filename)
+                            .download_blob()
+                            .readall()
+                        )
+                        source_kind = "audioqapause"
+                        source_error = None
+                    except Exception as exc:
+                        source_error = exc
+                    if audio_bytes is not None and not audio_bytes:
+                        source_error = ValueError("fichier audio statique vide")
+                        audio_bytes = None
 
-            copied_files = []
-            errors = []
-            copied_names = set()
+                if audio_bytes is None:
+                    if source_error is None:
+                        missing_required_files.append(filename)
+                    else:
+                        unreadable_required_files.append({
+                            "filename": filename,
+                            "error": str(source_error),
+                        })
+                    continue
+                prepared_files.append({
+                    "filename": filename,
+                    "audio_bytes": audio_bytes,
+                    "source": source_kind,
+                })
+
+            # Condition de sécurité : aucun archivage ni upload public tant que
+            # chaque octet du manifeste n'a pas été lu avec succès.
+            if missing_required_files or unreadable_required_files:
+                version_label = "V2" if schedule_schema_version == 2 else "V1"
+                failed_names = missing_required_files + [
+                    item["filename"] for item in unreadable_required_files
+                ]
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        f"La playlist {version_label} est incomplète ou illisible : "
+                        + ", ".join(failed_names)
+                    ),
+                    "missing_files": missing_required_files,
+                    "unreadable_files": unreadable_required_files,
+                }), 409
+
             archive_result = archive_public_platform_audios(
                 platform_id,
                 reason=f"fill-from-folder-{folder_id}",
             )
 
-            # Copier les fichiers générés du dossier (cours + Q&A/pauses contextuels)
-            for blob_path in playlist_blob_paths:
-                filename = blob_path.split("/")[-1]
+            copied_files = []
+            errors = []
+            for prepared in prepared_files:
+                filename = prepared["filename"]
                 try:
-                    audio_bytes = playlist_cc.get_blob_client(blob_path).download_blob().readall()
-                    dest_cc.get_blob_client(filename).upload_blob(audio_bytes, overwrite=True)
+                    dest_cc.get_blob_client(filename).upload_blob(
+                        prepared["audio_bytes"],
+                        overwrite=True,
+                    )
                     copied_files.append(filename)
-                    copied_names.add(filename)
-                    logger.info(f"   ✅ Playlist générée copiée : {filename}")
+                    if prepared["source"] == "audioqapause":
+                        logger.info(f"   ♻️ Q&A/Pause V1 copié : {filename}")
+                    else:
+                        logger.info(f"   ✅ Playlist générée copiée : {filename}")
                 except Exception as e:
                     logger.error(f"   ❌ Échec copie playlist {filename}: {e}")
-                    errors.append({"filename": filename, "error": str(e)})
-
-            # Fallback Q&A/pauses depuis audioqapause pour les fichiers non générés
-            from services.audio_service import get_playlist
-            expected_qa_pause = [
-                os.path.basename((item["filename"] or "").split("?", 1)[0])
-                for item in get_playlist(platform_id)
-                if item.get("type") in ("qa", "pause", "pause_midi")
-            ]
-
-            for filename in expected_qa_pause:
-                if filename in copied_names:
-                    continue
-                try:
-                    audio_bytes = qa_pause_cc.get_blob_client(filename).download_blob().readall()
-                    dest_cc.get_blob_client(filename).upload_blob(audio_bytes, overwrite=True)
-                    copied_files.append(filename)
-                    copied_names.add(filename)
-                    logger.info(f"   ♻️ Q&A/Pause copié : {filename}")
-                except Exception as e:
-                    logger.error(f"   ❌ Échec copie Q&A/Pause {filename}: {e}")
                     errors.append({"filename": filename, "error": str(e)})
 
             logger.info(f"✅ fill-from-folder P{platform_id}/F{folder_id}: {len(copied_files)} fichiers copiés, {len(errors)} erreur(s)")
@@ -6311,6 +6391,7 @@ def create_hr_blueprint(socketio):
                 "files": copied_files,
                 "error_details": errors,
                 "folder_name": folder_row[0],
+                "schedule_schema_version": schedule_schema_version,
                 "archive": archive_result,
             }), 200
 

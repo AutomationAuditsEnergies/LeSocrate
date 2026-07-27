@@ -135,6 +135,7 @@ def get_training_center_by_username(username):
                 cur.execute(
                     """
                     SELECT id, username, password_hash, center_name, slug, is_active,
+                           pipeline_access_enabled,
                            NULL::text AS password_debug_plaintext
                     FROM training_center_accounts
                     WHERE username = %s
@@ -149,7 +150,7 @@ def get_training_center_by_username(username):
         return _rest_get_first(
             "training_center_accounts",
             {
-                "select": "id,username,password_hash,center_name,slug,is_active",
+                "select": "id,username,password_hash,center_name,slug,is_active,pipeline_access_enabled",
                 "username": f"eq.{username}",
             },
         )
@@ -163,7 +164,8 @@ def get_training_center_by_id(center_id):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, username, center_name, slug, is_active
+                    SELECT id, username, center_name, slug, is_active,
+                           pipeline_access_enabled
                     FROM training_center_accounts
                     WHERE id = %s
                     """,
@@ -177,7 +179,7 @@ def get_training_center_by_id(center_id):
         return _rest_get_first(
             "training_center_accounts",
             {
-                "select": "id,username,center_name,slug,is_active",
+                "select": "id,username,center_name,slug,is_active,pipeline_access_enabled",
                 "id": f"eq.{center_id}",
             },
         )
@@ -206,7 +208,9 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
                         (username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
                     VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
                     ON CONFLICT (username) DO NOTHING
-                    RETURNING id, username, password_hash, center_name, slug, is_active, password_debug_plaintext
+                    RETURNING id, username, password_hash, center_name, slug,
+                              is_active, pipeline_access_enabled,
+                              password_debug_plaintext
                     """,
                     (username, password_hash, None, center_name, slug, now, now),
                 )

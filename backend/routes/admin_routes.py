@@ -1,17 +1,13 @@
 # admin_routes.py --- Routes d'administration (API JSON uniquement)
 from flask import Blueprint, g, request, session, jsonify, send_file
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import hmac
 import os
-import re
 import secrets
 import sqlite3
 import string
-import tempfile
 import requests as http_requests
-from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
-from azure.core.exceptions import ResourceExistsError
-from pydub import AudioSegment
+from azure.storage.blob import BlobServiceClient
 from werkzeug.security import check_password_hash, generate_password_hash
 import state
 from config import (
@@ -42,6 +38,10 @@ from repositories.pipeline_repository import (
 from repositories.course_schedule_repository import schedule_store_is_postgres
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
+from services.admin_access_service import (
+    get_admin_permissions,
+    permissions_from_account,
+)
 from services.course_schedule_service import create_missing_course_schedule, get_course_schedule_summary, update_course_schedule
 from utils.logger import get_logger
 from utils.auth_tokens import issue_auth_token
@@ -454,12 +454,15 @@ def create_admin_blueprint(socketio):
         if not session.get("is_admin"):
             return jsonify({"authenticated": False, "error": "Accès refusé"}), 403
 
+        account_type = session.get("admin_account_type")
+        account_id = session.get("admin_account_id")
         return jsonify({
             "authenticated": True,
             "account": {
-                "type": session.get("admin_account_type", "legacy_admin"),
-                "id": session.get("admin_account_id"),
+                "type": account_type,
+                "id": account_id,
                 "center_name": session.get("center_name"),
+                "permissions": get_admin_permissions(account_type, account_id),
             },
         }), 200
 
@@ -1048,7 +1051,19 @@ def create_admin_blueprint(socketio):
                     session.get("admin_account_id"),
                     session.get("center_name"),
                 )
-                return jsonify({"success": True, "message": "Déjà connecté", "token": token}), 200
+                account_type = session.get("admin_account_type")
+                account_id = session.get("admin_account_id")
+                return jsonify({
+                    "success": True,
+                    "message": "Déjà connecté",
+                    "token": token,
+                    "account": {
+                        "type": account_type,
+                        "id": account_id,
+                        "center_name": session.get("center_name"),
+                        "permissions": get_admin_permissions(account_type, account_id),
+                    },
+                }), 200
 
             logger.info(f"🔐 Tentative connexion admin: {username}")
 
@@ -1066,6 +1081,7 @@ def create_admin_blueprint(socketio):
                         "type": "legacy_admin",
                         "username": "admin",
                         "center_name": "Sales Hacking / Le Socrate interne",
+                        "permissions": permissions_from_account("legacy_admin", None),
                     },
                 }), 200
 
@@ -1109,6 +1125,10 @@ def create_admin_blueprint(socketio):
                                     "username": account["username"],
                                     "center_name": account["center_name"],
                                     "slug": account["slug"],
+                                    "permissions": permissions_from_account(
+                                        "training_center",
+                                        account,
+                                    ),
                                 },
                             }
                         ),
@@ -1123,7 +1143,8 @@ def create_admin_blueprint(socketio):
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, username, password_hash, center_name, is_active, slug
+                SELECT id, username, password_hash, center_name, is_active, slug,
+                       pipeline_access_enabled
                 FROM training_center_accounts
                 WHERE username = ?
                 """,
@@ -1179,6 +1200,13 @@ def create_admin_blueprint(socketio):
                             "username": account[1],
                             "center_name": account[3],
                             "slug": account[5],
+                            "permissions": permissions_from_account(
+                                "training_center",
+                                {
+                                    "is_active": account[4],
+                                    "pipeline_access_enabled": account[6],
+                                },
+                            ),
                         },
                     }
                 ),
@@ -1353,6 +1381,10 @@ def create_admin_blueprint(socketio):
                                 "username": account["username"],
                                 "center_name": account["center_name"],
                                 "slug": account["slug"],
+                                "permissions": permissions_from_account(
+                                    "training_center",
+                                    account,
+                                ),
                             },
                         }
                     ),
@@ -1414,6 +1446,13 @@ def create_admin_blueprint(socketio):
                             "username": username,
                             "center_name": center_name,
                             "slug": center_slug,
+                            "permissions": permissions_from_account(
+                                "training_center",
+                                {
+                                    "is_active": True,
+                                    "pipeline_access_enabled": False,
+                                },
+                            ),
                         },
                     }
                 ),
@@ -2084,400 +2123,6 @@ def create_admin_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur statut indexer: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    def clean_audio_filename(filename):
-        """Nettoie un nom de fichier audio selon le format attendu par la playlist.
-
-        Cas 1 — Nom contient le pattern playlist (type_HHhMM_HHhMM) :
-          ex: pause_17h15_17h25-_1_.wav → pause_17h15_17h25.mp3
-          ex: cours_9h00_9h45 (2).wav  → cours_9h00_9h45.mp3
-          Types reconnus : cours, qa, pause, pause_midi
-
-        Cas 2 — Nom générique :
-          - espaces → _, points multiples → un seul, caractères spéciaux supprimés
-        """
-        name, _ext = os.path.splitext(filename)
-        name = name.strip()
-
-        # Cas 1 : extraire le pattern playlist (séparateurs _ ou - tolérés partout)
-        # Ex: pause_17h15_17h25, pause-17h15_17h25, cours_9h00-9h45, etc.
-        playlist_pattern = re.search(
-            r"(cours|qa|pause_midi|pause)[_-](\d{1,2}h\d{2})[_-](\d{1,2}h\d{2})",
-            name,
-            re.IGNORECASE,
-        )
-        if playlist_pattern:
-            type_part = playlist_pattern.group(1).lower()
-            start_time = playlist_pattern.group(2).lower()
-            end_time = playlist_pattern.group(3).lower()
-            return f"{type_part}_{start_time}_{end_time}.mp3"
-
-        # Cas 2 : nettoyage générique
-        name = re.sub(r"\s+", "_", name)
-        name = re.sub(r"\.{2,}", ".", name)
-        name = re.sub(r"[^\w.\-]", "", name)
-        name = name.strip(".")
-        if not name:
-            name = "audio"
-        return f"{name}.mp3"
-
-    @admin_bp.route("/api/admin/upload-audios", methods=["POST"])
-    def upload_audios():
-        """Upload multi-audios : sauvegarde les fichiers puis lance le traitement en arrière-plan"""
-        try:
-            # Refuser si un job est déjà en cours
-            if state.audio_upload_job["status"] in ("saving", "processing"):
-                return (
-                    jsonify({"success": False, "error": "Un upload est déjà en cours"}),
-                    409,
-                )
-
-            files = request.files.getlist("files")
-            if not files or len(files) == 0:
-                return jsonify({"success": False, "error": "Aucun fichier envoyé"}), 400
-
-            logger.info(f"🎵 Upload audios: {len(files)} fichier(s) reçu(s)")
-
-            connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
-            if not connection_string:
-                return (
-                    jsonify(
-                        {
-                            "success": False,
-                            "error": "Configuration AZURE_AUDIO_STORAGE_CONNECTION_STRING manquante",
-                        }
-                    ),
-                    500,
-                )
-
-            AUDIO_EXTENSIONS = {
-                ".mp3",
-                ".wav",
-                ".ogg",
-                ".m4a",
-                ".flac",
-                ".aac",
-                ".wma",
-                ".webm",
-            }
-
-            # Phase 1 : sauvegarder les fichiers dans /tmp immédiatement
-            state.reset_audio_upload_job()
-            state.audio_upload_job["status"] = "saving"
-            state.audio_upload_job["message"] = "Réception des fichiers..."
-
-            saved_files = []  # (original_name, cleaned_name, ext, tmp_path)
-            skipped_report = []
-
-            for file in files:
-                if not file.filename:
-                    continue
-
-                _name, ext = os.path.splitext(file.filename.lower())
-                if ext not in AUDIO_EXTENSIONS:
-                    skipped_report.append(
-                        {
-                            "original": file.filename,
-                            "cleaned": None,
-                            "converted": False,
-                            "skipped": True,
-                            "reason": f"Format non supporté ({ext})",
-                        }
-                    )
-                    continue
-
-                cleaned_name = clean_audio_filename(file.filename)
-                tmp_input = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-                file.save(tmp_input.name)
-                tmp_input.close()
-                saved_files.append((file.filename, cleaned_name, ext, tmp_input.name))
-
-            if not saved_files:
-                state.reset_audio_upload_job()
-                return (
-                    jsonify(
-                        {
-                            "success": False,
-                            "error": "Aucun fichier audio valide à uploader",
-                            "report": skipped_report,
-                        }
-                    ),
-                    400,
-                )
-
-            state.audio_upload_job["total"] = len(saved_files)
-            state.audio_upload_job["files_status"] = {
-                cleaned_name: "pending" for _, cleaned_name, _, _ in saved_files
-            }
-            state.audio_upload_job["message"] = (
-                f"{len(saved_files)} fichier(s) sauvegardé(s), traitement lancé..."
-            )
-
-            # Phase 2 : lancer le traitement en arrière-plan
-            container_name = os.environ.get(
-                "AZURE_AUDIO_CONTAINER", "formationaudio-dev"
-            )
-            socketio.start_background_task(
-                _process_audio_upload,
-                saved_files,
-                skipped_report,
-                connection_string,
-                container_name,
-            )
-
-            return (
-                jsonify(
-                    {
-                        "success": True,
-                        "job_status": "saving",
-                        "message": f"{len(saved_files)} fichier(s) en cours de traitement",
-                    }
-                ),
-                202,
-            )
-
-        except Exception as e:
-            logger.error(f"❌ Erreur upload audios: {e}")
-            state.audio_upload_job["status"] = "error"
-            state.audio_upload_job["message"] = str(e)
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    def _process_audio_upload(
-        saved_files, skipped_report, connection_string, container_name
-    ):
-        """Tâche de fond : conversion MP3 + upload Azure (parallèle via eventlet)"""
-        import eventlet
-
-        report = list(skipped_report)
-
-        try:
-            state.audio_upload_job["status"] = "processing"
-
-            # Connexion Azure (une seule fois)
-            blob_service_client = BlobServiceClient.from_connection_string(
-                connection_string
-            )
-            container_client = blob_service_client.get_container_client(container_name)
-
-            try:
-                container_client.create_container()
-                logger.info(f"📦 Conteneur {container_name} créé")
-            except ResourceExistsError:
-                pass
-
-            completed_count = [0]
-            file_reports = []
-
-            def process_single_file(file_info):
-                original_name, cleaned_name, ext, tmp_path = file_info
-
-                try:
-                    # Phase 1 : Conversion
-                    state.audio_upload_job["files_status"][cleaned_name] = "converting"
-                    needs_conversion = ext != ".mp3"
-
-                    if needs_conversion:
-                        logger.info(f"  🔄 Conversion {original_name} ({ext} → .mp3)")
-                        audio_seg = AudioSegment.from_file(tmp_path)
-                        tmp_output = tempfile.NamedTemporaryFile(
-                            delete=False, suffix=".mp3"
-                        )
-                        audio_seg.export(tmp_output.name, format="mp3")
-                        tmp_output.close()
-                        upload_path = tmp_output.name
-                        os.unlink(tmp_path)
-                    else:
-                        upload_path = tmp_path
-
-                    # Phase 2 : Upload Azure
-                    state.audio_upload_job["files_status"][cleaned_name] = "uploading"
-                    blob_client = container_client.get_blob_client(cleaned_name)
-                    with open(upload_path, "rb") as f:
-                        blob_client.upload_blob(f, overwrite=True)
-                    logger.info(f"  ✅ Uploadé: {cleaned_name}")
-
-                    try:
-                        os.unlink(upload_path)
-                    except OSError:
-                        pass
-
-                    # Terminé
-                    state.audio_upload_job["files_status"][cleaned_name] = "done"
-                    completed_count[0] += 1
-                    state.audio_upload_job["progress"] = completed_count[0]
-                    state.audio_upload_job["current_file"] = cleaned_name
-                    state.audio_upload_job["message"] = (
-                        f"{completed_count[0]}/{len(saved_files)} fichier(s) traité(s)"
-                    )
-
-                    file_reports.append(
-                        {
-                            "original": original_name,
-                            "cleaned": cleaned_name,
-                            "converted": needs_conversion,
-                            "skipped": False,
-                        }
-                    )
-
-                except Exception as e:
-                    logger.error(f"  ❌ Erreur {original_name}: {e}")
-                    state.audio_upload_job["files_status"][cleaned_name] = "error"
-                    err_msg = str(e)
-                    if (
-                        "Invalid data" in err_msg
-                        or "Decoding failed" in err_msg
-                        or "Error opening input" in err_msg
-                    ):
-                        friendly_reason = "Fichier audio corrompu ou format non lisible"
-                    elif "No such file" in err_msg:
-                        friendly_reason = "Fichier introuvable"
-                    elif "codec" in err_msg.lower():
-                        friendly_reason = "Codec audio non supporté"
-                    else:
-                        friendly_reason = "Erreur de conversion"
-                    file_reports.append(
-                        {
-                            "original": original_name,
-                            "cleaned": None,
-                            "converted": False,
-                            "skipped": True,
-                            "reason": friendly_reason,
-                        }
-                    )
-                    completed_count[0] += 1
-                    state.audio_upload_job["progress"] = completed_count[0]
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-
-            # Traitement parallèle (max 4 fichiers simultanés)
-            pool = eventlet.GreenPool(size=4)
-            for _ in pool.imap(process_single_file, saved_files):
-                pass
-
-            report.extend(file_reports)
-            uploaded_count = sum(
-                1
-                for s in state.audio_upload_job["files_status"].values()
-                if s == "done"
-            )
-            logger.info(
-                f"✅ {uploaded_count} fichier(s) audio uploadé(s) dans {container_name}"
-            )
-
-            state.audio_upload_job["status"] = "completed"
-            state.audio_upload_job["message"] = (
-                f"{uploaded_count} fichier(s) uploadé(s) dans {container_name}"
-            )
-            state.audio_upload_job["report"] = report
-
-        except Exception as e:
-            logger.error(f"❌ Erreur traitement audio en arrière-plan: {e}")
-            state.audio_upload_job["status"] = "error"
-            state.audio_upload_job["message"] = str(e)
-            state.audio_upload_job["report"] = report
-            for _, _, _, tmp_path in saved_files:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-
-    @admin_bp.route("/api/admin/audio-upload-status", methods=["GET"])
-    def audio_upload_status():
-        """Retourne le statut du job d'upload audio en arrière-plan"""
-        try:
-            return jsonify({"success": True, **state.audio_upload_job}), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur statut upload audio: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @admin_bp.route("/api/admin/audios/<path:filename>", methods=["DELETE"])
-    def delete_audio(filename):
-        """Supprime un audio individuel du conteneur Azure"""
-        try:
-            connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
-            if not connection_string:
-                return (
-                    jsonify(
-                        {"success": False, "error": "Configuration Azure manquante"}
-                    ),
-                    500,
-                )
-
-            container_name = os.environ.get(
-                "AZURE_AUDIO_CONTAINER", "formationaudio-dev"
-            )
-            blob_service_client = BlobServiceClient.from_connection_string(
-                connection_string
-            )
-            container_client = blob_service_client.get_container_client(container_name)
-            container_client.delete_blob(filename)
-
-            logger.info(f"🗑️ Audio supprimé par intervenant : {filename}")
-            return jsonify({"success": True, "message": f"'{filename}' supprimé"}), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur suppression audio: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @admin_bp.route("/api/admin/audio-list", methods=["GET"])
-    def audio_list():
-        """Liste les fichiers audio présents dans le conteneur Azure avec URLs SAS"""
-        try:
-            if not session.get("is_admin"):
-                return jsonify({"success": False, "error": "Accès refusé"}), 403
-
-            connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
-            if not connection_string:
-                return (
-                    jsonify(
-                        {
-                            "success": False,
-                            "error": "Configuration AZURE_AUDIO_STORAGE_CONNECTION_STRING manquante",
-                        }
-                    ),
-                    500,
-                )
-
-            container_name = os.environ.get(
-                "AZURE_AUDIO_CONTAINER", "formationaudio-dev"
-            )
-            blob_service_client = BlobServiceClient.from_connection_string(
-                connection_string
-            )
-            container_client = blob_service_client.get_container_client(container_name)
-
-            account_name = blob_service_client.account_name
-            account_key = blob_service_client.credential.account_key
-
-            expiry = datetime.now(timezone.utc) + timedelta(hours=1)
-
-            audios = []
-            for blob in sorted(container_client.list_blobs(), key=lambda b: b.name):
-                sas_token = generate_blob_sas(
-                    account_name=account_name,
-                    container_name=container_name,
-                    blob_name=blob.name,
-                    account_key=account_key,
-                    permission=BlobSasPermissions(read=True),
-                    expiry=expiry,
-                )
-                url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob.name}?{sas_token}"
-                audios.append(
-                    {
-                        "name": blob.name,
-                        "size": blob.size,
-                        "url": url,
-                    }
-                )
-
-            return jsonify({"success": True, "audios": audios}), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur liste audio: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     return admin_bp

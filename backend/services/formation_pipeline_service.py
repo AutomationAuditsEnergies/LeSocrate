@@ -4,8 +4,8 @@ Service pipeline formation automatisé.
 Flux complet :
   1. Recherche RNCP sur France Compétences à partir du nom TP
   2. Téléchargement + extraction texte du REAC PDF
-  3. Génération programme global (Claude) → validation humaine
-  4. Découpage programme par journée (Claude) → validation humaine
+  3. Génération programme global (DeepSeek) → validation humaine
+  4. Découpage programme par journée (DeepSeek) → validation humaine
   5. Lancement génération TTS pour chaque journée (pipeline existant)
 """
 
@@ -33,19 +33,23 @@ from repositories.pipeline_repository import (
     list_pipeline_jobs,
     update_pipeline_job,
 )
-from utils.anthropic_client import (
-    AnthropicRateLimitError,
+from utils.deepseek_client import (
+    DeepSeekRateLimitError,
     default_model,
-    post_message as _anthropic_post,
+    post_message as _post_deepseek_message,
 )
 from utils.logger import get_logger
+from services.dynamic_day_schedule_service import (
+    SCHEDULE_SCHEMA_VERSION,
+    build_day_audio_manifest,
+    compile_day_schedule,
+)
 
 logger = get_logger(__name__)
 
 # Modèle utilisé pour la génération du pipeline formation.
-# Configure `FORMATION_LLM_MODEL=deepseek-v4-flash` ou `deepseek-v4-pro`
-# pour passer par DeepSeek. `FORMATION_CLAUDE_MODEL` reste supporté.
-CLAUDE_MODEL = default_model()
+# Configure `FORMATION_LLM_MODEL=deepseek-v4-flash` ou `deepseek-v4-pro`.
+DEEPSEEK_MODEL = default_model()
 HOURS_PER_DAY = 7
 
 COURSE_AUDIO_SLOTS = [
@@ -87,7 +91,181 @@ def _strip_internal_schedule_from_label(value: str | None) -> str:
     return text or original
 
 
-def _course_audio_slots_prompt() -> str:
+def _json_object(value, *, field_name: str) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field_name} contient un JSON invalide") from exc
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(f"{field_name} doit être un objet JSON")
+
+
+def _json_list(value, *, field_name: str) -> list:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field_name} contient un JSON invalide") from exc
+        if isinstance(parsed, list):
+            return parsed
+    raise ValueError(f"{field_name} doit être une liste JSON")
+
+
+def _v2_schedule_days(job: dict) -> list[dict] | None:
+    """Return validated immutable V2 days, or ``None`` for a legacy job."""
+
+    try:
+        schema_version = int(job.get("schedule_schema_version") or 1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("schedule_schema_version invalide") from exc
+    if schema_version != SCHEDULE_SCHEMA_VERSION:
+        return None
+
+    snapshot = _json_object(
+        job.get("schedule_snapshot_json") or job.get("schedule_snapshot"),
+        field_name="schedule_snapshot_json",
+    )
+    snapshot_version = int(
+        snapshot.get("schema_version") or schema_version
+    )
+    if snapshot_version != SCHEDULE_SCHEMA_VERSION:
+        raise ValueError(
+            "Le snapshot ne correspond pas à schedule_schema_version=2"
+        )
+
+    raw_days = snapshot.get("days")
+    if not isinstance(raw_days, list) or not raw_days:
+        raise ValueError("Le snapshot V2 doit contenir au moins une journée")
+
+    numbered_days = []
+    for fallback_index, raw_day in enumerate(raw_days, start=1):
+        if not isinstance(raw_day, dict):
+            raise ValueError(f"Journée V2 {fallback_index} invalide")
+        try:
+            day_index = int(
+                raw_day.get("day_index")
+                or raw_day.get("day_number")
+                or fallback_index
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Numéro de journée V2 invalide à la position {fallback_index}"
+            ) from exc
+        raw_blocks = (
+            raw_day.get("blocks")
+            or raw_day.get("schedule_blocks")
+            or raw_day.get("blocks_snapshot_json")
+            or []
+        )
+        canonical = compile_day_schedule(
+            _json_list(
+                raw_blocks,
+                field_name=f"schedule_snapshot_json.days[{fallback_index - 1}].blocks",
+            )
+        )
+        numbered_days.append(
+            {
+                **raw_day,
+                **canonical,
+                "day_index": day_index,
+                "day_number": day_index,
+            }
+        )
+
+    numbered_days.sort(key=lambda day: day["day_index"])
+    actual_indexes = [day["day_index"] for day in numbered_days]
+    expected_indexes = list(range(1, len(numbered_days) + 1))
+    if actual_indexes != expected_indexes:
+        raise ValueError(
+            "Les journées du snapshot V2 doivent être numérotées "
+            f"sans interruption : attendu {expected_indexes}, reçu {actual_indexes}"
+        )
+    return numbered_days
+
+
+def _schedule_day(
+    schedule_days: list[dict] | None,
+    day_number: int,
+) -> dict | None:
+    if not schedule_days:
+        return None
+    return next(
+        (
+            day
+            for day in schedule_days
+            if int(day.get("day_index") or day.get("day_number") or 0)
+            == int(day_number)
+        ),
+        None,
+    )
+
+
+def _minute_label(value: int) -> str:
+    hours, minutes = divmod(int(value), 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def _v2_course_slots(schedule_day: dict) -> list[dict]:
+    canonical = compile_day_schedule(schedule_day)
+    manifest_by_key = {
+        item["block_key"]: item
+        for item in build_day_audio_manifest(canonical)
+    }
+    slots = []
+    for block in canonical["blocks"]:
+        if block["block_type"] != "course":
+            continue
+        manifest_item = manifest_by_key[block["block_key"]]
+        slots.append(
+            {
+                "index": len(slots),
+                "course_index": int(block["course_index"]),
+                "label": f"Cours {block['course_index']}",
+                "block_key": block["block_key"],
+                "start": _minute_label(block["start_minute"]),
+                "end": _minute_label(block["end_minute"]),
+                "start_minute": block["start_minute"],
+                "end_minute": block["end_minute"],
+                "duration_min": block["duration_minutes"],
+                "target_words": block["target_words"],
+                "filename": manifest_item["filename"],
+            }
+        )
+    return slots
+
+
+def _course_audio_slots_prompt(
+    schedule_days: list[dict] | None = None,
+) -> str:
+    if schedule_days is not None:
+        day_lines = []
+        for day in schedule_days:
+            slots = _v2_course_slots(day)
+            day_number = int(
+                day.get("day_index") or day.get("day_number") or 0
+            )
+            day_lines.append(
+                f"Journée {day_number} : {len(slots)} cours vocaux, "
+                f"{sum(slot['duration_min'] for slot in slots)} minutes "
+                "de cours au total."
+            )
+            day_lines.extend(
+                (
+                    f"- Cours {slot['course_index']}/{len(slots)} · "
+                    f"{slot['duration_min']} min · cible "
+                    f"{slot['target_words']} mots · identifiant "
+                    f"{slot['block_key']} · fichier {slot['filename']}."
+                )
+                for slot in slots
+            )
+        return "\n".join(day_lines)
+
     return "\n".join(
         f"- {slot['label']} · données internes: {slot['start']}-{slot['end']}, "
         f"{slot['duration_min']} min, fichier {slot['filename']}. "
@@ -96,8 +274,96 @@ def _course_audio_slots_prompt() -> str:
     )
 
 
-def _normalize_day_audio_slots(day_data: dict) -> dict:
-    """Garantit que daily_programs expose 7 cours audio internes."""
+def _normalize_v2_day_audio_slots(
+    day_data: dict,
+    schedule_day: dict,
+) -> dict:
+    """Overlay generated pedagogy on the exact immutable V2 course slots."""
+
+    canonical_day = compile_day_schedule(schedule_day)
+    slots = _v2_course_slots(canonical_day)
+    raw_sub_parts = list(day_data.get("sub_parts") or [])
+    normalized = []
+    for idx, slot in enumerate(slots):
+        raw = raw_sub_parts[idx] if idx < len(raw_sub_parts) else {}
+        src = raw if isinstance(raw, dict) else {}
+        name = (src.get("name") or "").strip()
+        if not name and isinstance(raw, str):
+            name = raw.strip()
+        name = _strip_internal_schedule_from_label(name)
+        if not name:
+            name = f"{slot['label']} — Sujet à préciser"
+        elif not name.lower().startswith("cours"):
+            name = f"{slot['label']} — {name}"
+        module_content = (src.get("module_content") or "").strip()
+        if not module_content:
+            module_content = (
+                "Développer le contenu prévu pour ce chapitre en respectant "
+                "son budget de mots interne, sans mentionner le planning."
+            )
+        normalized.append(
+            {
+                **src,
+                "index": idx,
+                "course_index": slot["course_index"],
+                "course_count": len(slots),
+                "is_last_course": idx == len(slots) - 1,
+                "audio_slot": slot["label"],
+                "block_key": slot["block_key"],
+                "start_time": slot["start"],
+                "end_time": slot["end"],
+                "start_minute": slot["start_minute"],
+                "end_minute": slot["end_minute"],
+                "duration_min": slot["duration_min"],
+                "duration_minutes": slot["duration_min"],
+                "target_words": slot["target_words"],
+                "filename": slot["filename"],
+                "name": name,
+                "module_content": module_content,
+            }
+        )
+
+    day_data["sub_parts"] = normalized
+    day_data["audio_slots"] = slots
+    day_data["audio_manifest"] = build_day_audio_manifest(canonical_day)
+    day_data["audio_file_count"] = canonical_day["audio_file_count"]
+    day_data["schedule_blocks"] = canonical_day["blocks"]
+    day_data["schedule_schema_version"] = SCHEDULE_SCHEMA_VERSION
+    day_data["schedule_hash"] = canonical_day["schedule_hash"]
+    day_data["day_index"] = int(
+        schedule_day.get("day_index")
+        or schedule_day.get("day_number")
+        or day_data.get("day_number")
+        or 0
+    )
+    day_data["hours"] = canonical_day["total_course_minutes"] / 60
+    day_data["course_minutes"] = canonical_day["total_course_minutes"]
+    day_data["amplitude_minutes"] = canonical_day["amplitude_minutes"]
+    return day_data
+
+
+def _normalize_day_audio_slots(
+    day_data: dict,
+    schedule_day: dict | None = None,
+) -> dict:
+    """Normalize one day, dynamically for V2 and identically to legacy V1."""
+
+    if (
+        schedule_day is None
+        and str(day_data.get("schedule_schema_version") or "1")
+        == str(SCHEDULE_SCHEMA_VERSION)
+    ):
+        embedded_blocks = day_data.get("schedule_blocks")
+        if embedded_blocks:
+            schedule_day = {
+                "day_index": (
+                    day_data.get("day_index") or day_data.get("day_number")
+                ),
+                "blocks": embedded_blocks,
+            }
+    if schedule_day is not None:
+        return _normalize_v2_day_audio_slots(day_data, schedule_day)
+
     sub_parts = list(day_data.get("sub_parts") or [])
     normalized = []
     for idx, slot in enumerate(COURSE_AUDIO_SLOTS):
@@ -137,14 +403,37 @@ def _normalize_day_audio_slots(day_data: dict) -> dict:
 def _format_slot_generation_source(slot_data: dict) -> str:
     """Texte source injecté dans le prompt TTS pour un cours interne."""
     brief = slot_data.get("generation_brief") or {}
+    course_count = int(slot_data.get("course_count") or 0)
+    course_index = int(
+        slot_data.get("course_index") or slot_data.get("index") or 0
+    )
+    if course_count:
+        internal_label = (
+            f"Cours {course_index} sur {course_count}"
+            + (" (dernier cours de la journée)" if slot_data.get("is_last_course") else "")
+        )
+    else:
+        internal_label = slot_data.get("audio_slot")
     lines = [
-        f"COURS AUDIO INTERNE : {slot_data.get('audio_slot')}.",
+        f"COURS AUDIO INTERNE : {internal_label}.",
         "Les horaires, durées et fichiers associés à ce cours sont internes et ne doivent jamais être verbalisés.",
         f"OBJECTIF DU COURS : {_strip_internal_schedule_from_label(slot_data.get('name') or '')}",
         "",
         "CONTENU PRIORITAIRE :",
         slot_data.get("module_content", "") or "",
     ]
+    if course_count:
+        lines.extend(
+            [
+                "",
+                (
+                    "CONTRAINTE DE VOLUME INTERNE : "
+                    f"{slot_data.get('duration_min')} minutes, cible "
+                    f"{slot_data.get('target_words')} mots après la marge "
+                    "technique de 30 secondes."
+                ),
+            ]
+        )
     if isinstance(brief, dict) and brief:
         lines.extend(["", "BRIEF DE GÉNÉRATION DU COURS :"])
         for key, label in (
@@ -161,7 +450,7 @@ def _format_slot_generation_source(slot_data: dict) -> str:
                 lines.append(f"- {label} : {value}")
     return "\n".join(lines).strip()
 
-# ─── Prompts Claude ───────────────────────────────────────────────────────────
+# ─── Prompts DeepSeek ─────────────────────────────────────────────────────────
 
 _GLOBAL_PROGRAM_PROMPT = """Tu es un expert en ingénierie pédagogique spécialisé dans les titres professionnels du Ministère du Travail.
 
@@ -287,6 +576,134 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
     }}
   ]
 }}"""
+
+
+_DAILY_SPLIT_PROMPT_V2 = """Tu es un expert en ingénierie pédagogique.
+
+Tu vas découper ce programme de formation en fiches journée pour les jours {DAY_START} à {DAY_END} (sur {NB_DAYS} journées au total).
+
+TITRE PROFESSIONNEL : {TP_NAME}
+JOURNÉES À GÉNÉRER : jours {DAY_START} à {DAY_END}
+
+PROGRAMME GLOBAL :
+{GLOBAL_PROGRAM}
+
+PLANNING PÉDAGOGIQUE IMMUABLE :
+{COURSE_AUDIO_SLOTS}
+
+CONSIGNE :
+Génère uniquement les journées {DAY_START} à {DAY_END}, en répartissant le programme de façon cohérente.
+
+RÈGLES :
+- Pour chaque journée, crée exactement le nombre de cours vocaux indiqué dans le planning ci-dessus.
+- Respecte la durée et le budget de mots propres à chaque cours. Ne fusionne, ne supprime et n'ajoute aucun cours.
+- Un cours correspond à un chapitre pédagogique autonome.
+- Un module peut occuper plusieurs cours, ou plusieurs petits modules peuvent partager un cours si c'est pédagogiquement cohérent.
+- Ne coupe jamais une idée au hasard : chaque cours doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
+- Le dernier cours de chaque journée doit conclure la journée. Lui seul annonce la prochaine séance, sauf lors de la dernière journée de la formation.
+- Jour 1 : pas de rappel. Autres jours : bref rappel de la séance précédente.
+- "day_recap" : commence par "Lors de la dernière séance, nous avons vu…" (sauf jour 1).
+- "day_transition" : commence par "À la prochaine séance, nous aborderons…" (jamais "demain" ni "la semaine prochaine").
+- "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance et progression du chapitre.
+- "generation_brief" : précise quoi couvrir, quels exemples intégrer, comment finir et quelles redites éviter.
+- Les horaires, durées, budgets, identifiants et fichiers sont strictement internes : ne les mentionne jamais dans le texte pédagogique.
+- "name" doit contenir seulement "Cours N — thème pédagogique précis", sans heure, durée, budget, mot "créneau" ou planning.
+
+FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
+
+{{
+  "days": [
+    {{
+      "day_number": {DAY_START},
+      "title": "Titre descriptif de la journée",
+      "modules_covered": ["MODULE 1.1 : Nom"],
+      "sub_parts": [
+        {{
+          "course_index": 1,
+          "name": "Cours 1 — Nom précis du thème",
+          "module_content": "Contenu condensé et structuré de ce chapitre.",
+          "generation_brief": {{
+            "must_cover": ["notion prioritaire 1", "notion prioritaire 2"],
+            "examples": ["exemple métier à développer"],
+            "finish": "Type de chute ou synthèse attendue",
+            "avoid": ["notion réservée à un autre cours", "redite à éviter"],
+            "handoff": "Lien naturel avec le Q&R suivant"
+          }}
+        }}
+      ],
+      "day_recap": "Rappel de la séance précédente (vide pour le jour 1)",
+      "day_transition": "Annonce de la prochaine séance"
+    }}
+  ]
+}}"""
+
+
+def _build_global_program_prompt(
+    job: dict,
+    sources: str,
+    schedule_days: list[dict] | None = None,
+) -> str:
+    """Build a dynamic V2 prompt while preserving the legacy prompt verbatim."""
+
+    nb_days = len(schedule_days) if schedule_days else int(job["nb_days"])
+    if not schedule_days:
+        return (
+            _GLOBAL_PROGRAM_PROMPT
+            .replace("{TP_NAME}", job["tp_name"])
+            .replace("{TOTAL_HOURS}", str(job["total_hours"]))
+            .replace("{NB_DAYS}", str(nb_days))
+            .replace("{REAC_TEXT}", sources)
+        )
+
+    total_course_minutes = sum(
+        int(day["total_course_minutes"]) for day in schedule_days
+    )
+    schedule_summary = "\n".join(
+        (
+            f"- Journée {day['day_index']} : {day['course_count']} cours, "
+            f"{day['total_course_minutes']} minutes de cours vocal, "
+            f"amplitude {day['amplitude_minutes']} minutes."
+        )
+        for day in schedule_days
+    )
+    prompt = _GLOBAL_PROGRAM_PROMPT
+    prompt = prompt.replace(
+        "DURÉE TOTALE : {TOTAL_HOURS} heures ({NB_DAYS} journées de 7h)",
+        (
+            "VOLUME TOTAL DE COURS VOCAL : "
+            f"{total_course_minutes} minutes sur {nb_days} journées\n"
+            "ORGANISATION DES JOURNÉES :\n"
+            f"{schedule_summary}"
+        ),
+    )
+    prompt = prompt.replace(
+        "Durée totale : {TOTAL_HOURS} heures | {NB_DAYS} journées",
+        (
+            f"Volume total de cours vocal : {total_course_minutes} minutes "
+            f"| {nb_days} journées"
+        ),
+    )
+    prompt = prompt.replace(
+        "Durée : Xh | Compétences REAC couvertes : CP1, CP2...",
+        "Volume de cours vocal : X minutes | Compétences REAC couvertes : CP1, CP2...",
+    )
+    prompt = prompt.replace(
+        "### MODULE 1.1 : [Nom précis du module] (Xh)",
+        "### MODULE 1.1 : [Nom précis du module] (X minutes de cours vocal)",
+    )
+    prompt = prompt.replace(
+        "- La somme des durées hors [hors TTS] doit être égale à {TOTAL_HOURS}h",
+        (
+            "- La somme des volumes hors [hors TTS] doit être égale à "
+            f"{total_course_minutes} minutes de cours vocal"
+        ),
+    )
+    return (
+        prompt
+        .replace("{TP_NAME}", job["tp_name"])
+        .replace("{NB_DAYS}", str(nb_days))
+        .replace("{REAC_TEXT}", sources)
+    )
 
 
 # ─── France Compétences ───────────────────────────────────────────────────────
@@ -659,11 +1076,15 @@ def fetch_rome_data(rncp_code: str) -> str:
     return combined
 
 
-# ─── Appel Claude ─────────────────────────────────────────────────────────────
+# ─── Appel DeepSeek ───────────────────────────────────────────────────────────
 
-def _claude_post(messages, max_tokens=16000, model=None):
+def _deepseek_post(messages, max_tokens=16000, model=None):
     """Wrapper local qui injecte le modèle par défaut du service pipeline."""
-    return _anthropic_post(messages, max_tokens=max_tokens, model=model or CLAUDE_MODEL)
+    return _post_deepseek_message(
+        messages,
+        max_tokens=max_tokens,
+        model=model or DEEPSEEK_MODEL,
+    )
 
 
 # ─── Génération programme global ──────────────────────────────────────────────
@@ -676,10 +1097,11 @@ def _generate_global_program_thread(job_id: int, model: str = None):
             return
 
         update_job(job_id, status="global_generating")
-        used_model = model or CLAUDE_MODEL
+        used_model = model or DEEPSEEK_MODEL
         logger.info(f"🔄 Job {job_id} : génération programme global (modèle: {used_model})...")
 
-        nb_days = job["nb_days"]
+        schedule_days = _v2_schedule_days(job)
+        nb_days = len(schedule_days) if schedule_days else job["nb_days"]
 
         # ── Couche 1 : prioriser la Knowledge Base enrichie si dispo ──
         # Si l'utilisateur a lancé l'enrichissement (status kb_ready), on
@@ -707,17 +1129,15 @@ def _generate_global_program_thread(job_id: int, model: str = None):
                 sources += f"\n\n=== FICHES ROME (France Travail) ===\n{job['rome_text'][:5000]}"
             logger.info(f"📄 Job {job_id} : programme global généré depuis REAC brut (KB non disponible)")
 
-        prompt = (
-            _GLOBAL_PROGRAM_PROMPT
-            .replace("{TP_NAME}", job["tp_name"])
-            .replace("{TOTAL_HOURS}", str(job["total_hours"]))
-            .replace("{NB_DAYS}", str(nb_days))
-            .replace("{REAC_TEXT}", sources)
+        prompt = _build_global_program_prompt(
+            job,
+            sources,
+            schedule_days=schedule_days,
         )
 
         for attempt in range(5):
             try:
-                program = _claude_post(
+                program = _deepseek_post(
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=16000,
                     model=used_model,
@@ -730,7 +1150,7 @@ def _generate_global_program_thread(job_id: int, model: str = None):
                 )
                 logger.info(f"✅ Job {job_id} : programme global généré ({len(program)} chars)")
                 return
-            except AnthropicRateLimitError as e:
+            except DeepSeekRateLimitError as e:
                 if attempt < 4:
                     logger.warning(f"⏳ Retry {attempt+1}/5 génération global (429, sleep {e.wait_seconds:.0f}s)")
                     time.sleep(e.wait_seconds)
@@ -918,7 +1338,13 @@ def _ensure_list(value) -> list:
     return [value]
 
 
-def _normalize_daily_payload(data, day_start: int, day_end: int, tp_name: str) -> list[dict]:
+def _normalize_daily_payload(
+    data,
+    day_start: int,
+    day_end: int,
+    tp_name: str,
+    schedule_days: list[dict] | None = None,
+) -> list[dict]:
     expected = list(range(day_start, day_end + 1))
     if isinstance(data, dict):
         raw_days = data.get("days")
@@ -949,17 +1375,35 @@ def _normalize_daily_payload(data, day_start: int, day_end: int, tp_name: str) -
         if not day:
             missing.append(number)
             continue
-        selected.append(_complete_day_program_shape(day, number, tp_name))
+        schedule_day = _schedule_day(schedule_days, number)
+        if schedule_days and schedule_day is None:
+            raise ValueError(
+                f"Planning V2 introuvable pour la journée {number}"
+            )
+        selected.append(
+            _complete_day_program_shape(
+                day,
+                number,
+                tp_name,
+                schedule_day=schedule_day,
+            )
+        )
 
     if missing:
         raise ValueError(f"Journée(s) manquante(s) dans le JSON : {missing}")
     return selected
 
 
-def _complete_day_program_shape(day: dict, day_number: int, tp_name: str) -> dict:
+def _complete_day_program_shape(
+    day: dict,
+    day_number: int,
+    tp_name: str,
+    schedule_day: dict | None = None,
+) -> dict:
     day = dict(day or {})
     day["day_number"] = day_number
-    day["hours"] = HOURS_PER_DAY
+    if schedule_day is None:
+        day["hours"] = HOURS_PER_DAY
     title = _strip_internal_schedule_from_label(day.get("title") or "")
     day["title"] = title or f"Journée {day_number} — Progression {tp_name}"
     modules = day.get("modules_covered")
@@ -971,7 +1415,7 @@ def _complete_day_program_shape(day: dict, day_number: int, tp_name: str) -> dic
         day["day_recap"] = "Lors de la dernière séance, nous avons vu les bases nécessaires pour aborder cette nouvelle étape."
     if not str(day.get("day_transition") or "").strip():
         day["day_transition"] = "À la prochaine séance, nous aborderons la suite logique de cette progression."
-    return _normalize_day_audio_slots(day)
+    return _normalize_day_audio_slots(day, schedule_day=schedule_day)
 
 
 def _global_program_slice(global_program: str, day_number: int, nb_days: int, max_chars: int = 1800) -> str:
@@ -984,7 +1428,14 @@ def _global_program_slice(global_program: str, day_number: int, nb_days: int, ma
     return text[start:start + max_chars].strip()
 
 
-def _fallback_day_program(tp_name: str, nb_days: int, global_program: str, day_number: int, reason: str) -> dict:
+def _fallback_day_program(
+    tp_name: str,
+    nb_days: int,
+    global_program: str,
+    day_number: int,
+    reason: str,
+    schedule_day: dict | None = None,
+) -> dict:
     focus = _global_program_slice(global_program, day_number, nb_days)
     focus_short = focus[:900] if focus else (
         "reprendre les compétences du référentiel et les transformer en progression pédagogique opérationnelle"
@@ -992,23 +1443,41 @@ def _fallback_day_program(tp_name: str, nb_days: int, global_program: str, day_n
     themes = [
         ("Cadre et objectifs du thème", "poser le contexte, les objectifs et les notions clés"),
         ("Notions fondamentales", "expliquer les bases indispensables avec des exemples simples"),
+        ("Concepts clés", "approfondir les concepts structurants et leurs liens"),
         ("Méthode professionnelle", "montrer une méthode d'action applicable en situation métier"),
+        ("Démonstration guidée", "décomposer une démarche complète étape par étape"),
         ("Cas pratique guidé", "développer un cas concret et faire verbaliser le raisonnement attendu"),
         ("Points de vigilance", "identifier les erreurs fréquentes, limites et bonnes pratiques"),
         ("Mise en situation", "faire le lien avec une situation réaliste de terrain"),
+        ("Approfondissement", "consolider les acquis avec des variantes et contre-exemples"),
         ("Synthèse et transition", "résumer les acquis et préparer la suite de la progression"),
     ]
+    if schedule_day is None:
+        # Preserve the exact seven-theme legacy fallback ordering.
+        themes = [
+            themes[0],
+            themes[1],
+            themes[3],
+            themes[5],
+            themes[6],
+            themes[7],
+            themes[9],
+        ]
+        course_count = len(COURSE_AUDIO_SLOTS)
+    else:
+        course_count = len(_v2_course_slots(schedule_day))
+        themes = themes[:course_count]
+        themes[-1] = (
+            "Synthèse et transition",
+            "résumer les acquis et préparer la suite de la progression",
+        )
+
     sub_parts = []
-    for idx, (title, role) in enumerate(themes):
-        slot = COURSE_AUDIO_SLOTS[idx]
+    for idx, (title, role) in enumerate(themes[:course_count]):
+        label = f"Cours {idx + 1}"
         sub_parts.append({
             "index": idx,
-            "audio_slot": slot["label"],
-            "start_time": slot["start"],
-            "end_time": slot["end"],
-            "duration_min": slot["duration_min"],
-            "filename": slot["filename"],
-            "name": f"{slot['label']} — {title}",
+            "name": f"{label} — {title}",
             "module_content": (
                 f"Cette partie doit {role}. Elle s'appuie sur le programme global de "
                 f"la formation : {focus_short}. Le formateur doit rester concret, "
@@ -1022,21 +1491,24 @@ def _fallback_day_program(tp_name: str, nb_days: int, global_program: str, day_n
                 "handoff": "Transition naturelle vers le point suivant ou la pause.",
             },
         })
-    return _normalize_day_audio_slots({
+    raw_day = {
         "day_number": day_number,
         "title": f"Journée {day_number} — Progression {tp_name}",
-        "hours": HOURS_PER_DAY,
         "modules_covered": [],
         "sub_parts": sub_parts,
         "day_recap": "" if day_number == 1 else "Lors de la dernière séance, nous avons vu les bases nécessaires pour aborder cette nouvelle étape.",
         "day_transition": "À la prochaine séance, nous aborderons la suite logique de cette progression.",
         "generation_warning": f"Fallback déterministe utilisé après échec JSON du batch daily : {reason[:300]}",
-    })
+    }
+    if schedule_day is None:
+        raw_day["hours"] = HOURS_PER_DAY
+    return _normalize_day_audio_slots(raw_day, schedule_day=schedule_day)
 
 
 def _split_batch(tp_name: str, nb_days: int, global_program: str,
                  day_start: int, day_end: int, model: str,
-                 reac_text: str = "", rc_text: str = "", rome_text: str = "") -> list:
+                 reac_text: str = "", rc_text: str = "", rome_text: str = "",
+                 schedule_days: list[dict] | None = None) -> list:
     """Génère un batch de journées (day_start à day_end inclus)."""
     # Bloc sources enrichies pour le module_content
     enrichment = ""
@@ -1047,26 +1519,49 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
     if rome_text:
         enrichment += f"\n\n=== FICHES ROME ===\n{rome_text[:3000]}"
 
+    prompt_template = (
+        _DAILY_SPLIT_PROMPT_V2 if schedule_days else _DAILY_SPLIT_PROMPT
+    )
+    prompt_schedule_days = (
+        [
+            day
+            for day in schedule_days
+            if day_start
+            <= int(day.get("day_index") or day.get("day_number") or 0)
+            <= day_end
+        ]
+        if schedule_days
+        else None
+    )
     prompt = (
-        _DAILY_SPLIT_PROMPT
+        prompt_template
         .replace("{TP_NAME}", tp_name)
         .replace("{NB_DAYS}", str(nb_days))
         .replace("{DAY_START}", str(day_start))
         .replace("{DAY_END}", str(day_end))
-        .replace("{COURSE_AUDIO_SLOTS}", _course_audio_slots_prompt())
+        .replace(
+            "{COURSE_AUDIO_SLOTS}",
+            _course_audio_slots_prompt(prompt_schedule_days),
+        )
         .replace("{GLOBAL_PROGRAM}", global_program[:20000] + enrichment)
     )
     last_error = None
     for attempt in range(DAILY_SPLIT_ATTEMPTS):
         try:
-            raw = _claude_post(
+            raw = _deepseek_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=DAILY_SPLIT_MAX_TOKENS,
                 model=model,
             )
             data = _clean_json(raw)
-            return _normalize_daily_payload(data, day_start, day_end, tp_name)
-        except AnthropicRateLimitError as e:
+            return _normalize_daily_payload(
+                data,
+                day_start,
+                day_end,
+                tp_name,
+                schedule_days=schedule_days,
+            )
+        except DeepSeekRateLimitError as e:
             if attempt < DAILY_SPLIT_ATTEMPTS - 1:
                 logger.warning(
                     f"⏳ Retry {attempt+1}/{DAILY_SPLIT_ATTEMPTS} batch jours {day_start}-{day_end} "
@@ -1102,6 +1597,7 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
                     reac_text=reac_text,
                     rc_text=rc_text,
                     rome_text=rome_text,
+                    schedule_days=schedule_days,
                 )
             )
         return days
@@ -1111,7 +1607,16 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
         day_start,
         last_error,
     )
-    return [_fallback_day_program(tp_name, nb_days, global_program, day_start, str(last_error or ""))]
+    return [
+        _fallback_day_program(
+            tp_name,
+            nb_days,
+            global_program,
+            day_start,
+            str(last_error or ""),
+            schedule_day=_schedule_day(schedule_days, day_start),
+        )
+    ]
 
 
 def run_daily_split(job_id: int, model: str = None) -> dict:
@@ -1122,8 +1627,9 @@ def run_daily_split(job_id: int, model: str = None) -> dict:
             raise ValueError(f"Job {job_id} introuvable")
 
         update_job(job_id, status="daily_splitting", error_message=None)
-        used_model = model or CLAUDE_MODEL
-        nb_days = job["nb_days"]
+        used_model = model or DEEPSEEK_MODEL
+        schedule_days = _v2_schedule_days(job)
+        nb_days = len(schedule_days) if schedule_days else job["nb_days"]
         logger.info(
             "🔄 Job %s : découpage en %s journée(s), batch=%s, workers=%s (modèle: %s)...",
             job_id,
@@ -1153,6 +1659,7 @@ def run_daily_split(job_id: int, model: str = None) -> dict:
                 reac_text=job.get("reac_text") or "",
                 rc_text=job.get("rc_text") or "",
                 rome_text=job.get("rome_text") or "",
+                schedule_days=schedule_days,
             )
 
         workers = min(max(1, DAILY_SPLIT_WORKERS), max(1, len(batches)))
@@ -1179,7 +1686,15 @@ def run_daily_split(job_id: int, model: str = None) -> dict:
         for batch_days in results:
             all_days.extend(batch_days or [])
         all_days.sort(key=lambda d: d.get("day_number", 0))
-        all_days = [_complete_day_program_shape(day, i + 1, job["tp_name"]) for i, day in enumerate(all_days)]
+        all_days = [
+            _complete_day_program_shape(
+                day,
+                i + 1,
+                job["tp_name"],
+                schedule_day=_schedule_day(schedule_days, i + 1),
+            )
+            for i, day in enumerate(all_days)
+        ]
 
         expected_numbers = list(range(1, nb_days + 1))
         actual_numbers = [_coerce_day_number(day.get("day_number")) for day in all_days]
@@ -1266,9 +1781,9 @@ def refine_content(
         .replace("{CURRENT_CONTENT}", current_content[:30000])
         .replace("{INSTRUCTION}", instruction)
     )
-    used_model = model or CLAUDE_MODEL
+    used_model = model or DEEPSEEK_MODEL
     logger.info(f"🔧 Affinage contenu ({content_type}) avec {used_model} : '{instruction[:80]}'")
-    return _claude_post(
+    return _deepseek_post(
         messages=[{"role": "user", "content": prompt}],
         max_tokens=16000,
         model=used_model,
@@ -1402,6 +1917,11 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
     daily_programs = json.loads(job["daily_programs"] or "[]")
     if not daily_programs:
         raise ValueError("Aucun programme journée disponible")
+    schedule_days = _v2_schedule_days(job)
+    if schedule_days and len(daily_programs) != len(schedule_days):
+        raise ValueError(
+            "Le nombre de programmes journée ne correspond pas au snapshot V2"
+        )
 
     folder_state = get_expected_course_folders(
         job_id,
@@ -1416,13 +1936,21 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
 
     # Lancer génération TTS pour chaque journée
     for i, day_data in enumerate(daily_programs):
-        day_data = _normalize_day_audio_slots(day_data)
+        schedule_day = _schedule_day(schedule_days, i + 1)
+        day_data = _normalize_day_audio_slots(
+            day_data,
+            schedule_day=schedule_day,
+        )
         folder_name = expected_course_folder_name(day_data, i + 1)
         folder_info = folders_by_name.get(folder_name)
         if not folder_info:
             raise RuntimeError(f"Folder attendu introuvable : {folder_name}")
         folder_id = folder_info["folder_id"]
-        day_program_text = _format_day_program_text(day_data, job["tp_name"])
+        day_program_text = _format_day_program_text(
+            day_data,
+            job["tp_name"],
+            schedule_day=schedule_day,
+        )
         sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
         module_contents = {}
         for sp in day_data.get("sub_parts", []):
@@ -1507,9 +2035,16 @@ def repair_orphan_content_folders(job_id: int) -> dict:
     return {"repaired": len(repaired), "missing": missing, "folders": repaired}
 
 
-def _format_day_program_text(day_data: dict, tp_name: str) -> str:
+def _format_day_program_text(
+    day_data: dict,
+    tp_name: str,
+    schedule_day: dict | None = None,
+) -> str:
     """Formate le programme d'une journée en texte pour le job TTS."""
-    day_data = _normalize_day_audio_slots(day_data)
+    day_data = _normalize_day_audio_slots(
+        day_data,
+        schedule_day=schedule_day,
+    )
     lines = [
         f"TITRE PROFESSIONNEL : {tp_name}",
         f"JOURNÉE {day_data.get('day_number', '?')} : {day_data.get('title', '')}",

@@ -7,6 +7,7 @@ from repositories.course_schedule_repository import (
     mark_audio_waiting_for_content,
 )
 from repositories.pipeline_repository import list_due_audio_generation_sessions
+from services.audio_service import is_explicit_schedule_occurrence
 from services.formation_pipeline_service import get_expected_course_folders
 from utils.logger import get_logger
 
@@ -103,8 +104,49 @@ def launch_scheduled_audio_session(
         return {**result, "success": False, "skipped": True, "error": "Aucun job pipeline lié"}
 
     folder_ids = get_expected_course_folders(int(job_id)).get("folder_ids") or []
+    module_day_id = session.get("module_day_id")
+    if is_explicit_schedule_occurrence(session):
+        try:
+            from services.audio_service import (
+                resolve_v2_course_session_manifest,
+            )
+
+            resolve_v2_course_session_manifest(
+                platform_id,
+                session,
+            )
+        except Exception as exc:
+            mark_audio_waiting_for_content(
+                session_id,
+                updated_at=datetime.now(FRANCE_TZ),
+            )
+            logger.error(
+                "SCHEDULED_AUDIO_V2_MANIFEST_UNAVAILABLE "
+                "session=%s module_day_id=%s error=%s",
+                session_id,
+                module_day_id,
+                exc,
+                exc_info=True,
+            )
+            return {
+                **result,
+                "success": False,
+                "skipped": True,
+                "error": str(exc),
+                "module_day_id": module_day_id,
+            }
+
+    # The generation source can differ from the occurrence's target folder
+    # when a durable module is reused. Keep the historic source-folder mapping
+    # after validating that the target occurrence owns a sound V2 manifest.
     folder_index = session_index - 1
-    if folder_index < 0 or folder_index >= len(folder_ids):
+    folder_id = (
+        int(folder_ids[folder_index])
+        if 0 <= folder_index < len(folder_ids)
+        else None
+    )
+
+    if folder_id is None:
         mark_audio_waiting_for_content(session_id, updated_at=datetime.now(FRANCE_TZ))
         return {
             **result,
@@ -114,7 +156,6 @@ def launch_scheduled_audio_session(
             "available_folder_count": len(folder_ids),
         }
 
-    folder_id = int(folder_ids[folder_index])
     result["folder_id"] = folder_id
     try:
         from routes.formation_routes import start_folder_audio_generation
@@ -181,12 +222,12 @@ def process_due_audio_generations(
     *,
     wait_for_completion=False,
 ):
-    """Launch one day's audio before its J-1 readiness deadline.
+    """Launch one day's audio before its H-24 readiness deadline.
 
     Database claims, fencing tokens and retry timestamps make repeated timer
-    calls safe across restarts and multiple Azure instances. By default the
-    occurrence enters the queue at H-26: a two-hour build buffer before the
-    files must be ready at H-24. Later course days remain untouched.
+    calls safe across restarts and multiple Azure instances. V2 occurrences
+    enter at H-24 for their immutable day manifest. Historic V1 occurrences
+    keep the proactive two-hour buffer and enter at H-26.
     """
     ready_hours, build_buffer_hours = _scheduled_audio_window_hours(horizon_hours)
     claim_horizon_hours = ready_hours + build_buffer_hours
@@ -213,6 +254,20 @@ def process_due_audio_generations(
 
     results = []
     for session in due_sessions:
+        # V2 contract: TTS starts at H-24 for the exact immutable day
+        # manifest. V1 keeps its historic proactive build buffer.
+        if is_explicit_schedule_occurrence(session):
+            scheduled_at = session.get("scheduled_at")
+            if not isinstance(scheduled_at, datetime):
+                scheduled_at = datetime.fromisoformat(
+                    str(scheduled_at).replace("Z", "+00:00")
+                )
+            if scheduled_at.tzinfo is None:
+                scheduled_at = FRANCE_TZ.localize(scheduled_at)
+            else:
+                scheduled_at = scheduled_at.astimezone(FRANCE_TZ)
+            if scheduled_at > now + timedelta(hours=ready_hours):
+                continue
         if dry_run:
             results.append({
                 "session_id": session["id"],

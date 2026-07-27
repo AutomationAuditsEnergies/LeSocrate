@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -40,6 +42,24 @@ class DatabaseRuntimeModeTest(unittest.TestCase):
             with self.assertRaises(db.SQLiteRuntimeDisabledError):
                 db.init_database()
             connect.assert_not_called()
+
+    def test_runtime_sqlite_connection_enables_foreign_keys(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        try:
+            with patch.object(db, "DB_PATH", tmp.name), patch.object(
+                db,
+                "sqlite_runtime_enabled",
+                return_value=True,
+            ):
+                conn = db.get_db_connection()
+                try:
+                    enabled = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+                finally:
+                    conn.close()
+            self.assertEqual(enabled, 1)
+        finally:
+            os.unlink(tmp.name)
 
     def test_sqlite_maintenance_never_blocks_pure_postgres_requests(self):
         with patch.object(db_safety, "sqlite_runtime_enabled", return_value=False), patch.object(

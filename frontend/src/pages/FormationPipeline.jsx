@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { apiUrl } from '../api'
+import { apiDownload, apiFetch } from '../api'
 import { renderSlideTemplate } from '../components/slides/slideTemplateRegistry'
 
 const Icon = ({ name, className = '', style = {} }) => (
@@ -23,6 +23,16 @@ const TEXT_AVAILABLE_STATUSES = new Set([
   'audio_error',
 ])
 const CONTENT_POLLING_STATUSES = new Set(['tts_launched', 'audio_running'])
+const DEEPSEEK_PRO_MODEL = 'deepseek-v4-pro'
+const DEEPSEEK_FLASH_MODEL = 'deepseek-v4-flash'
+
+function normalizePipelineModel(model) {
+  const value = String(model || '').toLowerCase()
+  if (value === 'flash' || value.includes('flash')) {
+    return DEEPSEEK_FLASH_MODEL
+  }
+  return DEEPSEEK_PRO_MODEL
+}
 
 // ─── Mapping statut → étape active (0-indexed) ────────────────────────────────
 function statusToStep(status, job = null) {
@@ -129,11 +139,8 @@ const AUTO_PILOT_ORDER_INDEX = AUTO_PILOT_ORDER.reduce((acc, key, idx) => {
   return acc
 }, {})
 
-// ─── Connecteurs visuels entre étapes du pipeline ─────────────────────────────
-// Matérialise le flux de données : RNCP → REAC → split (API/CC) → texte + slides.
-// Deux primitives :
-//   - FlowArrowDown : flèche verticale ↓ entre 2 cards consécutives.
-//   - FlowSplit     : Y-fork qui part d'un tronc commun vers les 2 colonnes.
+// ─── Connecteur visuel entre étapes du pipeline ───────────────────────────────
+// Matérialise le flux de données séquentiel, de RNCP jusqu'aux textes et slides.
 const FLOW_COLOR = 'rgba(167, 139, 250, 0.35)'  // violet sobre cohérent avec l'accent
 const FLOW_STROKE = 2
 
@@ -168,68 +175,6 @@ function FlowArrowDown({ height = 28, color = FLOW_COLOR }) {
   )
 }
 
-// Y-fork (1 → 2) : tronc descend du centre, bifurque horizontalement vers les
-// centres des deux colonnes du grid (1fr 1fr, gap 40px → centres à 25%-10px et
-// 75%+10px), puis chute verticale + tête de flèche dans chaque colonne.
-function FlowSplit({ color = FLOW_COLOR }) {
-  const stem = 18      // tronc vertical depuis le haut
-  const drop = 22      // chute dans chaque branche
-  const arrow = 7      // hauteur de la tête de flèche
-  const total = stem + drop + arrow
-  return (
-    <div style={{ position: 'relative', height: `${total}px`, margin: '4px 0' }}>
-      {/* tronc central */}
-      <div style={{
-        position: 'absolute',
-        left: '50%', top: 0,
-        width: `${FLOW_STROKE}px`, height: `${stem}px`,
-        background: color, transform: 'translateX(-50%)',
-      }}/>
-      {/* barre horizontale entre centres des 2 colonnes */}
-      <div style={{
-        position: 'absolute',
-        left: 'calc(25% - 10px)', right: 'calc(25% - 10px)',
-        top: `${stem}px`, height: `${FLOW_STROKE}px`,
-        background: color,
-      }}/>
-      {/* chute gauche */}
-      <div style={{
-        position: 'absolute',
-        left: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: `${stem}px`,
-        width: `${FLOW_STROKE}px`, height: `${drop}px`,
-        background: color,
-      }}/>
-      {/* chute droite */}
-      <div style={{
-        position: 'absolute',
-        right: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: `${stem}px`,
-        width: `${FLOW_STROKE}px`, height: `${drop}px`,
-        background: color,
-      }}/>
-      {/* tête de flèche gauche */}
-      <div style={{
-        position: 'absolute',
-        left: 'calc(25% - 10px)', top: `${stem + drop}px`,
-        transform: 'translateX(-50%)',
-        width: 0, height: 0,
-        borderLeft: '5px solid transparent',
-        borderRight: '5px solid transparent',
-        borderTop: `${arrow}px solid ${color}`,
-      }}/>
-      {/* tête de flèche droite */}
-      <div style={{
-        position: 'absolute',
-        right: 'calc(25% - 10px)', top: `${stem + drop}px`,
-        transform: 'translateX(50%)',
-        width: 0, height: 0,
-        borderLeft: '5px solid transparent',
-        borderRight: '5px solid transparent',
-        borderTop: `${arrow}px solid ${color}`,
-      }}/>
-    </div>
-  )
-}
-
 // ─── Voix TTS : labels + couleurs pour l'affichage du module persistant ──────
 function voiceLabel(t) {
   if (t === 'fish_audio') return 'Fish Audio S2-Pro (payant)'
@@ -244,11 +189,9 @@ function voiceColor(t) {
   return '#94a3b8'
 }
 function pipelineModelLabel(model) {
-  if (model === 'pro' || model === 'deepseek-v4-pro') return 'DeepSeek Pro'
-  if (model === 'flash' || model === 'deepseek-v4-flash') return 'DeepSeek Flash'
-  if (model === 'haiku' || String(model || '').includes('haiku')) return 'Claude Haiku'
-  if (model === 'sonnet' || String(model || '').includes('sonnet')) return 'Claude Sonnet'
-  return model || 'modèle par défaut'
+  return normalizePipelineModel(model) === DEEPSEEK_FLASH_MODEL
+    ? 'DeepSeek Flash'
+    : 'DeepSeek Pro'
 }
 
 // ─── Styles communs ───────────────────────────────────────────────────────────
@@ -526,11 +469,6 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
       : events
   ).slice(-18)
   const latestAudioEvent = audioEvents[audioEvents.length - 1]
-  const latestProgressEvent = [...audioEvents].reverse().find(event => event.event_type === 'audio_progress')
-  const latestProgressData = eventData(latestProgressEvent)
-  const latestStep = Number(latestProgressData.step || 0)
-  const latestTotal = Number(latestProgressData.total || 0)
-  const playlistPct = latestTotal > 0 ? Math.min(100, Math.round((latestStep / latestTotal) * 100)) : null
   const totals = folders.reduce((acc, folder) => ({
     words: acc.words + (folder.total_words || 0),
     segments: acc.segments + (folder.segments_completed || 0),
@@ -988,7 +926,7 @@ function EventDetailModal({ event, onClose }) {
           {event.job_id && (<><span style={{ color: '#64748b' }}>Job formation</span><span style={{ color: '#cbd5e1' }}>Job #{event.job_id}</span></>)}
           {event.step && (<><span style={{ color: '#64748b' }}>Étape</span><span style={{ color: '#cbd5e1' }}>{event.step}</span></>)}
           {event.folder_id && (<><span style={{ color: '#64748b' }}>Dossier journée</span><span style={{ color: '#cbd5e1' }}>F{event.folder_id}</span></>)}
-          {event.model && (<><span style={{ color: '#64748b' }}>Modèle LLM</span><span style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{event.model}</span></>)}
+          {event.model && (<><span style={{ color: '#64748b' }}>Modèle LLM</span><span style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{pipelineModelLabel(event.model)}</span></>)}
           {event.duration_ms != null && (<><span style={{ color: '#64748b' }}>Durée</span><span style={{ color: '#cbd5e1' }}>{formatDuration(event.duration_ms) || `${event.duration_ms} ms`}</span></>)}
           <span style={{ color: '#64748b' }}>Type</span><span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{event.event_type}</span>
           <span style={{ color: '#64748b' }}>ID</span><span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{event.id}</span>
@@ -1446,8 +1384,11 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
   const [error, setError] = useState('')
 
   const stageEvents = (events || []).filter(event => eventMatchesPipelineStage(event, stage)).slice(0, 20)
-  const folderList = (folders || []).filter(folder => folder.folder_id)
-  const artifactNames = stage.artifacts || []
+  const folderList = useMemo(
+    () => (folders || []).filter(folder => folder.folder_id),
+    [folders],
+  )
+  const artifactNames = useMemo(() => stage.artifacts || [], [stage.artifacts])
 
   useEffect(() => {
     let cancelled = false
@@ -1462,7 +1403,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
       try {
         if (stage.auditMode === 'kb') {
           try {
-            const resp = await fetch(apiUrl(`/api/formation/${job.id}/kb`), { credentials: 'include' })
+            const resp = await apiFetch(`/api/formation/${job.id}/kb`, { credentials: 'include' })
             const data = await resp.json()
             kb = resp.ok ? { entries: data.entries || [], stats: data.stats || {}, error: '' } : { entries: [], stats: {}, error: data.error || 'Knowledge Base indisponible' }
           } catch {
@@ -1475,13 +1416,13 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
             folderList.flatMap(folder =>
               artifactNames.map(async name => {
                 try {
-                  const resp = await fetch(
-                    apiUrl(`/api/formation/${job.id}/content/${folder.folder_id}/artifact/${encodeURIComponent(name)}`),
+                  const resp = await apiFetch(
+                    `/api/formation/${job.id}/content/${folder.folder_id}/artifact/${encodeURIComponent(name)}`,
                     { credentials: 'include' },
                   )
                   const data = await resp.json()
                   return { folder, name, ok: resp.ok, artifact: data.artifact || null, error: data.error || '' }
-                } catch (e) {
+                } catch {
                   return { folder, name, ok: false, artifact: null, error: 'Erreur réseau' }
                 }
               }),
@@ -1494,13 +1435,13 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           const reportResults = await Promise.all(
             folderList.map(async folder => {
               try {
-                const resp = await fetch(
-                  apiUrl(`/api/formation/${job.id}/content/${folder.folder_id}/${stage.reportEndpoint}`),
+                const resp = await apiFetch(
+                  `/api/formation/${job.id}/content/${folder.folder_id}/${stage.reportEndpoint}`,
                   { credentials: 'include' },
                 )
                 const data = await resp.json()
                 return { folder, ok: resp.ok, report: data.report || null, error: data.error || '' }
-              } catch (e) {
+              } catch {
                 return { folder, ok: false, report: null, error: 'Erreur réseau' }
               }
             }),
@@ -1512,8 +1453,8 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           const deckResults = await Promise.all(
             folderList.map(async folder => {
               try {
-                const resp = await fetch(
-                  apiUrl(`/api/slides/data?folder_id=${encodeURIComponent(folder.folder_id)}`),
+                const resp = await apiFetch(
+                  `/api/slides/data?folder_id=${encodeURIComponent(folder.folder_id)}`,
                   { credentials: 'include' },
                 )
                 const data = await resp.json()
@@ -1523,7 +1464,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
                   deck: data.status === 'success' ? data : null,
                   error: data.message || data.error || '',
                 }
-              } catch (e) {
+              } catch {
                 return { folder, ok: false, deck: null, error: 'Erreur réseau' }
               }
             }),
@@ -1532,7 +1473,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
         }
 
         if (!cancelled) setPayload({ artifacts, reports, slideDecks, kb })
-      } catch (e) {
+      } catch {
         if (!cancelled) setError('Impossible de charger le détail de cette étape.')
       } finally {
         if (!cancelled) setLoading(false)
@@ -1540,7 +1481,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
     }
     load()
     return () => { cancelled = true }
-  }, [job.id, stage.key])
+  }, [artifactNames, folderList, job.id, stage.auditMode, stage.key, stage.reportEndpoint])
 
   const loadedArtifacts = payload.artifacts.filter(item => item.ok && item.artifact)
   const loadedReports = payload.reports.filter(item => item.ok && item.report)
@@ -1599,7 +1540,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
             <ReacAuditView job={job} />
           )}
           {!loading && stage.auditMode === 'kb' && (
-            <KnowledgeBaseAuditView kb={payload.kb} job={job} />
+            <KnowledgeBaseAuditView kb={payload.kb} />
           )}
           {!loading && stage.auditMode === 'global_program' && (
             <GlobalProgramAuditView job={job} />
@@ -1696,7 +1637,7 @@ function ReacAuditView({ job }) {
   )
 }
 
-function KnowledgeBaseAuditView({ kb, job }) {
+function KnowledgeBaseAuditView({ kb }) {
   const entries = Array.isArray(kb?.entries) ? kb.entries : []
   const stats = kb?.stats || {}
 
@@ -2541,8 +2482,6 @@ function BeatFirstIterationPanel({
           >
             <option value="deepseek-v4-pro">DeepSeek Pro</option>
             <option value="deepseek-v4-flash">DeepSeek Flash</option>
-            <option value="sonnet">Claude Sonnet</option>
-            <option value="haiku">Claude Haiku</option>
           </select>
         </label>
         <button
@@ -4767,7 +4706,6 @@ function StepEventsList({ events }) {
 
 // ─── Carte d'un job existant ──────────────────────────────────────────────────
 function JobCard({ job, onSelect, selected }) {
-  const step = statusToStep(job.status, job)
   const statusColor = AUDIO_DONE_STATUSES.has(job.status) ? 'green'
     : (job.status === 'error' || job.status === 'audio_error') ? 'red'
     : POLLING_STATUSES.has(job.status) ? 'amber'
@@ -4855,7 +4793,7 @@ function NewJobForm({ onCreated }) {
     setCreating(true)
     setError('')
     try {
-      const resp = await fetch(apiUrl('/api/formation/init'), {
+      const resp = await apiFetch('/api/formation/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -4870,7 +4808,7 @@ function NewJobForm({ onCreated }) {
       const data = await resp.json()
       if (data.job_id) onCreated(data.job_id)
       else setError(data.error || 'Erreur création')
-    } catch (e) {
+    } catch {
       setError('Erreur réseau')
     } finally {
       setCreating(false)
@@ -4947,8 +4885,6 @@ function NewJobForm({ onCreated }) {
         >
           <option value="pro">DeepSeek Pro</option>
           <option value="flash">DeepSeek Flash</option>
-          <option value="sonnet">Claude Sonnet</option>
-          <option value="haiku">Claude Haiku</option>
         </select>
         <div style={{ fontSize: '11px', color: '#475569', marginTop: '4px' }}>
           Ce choix sera repris par la génération, la sécurité volume, la révision conformité et les relances.
@@ -4973,14 +4909,13 @@ function RefinePanel({ jobId, contentType, currentContent, onRevised }) {
   const [instruction, setInstruction] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const HAIKU = 'claude-haiku-4-5-20251001'
 
   const handleRefine = async (model) => {
     if (!instruction.trim()) return
     setLoading(true)
     setError('')
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${jobId}/refine`), {
+      const resp = await apiFetch(`/api/formation/${jobId}/refine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -4994,7 +4929,7 @@ function RefinePanel({ jobId, contentType, currentContent, onRevised }) {
       } else {
         setError(data.error || 'Erreur')
       }
-    } catch (e) {
+    } catch {
       setError('Erreur réseau')
     } finally {
       setLoading(false)
@@ -5026,19 +4961,19 @@ function RefinePanel({ jobId, contentType, currentContent, onRevised }) {
           <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
             <button
               style={{ ...S.btn('primary'), fontSize: '12px', padding: '6px 14px' }}
-              onClick={() => handleRefine(null)}
+              onClick={() => handleRefine(DEEPSEEK_PRO_MODEL)}
               disabled={loading || !instruction.trim()}
             >
               {loading ? <Icon name="hourglass_empty" /> : <Icon name="auto_fix_high" />}
-              {loading ? 'Modification…' : 'Modifier (Sonnet)'}
+              {loading ? 'Modification…' : 'Modifier (DeepSeek Pro)'}
             </button>
             <button
               style={{ ...S.btn('neutral'), fontSize: '12px', padding: '6px 14px' }}
-              onClick={() => handleRefine(HAIKU)}
+              onClick={() => handleRefine(DEEPSEEK_FLASH_MODEL)}
               disabled={loading || !instruction.trim()}
-              title="~5x moins cher"
+              title="Mode rapide"
             >
-              <Icon name="bolt" /> Modifier (Haiku)
+              <Icon name="bolt" /> Modifier (DeepSeek Flash)
             </button>
           </div>
         </div>
@@ -5046,409 +4981,6 @@ function RefinePanel({ jobId, contentType, currentContent, onRevised }) {
     </div>
   )
 }
-
-// ─── Bloc d'étape individuel ──────────────────────────────────────────────────
-// ─── Double colonne API / Claude Code — Phase 2 ─────────────────────────────
-// Activation par `import.meta.env.DEV` : colonne droite visible uniquement en
-// dev (localhost:5173 via Vite). Les build prod Azure Static Web Apps gardent
-// la mono-colonne API. Pattern cohérent avec le gating backend `LOCAL_DEV=true`
-// documenté dans memoire/03-decisions/pipeline-dual-api-et-claude-code.md.
-const DUAL_COLUMN_ENABLED = import.meta.env.DEV
-
-const CC_MODELS = [
-  { value: 'haiku', label: 'Haiku', hint: 'rapide, volume' },
-  { value: 'sonnet', label: 'Sonnet', hint: 'qualité fine' },
-]
-const CC_DEFAULT_MODEL_BY_STEP = {
-  kb: 'haiku',
-  global: 'haiku',
-  daily: 'haiku',
-  content: 'sonnet',
-  review: 'sonnet',
-}
-// Subprocess auto : global + daily + kb en mode mono-chunk,
-// content + review en mode chunked
-// (boucle séquentielle de N appels CLI dans le backend, voir
-// claude_code_mission_service.py:_execute_chunked).
-// kb : prompt borné à 1500-2500 mots/compétence × ~10 = ~25K mots ≈ 38K tokens
-// (largement sous la limite Sonnet 64K output). Parsing tolérant à la
-// troncature dans `_import_kb` via `_repair_truncated_json`.
-const CC_AUTO_EXEC_ENABLED = {
-  global: true,
-  kb: true,
-  daily: true,
-  content: true,
-  review: true,
-}
-
-function StepDualLayout({ apiContent, claudeCodeContent }) {
-  // En mono-colonne (DUAL_COLUMN_ENABLED=false), on ne rend que le contenu
-  // API ; aucun visuel n'évoque Claude Code. Le code reste présent mais
-  // dormant côté front de prod.
-  if (!DUAL_COLUMN_ENABLED) return apiContent
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 1px 1fr',
-        gap: '24px',
-        alignItems: 'start',
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: '11px',
-            fontWeight: 700,
-            color: '#60a5fa',
-            textTransform: 'uppercase',
-            letterSpacing: '0.1em',
-            marginBottom: '10px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-          }}
-        >
-          <Icon name="cloud" style={{ fontSize: '14px' }} /> API Cloud
-        </div>
-        {apiContent}
-      </div>
-      <div
-        aria-hidden
-        style={{
-          alignSelf: 'stretch',
-          background: 'rgba(255,255,255,0.12)',
-          width: '1px',
-        }}
-      />
-      <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: '11px',
-            fontWeight: 700,
-            color: '#f59e0b',
-            textTransform: 'uppercase',
-            letterSpacing: '0.1em',
-            marginBottom: '10px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-          }}
-        >
-          <Icon name="terminal" style={{ fontSize: '14px' }} /> Claude Code local
-        </div>
-        {claudeCodeContent}
-      </div>
-    </div>
-  )
-}
-
-function ClaudeCodeStepActions({
-  stepKey,
-  stepLabel,
-  jobId,
-  disabled,
-  disabledReason,
-  onExport,
-  onExecute,
-  pendingMission,
-  onImport,
-  generatedVia,
-  defaultModel,
-}) {
-  const [model, setModel] = useState(defaultModel || CC_DEFAULT_MODEL_BY_STEP[stepKey] || 'haiku')
-  const [exporting, setExporting] = useState(false)
-  const [executing, setExecuting] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [showLogs, setShowLogs] = useState(false)
-
-  const isRunning = pendingMission?.execution_status === 'running'
-  const execDone = pendingMission?.execution_status === 'done'
-  const execError = pendingMission?.execution_status === 'error'
-
-  const handleExport = async () => {
-    if (disabled || exporting) return
-    setExporting(true)
-    try {
-      await onExport({ stepKey, model })
-    } finally {
-      setExporting(false)
-    }
-  }
-  const handleExecute = async () => {
-    if (disabled || executing || isRunning) return
-    setExecuting(true)
-    try {
-      await onExecute({ stepKey, model })
-    } finally {
-      setExecuting(false)
-    }
-  }
-  const handleImport = async () => {
-    if (importing || !pendingMission) return
-    setImporting(true)
-    try {
-      await onImport({ stepKey })
-    } finally {
-      setImporting(false)
-    }
-  }
-
-  return (
-    <div
-      style={{
-        padding: '14px',
-        border: '1px dashed rgba(245, 158, 11, 0.3)',
-        borderRadius: '10px',
-        background: 'rgba(245, 158, 11, 0.04)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '10px',
-      }}
-    >
-      <div style={{ fontSize: '13px', color: '#fbbf24', fontWeight: 600 }}>{stepLabel}</div>
-
-      {/* Badge de provenance — UNIQUEMENT si la dernière génération vient
-          de Claude Code. La colonne API a déjà ses propres indicateurs ;
-          afficher "Généré via API" sur la colonne CC est trompeur (le user
-          se demande pourquoi son côté CC parle d'API). */}
-      {generatedVia && generatedVia !== 'api' && (
-        <div style={{ fontSize: '11px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Icon name="terminal" style={{ fontSize: '12px' }} />
-          Généré via {generatedVia === 'claude_code_haiku' ? 'Claude Code Haiku' : 'Claude Code Sonnet'}
-        </div>
-      )}
-
-      <label style={{ fontSize: '12px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        Modèle :
-        <select
-          value={model}
-          onChange={e => setModel(e.target.value)}
-          disabled={disabled || exporting}
-          style={{
-            background: 'rgba(15,23,42,0.8)',
-            color: '#e2e8f0',
-            border: '1px solid rgba(245,158,11,0.3)',
-            borderRadius: '6px',
-            padding: '4px 8px',
-            fontSize: '12px',
-            outline: 'none',
-          }}
-        >
-          {CC_MODELS.map(m => (
-            <option key={m.value} value={m.value}>{m.label} — {m.hint}</option>
-          ))}
-        </select>
-      </label>
-
-      {/* Bouton principal : exécution automatique via subprocess `claude`.
-          Scope V1 : uniquement pour `global`. Les autres étapes affichent
-          un message "à venir" + bouton d'export manuel pour ceux qui
-          veulent vraiment essayer. */}
-      {CC_AUTO_EXEC_ENABLED[stepKey] ? (
-        <button
-          onClick={handleExecute}
-          disabled={disabled || executing || isRunning}
-          title={
-            disabled ? (disabledReason || 'Non disponible à cette étape')
-            : isRunning ? 'Exécution en cours — Claude Code travaille'
-            : 'Exporte la mission + lance `claude -p` + importe le résultat automatiquement'
-          }
-          style={{
-            ...S.btn('primary'),
-            padding: '7px 12px',
-            fontSize: '12px',
-            background: isRunning
-              ? 'linear-gradient(135deg, #78350f, #d97706)'
-              : 'linear-gradient(135deg, #d97706, #f59e0b)',
-            color: '#fff',
-            boxShadow: '0 4px 12px rgba(245,158,11,0.25)',
-            opacity: disabled ? 0.5 : 1,
-            cursor: (disabled || isRunning) ? 'wait' : 'pointer',
-          }}
-        >
-          <Icon name={isRunning || executing ? 'hourglass_empty' : 'play_circle'} />{' '}
-          {isRunning ? 'Claude Code travaille…' : executing ? 'Lancement…' : 'Exécuter avec Claude Code'}
-        </button>
-      ) : (
-        <div
-          style={{
-            padding: '8px 10px',
-            border: '1px dashed rgba(148,163,184,0.25)',
-            borderRadius: '8px',
-            fontSize: '11px',
-            color: '#94a3b8',
-            lineHeight: 1.4,
-          }}
-        >
-          <strong style={{ color: '#cbd5e1' }}>Exécution auto à venir</strong><br />
-          V1 : on valide le subprocess Claude Code d'abord sur <em>Programme global</em>.
-          Ensuite on l'étendra aux autres étapes avec une stratégie adaptée
-          (chunking pour KB/content, etc.).
-        </div>
-      )}
-
-      {/* État d'exécution : en cours / terminé / erreur */}
-      {isRunning && (
-        <div style={{ fontSize: '11px', color: '#fbbf24', lineHeight: 1.4 }}>
-          Peut prendre de quelques minutes à ~30 min selon l'étape et le modèle.
-          L'import se fait automatiquement à la fin.
-        </div>
-      )}
-
-      {/* Progression chunked (content/review) : "X/N — chunk_id" */}
-      {pendingMission?.progress && pendingMission.progress.total > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <div style={{ fontSize: '11px', color: '#cbd5e1', display: 'flex', justifyContent: 'space-between' }}>
-            <span>
-              <strong>{pendingMission.progress.current}/{pendingMission.progress.total}</strong>
-              {pendingMission.progress.current_chunk ? ` · ${pendingMission.progress.current_chunk}` : ''}
-            </span>
-            {pendingMission.progress.errors?.length > 0 && (
-              <span style={{ color: '#f87171' }}>
-                {pendingMission.progress.errors.length} erreur(s)
-              </span>
-            )}
-          </div>
-          <div style={{ height: '4px', background: 'rgba(148,163,184,0.15)', borderRadius: '2px', overflow: 'hidden' }}>
-            <div style={{
-              height: '100%',
-              width: `${Math.round((pendingMission.progress.current / pendingMission.progress.total) * 100)}%`,
-              background: pendingMission.progress.errors?.length > 0
-                ? 'linear-gradient(90deg, #d97706, #f59e0b)'
-                : 'linear-gradient(90deg, #34d399, #10b981)',
-              transition: 'width 0.3s ease',
-            }} />
-          </div>
-          {(pendingMission.progress.status === 'throttling' || pendingMission.progress.status === 'rate_limited') && (
-            <div style={{
-              fontSize: '10px',
-              color: pendingMission.progress.status === 'rate_limited' ? '#f87171' : '#fbbf24',
-              fontStyle: 'italic',
-            }}>
-              {pendingMission.progress.status === 'rate_limited'
-                ? '⏳ Rate limit Anthropic atteint — attente avant retry automatique…'
-                : '⏸ Pause anti-rate-limit (75s) entre chunks…'}
-            </div>
-          )}
-        </div>
-      )}
-      {(isRunning || execDone || execError) && (
-        <button
-          onClick={() => setShowLogs(true)}
-          style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '11px' }}
-          title="Voir les logs de Claude Code (stdout du subprocess)"
-        >
-          <Icon name="terminal" style={{ fontSize: '13px' }} /> Voir les logs
-        </button>
-      )}
-      {showLogs && (
-        <ClaudeCodeLogsModal
-          jobId={jobId}
-          stepKey={stepKey}
-          onClose={() => setShowLogs(false)}
-          autoPoll={isRunning}
-        />
-      )}
-      {execDone && (
-        <div style={{ fontSize: '11px', color: '#34d399', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <Icon name="check_circle" style={{ fontSize: '13px' }} />
-          Exécution terminée et importée
-        </div>
-      )}
-      {execError && (
-        <div style={{ fontSize: '11px', color: '#f87171', lineHeight: 1.4 }}>
-          <Icon name="error" style={{ fontSize: '12px' }} /> Échec : {pendingMission.execution_error}
-        </div>
-      )}
-
-      {/* Bouton avancé : export manuel (pour cas où on veut intervenir) */}
-      <button
-        onClick={handleExport}
-        disabled={disabled || exporting || isRunning}
-        title={disabled ? disabledReason || 'Non disponible à cette étape' : 'Avancé : exporter les fichiers sans lancer Claude Code (tu lances manuellement dans ton terminal)'}
-        style={{
-          ...S.btn('ghost'),
-          padding: '5px 10px',
-          fontSize: '11px',
-          borderColor: 'rgba(148,163,184,0.25)',
-          color: '#94a3b8',
-          opacity: disabled || isRunning ? 0.4 : 0.8,
-        }}
-      >
-        <Icon name="file_download" style={{ fontSize: '13px' }} />{' '}
-        {exporting ? 'Export…' : 'Exporter manuellement'}
-      </button>
-
-      {pendingMission && pendingMission.has_output && !isRunning && (
-        <div
-          style={{
-            padding: '8px 10px',
-            border: '1px solid rgba(245,158,11,0.4)',
-            borderRadius: '8px',
-            background: 'rgba(245,158,11,0.08)',
-            fontSize: '11px',
-            color: '#fbbf24',
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: '4px' }}>Résultat présent</div>
-          <div style={{ color: '#fde68a', marginBottom: '6px', lineHeight: 1.4 }}>
-            output.md existe dans <code style={{ fontSize: '10px' }}>{pendingMission.path}</code>
-          </div>
-          <button
-            onClick={handleImport}
-            disabled={importing}
-            style={{
-              ...S.btn('ghost'),
-              padding: '4px 10px',
-              fontSize: '11px',
-              width: '100%',
-              justifyContent: 'center',
-            }}
-          >
-            <Icon name={importing ? 'hourglass_empty' : 'file_upload'} />{' '}
-            {importing ? 'Import…' : 'Importer le résultat manuellement'}
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-
-// Variante StepBlock pour la colonne Claude Code — même hauteur d'alignement
-// que son pendant API (via grid-row partagée), mais style ambre distinct et
-// label allégé (pas de numéro d'étape en grand).
-function StepBlockCC({ stepIndex, currentStep, status, title, icon, children }) {
-  const active = stepIndex === currentStep
-  const done = stepIndex < currentStep
-  const pending = stepIndex > currentStep
-  return (
-    <div style={{
-      ...S.card,
-      border: `1px solid ${active ? 'rgba(245,158,11,0.35)' : done ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.12)'}`,
-      background: 'rgba(245,158,11,0.03)',
-      opacity: pending ? 0.5 : 1,
-      transition: 'all 0.3s',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: active || done ? '16px' : '0' }}>
-        <div style={{
-          width: '32px', height: '32px', borderRadius: '8px', fontSize: '16px',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(245,158,11,0.12)',
-          color: '#fbbf24',
-        }}>
-          <Icon name={icon} />
-        </div>
-        <span style={{ fontWeight: 600, color: '#fbbf24', flex: 1, fontSize: '14px' }}>
-          {title}
-        </span>
-      </div>
-      {(active || done) && children}
-    </div>
-  )
-}
-
 
 function StepBlock({ stepIndex, currentStep, status, title, icon, children }) {
   const active = stepIndex === currentStep
@@ -5523,15 +5055,13 @@ export default function FormationPipeline() {
   // Modèle utilisé pour la relance aval. Initialisé sur l'auto_pilot_model du
   // job courant si présent, sinon DeepSeek Pro (cas des jobs historiques sans
   // colonne persistée).
-  const [continueAfterTextModel, setContinueAfterTextModel] = useState('deepseek-v4-pro')
+  const [continueAfterTextModel, setContinueAfterTextModel] = useState(DEEPSEEK_PRO_MODEL)
   useEffect(() => {
     if (job?.auto_pilot_model) {
-      setContinueAfterTextModel(job.auto_pilot_model)
+      setContinueAfterTextModel(normalizePipelineModel(job.auto_pilot_model))
     }
   }, [job?.auto_pilot_model])
   const [pipelineDiagnostic, setPipelineDiagnostic] = useState(null)
-  const [pipelineDiagnosticLoading, setPipelineDiagnosticLoading] = useState(false)
-  const [pipelineDiagnosticError, setPipelineDiagnosticError] = useState('')
   const [beatFirstIterationRunning, setBeatFirstIterationRunning] = useState(false)
   const [beatFirstIterationError, setBeatFirstIterationError] = useState('')
   const [beatFirstIterationNotice, setBeatFirstIterationNotice] = useState('')
@@ -5557,7 +5087,7 @@ export default function FormationPipeline() {
   // ─── Fetch liste des jobs ─────────────────────────────────────────────────
   const fetchJobs = useCallback(async () => {
     try {
-      const resp = await fetch(apiUrl('/api/formation/list'), { credentials: 'include' })
+      const resp = await apiFetch('/api/formation/list', { credentials: 'include' })
       const data = await resp.json()
       if (data.jobs) setJobs(data.jobs)
     } catch (e) {
@@ -5572,7 +5102,7 @@ export default function FormationPipeline() {
   // ─── Fetch job courant ────────────────────────────────────────────────────
   const fetchJob = useCallback(async (id) => {
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${id}`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/formation/${id}`, { credentials: 'include' })
       const data = await resp.json()
       if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(id)) return
       if (data.id && Number(data.id) === Number(id)) {
@@ -5580,7 +5110,11 @@ export default function FormationPipeline() {
         // Synchroniser les états locaux si pas en train d'éditer
         if (!globalEditing) setGlobalProgram(data.global_program || '')
         if (dailyEditIdx === null && data.daily_programs) {
-          try { setDailyPrograms(JSON.parse(data.daily_programs)) } catch {}
+          try {
+            setDailyPrograms(JSON.parse(data.daily_programs))
+          } catch {
+            // Conserver le dernier programme valide si le payload est incomplet.
+          }
         }
       }
     } catch (e) { console.error(e) }
@@ -5589,7 +5123,7 @@ export default function FormationPipeline() {
   // ─── Fetch knowledge base (Couche 1) ──────────────────────────────────────
   const fetchKb = useCallback(async (id) => {
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${id}/kb`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/formation/${id}/kb`, { credentials: 'include' })
       const data = await resp.json()
       if (data.stats) setKb({ entries: data.entries || [], stats: data.stats })
     } catch (e) { console.error(e) }
@@ -5602,10 +5136,12 @@ export default function FormationPipeline() {
   const fetchAutoPilotStatus = useCallback(async (jobId) => {
     if (!jobId) return
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${jobId}/run-auto/status`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/formation/${jobId}/run-auto/status`, { credentials: 'include' })
       const data = await resp.json()
       setAutoPilotState(data && data.status && data.status !== 'idle' ? data : null)
-    } catch (e) { /* silent */ }
+    } catch {
+      // Le prochain cycle de polling réessaiera.
+    }
   }, [])
 
   const stopAutoPilot = useCallback(async () => {
@@ -5614,7 +5150,7 @@ export default function FormationPipeline() {
     if (!ok) return
     setStopAutoPilotBusy(true)
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}/run-auto/stop`), {
+      const resp = await apiFetch(`/api/formation/${selectedJobId}/run-auto/stop`, {
         method: 'POST',
         credentials: 'include',
       })
@@ -5634,23 +5170,17 @@ export default function FormationPipeline() {
     }
   }, [fetchAutoPilotStatus, fetchJob, fetchJobs, selectedJobId, stopAutoPilotBusy])
 
-  const fetchPipelineDiagnostic = useCallback(async (jobId, { silent = false } = {}) => {
+  const fetchPipelineDiagnostic = useCallback(async (jobId) => {
     if (!jobId) return
-    if (!silent) setPipelineDiagnosticLoading(true)
-    setPipelineDiagnosticError('')
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${jobId}/diagnostic?events_limit=80`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/formation/${jobId}/diagnostic?events_limit=80`, { credentials: 'include' })
       const data = await resp.json()
       if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(jobId)) return
       if (resp.ok) {
         setPipelineDiagnostic(data)
-      } else {
-        setPipelineDiagnosticError(data.error || 'Diagnostic indisponible')
       }
     } catch {
-      setPipelineDiagnosticError('Erreur réseau diagnostic')
-    } finally {
-      if (!silent) setPipelineDiagnosticLoading(false)
+      // Diagnostic non bloquant : le prochain polling réessaiera.
     }
   }, [])
 
@@ -5658,10 +5188,10 @@ export default function FormationPipeline() {
   useEffect(() => {
     if (!selectedJobId) return
     fetchAutoPilotStatus(selectedJobId)
-    fetchPipelineDiagnostic(selectedJobId, { silent: true })
+    fetchPipelineDiagnostic(selectedJobId)
     const interval = setInterval(() => {
       fetchAutoPilotStatus(selectedJobId)
-      fetchPipelineDiagnostic(selectedJobId, { silent: true })
+      fetchPipelineDiagnostic(selectedJobId)
     }, 5000)
     return () => clearInterval(interval)
   }, [selectedJobId, fetchAutoPilotStatus, fetchPipelineDiagnostic])
@@ -5670,7 +5200,7 @@ export default function FormationPipeline() {
   const fetchLinkedModule = useCallback(async (jobId) => {
     if (!jobId) { setLinkedModule(null); return }
     try {
-      const resp = await fetch(apiUrl('/api/hr/formation-modules'), { credentials: 'include' })
+      const resp = await apiFetch('/api/hr/formation-modules', { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
         const mod = (data.modules || []).find(m => m.source_pipeline_job_id === jobId)
@@ -5688,13 +5218,17 @@ export default function FormationPipeline() {
 
     const startPolling = () => {
       pollingRef.current = setInterval(async () => {
-        const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}`), { credentials: 'include' })
+        const resp = await apiFetch(`/api/formation/${selectedJobId}`, { credentials: 'include' })
         const data = await resp.json()
         if (data.id) {
           setJob(data)
           if (!globalEditing) setGlobalProgram(data.global_program || '')
           if (dailyEditIdx === null && data.daily_programs) {
-            try { setDailyPrograms(JSON.parse(data.daily_programs)) } catch {}
+            try {
+              setDailyPrograms(JSON.parse(data.daily_programs))
+            } catch {
+              // Conserver le dernier programme valide si le payload est incomplet.
+            }
           }
           // Rafraîchir la KB pendant l'enrichissement
           if (data.status === 'kb_building' || data.status === 'kb_ready') {
@@ -5704,7 +5238,7 @@ export default function FormationPipeline() {
           // barre de progression temps réel par dossier reste vivante (events
           // audio_progress se mettent à jour seulement si on re-fetch).
           if (AUDIO_ACTIVE_STATUSES.has(data.status)) {
-            fetchPipelineDiagnostic(selectedJobId, { silent: true })
+            fetchPipelineDiagnostic(selectedJobId)
           }
           // Arrêter le polling quand le statut n'est plus "en cours"
           if (!POLLING_STATUSES.has(data.status)) {
@@ -5721,22 +5255,33 @@ export default function FormationPipeline() {
 
     startPolling()
     return () => clearInterval(pollingRef.current)
-  }, [selectedJobId])
+  }, [
+    dailyEditIdx,
+    fetchJob,
+    fetchKb,
+    fetchLinkedModule,
+    fetchPipelineDiagnostic,
+    globalEditing,
+    selectedJobId,
+  ])
 
-  // Relancer le polling si le statut devient "en cours"
+  // Relancer le polling si le statut devient "en cours".
+  const pollingJobId = job?.id
+  const pollingJobStatus = job?.status
   useEffect(() => {
-    if (job && POLLING_STATUSES.has(job.status)) {
-      clearInterval(pollingRef.current)
-      pollingRef.current = setInterval(() => fetchJob(job.id), 3000)
-    }
-  }, [job?.status])
+    if (!pollingJobId || !POLLING_STATUSES.has(pollingJobStatus)) return
+    clearInterval(pollingRef.current)
+    const interval = setInterval(() => fetchJob(pollingJobId), 3000)
+    pollingRef.current = interval
+    return () => clearInterval(interval)
+  }, [fetchJob, pollingJobId, pollingJobStatus])
 
   // ─── Actions API ──────────────────────────────────────────────────────────
   const doAction = async (path, body = {}) => {
     setActionLoading(true)
     setActionError('')
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}/${path}`), {
+      const resp = await apiFetch(`/api/formation/${selectedJobId}/${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -5749,14 +5294,12 @@ export default function FormationPipeline() {
         await fetchJobs()
       }
       return data
-    } catch (e) {
+    } catch {
       setActionError('Erreur réseau')
     } finally {
       setActionLoading(false)
     }
   }
-
-  const HAIKU = 'claude-haiku-4-5-20251001'
 
   const handleFetchReac = () => doAction('fetch-reac')
   const handleEnrichReac = (model) => doAction('enrich-reac', model ? { model } : {})
@@ -5790,51 +5333,66 @@ export default function FormationPipeline() {
   // ─── Étape 5 suite — fetch de l'état des dossiers cours par journée ───────
   const fetchContentFolders = useCallback(async (jobId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${jobId}/content`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/formation/${jobId}/content`, { credentials: 'include' })
       const data = await resp.json()
       if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(jobId)) return
       if (data.folders) setContentFolders(data.folders)
       else setContentFolders([])
-    } catch (e) {
-      console.error('fetchContentFolders:', e)
+    } catch (error) {
+      console.error('fetchContentFolders:', error)
       setContentFolders([])
     }
   }, [])
+
+  const allContentCompleted = contentFolders.length > 0 &&
+    contentFolders.every(folder => folder.content_status === 'completed')
+  const hasIncompleteContent = contentFolders.some(
+    folder => folder.content_status && folder.content_status !== 'completed',
+  )
+  const selectedJobStatus = job?.status
+  const dailyProgramsValidated = Boolean(job?.daily_programs_validated)
 
   // Rehydrate les dossiers dès que le job peut avoir du texte. Important :
   // après découplage audio, un job texte prêt est `text_ready`, donc un refresh
   // ne doit pas retomber sur l'écran "Générer".
   useEffect(() => {
-    if (!job || !selectedJobId) return
+    if (!selectedJobStatus || !selectedJobId) return
     const shouldLoadContent =
-      TEXT_AVAILABLE_STATUSES.has(job.status) ||
-      job.daily_programs_validated ||
+      TEXT_AVAILABLE_STATUSES.has(selectedJobStatus) ||
+      dailyProgramsValidated ||
       contentFolders.length > 0
     if (!shouldLoadContent) return
 
     fetchContentFolders(selectedJobId)
     const shouldPollContent =
-      CONTENT_POLLING_STATUSES.has(job.status) ||
-      contentFolders.some(f => f.content_status && f.content_status !== 'completed')
+      CONTENT_POLLING_STATUSES.has(selectedJobStatus) ||
+      hasIncompleteContent
     if (!shouldPollContent) return
 
     const interval = setInterval(() => {
-      const allDone = contentFolders.length > 0 &&
-        contentFolders.every(f => f.content_status === 'completed')
-      if (!allDone) fetchContentFolders(selectedJobId)
+      if (!allContentCompleted) fetchContentFolders(selectedJobId)
     }, 3000)
     return () => clearInterval(interval)
-  }, [selectedJobId, job?.status, job?.daily_programs_validated, contentFolders.length, fetchContentFolders])
+  }, [
+    allContentCompleted,
+    contentFolders.length,
+    dailyProgramsValidated,
+    fetchContentFolders,
+    hasIncompleteContent,
+    selectedJobId,
+    selectedJobStatus,
+  ])
 
-  const allContentCompleted = contentFolders.length > 0 &&
-    contentFolders.every(f => f.content_status === 'completed')
-
-  const handleDownloadDocx = (folderId, version = 'current') => {
-    // Ouvre directement l'URL backend (Content-Disposition: attachment).
-    // version='current' = état actuel (post-révision si appliquée)
-    // version='pre_review' = snapshot pris au finalize content (avant révision)
-    const url = apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/docx?version=${version}`)
-    window.open(url, '_blank')
+  const handleDownloadDocx = async (folderId, version = 'current') => {
+    setActionError('')
+    try {
+      await apiDownload(
+        `/api/formation/${selectedJobId}/content/${folderId}/docx?version=${version}`,
+        `formation-${selectedJobId}-jour-${folderId}.docx`,
+      )
+    } catch (error) {
+      setActionError(error.message || 'Téléchargement Word impossible')
+    }
   }
 
   // ─── Étape 5 — reprise de la génération texte après crash backend ──────────
@@ -5843,7 +5401,7 @@ export default function FormationPipeline() {
     setResumingContent(true)
     setActionError('')
     try {
-      const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}/resume-content`), {
+      const resp = await apiFetch(`/api/formation/${selectedJobId}/resume-content`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -5852,7 +5410,7 @@ export default function FormationPipeline() {
       const data = await resp.json()
       if (data.error) setActionError(data.error)
       else await fetchContentFolders(selectedJobId)
-    } catch (e) {
+    } catch {
       setActionError('Erreur réseau')
     } finally {
       setResumingContent(false)
@@ -5866,8 +5424,8 @@ export default function FormationPipeline() {
     setContinuingAfterTextFolders(prev => ({ ...prev, [folderId]: true }))
     try {
       const chosenModel = modelOverride || continueAfterTextModel || job?.auto_pilot_model
-      const resp = await fetch(
-        apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/continue-after-text`),
+      const resp = await apiFetch(
+        `/api/formation/${selectedJobId}/content/${folderId}/continue-after-text`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -5901,8 +5459,7 @@ export default function FormationPipeline() {
       }
       await fetchJob(selectedJobId)
       await fetchContentFolders(selectedJobId)
-      await fetchVolumeAudit(selectedJobId)
-      await fetchPipelineDiagnostic(selectedJobId, { silent: true })
+      await fetchPipelineDiagnostic(selectedJobId)
     } catch {
       setContinueAfterTextError('Erreur réseau')
       setContinuingAfterTextFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
@@ -5916,7 +5473,7 @@ export default function FormationPipeline() {
     setSlideIterationNotice('')
     setSlideIterationFolders(prev => ({ ...prev, [folderId]: true }))
     try {
-      const resp = await fetch(apiUrl('/api/slides/generate-from-script'), {
+      const resp = await apiFetch('/api/slides/generate-from-script', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -5926,7 +5483,7 @@ export default function FormationPipeline() {
           platform_id: folder.platform_id || job?.platform_id || null,
           max_slides: 60,
           pace: 'normal',
-          model: continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro',
+          model: continueAfterTextModel || normalizePipelineModel(job?.auto_pilot_model),
         }),
       })
       const data = await resp.json().catch(() => ({}))
@@ -5938,7 +5495,7 @@ export default function FormationPipeline() {
         `Curation + slides régénérées pour F${folderId} (${data.slides_count || 0} slides).`,
       )
       await fetchContentFolders(selectedJobId)
-      await fetchPipelineDiagnostic(selectedJobId, { silent: true })
+      await fetchPipelineDiagnostic(selectedJobId)
     } catch {
       setSlideIterationError('Erreur réseau')
     } finally {
@@ -5950,10 +5507,9 @@ export default function FormationPipeline() {
     }
   }
 
-  // ─── Étape 6bis — révision conformité via reviewer API (Claude Sonnet) ────
-  // Spec : memoire/03-decisions/pipeline-dual-api-et-claude-code.md — Phase 1.
-  // Le backend spawn un greenlet qui audit segment par segment. Côté front on
-  // suit l'avancement via `segments_reviewed` / `segments_completed` polled.
+  // ─── Étape 6bis — révision conformité via DeepSeek ────────────────────────
+  // Le backend audite segment par segment. Côté front, on suit l'avancement
+  // via `segments_reviewed` / `segments_completed`.
   const [reviewingFolders, setReviewingFolders] = useState({})  // { [folderId]: true }
   const [reviewError, setReviewError] = useState('')
 
@@ -5961,8 +5517,8 @@ export default function FormationPipeline() {
     setReviewError('')
     setReviewingFolders(prev => ({ ...prev, [folderId]: true }))
     try {
-      const resp = await fetch(
-        apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/review`),
+      const resp = await apiFetch(
+        `/api/formation/${selectedJobId}/content/${folderId}/review`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -5979,7 +5535,7 @@ export default function FormationPipeline() {
       // 202 Accepted — on garde le folder dans reviewingFolders, le polling
       // (plus bas) le retirera automatiquement une fois reviewed === completed.
       await fetchContentFolders(selectedJobId)
-    } catch (e) {
+    } catch {
       setReviewError('Erreur réseau')
       setReviewingFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
     }
@@ -6015,41 +5571,15 @@ export default function FormationPipeline() {
     })
   }, [contentFolders])
 
-  // ─── Étape 6.5 — Sécurité volume (audit + enrichissement à la demande) ────
-  // Filet de sécurité POST-génération : si une journée est sous le budget audio
-  // calibré, l'utilisateur peut lancer un agent qui enrichit (append-only)
-  // les segments les plus courts en respectant les règles #1-#27.
-  const [volumeAudit, setVolumeAudit] = useState(null)              // { target, folders[] }
-  const [safetyRunning, setSafetyRunning] = useState({})            // { [folderId]: true }
-  const [safetyError, setSafetyError] = useState('')
-  const [safetyModel, setSafetyModel] = useState('sonnet')
+  const autoPilotStatus = autoPilotState?.status
   useEffect(() => {
-    if (job?.auto_pilot_model) setSafetyModel(job.auto_pilot_model)
-  }, [job?.auto_pilot_model])
-
-  const fetchVolumeAudit = useCallback(async (jobId) => {
-    if (!jobId) return
-    try {
-      const resp = await fetch(apiUrl(`/api/formation/${jobId}/volume-audit`), { credentials: 'include' })
-      if (resp.status === 403) return
-      const data = await resp.json()
-      if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(jobId)) return
-      if (data.folders) setVolumeAudit(data)
-    } catch (e) {
-      // Silencieux : endpoint optionnel
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!selectedJobId || !autoPilotState || !['running', 'starting'].includes(autoPilotState.status)) return
+    if (!selectedJobId || !['running', 'starting'].includes(autoPilotStatus)) return
     fetchContentFolders(selectedJobId)
-    fetchVolumeAudit(selectedJobId)
     const interval = setInterval(() => {
       fetchContentFolders(selectedJobId)
-      fetchVolumeAudit(selectedJobId)
     }, 5000)
     return () => clearInterval(interval)
-  }, [selectedJobId, autoPilotState?.status, autoPilotState?.step, fetchContentFolders, fetchVolumeAudit])
+  }, [autoPilotStatus, fetchContentFolders, selectedJobId])
 
   useEffect(() => {
     const ids = Object.keys(continuingAfterTextFolders)
@@ -6057,11 +5587,16 @@ export default function FormationPipeline() {
     const interval = setInterval(() => {
       fetchJob(selectedJobId)
       fetchContentFolders(selectedJobId)
-      fetchVolumeAudit(selectedJobId)
-      fetchPipelineDiagnostic(selectedJobId, { silent: true })
+      fetchPipelineDiagnostic(selectedJobId)
     }, 4000)
     return () => clearInterval(interval)
-  }, [continuingAfterTextFolders, selectedJobId, fetchJob, fetchContentFolders, fetchVolumeAudit, fetchPipelineDiagnostic])
+  }, [
+    continuingAfterTextFolders,
+    fetchContentFolders,
+    fetchJob,
+    fetchPipelineDiagnostic,
+    selectedJobId,
+  ])
 
   useEffect(() => {
     setContinuingAfterTextFolders(prev => {
@@ -6084,64 +5619,6 @@ export default function FormationPipeline() {
     })
   }, [contentFolders, job?.status])
 
-  // Fetch dès qu'au moins une journée est completed
-  useEffect(() => {
-    if (!selectedJobId) return
-    const hasCompleted = contentFolders.some(f => f.content_status === 'completed')
-    if (!hasCompleted) return
-    fetchVolumeAudit(selectedJobId)
-  }, [selectedJobId, contentFolders, fetchVolumeAudit])
-
-  // Polling pendant une exécution volume safety
-  useEffect(() => {
-    const ids = Object.keys(safetyRunning)
-    if (ids.length === 0) return
-    const interval = setInterval(async () => {
-      for (const folderId of ids) {
-        try {
-          const resp = await fetch(
-            apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/volume-safety/status`),
-            { credentials: 'include' },
-          )
-          const data = await resp.json()
-          if (data.status === 'done' || data.status === 'error') {
-            setSafetyRunning(prev => { const n = { ...prev }; delete n[folderId]; return n })
-            if (data.status === 'error') {
-              setSafetyError(`Folder ${folderId} : ${data.error || 'erreur inconnue'}`)
-            }
-            await fetchVolumeAudit(selectedJobId)
-            await fetchContentFolders(selectedJobId)
-          }
-        } catch (e) { /* ignore */ }
-      }
-    }, 4000)
-    return () => clearInterval(interval)
-  }, [safetyRunning, selectedJobId, fetchVolumeAudit, fetchContentFolders])
-
-  const handleLaunchVolumeSafety = async (folderId, mode = null) => {
-    setSafetyError('')
-    setSafetyRunning(prev => ({ ...prev, [folderId]: true }))
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/volume-safety`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(mode ? { model: safetyModel, mode } : { model: safetyModel }),
-        },
-      )
-      const data = await resp.json()
-      if (resp.status !== 202 && data.error) {
-        setSafetyError(data.error)
-        setSafetyRunning(prev => { const n = { ...prev }; delete n[folderId]; return n })
-      }
-    } catch (e) {
-      setSafetyError('Erreur réseau')
-      setSafetyRunning(prev => { const n = { ...prev }; delete n[folderId]; return n })
-    }
-  }
-
   const handleRestartBeatFirstIteration = async () => {
     const foldersToRestart = contentFolders.filter(folder =>
       folder.content_status === 'completed' &&
@@ -6155,14 +5632,14 @@ export default function FormationPipeline() {
     setBeatFirstIterationError('')
     setBeatFirstIterationNotice('')
     setPipelineDiagnostic(null)
-    const chosenModel = continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro'
+    const chosenModel = continueAfterTextModel || normalizePipelineModel(job?.auto_pilot_model)
     const fastMode = beatFirstIterationMode !== 'full'
     const startedFolders = []
     try {
       for (const folder of foldersToRestart) {
         setContinuingAfterTextFolders(prev => ({ ...prev, [folder.folder_id]: true }))
-        const resp = await fetch(
-          apiUrl(`/api/formation/${selectedJobId}/content/${folder.folder_id}/continue-after-text`),
+        const resp = await apiFetch(
+          `/api/formation/${selectedJobId}/content/${folder.folder_id}/continue-after-text`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -6194,136 +5671,11 @@ export default function FormationPipeline() {
       )
       await fetchJob(selectedJobId)
       await fetchContentFolders(selectedJobId)
-      await fetchVolumeAudit(selectedJobId)
-      await fetchPipelineDiagnostic(selectedJobId, { silent: true })
+      await fetchPipelineDiagnostic(selectedJobId)
     } catch (e) {
       setBeatFirstIterationError(e?.message || 'Erreur réseau pendant la relance beat-first')
     } finally {
       setBeatFirstIterationRunning(false)
-    }
-  }
-
-  // ─── Missions Claude Code (Phase 3) — export / import manuel ──────────────
-  // Spec : memoire/03-decisions/pipeline-dual-api-et-claude-code.md
-  // Le backend écrit des fichiers dans review_queue/<job>/<step>/, l'utilisateur
-  // lance `claude --model <haiku|sonnet>` dans son terminal, Claude Code écrit
-  // le résultat, puis le frontend importe via un second bouton.
-  const [pendingMissions, setPendingMissions] = useState({})  // { [stepKey]: { path, exported_at, command, ... } }
-  const [missionModal, setMissionModal] = useState(null)       // { stepKey, mission } quand une mission vient d'être exportée
-  const [missionError, setMissionError] = useState('')
-
-  const fetchPendingMissions = useCallback(async (jobId) => {
-    if (!DUAL_COLUMN_ENABLED || !jobId) return
-    try {
-      const resp = await fetch(apiUrl(`/api/formation/${jobId}/missions/pending`), { credentials: 'include' })
-      if (resp.status === 403) return  // LOCAL_DEV non activé côté backend, on ignore
-      const data = await resp.json()
-      if (data.missions) setPendingMissions(data.missions)
-    } catch (e) {
-      // Silencieux : endpoint pas indispensable
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!selectedJobId) return
-    fetchPendingMissions(selectedJobId)
-  }, [selectedJobId, fetchPendingMissions])
-
-  const handleExportMission = async ({ stepKey, model }) => {
-    setMissionError('')
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/formation/${selectedJobId}/missions/${stepKey}/export`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ model }),
-        }
-      )
-      const data = await resp.json()
-      if (!resp.ok || data.error) {
-        setMissionError(data.error || `Erreur ${resp.status}`)
-        return
-      }
-      setPendingMissions(prev => ({ ...prev, [stepKey]: data.mission }))
-      setMissionModal({ stepKey, mission: data.mission })
-    } catch (e) {
-      setMissionError('Erreur réseau')
-    }
-  }
-
-  const handleExecuteMission = async ({ stepKey, model }) => {
-    setMissionError('')
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/formation/${selectedJobId}/missions/${stepKey}/execute`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ model }),
-        }
-      )
-      const data = await resp.json()
-      if (!resp.ok || data.error) {
-        setMissionError(data.error || `Erreur ${resp.status}`)
-        return
-      }
-      // 202 Accepted — le greenlet tourne. Le polling fetchPendingMissions
-      // va refresh l'UI avec execution_status='running' puis 'done'/'error'.
-      await fetchPendingMissions(selectedJobId)
-    } catch (e) {
-      setMissionError('Erreur réseau')
-    }
-  }
-
-  // Polling continu tant qu'au moins une mission est en execution_status='running'
-  useEffect(() => {
-    if (!selectedJobId || !DUAL_COLUMN_ENABLED) return
-    const hasRunning = Object.values(pendingMissions).some(m => m.execution_status === 'running')
-    if (!hasRunning) return
-    const interval = setInterval(() => {
-      fetchPendingMissions(selectedJobId)
-      // Si un done récent, on refresh aussi le job et les folders
-      fetchJob(selectedJobId)
-      fetchContentFolders(selectedJobId)
-    }, 4000)
-    return () => clearInterval(interval)
-  }, [pendingMissions, selectedJobId, fetchPendingMissions])
-
-  const handleImportMission = async ({ stepKey }) => {
-    setMissionError('')
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/formation/${selectedJobId}/missions/${stepKey}/import`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({}),
-        }
-      )
-      const data = await resp.json()
-      // Si 501 (not_implemented) ou autre erreur : on affiche le message et
-      // on GARDE la mission dans la file + la modale reste ouverte.
-      // L'utilisateur doit savoir que rien n'a été importé.
-      if (!resp.ok || data.error) {
-        const prefix = data.not_implemented ? 'Import non implémenté : ' : ''
-        setMissionError(`${prefix}${data.error || `Erreur ${resp.status}`}`)
-        return
-      }
-      setPendingMissions(prev => {
-        const next = { ...prev }
-        delete next[stepKey]
-        return next
-      })
-      setMissionModal(null)
-      // Re-fetch l'état courant du job et des folders
-      await fetchJob(selectedJobId)
-      await fetchContentFolders(selectedJobId)
-    } catch (e) {
-      setMissionError('Erreur réseau')
     }
   }
 
@@ -6332,8 +5684,8 @@ export default function FormationPipeline() {
     setAudioError('')
     setFolderAudioRunning(prev => ({ ...prev, [folder.folder_id]: true }))
     try {
-      const resp = await fetch(
-        apiUrl(`/api/formation/${selectedJobId}/content/${folder.folder_id}/generate-audio`),
+      const resp = await apiFetch(
+        `/api/formation/${selectedJobId}/content/${folder.folder_id}/generate-audio`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -6353,9 +5705,9 @@ export default function FormationPipeline() {
         await fetchJob(selectedJobId)
         await fetchContentFolders(selectedJobId)
         await fetchLinkedModule(selectedJobId)
-        await fetchPipelineDiagnostic(selectedJobId, { silent: true })
+        await fetchPipelineDiagnostic(selectedJobId)
       }
-    } catch (e) {
+    } catch {
       setAudioError('Erreur réseau audio')
     } finally {
       setFolderAudioRunning(prev => {
@@ -6386,19 +5738,12 @@ export default function FormationPipeline() {
     setContinuingAfterTextFolders({})
     setReviewingFolders({})
     setReviewError('')
-    setVolumeAudit(null)
-    setSafetyRunning({})
-    setSafetyError('')
     setPipelineDiagnostic(null)
-    setPipelineDiagnosticError('')
     setBeatFirstIterationRunning(false)
     setBeatFirstIterationError('')
     setBeatFirstIterationNotice('')
     setAutoPilotState(null)
     setLinkedModule(null)
-    setPendingMissions({})
-    setMissionModal(null)
-    setMissionError('')
   }
 
   const handleSelectJob = (j) => {
@@ -6615,8 +5960,8 @@ export default function FormationPipeline() {
                   }}
                   onClick={async () => {
                     try {
-                      const resp = await fetch(
-                        apiUrl(`/api/formation/${selectedJobId}/run-auto/resume`),
+                      const resp = await apiFetch(
+                        `/api/formation/${selectedJobId}/run-auto/resume`,
                         {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
@@ -6633,7 +5978,7 @@ export default function FormationPipeline() {
                         await fetchAutoPilotStatus(selectedJobId)
                         await fetchJob(selectedJobId)
                       }
-                    } catch (e) {
+                    } catch {
                       alert('Erreur réseau lors de la reprise')
                     }
                   }}
@@ -6721,42 +6066,13 @@ export default function FormationPipeline() {
               diagnostic={pipelineDiagnostic}
             />
 
-            {/* Bandeau missions Claude Code en attente d'import (Phase 3) */}
-            {DUAL_COLUMN_ENABLED && Object.keys(pendingMissions).length > 0 && (
-              <div
-                style={{
-                  padding: '12px 16px',
-                  background: 'rgba(245,158,11,0.08)',
-                  border: '1px solid rgba(245,158,11,0.35)',
-                  borderRadius: '10px',
-                  fontSize: '13px',
-                  color: '#fbbf24',
-                  marginBottom: '16px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                  flexWrap: 'wrap',
-                }}
-              >
-                <Icon name="warning_amber" />
-                <strong>{Object.keys(pendingMissions).length} mission(s) Claude Code en attente d'import</strong>
-                <span style={{ color: '#fde68a' }}>
-                  · {Object.keys(pendingMissions).join(', ')}
-                </span>
-              </div>
-            )}
-
             {/* Erreur action */}
             {actionError && (
               <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '8px', fontSize: '13px', color: '#f87171', marginBottom: '16px' }}>
                 {actionError}
               </div>
             )}
-            {missionError && (
-              <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '8px', fontSize: '13px', color: '#fbbf24', marginBottom: '16px' }}>
-                Mission : {missionError}
-              </div>
-            )}
+
 
             <BeatFirstIterationPanel
               folders={contentFolders}
@@ -6818,65 +6134,16 @@ export default function FormationPipeline() {
               )}
             </StepBlock>
 
-            {/* ─── Connecteur REAC → split en 2 colonnes (ou ↓ simple en mono) ── */}
-            {DUAL_COLUMN_ENABLED ? <FlowSplit /> : <FlowArrowDown />}
+            <FlowArrowDown />
 
-            {/* ─── Labels de colonnes si DUAL — une ligne commune au-dessus ── */}
-            {DUAL_COLUMN_ENABLED && (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '24px 40px',
-                  marginBottom: '8px',
-                }}
-              >
-                <div style={{
-                  fontSize: '11px', fontWeight: 700, color: '#60a5fa',
-                  textTransform: 'uppercase', letterSpacing: '0.1em',
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                }}>
-                  <Icon name="cloud" style={{ fontSize: '14px' }} /> API Cloud · Anthropic
-                </div>
-                <div style={{
-                  fontSize: '11px', fontWeight: 700, color: '#f59e0b',
-                  textTransform: 'uppercase', letterSpacing: '0.1em',
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                }}>
-                  <Icon name="terminal" style={{ fontSize: '14px' }} /> Claude Code local · forfait
-                </div>
-              </div>
-            )}
-
-            {/* ─── Wrapper grid des étapes 3-6 (API à gauche, CC à droite) ──
-                 En mono : grid 1fr = stack vertical normal.
-                 En dual : grid 1fr 1fr + séparateur central sobre en absolute.
-                 Chaque paire <StepBlock>/<StepBlockCC> se place auto sur
-                 la même ligne grâce à grid-auto-flow: row. Spec :
-                 memoire/03-decisions/pipeline-dual-api-et-claude-code.md */}
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: DUAL_COLUMN_ENABLED ? '1fr 1fr' : '1fr',
-                gap: '16px 40px',
-                position: 'relative',
+                gridTemplateColumns: '1fr',
+                gap: '16px',
                 marginBottom: '24px',
               }}
             >
-              {DUAL_COLUMN_ENABLED && (
-                <div
-                  aria-hidden
-                  style={{
-                    position: 'absolute',
-                    top: 0, bottom: 0, left: '50%',
-                    width: '1px',
-                    background: 'rgba(255,255,255,0.12)',
-                    transform: 'translateX(-50%)',
-                    pointerEvents: 'none',
-                  }}
-                />
-              )}
-
             {/* ── Étape 3 : Enrichissement Knowledge Base (Couche 1) ── */}
             <StepBlock stepIndex={2} currentStep={currentStep} status={job.status} title="Enrichissement Knowledge Base" icon="psychology">
               {job.status === 'kb_building' ? (
@@ -6903,11 +6170,11 @@ export default function FormationPipeline() {
                     💡 Si la progression semble figée plus de 2 minutes (backend redémarré, crash), clique "Reprendre" — ça continuera depuis la dernière compétence enregistrée.
                   </div>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac()} disabled={actionLoading}>
-                      <Icon name="refresh" /> Reprendre (Sonnet)
+                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac(DEEPSEEK_PRO_MODEL)} disabled={actionLoading}>
+                      <Icon name="refresh" /> Reprendre (DeepSeek Pro)
                     </button>
-                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac(HAIKU)} disabled={actionLoading}>
-                      <Icon name="bolt" /> Reprendre (Haiku)
+                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac(DEEPSEEK_FLASH_MODEL)} disabled={actionLoading}>
+                      <Icon name="bolt" /> Reprendre (DeepSeek Flash)
                     </button>
                   </div>
                 </div>
@@ -7028,18 +6295,18 @@ export default function FormationPipeline() {
                     </details>
                   )}
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac()} disabled={actionLoading}>
-                      <Icon name="refresh" /> Relancer (Sonnet)
+                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac(DEEPSEEK_PRO_MODEL)} disabled={actionLoading}>
+                      <Icon name="refresh" /> Relancer (DeepSeek Pro)
                     </button>
-                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac(HAIKU)} disabled={actionLoading}>
-                      <Icon name="bolt" /> Relancer (Haiku)
+                    <button style={S.btn('ghost')} onClick={() => handleEnrichReac(DEEPSEEK_FLASH_MODEL)} disabled={actionLoading}>
+                      <Icon name="bolt" /> Relancer (DeepSeek Flash)
                     </button>
                   </div>
                 </div>
               ) : (
                 <div>
                   <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '10px' }}>
-                    Claude va extraire les compétences du REAC et les enrichir une par une
+                    DeepSeek va extraire les compétences du REAC et les enrichir une par une
                     (définition pédagogique, études de cas, pièges fréquents, vocabulaire métier, contexte terrain).
                   </p>
                   <p style={{ fontSize: '13px', color: '#475569', marginBottom: '16px' }}>
@@ -7047,47 +6314,24 @@ export default function FormationPipeline() {
                     la génération du programme et éviter la dilution sur les formations longues.
                   </p>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                    <button style={S.btn('primary')} onClick={() => handleEnrichReac()} disabled={actionLoading}>
-                      <Icon name="psychology" /> Enrichir (Sonnet)
+                    <button style={S.btn('primary')} onClick={() => handleEnrichReac(DEEPSEEK_PRO_MODEL)} disabled={actionLoading}>
+                      <Icon name="psychology" /> Enrichir (DeepSeek Pro)
                     </button>
-                    <button style={S.btn('neutral')} onClick={() => handleEnrichReac(HAIKU)} disabled={actionLoading} title="~5x moins cher, qualité légèrement inférieure">
-                      <Icon name="bolt" /> Enrichir (Haiku)
+                    <button style={S.btn('neutral')} onClick={() => handleEnrichReac(DEEPSEEK_FLASH_MODEL)} disabled={actionLoading} title="Mode rapide">
+                      <Icon name="bolt" /> Enrichir (DeepSeek Flash)
                     </button>
                   </div>
                 </div>
               )}
             </StepBlock>
 
-            {/* Étape KB en mode Claude Code — réactivée 2026-04-28 :
-                prompt borné (1500-2500 mots/compétence) + parsing tolérant à la
-                troncature. Permet d'économiser des crédits API quand le compte
-                Anthropic est bas. */}
-            {DUAL_COLUMN_ENABLED && (
-              <StepBlockCC stepIndex={2} currentStep={currentStep} status={job.status} title="Enrichissement KB (local)" icon="psychology">
-                <ClaudeCodeStepActions
-                  stepKey="kb"
-                  stepLabel="Enrichissement Knowledge Base"
-                  jobId={selectedJobId}
-                  disabled={!job.reac_length || currentStep < 2}
-                  disabledReason={!job.reac_length ? 'REAC non téléchargé' : undefined}
-                  onExport={handleExportMission}
-                  onExecute={handleExecuteMission}
-                  onImport={handleImportMission}
-                  pendingMission={pendingMissions.kb}
-                  generatedVia={job.kb_generated_via}
-                />
-              </StepBlockCC>
-            )}
-
-            {/* ─── KB → Programme global (1 flèche par colonne) ── */}
             <FlowArrowDown />
-            {DUAL_COLUMN_ENABLED && <FlowArrowDown />}
 
             {/* ── Étape 4 : Programme global ── */}
             <StepBlock stepIndex={3} currentStep={currentStep} status={job.status} title="Programme global" icon="auto_stories">
               {job.status === 'global_generating' ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#fbbf24', fontSize: '14px' }}>
-                  <Icon name="hourglass_empty" /> Claude génère le programme global… (peut prendre 1-2 min)
+                  <Icon name="hourglass_empty" /> DeepSeek génère le programme global… (peut prendre 1-2 min)
                 </div>
               ) : job.status === 'global_ready' || job.status === 'global_validated' || currentStep > 3 ? (
                 <div>
@@ -7119,11 +6363,11 @@ export default function FormationPipeline() {
                       <button style={S.btn('success')} onClick={handleValidateGlobal} disabled={globalValidating || actionLoading}>
                         <Icon name="check_circle" /> {globalValidating ? 'Validation…' : 'Valider le programme'}
                       </button>
-                      <button style={S.btn('ghost')} onClick={() => handleGenerateGlobal()} disabled={actionLoading}>
-                        <Icon name="refresh" /> Regénérer (Sonnet)
+                      <button style={S.btn('ghost')} onClick={() => handleGenerateGlobal(DEEPSEEK_PRO_MODEL)} disabled={actionLoading}>
+                        <Icon name="refresh" /> Regénérer (DeepSeek Pro)
                       </button>
-                      <button style={S.btn('ghost')} onClick={() => handleGenerateGlobal(HAIKU)} disabled={actionLoading}>
-                        <Icon name="bolt" /> Regénérer (Haiku)
+                      <button style={S.btn('ghost')} onClick={() => handleGenerateGlobal(DEEPSEEK_FLASH_MODEL)} disabled={actionLoading}>
+                        <Icon name="bolt" /> Regénérer (DeepSeek Flash)
                       </button>
                     </div>
                   )}
@@ -7142,35 +6386,15 @@ export default function FormationPipeline() {
                     <button style={S.btn('primary')} onClick={() => handleGenerateGlobal()} disabled={actionLoading}>
                       <Icon name="auto_stories" /> Générer ({selectedPipelineModel})
                     </button>
-                    <button style={S.btn('neutral')} onClick={() => handleGenerateGlobal(HAIKU)} disabled={actionLoading} title="~5x moins cher, qualité légèrement inférieure">
-                      <Icon name="bolt" /> Générer (Haiku)
+                    <button style={S.btn('neutral')} onClick={() => handleGenerateGlobal(DEEPSEEK_FLASH_MODEL)} disabled={actionLoading} title="Mode rapide">
+                      <Icon name="bolt" /> Générer (DeepSeek Flash)
                     </button>
                   </div>
                 </div>
               )}
             </StepBlock>
 
-            {/* Pendant Claude Code — étape 4 (Programme global) */}
-            {DUAL_COLUMN_ENABLED && (
-              <StepBlockCC stepIndex={3} currentStep={currentStep} status={job.status} title="Programme global (local)" icon="auto_stories">
-                <ClaudeCodeStepActions
-                  stepKey="global"
-                  stepLabel="Programme global"
-                  jobId={selectedJobId}
-                  disabled={currentStep < 3 || job.status === 'kb_building'}
-                  disabledReason="En attente de la KB"
-                  onExport={handleExportMission}
-                  onExecute={handleExecuteMission}
-                  onImport={handleImportMission}
-                  pendingMission={pendingMissions.global}
-                  generatedVia={job.global_program_generated_via}
-                />
-              </StepBlockCC>
-            )}
-
-            {/* ─── Programme global → Programmes journée (1 flèche par colonne) ── */}
             <FlowArrowDown />
-            {DUAL_COLUMN_ENABLED && <FlowArrowDown />}
 
             {/* ── Étape 5 : Programmes journée ── */}
             <StepBlock stepIndex={4} currentStep={currentStep} status={job.status} title={`Programmes journée (${job.nb_days} jours)`} icon="calendar_view_week">
@@ -7256,8 +6480,8 @@ export default function FormationPipeline() {
                       <button style={S.btn('ghost')} onClick={() => handleSplitDaily()} disabled={actionLoading}>
                         <Icon name="refresh" /> Regénérer ({selectedPipelineModel})
                       </button>
-                      <button style={S.btn('ghost')} onClick={() => handleSplitDaily(HAIKU)} disabled={actionLoading}>
-                        <Icon name="bolt" /> Regénérer (Haiku)
+                      <button style={S.btn('ghost')} onClick={() => handleSplitDaily(DEEPSEEK_FLASH_MODEL)} disabled={actionLoading}>
+                        <Icon name="bolt" /> Regénérer (DeepSeek Flash)
                       </button>
                     </div>
                   )}
@@ -7274,8 +6498,8 @@ export default function FormationPipeline() {
                     <button style={S.btn('primary')} onClick={() => handleSplitDaily()} disabled={actionLoading || !job.global_program_validated}>
                       <Icon name="calendar_view_week" /> Découper ({selectedPipelineModel})
                     </button>
-                    <button style={S.btn('neutral')} onClick={() => handleSplitDaily(HAIKU)} disabled={actionLoading || !job.global_program_validated} title="~5x moins cher">
-                      <Icon name="bolt" /> Découper (Haiku)
+                    <button style={S.btn('neutral')} onClick={() => handleSplitDaily(DEEPSEEK_FLASH_MODEL)} disabled={actionLoading || !job.global_program_validated} title="Mode rapide">
+                      <Icon name="bolt" /> Découper (DeepSeek Flash)
                     </button>
                   </div>
                   {!job.global_program_validated && (
@@ -7285,27 +6509,7 @@ export default function FormationPipeline() {
               )}
             </StepBlock>
 
-            {/* Pendant Claude Code — étape 5 (Programmes journée) */}
-            {DUAL_COLUMN_ENABLED && (
-              <StepBlockCC stepIndex={4} currentStep={currentStep} status={job.status} title="Programmes journée (local)" icon="calendar_view_week">
-                <ClaudeCodeStepActions
-                  stepKey="daily"
-                  stepLabel={`Programmes journée (${job.nb_days} jours)`}
-                  jobId={selectedJobId}
-                  disabled={currentStep < 4 || !job.global_program_validated}
-                  disabledReason="En attente du programme global validé"
-                  onExport={handleExportMission}
-                  onExecute={handleExecuteMission}
-                  onImport={handleImportMission}
-                  pendingMission={pendingMissions.daily}
-                  generatedVia={job.daily_programs_generated_via}
-                />
-              </StepBlockCC>
-            )}
-
-            {/* ─── Programmes journée → Génération cours (1 flèche par colonne) ── */}
             <FlowArrowDown />
-            {DUAL_COLUMN_ENABLED && <FlowArrowDown />}
 
             {/* ── Étape 6 : Génération des cours (texte) + relecture PDF ── */}
             <StepBlock stepIndex={5} currentStep={currentStep} status={job.status} title="Génération des cours (texte)" icon="edit_note">
@@ -7461,14 +6665,6 @@ export default function FormationPipeline() {
                                     title={canUseFolder ? 'Lire le texte de la journée' : 'En attente de génération ou dossier hors job'}
                                   >
                                     <Icon name="visibility" /> Voir
-                                  </button>
-                                  <button
-                                    style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
-                                    disabled={!canUseFolder}
-                                    onClick={() => window.open(`/generated-slides?job_id=${selectedJobId}&folder_id=${folder.folder_id}&platform_id=${folder.platform_id || job?.platform_id || ''}`, '_blank')}
-                                    title={canUseFolder ? 'Prévisualiser les slides générées depuis le texte' : 'En attente de génération ou dossier hors job'}
-                                  >
-                                    <Icon name="slideshow" /> Slides
                                   </button>
                                   <button
                                     style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
@@ -7665,8 +6861,6 @@ export default function FormationPipeline() {
                                           >
                                             <option value="deepseek-v4-pro">DeepSeek Pro</option>
                                             <option value="deepseek-v4-flash">DeepSeek Flash</option>
-                                            <option value="sonnet">Claude Sonnet</option>
-                                            <option value="haiku">Claude Haiku</option>
                                           </select>
                                         </div>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -7816,11 +7010,11 @@ export default function FormationPipeline() {
                     </button>
                     <button
                       style={S.btn('neutral')}
-                      onClick={() => handleLaunchTTS(HAIKU)}
+                      onClick={() => handleLaunchTTS(DEEPSEEK_FLASH_MODEL)}
                       disabled={launchingTTS || actionLoading || !job.daily_programs_validated}
-                      title="~5x moins cher, qualité légèrement inférieure"
+                      title="Mode rapide"
                     >
-                      <Icon name="bolt" /> {launchingTTS ? 'Lancement…' : `Haiku`}
+                      <Icon name="bolt" /> {launchingTTS ? 'Lancement…' : 'DeepSeek Flash'}
                     </button>
                   </div>
                   {!job.daily_programs_validated && (
@@ -7830,41 +7024,7 @@ export default function FormationPipeline() {
               )}
             </StepBlock>
 
-            {/* Pendant Claude Code — étape 6 (Génération cours texte) + conformité locale */}
-            {DUAL_COLUMN_ENABLED && (
-              <StepBlockCC stepIndex={5} currentStep={currentStep} status={job.status} title="Génération cours + Révision (local)" icon="edit_note">
-                <ClaudeCodeStepActions
-                  stepKey="content"
-                  stepLabel="Génération des cours (texte)"
-                  jobId={selectedJobId}
-                  disabled={currentStep < 5 || !job.daily_programs_validated}
-                  disabledReason="En attente des programmes journée validés"
-                  onExport={handleExportMission}
-                  onExecute={handleExecuteMission}
-                  onImport={handleImportMission}
-                  pendingMission={pendingMissions.content}
-                  generatedVia={null}
-                />
-
-                <FlowArrowDown height={20} />
-                <div>
-                  <ClaudeCodeStepActions
-                    stepKey="review"
-                    stepLabel="Conformité locale par morceau"
-                    jobId={selectedJobId}
-                    disabled={!TEXT_AVAILABLE_STATUSES.has(job.status)}
-                    disabledReason="En attente de la génération texte"
-                    onExport={handleExportMission}
-                    onExecute={handleExecuteMission}
-                    onImport={handleImportMission}
-                    pendingMission={pendingMissions.review}
-                    generatedVia={null}
-                  />
-                </div>
-              </StepBlockCC>
-            )}
-
-            </div>{/* fin du grid dual API / Claude Code */}
+            </div>
 
           </>
         )}
@@ -7903,202 +7063,11 @@ export default function FormationPipeline() {
         />
       )}
 
-      {missionModal && (
-        <ClaudeCodeMissionModal
-          stepKey={missionModal.stepKey}
-          mission={missionModal.mission}
-          onClose={() => setMissionModal(null)}
-          onImport={() => handleImportMission({ stepKey: missionModal.stepKey })}
-        />
-      )}
+
     </div>
   )
 }
 
-// ─── Modal d'instructions mission Claude Code (Phase 3) ───────────────────────
-// Modale logs subprocess `claude` — poll automatique tant que `autoPoll=true`.
-function ClaudeCodeLogsModal({ jobId, stepKey, onClose, autoPoll }) {
-  const [logs, setLogs] = useState('')
-  const [source, setSource] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const logsRef = useRef(null)
-
-  const fetchLogs = useCallback(async () => {
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/formation/${jobId}/missions/${stepKey}/logs?tail=300`),
-        { credentials: 'include' }
-      )
-      const data = await resp.json()
-      if (resp.ok) {
-        setLogs(data.logs || '')
-        setSource(data.source)
-      }
-    } catch (e) {
-      // silencieux
-    } finally {
-      setLoading(false)
-    }
-  }, [jobId, stepKey])
-
-  useEffect(() => {
-    fetchLogs()
-  }, [fetchLogs])
-
-  // Poll toutes les 3s tant que l'exécution tourne
-  useEffect(() => {
-    if (!autoPoll) return
-    const interval = setInterval(fetchLogs, 3000)
-    return () => clearInterval(interval)
-  }, [autoPoll, fetchLogs])
-
-  // Auto-scroll vers le bas à chaque update
-  useEffect(() => {
-    if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight
-  }, [logs])
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 1000, padding: '24px',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: '#0f172a', borderRadius: '12px', padding: '20px',
-          width: '90vw', maxWidth: '1000px', height: '80vh',
-          display: 'flex', flexDirection: 'column',
-          border: '1px solid rgba(245,158,11,0.3)', color: '#e2e8f0',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-          <Icon name="terminal" style={{ color: '#fbbf24' }} />
-          <h3 style={{ margin: 0, fontSize: '16px', flex: 1 }}>
-            Logs Claude Code — {stepKey}
-            {autoPoll && <span style={{ fontSize: '11px', color: '#fbbf24', marginLeft: '8px' }}>● live (poll 3s)</span>}
-            {source === 'archived' && <span style={{ fontSize: '11px', color: '#94a3b8', marginLeft: '8px' }}>(archivé)</span>}
-          </h3>
-          <button onClick={fetchLogs} style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '12px' }}>
-            <Icon name="refresh" /> Refresh
-          </button>
-          <button onClick={onClose} style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '12px' }}>
-            <Icon name="close" /> Fermer
-          </button>
-        </div>
-        <pre
-          ref={logsRef}
-          style={{
-            flex: 1,
-            margin: 0,
-            padding: '12px',
-            background: '#020617',
-            borderRadius: '8px',
-            fontSize: '11px',
-            fontFamily: "'Fira Code', 'Menlo', monospace",
-            color: '#cbd5e1',
-            overflow: 'auto',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            border: '1px solid rgba(30,41,59,0.8)',
-          }}
-        >
-          {loading ? 'Chargement…' : logs || '(pas encore de logs — execution.log non créé)'}
-        </pre>
-      </div>
-    </div>
-  )
-}
-
-
-function ClaudeCodeMissionModal({ stepKey, mission, onClose, onImport }) {
-  const [copied, setCopied] = useState(false)
-  const command = mission?.command || `claude --model ${mission?.model || 'haiku'}`
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(command)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch (e) {
-      // ignore
-    }
-  }
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 1000, padding: '24px',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: '#1e293b', borderRadius: '14px', padding: '24px',
-          maxWidth: '640px', width: '100%', color: '#e2e8f0',
-          border: '1px solid rgba(245,158,11,0.3)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-          <Icon name="terminal" style={{ color: '#fbbf24' }} />
-          <h3 style={{ margin: 0, fontSize: '18px' }}>Mission Claude Code exportée</h3>
-        </div>
-
-        <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Étape</div>
-        <div style={{ fontSize: '14px', color: '#e2e8f0', marginBottom: '14px', fontWeight: 600 }}>
-          {mission.step_label || stepKey}
-        </div>
-
-        <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Fichiers écrits</div>
-        <code
-          style={{
-            display: 'block',
-            padding: '10px 12px', background: 'rgba(15,23,42,0.8)', borderRadius: '8px',
-            fontSize: '12px', color: '#cbd5e1', marginBottom: '14px', wordBreak: 'break-all',
-          }}
-        >
-          {mission.path}
-        </code>
-
-        <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Dans ton terminal</div>
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: '8px',
-            padding: '10px 12px', background: 'rgba(15,23,42,0.8)', borderRadius: '8px',
-            marginBottom: '6px',
-          }}
-        >
-          <code style={{ flex: 1, fontSize: '13px', color: '#a78bfa' }}>$ {command}</code>
-          <button
-            onClick={handleCopy}
-            style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '12px' }}
-          >
-            <Icon name={copied ? 'check' : 'content_copy'} /> {copied ? 'Copié' : 'Copier'}
-          </button>
-        </div>
-        <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '14px' }}>
-          Puis dans la session Claude Code :
-          <div style={{ marginTop: '4px', color: '#cbd5e1' }}>
-            &gt; Exécute la mission décrite dans <code style={{ color: '#a78bfa' }}>{mission.path}/task.md</code>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-          <button onClick={onClose} style={S.btn('ghost')}>Plus tard</button>
-          <button onClick={onImport} style={S.btn('primary')}>
-            <Icon name="file_upload" /> Importer le résultat
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Modal de lecture du texte d'une journée ──────────────────────────────────
 function ReviewReportModal({ jobId, folder, onClose, reportEndpoint = 'review-report' }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -8109,15 +7078,15 @@ function ReviewReportModal({ jobId, folder, onClose, reportEndpoint = 'review-re
     let cancelled = false
     async function load() {
       try {
-        const resp = await fetch(
-          apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/${reportEndpoint}`),
+        const resp = await apiFetch(
+          `/api/formation/${jobId}/content/${folder.folder_id}/${reportEndpoint}`,
           { credentials: 'include' },
         )
         const data = await resp.json()
         if (cancelled) return
         if (resp.ok && data.report) setReport(data.report)
         else setError(data.error || 'Aucun rapport disponible')
-      } catch (e) {
+      } catch {
         if (!cancelled) setError('Erreur réseau')
       } finally {
         if (!cancelled) setLoading(false)
@@ -8125,7 +7094,7 @@ function ReviewReportModal({ jobId, folder, onClose, reportEndpoint = 'review-re
     }
     load()
     return () => { cancelled = true }
-  }, [jobId, folder.folder_id])
+  }, [folder.folder_id, jobId, reportEndpoint])
 
   const ruleLabels = {
     '#18': 'Anti-hallucination (chiffres / études non sourcés)',
@@ -8278,7 +7247,7 @@ function ReviewReportModal({ jobId, folder, onClose, reportEndpoint = 'review-re
                   Détail par segment ({(report.by_segment || []).length})
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {(report.by_segment || []).map((seg, i) => {
+                  {(report.by_segment || []).map(seg => {
                     const key = `${seg.sub_idx}_${seg.passe}`
                     const expanded = !!expandedSegments[key]
                     return (
@@ -8636,9 +7605,9 @@ function Slide2AlignmentModal({ jobId, folder, onClose }) {
 
       try {
         const [slidesResp, artifactResp] = await Promise.all([
-          fetch(apiUrl(`/api/slides/data?folder_id=${encodeURIComponent(folder.folder_id)}`), { credentials: 'include' }),
-          fetch(
-            apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/artifact/content-course-scripts.json`),
+          apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folder.folder_id)}`, { credentials: 'include' }),
+          apiFetch(
+            `/api/formation/${jobId}/content/${folder.folder_id}/artifact/content-course-scripts.json`,
             { credentials: 'include' },
           ),
         ])
@@ -8661,8 +7630,8 @@ function Slide2AlignmentModal({ jobId, folder, onClose }) {
         if (artifactResp.ok && artifactData.artifact) {
           artifact = artifactData.artifact
         } else {
-          const textResp = await fetch(
-            apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/text`),
+          const textResp = await apiFetch(
+            `/api/formation/${jobId}/content/${folder.folder_id}/text`,
             { credentials: 'include' },
           )
           const textData = await textResp.json().catch(() => ({}))
@@ -8701,8 +7670,14 @@ function Slide2AlignmentModal({ jobId, folder, onClose }) {
   }, [jobId, folder.folder_id])
 
   const assignmentsByCourse = useMemo(() => buildSlide2Assignments(courses, slides), [courses, slides])
-  const selectedCourse = courses.find(course => course.courseNumber === selectedCourseNumber) || courses[0] || null
-  const selectedAssignments = selectedCourse ? assignmentsByCourse.get(selectedCourse.courseNumber) || [] : []
+  const selectedCourse = useMemo(
+    () => courses.find(course => course.courseNumber === selectedCourseNumber) || courses[0] || null,
+    [courses, selectedCourseNumber],
+  )
+  const selectedAssignments = useMemo(
+    () => selectedCourse ? assignmentsByCourse.get(selectedCourse.courseNumber) || [] : [],
+    [assignmentsByCourse, selectedCourse],
+  )
 
   useEffect(() => {
     if (!courses.length) return
@@ -9074,15 +8049,15 @@ function FolderTextModal({ jobId, folder, onClose }) {
     let cancelled = false
     async function load() {
       try {
-        const resp = await fetch(
-          apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/text`),
+        const resp = await apiFetch(
+          `/api/formation/${jobId}/content/${folder.folder_id}/text`,
           { credentials: 'include' },
         )
         const data = await resp.json()
         if (cancelled) return
         if (data.text) setText(data.text)
         else setError(data.error || 'Aucun texte disponible')
-      } catch (e) {
+      } catch {
         if (!cancelled) setError('Erreur réseau')
       } finally {
         if (!cancelled) setLoading(false)
@@ -9125,7 +8100,16 @@ function FolderTextModal({ jobId, folder, onClose }) {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               style={{ ...S.btn('primary'), padding: '6px 12px', fontSize: '12px' }}
-              onClick={() => window.open(apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/docx`), '_blank')}
+              onClick={async () => {
+                try {
+                  await apiDownload(
+                    `/api/formation/${jobId}/content/${folder.folder_id}/docx`,
+                    `formation-${jobId}-jour-${folder.folder_id}.docx`,
+                  )
+                } catch (downloadError) {
+                  setError(downloadError.message || 'Téléchargement Word impossible')
+                }
+              }}
             >
               <Icon name="description" /> Word
             </button>

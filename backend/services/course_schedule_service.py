@@ -86,6 +86,8 @@ def ensure_course_schedule_tables(cursor):
             postponed_from TEXT,
             postponed_at TEXT,
             postponement_count INTEGER NOT NULL DEFAULT 0,
+            module_day_id INTEGER,
+            local_date TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(platform_id, session_index)
@@ -117,6 +119,8 @@ def ensure_course_schedule_tables(cursor):
         "postponed_from": "TEXT",
         "postponed_at": "TEXT",
         "postponement_count": "INTEGER NOT NULL DEFAULT 0",
+        "module_day_id": "INTEGER",
+        "local_date": "TEXT",
     }.items():
         if col not in columns:
             cursor.execute(f"ALTER TABLE course_sessions ADD COLUMN {col} {col_type}")
@@ -542,6 +546,145 @@ def save_course_schedule(cursor, platform_id, schedule):
     }
 
 
+def save_explicit_course_schedule(cursor, platform_id, schedule):
+    """Persist an immutable V2 calendar from its exact checked dates.
+
+    Recurrence helpers are deliberately absent here: one canonical day in the
+    snapshot produces one dated session, in chronological order.
+    """
+    from services.dynamic_day_schedule_service import (
+        SCHEDULE_SCHEMA_VERSION,
+        compile_day_schedule,
+    )
+
+    schedule = schedule or {}
+    days = schedule.get("days")
+    if not isinstance(days, list) or not days:
+        raise ValueError("Le planning V2 doit contenir une liste days non vide")
+
+    requested_dates = schedule.get("selected_dates")
+    if requested_dates is not None:
+        if not isinstance(requested_dates, list):
+            raise ValueError("selected_dates doit être une liste")
+        requested_dates = [str(value) for value in requested_dates]
+
+    normalized_days = []
+    seen_dates = set()
+    for expected_index, raw_day in enumerate(days, start=1):
+        if not isinstance(raw_day, dict):
+            raise ValueError(f"Journée {expected_index} invalide")
+        day_index = int(
+            raw_day.get("day_index", raw_day.get("day_number", expected_index))
+        )
+        if day_index != expected_index:
+            raise ValueError("Les journées doivent être ordonnées sans interruption")
+        raw_date = str(raw_day.get("date") or "").strip()
+        try:
+            local_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(
+                f"La date de la journée {expected_index} est invalide"
+            ) from exc
+        if local_date.isoformat() != raw_date or raw_date in seen_dates:
+            raise ValueError("Les dates doivent être uniques au format YYYY-MM-DD")
+        seen_dates.add(raw_date)
+
+        compiled_day = compile_day_schedule(raw_day)
+        start_minute = int(compiled_day["start_minute"])
+        try:
+            scheduled_at = FRANCE_TZ.localize(
+                datetime.combine(
+                    local_date,
+                    time(start_minute // 60, start_minute % 60),
+                ),
+                is_dst=None,
+            )
+        except NonExistentTimeError as exc:
+            raise ValueError(
+                "L’heure de début n’existe pas le jour du passage à l’heure d’été"
+            ) from exc
+        except AmbiguousTimeError as exc:
+            raise ValueError(
+                "L’heure de début est ambiguë le jour du passage à l’heure d’hiver"
+            ) from exc
+        normalized_days.append(
+            {
+                "day_index": day_index,
+                "date": raw_date,
+                "scheduled_at": scheduled_at,
+                "module_day_id": raw_day.get("module_day_id"),
+            }
+        )
+
+    normalized_days.sort(key=lambda day: (day["scheduled_at"], day["day_index"]))
+    if [day["day_index"] for day in normalized_days] != list(
+        range(1, len(normalized_days) + 1)
+    ):
+        raise ValueError("Les journées doivent suivre l’ordre chronologique des dates")
+    canonical_dates = [day["date"] for day in normalized_days]
+    if requested_dates is not None and requested_dates != canonical_dates:
+        raise ValueError("selected_dates doit suivre l’ordre chronologique des journées")
+    if len(normalized_days) != int(
+        schedule.get("day_count") or len(normalized_days)
+    ):
+        raise ValueError("day_count ne correspond pas aux journées")
+
+    now_dt = datetime.now(FRANCE_TZ)
+    if normalized_days[0]["scheduled_at"] <= now_dt:
+        raise ValueError("La première journée doit commencer dans le futur")
+    session_rows = [
+        {
+            "session_index": day["day_index"],
+            "scheduled_at": day["scheduled_at"],
+            "local_date": day["date"],
+            "module_day_id": (
+                int(day["module_day_id"])
+                if day.get("module_day_id") is not None
+                else None
+            ),
+            "session_password": _generate_session_password(),
+        }
+        for day in normalized_days
+    ]
+    sqlite_connection = None
+    if not schedule_repo.schedule_store_is_postgres():
+        ensure_course_schedule_tables(cursor)
+        sqlite_connection = getattr(cursor, "connection", None)
+        if sqlite_connection is None:
+            raise RuntimeError("Connexion SQLite du planning indisponible")
+    storage_result = schedule_repo.replace_course_schedule(
+        platform_id=int(platform_id),
+        total_training_days=len(normalized_days),
+        weekly_course_count=0,
+        weekdays_json="[]",
+        start_time=normalized_days[0]["scheduled_at"].strftime("%H:%M"),
+        timezone_name="Europe/Paris",
+        sessions=session_rows,
+        now=now_dt,
+        replace_after=now_dt,
+        fill_remaining_to_total=False,
+        sqlite_connection=sqlite_connection,
+        schedule_schema_version=SCHEDULE_SCHEMA_VERSION,
+    )
+    horizon, _ = _audio_schedule_window_hours()
+    immediate_audio = (
+        normalized_days[0]["scheduled_at"]
+        <= now_dt + timedelta(hours=horizon)
+    )
+    return {
+        "total_sessions": len(normalized_days),
+        "first_session_at": normalized_days[0]["scheduled_at"].strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+        "last_session_at": normalized_days[-1]["scheduled_at"].strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+        "audio_generation_immediate": immediate_audio,
+        "schedule_schema_version": SCHEDULE_SCHEMA_VERSION,
+        **(storage_result or {}),
+    }
+
+
 def create_missing_course_schedule(
     cursor,
     platform_id,
@@ -787,6 +930,26 @@ def _parse_postponement_datetime(value):
         raise ValueError("Cette heure est ambiguë le jour du changement d’heure") from exc
 
 
+V2_POSTPONEMENT_UNSUPPORTED_MESSAGE = (
+    "Le report des journées pour les formations au planning V2 "
+    "n’est pas encore pris en charge."
+)
+
+
+def _assert_legacy_postponement_supported(summary, rows):
+    """Stop legacy recurrence logic before it receives an explicit V2 calendar."""
+    try:
+        schema_version = int((summary or {}).get("schedule_schema_version") or 1)
+    except (TypeError, ValueError):
+        schema_version = 1
+    has_v2_occurrence = any(
+        row.get("module_day_id") is not None or row.get("local_date") is not None
+        for row in (rows or [])
+    )
+    if schema_version >= 2 or has_v2_occurrence:
+        raise ValueError(V2_POSTPONEMENT_UNSUPPORTED_MESSAGE)
+
+
 def _build_course_session_postponement_plan(
     platform_id,
     session_id,
@@ -814,6 +977,7 @@ def _build_course_session_postponement_plan(
     if not summary:
         raise ValueError("Le planning de cette formation est introuvable")
     rows = schedule_repo.list_course_sessions(int(platform_id), limit=1000)
+    _assert_legacy_postponement_supported(summary, rows)
     target_position = next(
         (index for index, row in enumerate(rows) if int(row.get("id") or 0) == int(session_id)),
         None,
@@ -1102,12 +1266,24 @@ def update_course_schedule(
 
 
 def create_course_schedule(platform_id, schedule):
+    schedule_version = int(
+        (schedule or {}).get(
+            "schedule_schema_version",
+            (schedule or {}).get("schema_version", 1),
+        )
+        or 1
+    )
     if schedule_repo.schedule_store_is_postgres():
+        if schedule_version >= 2:
+            return save_explicit_course_schedule(None, platform_id, schedule)
         return save_course_schedule(None, platform_id, schedule)
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        result = save_course_schedule(cursor, platform_id, schedule)
+        if schedule_version >= 2:
+            result = save_explicit_course_schedule(cursor, platform_id, schedule)
+        else:
+            result = save_course_schedule(cursor, platform_id, schedule)
         conn.commit()
         return result
     finally:

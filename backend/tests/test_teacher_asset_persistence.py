@@ -96,6 +96,12 @@ class TeacherAssetPersistenceTest(unittest.TestCase):
             service,
             "get_module_audio_manifest_readiness",
             return_value={"ready": True, "audio_asset_count": 19, "required_folder_count": 1},
+        ), patch(
+            "services.day_playlist_service.required_audio_filenames",
+            return_value={
+                path.rsplit("/", 1)[-1]
+                for path in service.CANONICAL_AUDIO_PLAYLIST_PATHS
+            },
         ):
             result = service.ensure_module_asset_manifest(
                 module_id=44,
@@ -135,18 +141,19 @@ class TeacherAssetPersistenceTest(unittest.TestCase):
             "total_hours": 7,
             "nb_days": 1,
         }
-        finalized_module = {
+        draft_module = {
             "platform_id": 12,
             "platform_ready_updated": 1,
             "module_id": 44,
             "module_created": True,
             "center_account_id": 7,
+            "canonical_reuse_candidate": True,
             "canonical_reuse_allowed": True,
         }
         with patch.object(formation_routes, "get_job", return_value=job), patch(
             "repositories.pipeline_repository.finalize_pipeline_module",
-            return_value=finalized_module,
-        ), patch(
+            return_value=draft_module,
+        ) as finalize_module, patch(
             "services.formation_pipeline_service.get_expected_course_folders",
             return_value={"folder_ids": [91]},
         ), patch(
@@ -159,6 +166,8 @@ class TeacherAssetPersistenceTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "manifeste audio incomplet"):
                 formation_routes._finalize_audio_ready_state(9, "fish_audio")
+        self.assertEqual(finalize_module.call_count, 1)
+        self.assertFalse(finalize_module.call_args.kwargs["audio_ready"])
 
     def test_each_scheduled_day_is_persisted_before_global_validation(self):
         module = {

@@ -248,9 +248,12 @@ Ensuite seulement, connecter les donnees dynamiques du projet.
 
 - `frontend/src/components/slides/templates/DeckTemplates.jsx`
 - `frontend/src/components/slides/templates/DeckTemplates.css`
-- `frontend/src/pages/GeneratedSlides.jsx`
 - `frontend/src/pages/FormationPipeline.jsx`
 - `frontend/src/pages/TestSlides.jsx`
+
+La page historique `GeneratedSlides.jsx` citée dans l'ancien exemple a été
+retirée. Les prévisualisations actives passent désormais par les composants de
+la pipeline et par `/test-slides`.
 
 Commit de reference :
 

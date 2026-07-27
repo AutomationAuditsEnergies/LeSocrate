@@ -36,7 +36,7 @@ class PostgresSchemaContractTest(unittest.TestCase):
         ):
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {column}", schema)
 
-    def test_schema_covers_operational_sqlite_deletion_requests(self):
+    def test_schema_preserves_historical_sqlite_deletion_requests(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE IF NOT EXISTS deletion_requests", schema)
         for column in (
@@ -50,6 +50,22 @@ class PostgresSchemaContractTest(unittest.TestCase):
         ):
             self.assertRegex(schema, rf"(?m)^\s*{column}\s+")
         self.assertIn("ALTER TABLE deletion_requests ENABLE ROW LEVEL SECURITY", schema)
+
+    def test_pipeline_access_bootstrap_is_targeted_and_one_time(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        self.assertIn("pipeline_permission_was_missing", schema)
+        self.assertIn("IF pipeline_permission_was_missing THEN", schema)
+        self.assertIn("pipeline_operator_count", schema)
+        self.assertIn("IF pipeline_operator_count > 1 THEN", schema)
+        self.assertIn("RAISE EXCEPTION", schema)
+        self.assertIn("LOWER(username) = 'newpiprod@gmail.com'", schema)
+        self.assertIn("pipeline_access_enabled = TRUE", schema)
+        self.assertIn("platform.center_account_id IS NULL", schema)
+        self.assertRegex(
+            schema,
+            r"EXISTS\s*\(\s*SELECT 1\s+FROM formation_pipeline_jobs job"
+            r"\s+WHERE job\.platform_id = platform\.id\s*\)",
+        )
 
     def test_pipeline_tables_deny_direct_data_api_access_by_default(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")

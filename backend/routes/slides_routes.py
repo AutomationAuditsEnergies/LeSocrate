@@ -11,6 +11,7 @@ from services.script_slide_generation_service import (
     preview_slides_from_text,
 )
 from repositories.pipeline_repository import hr_resource_belongs_to_center
+from services.admin_access_service import can_access_formation_pipeline
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +43,13 @@ def require_admin_for_slide_workbench():
         return jsonify({"status": "error", "message": "Non autorisé"}), 403
 
     account_type = str(session.get("admin_account_type") or "").strip().lower()
+    if request.endpoint == "slides.generate_from_script":
+        account_id = session.get("admin_account_id")
+        if (
+            account_type != "training_center"
+            or not can_access_formation_pipeline(account_type, account_id)
+        ):
+            return jsonify({"status": "error", "message": "Non autorisé"}), 403
     if account_type == "legacy_admin":
         return None
     if account_type != "training_center":
@@ -229,7 +237,7 @@ def generate_from_script():
             "platform_id": 36,         # optionnel, prioritaire sur la session admin
             "max_slides": 60,          # cap de densité V1
             "pace": "normal",          # dense|normal|synthesis
-            "model": "sonnet"          # optionnel
+            "model": "deepseek-v4-pro"  # optionnel
         }
     """
     global _generated_slides, _generation_error, _generation_stats, _generation_timeline
@@ -318,7 +326,7 @@ def preview_from_text():
             "fields_hint": {},             # optionnel
             "max_slides": 8,
             "pace": "dense",
-            "model": "sonnet"
+            "model": "deepseek-v4-pro"
         }
     """
     global _generated_slides, _generation_error, _generation_stats, _generation_timeline

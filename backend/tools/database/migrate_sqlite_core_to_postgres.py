@@ -46,12 +46,14 @@ CORE_TABLES = [
     "deletion_requests",
 ]
 
+PIPELINE_OPERATOR_USERNAME = "newpiprod@gmail.com"
+
 PRIMARY_KEY_COLUMNS = {
     "course_schedule_config": ("platform_id",),
 }
 
 BOOL_COLUMNS = {
-    "training_center_accounts": {"is_active"},
+    "training_center_accounts": {"is_active", "pipeline_access_enabled"},
     "platform_config": {"upload_locked", "public_access_enabled"},
     "student_accounts": {"is_active"},
     "student_profiles": {"is_active"},
@@ -294,6 +296,12 @@ def normalize_row(
     # Never migrate the historical debug copy of a password into production.
     if table == "training_center_accounts" and "password_debug_plaintext" in columns:
         values[columns.index("password_debug_plaintext")] = None
+    # Planning V2 parents are imported by the second (pipeline) migration.
+    # Keeping the source id here would violate the immediate PostgreSQL FK on
+    # course_sessions.module_day_id.  The pipeline migration restores and
+    # verifies every non-null binding after formation_module_days is present.
+    if table == "course_sessions" and "module_day_id" in columns:
+        values[columns.index("module_day_id")] = None
     return values
 
 
@@ -343,6 +351,144 @@ def truncate_core_tables(pg_conn: Any) -> None:
                 sql.SQL(", ").join(sql.Identifier(table) for table in CORE_TABLES)
             )
         )
+
+
+def read_target_pipeline_operator_permission(pg_conn: Any) -> bool | None:
+    """Return the pre-import permission, or None when the operator is absent.
+
+    Reading this before an optional truncate lets a legacy SQLite import retain
+    an explicit PostgreSQL revocation instead of treating every rerun as a
+    first-time bootstrap.
+    """
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT pipeline_access_enabled
+            FROM training_center_accounts
+            WHERE LOWER(username) = %s
+            ORDER BY id
+            LIMIT 2
+            """,
+            (PIPELINE_OPERATOR_USERNAME,),
+        )
+        rows = cur.fetchall()
+    if len(rows) > 1:
+        raise MigrationValidationError(
+            "Plusieurs comptes correspondent à "
+            f"{PIPELINE_OPERATOR_USERNAME}; migration interrompue."
+        )
+    return bool(rows[0][0]) if rows else None
+
+
+def should_bootstrap_legacy_pipeline_operator(
+    *,
+    source_has_permission_column: bool,
+    previous_target_permission: bool | None,
+) -> bool:
+    """Bootstrap only a legacy source and never override a known revocation."""
+    return (
+        not source_has_permission_column
+        and previous_target_permission is not False
+    )
+
+
+def reconcile_pipeline_operator_after_core_copy(
+    sqlite_conn: sqlite3.Connection,
+    pg_conn: Any,
+    *,
+    previous_target_permission: bool | None,
+) -> tuple[bool, int]:
+    """Preserve/grant pipeline access and attach only historical pipeline data.
+
+    A source that already contains the permission column is authoritative. For
+    an older source, the Lyon operator is enabled only on the initial import
+    (or when the target was already enabled). Ownership is restricted to
+    orphan platforms referenced by an actual source pipeline job.
+    """
+    account_columns = set(sqlite_columns(sqlite_conn, "training_center_accounts"))
+    source_has_permission_column = "pipeline_access_enabled" in account_columns
+    should_bootstrap = should_bootstrap_legacy_pipeline_operator(
+        source_has_permission_column=source_has_permission_column,
+        previous_target_permission=previous_target_permission,
+    )
+
+    with pg_conn.cursor() as cur:
+        if previous_target_permission is False:
+            # A PostgreSQL revocation is authoritative. This also restores it
+            # after copy_table imported a stale TRUE from SQLite, including
+            # when --truncate recreated the account.
+            cur.execute(
+                """
+                UPDATE training_center_accounts
+                SET pipeline_access_enabled = FALSE
+                WHERE LOWER(username) = %s
+                """,
+                (PIPELINE_OPERATOR_USERNAME,),
+            )
+        elif should_bootstrap:
+            cur.execute(
+                """
+                UPDATE training_center_accounts
+                SET pipeline_access_enabled = TRUE
+                WHERE LOWER(username) = %s
+                  AND is_active = TRUE
+                """,
+                (PIPELINE_OPERATOR_USERNAME,),
+            )
+
+        cur.execute(
+            """
+            SELECT id, is_active, pipeline_access_enabled
+            FROM training_center_accounts
+            WHERE LOWER(username) = %s
+            ORDER BY id
+            LIMIT 2
+            """,
+            (PIPELINE_OPERATOR_USERNAME,),
+        )
+        operator_rows = cur.fetchall()
+
+    if len(operator_rows) > 1:
+        raise MigrationValidationError(
+            "Plusieurs comptes correspondent à "
+            f"{PIPELINE_OPERATOR_USERNAME}; rattachement interrompu."
+        )
+    if not operator_rows:
+        return False, 0
+
+    operator_id, is_active, permission_enabled = operator_rows[0]
+    can_access_pipeline = bool(is_active) and bool(permission_enabled)
+    job_columns = set(sqlite_columns(sqlite_conn, "formation_pipeline_jobs"))
+    if not can_access_pipeline or "platform_id" not in job_columns:
+        return can_access_pipeline, 0
+
+    platform_ids = [
+        int(row[0])
+        for row in sqlite_conn.execute(
+            """
+            SELECT DISTINCT platform_id
+            FROM formation_pipeline_jobs
+            WHERE platform_id IS NOT NULL
+            ORDER BY platform_id
+            """
+        ).fetchall()
+    ]
+    if not platform_ids:
+        return can_access_pipeline, 0
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE platform_config
+            SET center_account_id = %s
+            WHERE center_account_id IS NULL
+              AND id = ANY(%s)
+            RETURNING id
+            """,
+            (operator_id, platform_ids),
+        )
+        attached_count = len(cur.fetchall())
+    return can_access_pipeline, attached_count
 
 
 def _verify_primary_keys(
@@ -534,6 +680,7 @@ def main() -> int:
         if args.apply_schema:
             apply_schema(args.database_url)
         with psycopg.connect(args.database_url) as pg_conn:
+            previous_pipeline_permission = read_target_pipeline_operator_permission(pg_conn)
             if args.truncate:
                 truncate_core_tables(pg_conn)
             total = 0
@@ -545,10 +692,22 @@ def main() -> int:
                     assumed_timezone=assumed_timezone,
                     batch_size=args.batch_size,
                 )
+            pipeline_enabled, attached_platforms = (
+                reconcile_pipeline_operator_after_core_copy(
+                    sqlite_conn,
+                    pg_conn,
+                    previous_target_permission=previous_pipeline_permission,
+                )
+            )
             pg_conn.commit()
     finally:
         sqlite_conn.close()
 
+    print(
+        "Acces pipeline Lyon: "
+        f"{'actif' if pipeline_enabled else 'inactif'}, "
+        f"{attached_platforms} plateforme(s) historique(s) rattachee(s)"
+    )
     print(f"Migration terminee: {total} ligne(s) au total")
     return 0
 

@@ -16,6 +16,7 @@ POST /api/formation/<job_id>/launch-audio Lance la synthèse TTS Fish Audio sur 
 GET  /api/formation/list                  Liste les jobs de la plateforme
 """
 
+import json
 import os
 import socket
 import threading
@@ -50,6 +51,7 @@ from services.knowledge_base_service import (
     kb_stats,
 )
 from utils.logger import get_logger
+from services.admin_access_service import can_access_formation_pipeline
 
 logger = get_logger(__name__)
 
@@ -60,25 +62,16 @@ _SCHEDULED_AUDIO_CAPACITY = None
 _SCHEDULED_AUDIO_CAPACITY_LIMIT = None
 
 _PIPELINE_MODEL_ALIASES = {
-    "sonnet": "claude-sonnet-4-20250514",
-    "haiku": "claude-haiku-4-5-20251001",
     "flash": "deepseek-v4-flash",
     "pro": "deepseek-v4-pro",
 }
 _PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
-
-
-def _claude_code_pipeline_supported() -> bool:
-    """Return whether the legacy local Claude Code runner is safe to use.
-
-    Its mission workspace still contains SQLite-specific imports. Production
-    Postgres uses the API implementation of the same steps until that optional
-    local developer tool has been fully repository-ported.
-    """
-    return (
-        os.getenv("LOCAL_DEV", "").strip().lower() == "true"
-        and PIPELINE_DATABASE_BACKEND not in {"postgres", "postgresql", "supabase"}
-    )
+_LEGACY_PIPELINE_MODEL_CHOICES = {
+    "sonnet": "pro",
+    "claude-sonnet-4-20250514": "pro",
+    "haiku": "flash",
+    "claude-haiku-4-5-20251001": "flash",
+}
 
 
 def _slides_folder_workers(default: int = 3) -> int:
@@ -123,9 +116,12 @@ def _formation_content_day_workers(default: int = 3) -> int:
 def _normalize_pipeline_model_choice(raw, default=None):
     """Normalise le choix UI persistant de l'auto-pilot."""
     value = (raw or default or "").strip().lower()
+    value = _LEGACY_PIPELINE_MODEL_CHOICES.get(value, value)
     if value in _PIPELINE_MODEL_CHOICES:
         return value
-    return default
+    fallback = str(default or "").strip().lower()
+    fallback = _LEGACY_PIPELINE_MODEL_CHOICES.get(fallback, fallback)
+    return fallback if fallback in _PIPELINE_MODEL_CHOICES else None
 
 
 def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
@@ -134,31 +130,20 @@ def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
     Priorité :
       1. modèle explicite passé en argument
       2. modèle choisi au lancement (`auto_pilot_model`)
-      3. fallback FORMATION_LLM_PROVIDER (env var) → deepseek-v4-pro / sonnet
-      4. fallback DEEPSEEK_API_KEY (sans ANTHROPIC_API_KEY) → deepseek-v4-pro
-      5. None (laisse les services retomber sur leur default_model())
+      3. fallback DeepSeek Pro
 
     Garantit qu'un job lancé en DeepSeek reste en DeepSeek pour TOUTES les
     étapes, même si `auto_pilot_model` n'a pas été persisté côté DB (jobs
     historiques) — ce qui évite que les services de transition retombent
-    silencieusement sur Anthropic.
+    silencieusement vers un autre fournisseur.
     """
     model = requested_model or (job or {}).get("auto_pilot_model")
     if not model:
-        provider = (
-            os.environ.get("FORMATION_LLM_PROVIDER")
-            or os.environ.get("LLM_PROVIDER")
-            or ""
-        ).strip().lower()
-        if provider == "deepseek":
-            model = "deepseek-v4-pro"
-        elif provider == "anthropic":
-            model = "sonnet"
-        elif os.environ.get("DEEPSEEK_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
-            model = "deepseek-v4-pro"
-    if not model:
-        return None
+        model = "deepseek-v4-pro"
     model = str(model).strip()
+    legacy_choice = _LEGACY_PIPELINE_MODEL_CHOICES.get(model.lower())
+    if legacy_choice:
+        return _PIPELINE_MODEL_ALIASES[legacy_choice]
     return _PIPELINE_MODEL_ALIASES.get(model.lower(), model)
 
 
@@ -174,9 +159,6 @@ def _get_platform_id():
 def _require_admin():
     """Retourne True si l'utilisateur est authentifié admin."""
     return session.get("is_admin", False)
-
-
-_PIPELINE_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
 
 
 def _admin_account_type() -> str:
@@ -211,7 +193,7 @@ def _enforce_pipeline_job_tenant_scope():
 
     Internal workers call services/repositories directly and are unaffected.
     Job ownership is centre-scoped; folder ownership is always checked against
-    the URL job, including for superadmins, before any DB/Blob/report read.
+    the URL job before any DB/Blob/report read.
     """
     if request.method == "OPTIONS":
         # Browser CORS preflight carries no authenticated application session.
@@ -221,12 +203,12 @@ def _enforce_pipeline_job_tenant_scope():
         return _formation_admin_forbidden()
 
     account_type = _admin_account_type()
-    center_account_id = None
-    if account_type == "training_center":
-        center_account_id = _training_center_account_id()
-        if center_account_id is None:
-            return _formation_admin_forbidden()
-    elif account_type not in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
+    center_account_id = _training_center_account_id()
+    if (
+        account_type != "training_center"
+        or center_account_id is None
+        or not can_access_formation_pipeline(account_type, center_account_id)
+    ):
         return _formation_admin_forbidden()
 
     if "job_id" in view_args and center_account_id is not None:
@@ -354,11 +336,6 @@ def init_formation():
     Crée un job pipeline formation + une nouvelle plateforme dédiée.
     Body: { "platform_name": "TP CRCD 2026", "tp_name": "TP CRCD", "total_hours": 70, "rncp_code": "35304" }
     """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    if _admin_account_type() not in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
-        return jsonify({"error": "Cette création doit passer par une commande professeur IA."}), 403
-
     data = request.get_json() or {}
     platform_name = (data.get("platform_name") or "").strip()
     tp_name = (data.get("tp_name") or "").strip()
@@ -389,11 +366,7 @@ def init_formation():
             link_pipeline_platform_to_job,
         )
 
-        center_account_id = (
-            session.get("admin_account_id")
-            if session.get("admin_account_type") == "training_center"
-            else None
-        )
+        center_account_id = _training_center_account_id()
         if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
             aggregate = create_postgres_pipeline_aggregate(
                 platform_name=platform_name,
@@ -465,11 +438,6 @@ def init_test_pipeline():
 
     Retourne 202 avec { job_id, platform_id, nb_days, segments_inserted }.
     """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    if _admin_account_type() not in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
-        return jsonify({"error": "Le mode test est réservé à l’administration technique."}), 403
-
     platform_name = (request.form.get("platform_name") or "").strip()
     tp_name = (request.form.get("tp_name") or "").strip()
     rncp_code = (request.form.get("rncp_code") or "").strip()
@@ -537,8 +505,7 @@ def init_test_pipeline():
             if session.get("admin_account_type") == "training_center"
             else None
         )
-        use_cc = _claude_code_pipeline_supported()
-        model_choice = "sonnet" if use_cc else "pro"
+        model_choice = "pro"
         if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
             aggregate = create_postgres_pipeline_aggregate(
                 platform_name=platform_name,
@@ -658,26 +625,20 @@ def init_test_pipeline():
                 f"21 segments injectés depuis '{prepared_doc['filename']}'"
             )
 
-        # 4. Si auto_pilot demandé, lancer la machine d'état. Claude Code est
-        # réservé au développement SQLite; le chemin PostgreSQL utilise l'API.
+        # 4. Si auto_pilot demandé, lancer la machine d'état DeepSeek.
         # Important : même si KB/global/daily/content sont skippés (segments déjà
         # en DB), la conformité locale en aval CONSOMME de l'IA et donc du crédit :
         #   - Review conformité : audit règles hors micro-éthique, par morceau
-        # Sans use_claude_code=True, ces appels passent par l'API LLM configurée
-        # (DeepSeek ou Anthropic). Avec True, ils utilisent le forfait Pro/Max
-        # via subprocess `claude`.
+        # Ces appels passent par l'API DeepSeek configurée.
         # L'audio est désormais découplé : l'auto-pilot prépare le texte/Word 2,
         # puis la synthèse se lance séparément par journée/semaine.
-        # Modèle SONNET (pas Haiku) : la conformité locale demande du jugement
-        # linguistique fin. Haiku produit des patches mécaniques et parfois cassés.
-        # Le coût est sur le forfait CC, donc gratuit côté API.
         dispatch = None
         if auto_pilot:
             update_job(job_id,
                        auto_pilot_enabled=1,
                        auto_pilot_model=model_choice,
                        auto_pilot_tts_mode=tts_mode,
-                       auto_pilot_use_cc=int(use_cc),
+                       auto_pilot_use_cc=0,
                        auto_pilot_skip_vs=1,   # volume safety skippée en mode TEST
                        auto_pilot_generate_audio=0,
                        auto_pilot_volume_done=0,
@@ -692,14 +653,14 @@ def init_test_pipeline():
                     status="running",
                     model=model_choice,
                     message="Auto-pilot test lancé",
-                    data={"tts_mode": tts_mode, "use_claude_code": use_cc, "test_mode": True},
+                    data={"tts_mode": tts_mode, "test_mode": True},
                 )
             except Exception:
                 pass
             dispatch = _dispatch_auto_pilot_tick(job_id, reason="init_test")
             logger.info(
                 f"🧪 [TEST] Auto-pilot (DB state machine) spawné pour job {job_id} "
-                f"(tts={tts_mode}, model={model_choice}, cc={use_cc}, volume_safety skippée)"
+                f"(tts={tts_mode}, model={model_choice}, volume_safety skippée)"
             )
 
         return jsonify({
@@ -859,7 +820,7 @@ def fetch_reac(job_id):
 def enrich_reac(job_id):
     """
     Lance la construction de la knowledge base enrichie à partir du REAC.
-    Claude extrait les compétences puis les enrichit une par une (définition,
+    DeepSeek extrait les compétences puis les enrichit une par une (définition,
     études de cas, pièges, vocabulaire, contexte terrain, liens connexes).
     """
     if not _require_admin():
@@ -1311,7 +1272,7 @@ def _short_review_excerpt(text: str, limit: int = 220) -> str:
 
 def _build_db_review_report(job_id: int, folder_id: int) -> dict | None:
     """Fallback persistant pour les reviews API: reconstruit un rapport depuis
-    la DB quand aucun review_report.json Claude Code n'existe.
+    la DB quand aucun ancien fichier local review_report.json n'existe.
 
     Les anciennes reviews API ne stockaient pas l'historique exact des patches.
     On peut tout de même afficher un rapport exploitable: segments relus,
@@ -2140,7 +2101,7 @@ def resume_content(job_id):
     })
 
 
-# ─── Étape 6bis : Révision conformité via reviewer API Claude ────────────────
+# ─── Étape 6bis : Révision conformité via reviewer API DeepSeek ──────────────
 # Phase 1 de memoire/03-decisions/pipeline-dual-api-et-claude-code.md
 # Scope strict : API uniquement, pas de refonte UI double colonne ici.
 
@@ -2267,200 +2228,23 @@ def review_content(job_id, folder_id):
     }), 202
 
 
-# ─── Missions Claude Code local (Phase 3) ────────────────────────────────────
-# Export/import manuel de tâches à faire dans `claude --model haiku|sonnet`.
-# Gating : nécessite LOCAL_DEV=true côté backend. Spec complète :
-# memoire/03-decisions/pipeline-dual-api-et-claude-code.md
-
-@formation_bp.route(
-    "/api/formation/<int:job_id>/missions/<string:step_key>/export",
-    methods=["POST"],
-)
-def export_claude_code_mission(job_id, step_key):
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    from services.claude_code_mission_service import (
-        export_mission, local_dev_enabled,
-    )
-    if not local_dev_enabled():
-        return jsonify({"error": "LOCAL_DEV non activé — fonctionnalité dev uniquement"}), 403
-    data = request.get_json(silent=True) or {}
-    model = data.get("model", "haiku")
-    try:
-        mission = export_mission(job_id, step_key, model)
-    except PermissionError as e:
-        return jsonify({"error": str(e)}), 403
-    except (ValueError, FileNotFoundError) as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        logger.error(f"❌ export_claude_code_mission : {e}")
-        return jsonify({"error": str(e)}), 500
-    return jsonify({"mission": mission}), 201
-
-
-@formation_bp.route(
-    "/api/formation/<int:job_id>/missions/<string:step_key>/import",
-    methods=["POST"],
-)
-def import_claude_code_mission(job_id, step_key):
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    from services.claude_code_mission_service import (
-        import_mission_result, local_dev_enabled,
-    )
-    if not local_dev_enabled():
-        return jsonify({"error": "LOCAL_DEV non activé — fonctionnalité dev uniquement"}), 403
-    try:
-        result = import_mission_result(job_id, step_key)
-    except PermissionError as e:
-        return jsonify({"error": str(e)}), 403
-    except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 400
-    except NotImplementedError as e:
-        # Étapes kb / content : parsers non implémentés en V1. On renvoie un
-        # vrai 501 pour que le frontend affiche l'erreur et ne supprime pas
-        # la mission de la file (cf. audit point #2).
-        return jsonify({"error": str(e), "not_implemented": True}), 501
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        logger.error(f"❌ import_claude_code_mission : {e}")
-        return jsonify({"error": str(e)}), 500
-    return jsonify(result), 200
-
-
-@formation_bp.route(
-    "/api/formation/<int:job_id>/missions/<string:step_key>/execute",
-    methods=["POST"],
-)
-def execute_claude_code_mission(job_id, step_key):
-    """Lance `claude -p` en subprocess (greenlet eventlet) + import auto à la fin.
-    Dev local only (LOCAL_DEV=true côté backend ET `claude` dans le PATH)."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    from services.claude_code_mission_service import (
-        execute_mission_locally, local_dev_enabled,
-    )
-    if not local_dev_enabled():
-        return jsonify({"error": "LOCAL_DEV non activé — fonctionnalité dev uniquement"}), 403
-    data = request.get_json(silent=True) or {}
-    model = data.get("model", "haiku")
-
-    # État partagé de l'exécution par (job_id, step_key) — mis à jour par le
-    # greenlet et lu par le polling frontend via /missions/pending.
-    import eventlet
-    from services.claude_code_mission_service import _EXECUTION_STATE
-
-    key = (job_id, step_key)
-    if _EXECUTION_STATE.get(key, {}).get("status") == "running":
-        return jsonify({"error": "Une exécution est déjà en cours pour cette étape"}), 409
-
-    _EXECUTION_STATE[key] = {"status": "running", "model": model, "error": None, "result": None}
-
-    def _run():
-        import sys, traceback
-        try:
-            logger.info(f"🤖 Exec Claude Code : job={job_id} step={step_key} model={model}")
-            sys.stdout.flush()
-            result = execute_mission_locally(job_id, step_key, model)
-            _EXECUTION_STATE[key] = {"status": "done", "model": model, "error": None, "result": result}
-            logger.info(f"✅ Exec Claude Code terminée : job={job_id} step={step_key}")
-            sys.stdout.flush()
-        except Exception as e:
-            logger.error(f"❌ Exec Claude Code échouée : job={job_id} step={step_key} : {e}")
-            logger.error(traceback.format_exc())
-            _EXECUTION_STATE[key] = {"status": "error", "model": model, "error": str(e)[:500], "result": None}
-            sys.stdout.flush()
-
-    eventlet.spawn(_run)
-    return jsonify({"status": "running", "step_key": step_key, "model": model}), 202
-
-
-@formation_bp.route(
-    "/api/formation/<int:job_id>/missions/<string:step_key>/logs",
-    methods=["GET"],
-)
-def get_claude_code_mission_logs(job_id, step_key):
-    """Retourne les N dernières lignes du execution.log de la mission.
-    Cherche dans review_queue/job_X/step_Y/ d'abord, puis dans _done/ en
-    fallback pour les missions déjà importées et archivées."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    from services.claude_code_mission_service import (
-        mission_dir, _DONE_ROOT, local_dev_enabled,
-    )
-    import os
-    if not local_dev_enabled():
-        return jsonify({"logs": "", "source": "disabled"}), 200
-
-    tail_n = int(request.args.get("tail", 200))
-    # Chemin actuel
-    active = os.path.join(mission_dir(job_id, step_key), "execution.log")
-    # Fallback : chercher le dernier _done correspondant
-    archive_path = None
-    if os.path.isdir(_DONE_ROOT):
-        candidates = sorted(
-            (d for d in os.listdir(_DONE_ROOT) if d.endswith(f"-job{job_id}-{step_key}")),
-            reverse=True,
-        )
-        if candidates:
-            archive_path = os.path.join(_DONE_ROOT, candidates[0], "execution.log")
-
-    source = None
-    path = None
-    if os.path.exists(active):
-        path, source = active, "active"
-    elif archive_path and os.path.exists(archive_path):
-        path, source = archive_path, "archived"
-
-    if not path:
-        return jsonify({"logs": "", "source": "not_found"}), 200
-
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        tail = "".join(lines[-tail_n:])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    return jsonify({
-        "logs": tail,
-        "source": source,
-        "total_lines": len(lines),
-        "returned_lines": min(tail_n, len(lines)),
-    }), 200
-
-
-@formation_bp.route("/api/formation/<int:job_id>/missions/pending", methods=["GET"])
-def list_claude_code_pending_missions(job_id):
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    from services.claude_code_mission_service import (
-        list_pending_missions, local_dev_enabled,
-    )
-    if not local_dev_enabled():
-        return jsonify({"missions": {}}), 200
-    return jsonify({"missions": list_pending_missions(job_id)}), 200
-
-
 # ─── Pre-flight et health-check (audit pipeline) ─────────────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/preflight", methods=["POST"])
 def preflight_pipeline(job_id):
     """Audit AVANT lancement : valide que la pipeline a les chances de tourner
     one-shot (config + connectivité externe). Body :
-      { "use_claude_code": bool, "tts_mode": "fish_audio"|"gtts"|"mock" }
+      { "tts_mode": "fish_audio"|"gtts"|"mock" }
     Retourne :
       { "ok": bool, "blocking": [...], "warnings": [...], "checks": {...} }
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
     payload = request.get_json(silent=True) or {}
-    use_cc = bool(payload.get("use_claude_code", False))
     tts_mode = (payload.get("tts_mode") or "gtts").lower()
     try:
         from services.formation_health_service import compute_preflight
-        result = compute_preflight(job_id, use_claude_code=use_cc, tts_mode=tts_mode)
+        result = compute_preflight(job_id, tts_mode=tts_mode)
         return jsonify(result), 200 if result["ok"] else 422
     except Exception as e:
         logger.error(f"❌ preflight job {job_id} : {e}")
@@ -2675,25 +2459,31 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
         voice_type=voice_type,
     )
     canonical_fingerprint = canonical_teacher_fingerprint(canonical_signature)
-    result = finalize_pipeline_module(
+    # Create or reload the draft envelope first. Canonical assets need the
+    # durable module namespace, but the module must remain non-reusable until
+    # the exact audio manifest has been snapshotted and verified.
+    draft_result = finalize_pipeline_module(
         formation_job_id=job_id,
         platform_id=int(job["platform_id"]),
         rncp_code=job.get("rncp_code") or "",
         tp_name=job.get("tp_name") or f"Job {job_id}",
-        audio_ready=True,
-        voice_type=voice_type,
-        canonical_fingerprint=canonical_fingerprint,
-        canonical_signature_json=json.dumps(canonical_signature, ensure_ascii=False, sort_keys=True),
-        canonical_generator_version=canonical_signature["generator_version"],
+        audio_ready=False,
     )
-    if result.get("canonical_reuse_allowed") and result.get("center_account_id") is not None:
+    manifest = None
+    if (
+        (
+            draft_result.get("canonical_reuse_candidate")
+            or draft_result.get("canonical_reuse_allowed")
+        )
+        and draft_result.get("center_account_id") is not None
+    ):
         from services.formation_pipeline_service import get_expected_course_folders
         from services.teacher_asset_service import ensure_module_asset_manifest
 
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         manifest = ensure_module_asset_manifest(
-            module_id=int(result["module_id"]),
-            center_account_id=int(result["center_account_id"]),
+            module_id=int(draft_result["module_id"]),
+            center_account_id=int(draft_result["center_account_id"]),
             source_platform_id=int(job["platform_id"]),
             source_folder_ids=folder_ids,
             force=True,
@@ -2704,6 +2494,23 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
                 f"manifeste audio incomplet ({manifest.get('audio_asset_count', 0)} fichier(s), "
                 f"{manifest.get('required_folder_count', 0)} jour(s) attendu(s))"
             )
+
+    result = finalize_pipeline_module(
+        formation_job_id=job_id,
+        platform_id=int(job["platform_id"]),
+        rncp_code=job.get("rncp_code") or "",
+        tp_name=job.get("tp_name") or f"Job {job_id}",
+        audio_ready=True,
+        voice_type=voice_type,
+        canonical_fingerprint=canonical_fingerprint,
+        canonical_signature_json=json.dumps(
+            canonical_signature,
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        canonical_generator_version=canonical_signature["generator_version"],
+    )
+    if manifest is not None:
         result["asset_manifest"] = manifest
     logger.info(
         "PIPELINE_AUDIO_FINALIZED formation_job_id=%s platform_id=%s "
@@ -2738,6 +2545,44 @@ def _finalize_text_ready_state(job_id: int) -> dict:
         tp_name=job.get("tp_name") or f"Job {job_id}",
         audio_ready=False,
     )
+    if (
+        int(job.get("schedule_schema_version") or 1) == 2
+        and result.get("center_account_id") is not None
+    ):
+        snapshot = job.get("schedule_snapshot_json") or {}
+        if isinstance(snapshot, str):
+            snapshot = json.loads(snapshot)
+        days = snapshot.get("days") if isinstance(snapshot, dict) else None
+        if not days:
+            raise RuntimeError(
+                "Le module V2 ne peut pas être finalisé sans journées verrouillées"
+            )
+        from repositories.day_schedule_repository import (
+            bind_module_days_to_platform,
+            create_module_day_snapshots,
+        )
+        from services.formation_pipeline_service import (
+            get_expected_course_folders,
+        )
+
+        module_days = create_module_day_snapshots(
+            int(result["center_account_id"]),
+            int(result["module_id"]),
+            days,
+            schedule_schema_version=2,
+        )
+        folder_ids = (
+            get_expected_course_folders(int(job_id)).get("folder_ids")
+            or []
+        )
+        bindings = bind_module_days_to_platform(
+            int(result["center_account_id"]),
+            int(result["module_id"]),
+            int(result["platform_id"]),
+            folder_ids,
+        )
+        result["module_days"] = len(module_days)
+        result["module_day_bindings"] = bindings
     logger.info(
         "PIPELINE_TEXT_FINALIZED formation_job_id=%s platform_id=%s "
         "module_id=%s module_created=%s status=%s ready_updated=%s",
@@ -2885,6 +2730,28 @@ def start_folder_audio_generation(
         return {"error": "Folder hors journées attendues"}, 400
     idx = folder_ids.index(folder_id)
     next_folder_id = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
+    reuse_existing_assets = False
+    if publish_platform_id != int(job["platform_id"]):
+        try:
+            from repositories.teacher_asset_repository import (
+                get_module_audio_manifest_readiness,
+                resolve_folder_asset_origin,
+            )
+
+            asset_origin = resolve_folder_asset_origin(int(folder_id)) or {}
+            module_id = int(asset_origin.get("module_id") or 0)
+            reuse_existing_assets = bool(
+                module_id
+                and get_module_audio_manifest_readiness(module_id).get("ready")
+            )
+        except Exception:
+            logger.warning(
+                "PIPELINE_REUSE_ASSET_CHECK_FAILED job=%s folder=%s target_platform=%s",
+                job_id,
+                folder_id,
+                publish_platform_id,
+                exc_info=True,
+            )
 
     from datetime import datetime
     from config import FRANCE_TZ
@@ -2970,7 +2837,8 @@ def start_folder_audio_generation(
 
         try:
             from services.formation_observability_service import log_pipeline_event
-            update_job(job_id, status="audio_running", error_message=None)
+            if not reuse_existing_assets:
+                update_job(job_id, status="audio_running", error_message=None)
             log_pipeline_event(
                 job_id,
                 "audio_folder_started",
@@ -2988,31 +2856,39 @@ def start_folder_audio_generation(
                     "single_folder": True,
                     "trigger_source": trigger_source,
                     "schedule_session_id": schedule_session_id,
+                    "reuse_existing_assets": reuse_existing_assets,
                 },
             )
-            result_audio = generate_audio_from_script(
-                folder_id,
-                on_progress=_make_audio_progress_logger(
-                    job_id,
+            if reuse_existing_assets:
+                result_audio = {
+                    "generated": 0,
+                    "skipped": True,
+                    "reused_durable_assets": True,
+                }
+            else:
+                result_audio = generate_audio_from_script(
                     folder_id,
-                    voice_type,
-                    schedule_session_id=schedule_session_id,
-                    schedule_claim_started_at=schedule_claim_started_at,
-                    ownership_state=ownership_state,
-                ),
-                force_all=force_all,
-                mock=mock,
-                basic_tts=basic_tts,
-                next_folder_id=next_folder_id,
-                is_last_folder=next_folder_id is None,
-                sync_slides=sync_slides,
-                auto_generate_slides=auto_generate_slides,
-                slide_max_slides=max_slides,
-                slide_pace=pace,
-                slide_model=model,
-                llm_model=model,
-                preserve_existing=preserve_existing,
-            )
+                    on_progress=_make_audio_progress_logger(
+                        job_id,
+                        folder_id,
+                        voice_type,
+                        schedule_session_id=schedule_session_id,
+                        schedule_claim_started_at=schedule_claim_started_at,
+                        ownership_state=ownership_state,
+                    ),
+                    force_all=force_all,
+                    mock=mock,
+                    basic_tts=basic_tts,
+                    next_folder_id=next_folder_id,
+                    is_last_folder=next_folder_id is None,
+                    sync_slides=sync_slides,
+                    auto_generate_slides=auto_generate_slides,
+                    slide_max_slides=max_slides,
+                    slide_pace=pace,
+                    slide_model=model,
+                    llm_model=model,
+                    preserve_existing=preserve_existing,
+                )
             pdf_result = None
             if schedule_session_id:
                 # The support is part of the H-24 occurrence contract.  It is
@@ -3058,9 +2934,13 @@ def start_folder_audio_generation(
             publish_result = None
             try:
                 from services.audio_publish_service import publish_playlist_audio_to_platform
+                from services.day_playlist_service import required_audio_filenames
+
+                required_files = required_audio_filenames(int(folder_id))
                 publish_result = publish_playlist_audio_to_platform(
                     publish_platform_id,
                     folder_id,
+                    filenames=required_files,
                     source_platform_id=int(job["platform_id"]),
                     archive_existing=True,
                     archive_reason=f"{trigger_source}-folder-{folder_id}",
@@ -3072,8 +2952,6 @@ def start_folder_audio_generation(
                 )
                 publish_errors = publish_result.get("publish_errors") or []
                 published_files = publish_result.get("published") or []
-                from services.playlist_tts_service import PLAYLIST_SPEC
-                required_files = {item[0] for item in PLAYLIST_SPEC}
                 missing_files = sorted(required_files - set(published_files))
                 if publish_errors or missing_files:
                     raise RuntimeError(
@@ -3120,18 +2998,29 @@ def start_folder_audio_generation(
                     schedule_claim_started_at,
                     ownership_state=ownership_state,
                 )
-                # The day's 19 MP3 files become durable before the occurrence
+                # The day's immutable manifest becomes durable before the occurrence
                 # can be marked complete. A storage/manifest failure therefore
                 # follows the normal retry path without regenerating valid MP3.
-                daily_asset_manifest = _persist_daily_teacher_audio_assets(
-                    int(job_id),
-                    int(folder_id),
-                )
-                scheduled_readiness = _finalize_scheduled_audio_module_if_ready(
-                    int(job_id),
-                    voice_type,
-                    completing_session_id=int(schedule_session_id),
-                )
+                if reuse_existing_assets:
+                    daily_asset_manifest = {
+                        "persisted": False,
+                        "reused_durable_assets": True,
+                    }
+                    scheduled_readiness = {
+                        "ready": True,
+                        "finalized": False,
+                        "reused_durable_assets": True,
+                    }
+                else:
+                    daily_asset_manifest = _persist_daily_teacher_audio_assets(
+                        int(job_id),
+                        int(folder_id),
+                    )
+                    scheduled_readiness = _finalize_scheduled_audio_module_if_ready(
+                        int(job_id),
+                        voice_type,
+                        completing_session_id=int(schedule_session_id),
+                    )
                 # Re-fence immediately after the idempotent promotion and next
                 # to the guarded completion write.
                 _assert_scheduled_audio_ownership(
@@ -3149,7 +3038,13 @@ def start_folder_audio_generation(
                         f"Finalisation refusée: lock audio perdu pour la séance {schedule_session_id}"
                     )
                 heartbeat_stop.set()
-            if not scheduled_readiness or not scheduled_readiness.get("finalized"):
+            if (
+                not reuse_existing_assets
+                and (
+                    not scheduled_readiness
+                    or not scheduled_readiness.get("finalized")
+                )
+            ):
                 update_job(job_id, status="text_ready", error_message=None)
             log_pipeline_event(
                 job_id,
@@ -3293,7 +3188,7 @@ def launch_audio(job_id):
     """
     Lance la synthèse audio Fish Audio S2-Pro pour toutes les journées du job.
     Pré-requis : chaque dossier cours doit avoir son content_generation_job en
-    status 'completed' (textes générés par Claude). Boucle sur les dossiers et
+    status 'completed' (textes générés par la pipeline). Boucle sur les dossiers et
     spawn un greenlet eventlet par journée qui appelle generate_audio_from_script.
     """
     if not _require_admin():
@@ -4422,16 +4317,10 @@ def list_formations():
 
     from repositories.pipeline_repository import list_pipeline_jobs
 
-    account_type = _admin_account_type()
-    if account_type in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
-        jobs = list_pipeline_jobs()
-    elif account_type == "training_center":
-        center_account_id = _training_center_account_id()
-        if center_account_id is None:
-            return _pipeline_job_not_found()
-        jobs = list_pipeline_jobs(center_account_id=center_account_id)
-    else:
+    center_account_id = _training_center_account_id()
+    if center_account_id is None:
         return _pipeline_job_not_found()
+    jobs = list_pipeline_jobs(center_account_id=center_account_id)
     return jsonify({"jobs": jobs})
 
 
@@ -4724,32 +4613,18 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
     """Exécute UNE étape de l'auto-pilot (synchrone — bloque le tick courant)."""
     import eventlet
-    from services.claude_code_mission_service import execute_mission_locally
 
     model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="pro")
     tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
-    use_cc = bool(job.get("auto_pilot_use_cc"))
-    if use_cc and not _claude_code_pipeline_supported():
-        raise RuntimeError(
-            "Claude Code est réservé au développement SQLite. "
-            "Relancez ce job PostgreSQL avec use_claude_code=false."
+    if job.get("auto_pilot_use_cc"):
+        logger.warning(
+            "PIPELINE_LEGACY_CLAUDE_CODE_DISABLED job=%s fallback=deepseek",
+            job_id,
         )
+        update_job(job_id, auto_pilot_use_cc=0, auto_pilot_model=model)
     platform_id = job["platform_id"]
 
     api_model = _PIPELINE_MODEL_ALIASES[model]
-    cc_model = "haiku" if model == "haiku" else "sonnet"
-
-    def _assert_cc_result_complete(step_label: str, result: dict | None) -> None:
-        if isinstance(result, dict) and int(result.get("chunks_failed") or 0) > 0:
-            errors = result.get("errors") or []
-            first_error = ""
-            if errors:
-                first = errors[0]
-                first_error = f" — {first.get('chunk')}: {first.get('error')}"
-            raise RuntimeError(
-                f"{step_label} Claude Code incomplète : "
-                f"{result.get('chunks_failed')} chunk(s) en erreur{first_error}"
-            )
 
     def _wait_status(targets, max_wait=3600):
         elapsed = 0
@@ -4768,7 +4643,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
 
     if step == "reac":
         from services.formation_health_service import compute_preflight
-        preflight = compute_preflight(job_id, use_claude_code=use_cc, tts_mode=tts_mode)
+        preflight = compute_preflight(job_id, tts_mode=tts_mode)
         if not preflight["ok"]:
             raise RuntimeError(f"Pre-flight bloqué : {', '.join(preflight['blocking'])}")
         logger.info(f"🛂 Pre-flight OK job {job_id}")
@@ -4822,191 +4697,179 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         logger.info(f"🤖 ✓ REAC téléchargé job {job_id}")
 
     elif step == "kb":
-        if use_cc:
-            execute_mission_locally(job_id, "kb", cc_model)
-        else:
-            launch_kb_building(job_id, model=api_model)
-            _wait_status({"kb_ready"}, max_wait=3600)
+        launch_kb_building(job_id, model=api_model)
+        _wait_status({"kb_ready"}, max_wait=3600)
         logger.info(f"🤖 ✓ KB construite job {job_id}")
 
     elif step == "global":
-        if use_cc:
-            execute_mission_locally(job_id, "global", cc_model)
-        else:
-            launch_global_program_generation(job_id, model=api_model)
-            _wait_status({"global_ready"}, max_wait=600)
+        launch_global_program_generation(job_id, model=api_model)
+        _wait_status({"global_ready"}, max_wait=600)
         update_job(job_id, global_program_validated=1, status="global_validated")
         logger.info(f"🤖 ✓ Programme global validé job {job_id}")
 
     elif step == "daily":
-        if use_cc:
-            execute_mission_locally(job_id, "daily", cc_model)
-        else:
-            run_daily_split(job_id, model=api_model)
+        run_daily_split(job_id, model=api_model)
         update_job(job_id, daily_programs_validated=1, status="daily_validated")
         logger.info(f"🤖 ✓ Programmes journée validés job {job_id}")
 
     elif step == "content":
-        if use_cc:
-            execute_mission_locally(job_id, "content", cc_model)
-        else:
-            # Mode API : génération synchrone par folder, avec concurrence bornée.
-            # Pas de thread background durable : run_content_generation reste appelé
-            # dans le greenlet auto-pilot — résiste aux restarts Azure car :
-            #   - folder existant mais job running/idle → run reprend les segments manquants
-            #   - folder existant + job completed → skip via done_set
-            #   - aucun thread mort possible (pas de thread du tout)
-            import json as _json
-            import eventlet as _eventlet
-            from services.content_generation_service import run_content_generation
-            from repositories.pipeline_repository import (
-                list_content_completion_rows_for_folders,
-                reset_and_upsert_content_generation_jobs,
-            )
-            from services.formation_pipeline_service import (
-                _format_day_program_text,
-                expected_course_folder_name,
-                get_expected_course_folders,
-            )
+        # Mode API : génération synchrone par folder, avec concurrence bornée.
+        # Pas de thread background durable : run_content_generation reste appelé
+        # dans le greenlet auto-pilot — résiste aux restarts Azure car :
+        #   - folder existant mais job running/idle → run reprend les segments manquants
+        #   - folder existant + job completed → skip via done_set
+        #   - aucun thread mort possible (pas de thread du tout)
+        import json as _json
+        import eventlet as _eventlet
+        from services.content_generation_service import run_content_generation
+        from repositories.pipeline_repository import (
+            list_content_completion_rows_for_folders,
+            reset_and_upsert_content_generation_jobs,
+        )
+        from services.formation_pipeline_service import (
+            _format_day_program_text,
+            expected_course_folder_name,
+            get_expected_course_folders,
+        )
 
-            daily_programs = _json.loads(job.get("daily_programs") or "[]")
-            update_job(
+        daily_programs = _json.loads(job.get("daily_programs") or "[]")
+        update_job(
+            job_id,
+            status="tts_launched",
+            auto_pilot_volume_done=0,
+            auto_pilot_post_review_docs_done=0,
+            error_message=None,
+        )
+        folder_state = get_expected_course_folders(
+            job_id,
+            create_missing=True,
+            platform_id=platform_id,
+        )
+        folders_by_name = {
+            f["expected_name"]: f
+            for f in folder_state.get("folders", [])
+        }
+        if folder_state.get("duplicates"):
+            logger.warning(
+                "PIPELINE_CONTENT_DUPLICATE_FOLDERS job=%s duplicates=%s",
                 job_id,
-                status="tts_launched",
-                auto_pilot_volume_done=0,
-                auto_pilot_post_review_docs_done=0,
-                error_message=None,
+                [
+                    {
+                        "folder_id": d["folder_id"],
+                        "name": d["name"],
+                        "duplicate_of": d.get("duplicate_of"),
+                    }
+                    for d in folder_state["duplicates"]
+                ],
             )
-            folder_state = get_expected_course_folders(
-                job_id,
-                create_missing=True,
-                platform_id=platform_id,
-            )
-            folders_by_name = {
-                f["expected_name"]: f
-                for f in folder_state.get("folders", [])
-            }
-            if folder_state.get("duplicates"):
-                logger.warning(
-                    "PIPELINE_CONTENT_DUPLICATE_FOLDERS job=%s duplicates=%s",
-                    job_id,
-                    [
-                        {
-                            "folder_id": d["folder_id"],
-                            "name": d["name"],
-                            "duplicate_of": d.get("duplicate_of"),
-                        }
-                        for d in folder_state["duplicates"]
-                    ],
-                )
 
-            planned_days = []
-            for idx, day_data in enumerate(daily_programs):
-                day_data = _normalize_day_audio_slots(day_data)
-                folder_name = expected_course_folder_name(day_data, idx + 1)
-                folder_info = folders_by_name.get(folder_name)
-                if not folder_info:
-                    raise RuntimeError(f"Folder attendu introuvable : {folder_name}")
-                folder_id = folder_info["folder_id"]
-                day_num = day_data.get("day_number", idx + 1)
+        planned_days = []
+        for idx, day_data in enumerate(daily_programs):
+            day_data = _normalize_day_audio_slots(day_data)
+            folder_name = expected_course_folder_name(day_data, idx + 1)
+            folder_info = folders_by_name.get(folder_name)
+            if not folder_info:
+                raise RuntimeError(f"Folder attendu introuvable : {folder_name}")
+            folder_id = folder_info["folder_id"]
+            day_num = day_data.get("day_number", idx + 1)
 
-                planned_days.append({
-                    "day_num": day_num,
+            planned_days.append({
+                "day_num": day_num,
+                "folder_id": folder_id,
+                "day_data": day_data,
+            })
+
+        folder_ids = [day["folder_id"] for day in planned_days]
+        content_rows = {
+            int(row["folder_id"]): row
+            for row in list_content_completion_rows_for_folders(folder_ids)
+        }
+        day_tasks = []
+        jobs_to_create = []
+        for planned_day in planned_days:
+            day_num = planned_day["day_num"]
+            folder_id = planned_day["folder_id"]
+            content_row = content_rows.get(folder_id) or {}
+            if content_row.get("content_job_id") and content_row.get("status") == "completed":
+                logger.info(f"🤖   ⏭ Jour {day_num} déjà complété (folder {folder_id}), skip")
+                continue
+
+            if not content_row.get("content_job_id"):
+                day_data = planned_day["day_data"]
+                sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
+                module_contents = {}
+                for sp in day_data.get("sub_parts", []):
+                    module_contents[sp["name"]] = _format_slot_generation_source(sp)
+                jobs_to_create.append({
                     "folder_id": folder_id,
-                    "day_data": day_data,
+                    "platform_id": platform_id,
+                    "program_text": _format_day_program_text(day_data, job["tp_name"]),
+                    "program_title": job["tp_name"],
+                    "sub_parts_json": _json.dumps(sub_parts, ensure_ascii=False),
+                    "from_scratch": True,
+                    "module_contents_json": _json.dumps(module_contents, ensure_ascii=False),
                 })
 
-            folder_ids = [day["folder_id"] for day in planned_days]
-            content_rows = {
-                int(row["folder_id"]): row
-                for row in list_content_completion_rows_for_folders(folder_ids)
-            }
-            day_tasks = []
-            jobs_to_create = []
-            for planned_day in planned_days:
-                day_num = planned_day["day_num"]
-                folder_id = planned_day["folder_id"]
-                content_row = content_rows.get(folder_id) or {}
-                if content_row.get("content_job_id") and content_row.get("status") == "completed":
-                    logger.info(f"🤖   ⏭ Jour {day_num} déjà complété (folder {folder_id}), skip")
-                    continue
+            day_tasks.append({"day_num": day_num, "folder_id": folder_id})
 
-                if not content_row.get("content_job_id"):
-                    day_data = planned_day["day_data"]
-                    sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
-                    module_contents = {}
-                    for sp in day_data.get("sub_parts", []):
-                        module_contents[sp["name"]] = _format_slot_generation_source(sp)
-                    jobs_to_create.append({
-                        "folder_id": folder_id,
-                        "platform_id": platform_id,
-                        "program_text": _format_day_program_text(day_data, job["tp_name"]),
-                        "program_title": job["tp_name"],
-                        "sub_parts_json": _json.dumps(sub_parts, ensure_ascii=False),
-                        "from_scratch": True,
-                        "module_contents_json": _json.dumps(module_contents, ensure_ascii=False),
-                    })
+        if jobs_to_create:
+            reset_and_upsert_content_generation_jobs(jobs_to_create)
+        logger.info(
+            "PIPELINE_CONTENT_DAY_JOB_PREP job=%s folders=%s created=%s runnable=%s",
+            job_id,
+            len(planned_days),
+            len(jobs_to_create),
+            len(day_tasks),
+        )
 
-                day_tasks.append({"day_num": day_num, "folder_id": folder_id})
+        day_workers = min(_formation_content_day_workers(), max(1, len(day_tasks) or 1))
+        logger.info(
+            "PIPELINE_CONTENT_DAY_PARALLEL_CONFIG job=%s workers=%s days=%s",
+            job_id,
+            day_workers,
+            len(day_tasks),
+        )
 
-            if jobs_to_create:
-                reset_and_upsert_content_generation_jobs(jobs_to_create)
-            logger.info(
-                "PIPELINE_CONTENT_DAY_JOB_PREP job=%s folders=%s created=%s runnable=%s",
-                job_id,
-                len(planned_days),
-                len(jobs_to_create),
-                len(day_tasks),
-            )
-
-            day_workers = min(_formation_content_day_workers(), max(1, len(day_tasks) or 1))
-            logger.info(
-                "PIPELINE_CONTENT_DAY_PARALLEL_CONFIG job=%s workers=%s days=%s",
-                job_id,
-                day_workers,
-                len(day_tasks),
-            )
-
-            def _run_content_day(task: dict) -> dict:
-                day_num = task["day_num"]
-                folder_id = task["folder_id"]
-                try:
-                    # run_content_generation lit les segments déjà complétés :
-                    # idempotent, reprise naturelle si un folder avait déjà démarré.
-                    logger.info(f"🤖   Génération Jour {day_num} (folder {folder_id})…")
-                    run_content_generation(folder_id, model=api_model)
-                    logger.info(f"🤖   ✓ Jour {day_num} terminé (folder {folder_id})")
-                    return {"ok": True, "day_num": day_num, "folder_id": folder_id}
-                except Exception as exc:
-                    logger.exception(
-                        "PIPELINE_CONTENT_DAY_FAILED job=%s day=%s folder=%s",
-                        job_id,
-                        day_num,
-                        folder_id,
-                    )
-                    return {
-                        "ok": False,
-                        "day_num": day_num,
-                        "folder_id": folder_id,
-                        "error": str(exc)[:500],
-                    }
-
-            if day_workers <= 1:
-                day_results = [_run_content_day(task) for task in day_tasks]
-            else:
-                pool = _eventlet.GreenPool(size=day_workers)
-                greenlets = [pool.spawn(_run_content_day, task) for task in day_tasks]
-                day_results = [greenlet.wait() for greenlet in greenlets]
-
-            failed_days = [result for result in day_results if not result.get("ok")]
-            if failed_days:
-                raise RuntimeError(
-                    "Génération contenu échouée sur journées : "
-                    + ", ".join(
-                        f"J{result['day_num']} folder={result['folder_id']} ({result.get('error')})"
-                        for result in failed_days
-                    )
+        def _run_content_day(task: dict) -> dict:
+            day_num = task["day_num"]
+            folder_id = task["folder_id"]
+            try:
+                # run_content_generation lit les segments déjà complétés :
+                # idempotent, reprise naturelle si un folder avait déjà démarré.
+                logger.info(f"🤖   Génération Jour {day_num} (folder {folder_id})…")
+                run_content_generation(folder_id, model=api_model)
+                logger.info(f"🤖   ✓ Jour {day_num} terminé (folder {folder_id})")
+                return {"ok": True, "day_num": day_num, "folder_id": folder_id}
+            except Exception as exc:
+                logger.exception(
+                    "PIPELINE_CONTENT_DAY_FAILED job=%s day=%s folder=%s",
+                    job_id,
+                    day_num,
+                    folder_id,
                 )
+                return {
+                    "ok": False,
+                    "day_num": day_num,
+                    "folder_id": folder_id,
+                    "error": str(exc)[:500],
+                }
+
+        if day_workers <= 1:
+            day_results = [_run_content_day(task) for task in day_tasks]
+        else:
+            pool = _eventlet.GreenPool(size=day_workers)
+            greenlets = [pool.spawn(_run_content_day, task) for task in day_tasks]
+            day_results = [greenlet.wait() for greenlet in greenlets]
+
+        failed_days = [result for result in day_results if not result.get("ok")]
+        if failed_days:
+            raise RuntimeError(
+                "Génération contenu échouée sur journées : "
+                + ", ".join(
+                    f"J{result['day_num']} folder={result['folder_id']} ({result.get('error')})"
+                    for result in failed_days
+                )
+            )
 
         logger.info(f"🤖 ✓ Contenu généré job {job_id}")
 
@@ -5028,42 +4891,38 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
     elif step == "review":
         from services.formation_pipeline_service import get_expected_course_folders
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
-        if use_cc:
-            result = execute_mission_locally(job_id, "review", cc_model)
-            _assert_cc_result_complete("Révision conformité", result)
-        else:
-            from services.content_generation_service import run_content_review
-            failed = []
-            reports_written = 0
-            for fid in folder_ids:
-                try:
-                    result = run_content_review(fid, model=api_model)
-                    _write_api_review_report(job_id, fid, result, api_model)
-                    reports_written += 1
-                    if result.get("segments_failed", 0) > 0:
-                        error_samples = []
-                        for detail in result.get("details") or []:
-                            error = str((detail or {}).get("error") or "").strip()
-                            if not error:
-                                continue
-                            error = " ".join(error.split())[:180]
-                            if error not in error_samples:
-                                error_samples.append(error)
-                            if len(error_samples) >= 2:
-                                break
-                        suffix = f" : {' ; '.join(error_samples)}" if error_samples else ""
-                        failed.append(f"{fid}({result['segments_failed']} segments échoués{suffix})")
-                except Exception as e:
-                    logger.warning(f"⚠️ Review folder {fid} : {e}")
-                    failed.append(str(fid))
-            if failed:
-                raise RuntimeError(f"Review échouée sur folders : {', '.join(failed)}")
-            logger.info(
-                "🤖 ✓ Rapports conformité persistés job %s : %s/%s",
-                job_id,
-                reports_written,
-                len(folder_ids),
-            )
+        from services.content_generation_service import run_content_review
+        failed = []
+        reports_written = 0
+        for fid in folder_ids:
+            try:
+                result = run_content_review(fid, model=api_model)
+                _write_api_review_report(job_id, fid, result, api_model)
+                reports_written += 1
+                if result.get("segments_failed", 0) > 0:
+                    error_samples = []
+                    for detail in result.get("details") or []:
+                        error = str((detail or {}).get("error") or "").strip()
+                        if not error:
+                            continue
+                        error = " ".join(error.split())[:180]
+                        if error not in error_samples:
+                            error_samples.append(error)
+                        if len(error_samples) >= 2:
+                            break
+                    suffix = f" : {' ; '.join(error_samples)}" if error_samples else ""
+                    failed.append(f"{fid}({result['segments_failed']} segments échoués{suffix})")
+            except Exception as e:
+                logger.warning(f"⚠️ Review folder {fid} : {e}")
+                failed.append(str(fid))
+        if failed:
+            raise RuntimeError(f"Review échouée sur folders : {', '.join(failed)}")
+        logger.info(
+            "🤖 ✓ Rapports conformité persistés job %s : %s/%s",
+            job_id,
+            reports_written,
+            len(folder_ids),
+        )
         update_job(job_id, auto_pilot_post_review_docs_done=0)
         logger.info(f"🤖 ✓ Conformité locale terminée job {job_id}")
 
@@ -5484,7 +5343,6 @@ def _tick_auto_pilot(job_id: int) -> None:
                 message=f"Étape auto-pilot démarrée : {step}",
                 data={
                     "tts_mode": j.get("auto_pilot_tts_mode"),
-                    "use_claude_code": bool(j.get("auto_pilot_use_cc")),
                     "generate_audio": bool(j.get("auto_pilot_generate_audio")),
                 },
             )
@@ -5600,8 +5458,7 @@ def run_auto_pilot(job_id):
 
     Body (optionnel) :
       - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')
-      - model : 'sonnet' | 'haiku' | 'flash' | 'pro' (défaut 'pro')
-      - use_claude_code : bool (défaut false)
+      - model : 'flash' | 'pro' (défaut 'pro')
       - generate_audio : bool (défaut false) — legacy, enchaîne aussi l'audio
 
     Retourne 202 immédiatement. Suivre via GET /run-auto/status.
@@ -5630,19 +5487,7 @@ def run_auto_pilot(job_id):
         return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
     model = _normalize_pipeline_model_choice(payload.get("model"), default=job.get("auto_pilot_model") or "pro")
     if model not in _PIPELINE_MODEL_CHOICES:
-        return jsonify({"error": "model invalide (sonnet | haiku | flash | pro)"}), 400
-    use_cc = bool(payload.get("use_claude_code", False))
-    if use_cc and not _claude_code_pipeline_supported():
-        return jsonify({
-            "error": (
-                "use_claude_code=true est réservé au développement SQLite. "
-                "La pipeline PostgreSQL de production utilise le mode API."
-            )
-        }), 400
-    if use_cc and model in ("flash", "pro"):
-        return jsonify({
-            "error": "use_claude_code=true est incompatible avec DeepSeek. Lance l'auto-pilot en mode API."
-        }), 400
+        return jsonify({"error": "model invalide (flash | pro)"}), 400
     generate_audio = bool(payload.get("generate_audio") or payload.get("include_audio"))
     if generate_audio and not _legacy_bulk_audio_enabled():
         return jsonify({
@@ -5667,7 +5512,7 @@ def run_auto_pilot(job_id):
                auto_pilot_enabled=1,
                auto_pilot_model=model,
                auto_pilot_tts_mode=tts_mode,
-               auto_pilot_use_cc=int(use_cc),
+               auto_pilot_use_cc=0,
                auto_pilot_skip_vs=0,
                auto_pilot_generate_audio=int(generate_audio),
                auto_pilot_volume_done=0,
@@ -5682,7 +5527,7 @@ def run_auto_pilot(job_id):
             status="running",
             model=model,
             message="Auto-pilot lancé",
-            data={"tts_mode": tts_mode, "use_claude_code": use_cc, "generate_audio": generate_audio},
+            data={"tts_mode": tts_mode, "generate_audio": generate_audio},
         )
     except Exception:
         pass
@@ -5691,7 +5536,6 @@ def run_auto_pilot(job_id):
     return jsonify({
         "ok": True, "status": "auto_pilot_started",
         "tts_mode": tts_mode, "model": model,
-        "use_claude_code": use_cc,
         "generate_audio": generate_audio,
         "dispatch": dispatch,
     }), 202

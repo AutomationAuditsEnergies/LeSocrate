@@ -38,12 +38,85 @@ def get_db_connection():
     """
     _require_sqlite_runtime("get_db_connection")
     conn = sqlite3.connect(DB_PATH, timeout=30)
+    # SQLite leaves FK enforcement disabled per connection by default.  Every
+    # runtime connection must opt in or the declared planning constraints and
+    # cascades are only documentation.
+    conn.execute("PRAGMA foreign_keys=ON")
     # NORMAL n'est sûr qu'avec WAL (jamais activé sur Azure : /home est un
     # partage réseau, cf. db_safety.enable_wal). En mode rollback journal on
     # garde le FULL par défaut, plus lent mais sans risque de corruption.
     if not os.getenv("WEBSITE_SITE_NAME"):
         conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def _install_module_day_fk_guards(cursor) -> None:
+    """Enforce additive module-day FKs on pre-V2 SQLite databases.
+
+    SQLite cannot add a FOREIGN KEY to an existing table without rebuilding it.
+    These idempotent triggers provide the same insert/update/delete protection
+    for databases whose tables predate the inline constraints above.
+    """
+    statements = (
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_course_sessions_module_day_insert
+        BEFORE INSERT ON course_sessions
+        WHEN NEW.module_day_id IS NOT NULL
+         AND NOT EXISTS (
+             SELECT 1 FROM formation_module_days WHERE id = NEW.module_day_id
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'course_sessions.module_day_id invalide');
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_course_sessions_module_day_update
+        BEFORE UPDATE OF module_day_id ON course_sessions
+        WHEN NEW.module_day_id IS NOT NULL
+         AND NOT EXISTS (
+             SELECT 1 FROM formation_module_days WHERE id = NEW.module_day_id
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'course_sessions.module_day_id invalide');
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_cours_folders_module_day_insert
+        BEFORE INSERT ON cours_folders
+        WHEN NEW.module_day_id IS NOT NULL
+         AND NOT EXISTS (
+             SELECT 1 FROM formation_module_days WHERE id = NEW.module_day_id
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'cours_folders.module_day_id invalide');
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_cours_folders_module_day_update
+        BEFORE UPDATE OF module_day_id ON cours_folders
+        WHEN NEW.module_day_id IS NOT NULL
+         AND NOT EXISTS (
+             SELECT 1 FROM formation_module_days WHERE id = NEW.module_day_id
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'cours_folders.module_day_id invalide');
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_formation_module_days_delete_restrict
+        BEFORE DELETE ON formation_module_days
+        WHEN EXISTS (
+            SELECT 1 FROM course_sessions WHERE module_day_id = OLD.id
+        ) OR EXISTS (
+            SELECT 1 FROM cours_folders WHERE module_day_id = OLD.id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'formation_module_days encore référencée');
+        END
+        """,
+    )
+    for statement in statements:
+        cursor.execute(statement)
 
 
 def _is_malformed_database_error(exc: Exception) -> bool:
@@ -80,6 +153,7 @@ def init_database(_recovered_from_corruption: bool = False):
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA foreign_keys=ON")
         cursor = conn.cursor()
         logger.info("✅ Connexion à la base de données réussie")
 
@@ -162,9 +236,13 @@ def init_database(_recovered_from_corruption: bool = False):
                 postponed_from TEXT,
                 postponed_at TEXT,
                 postponement_count INTEGER NOT NULL DEFAULT 0,
+                module_day_id INTEGER,
+                local_date TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                UNIQUE(platform_id, session_index)
+                UNIQUE(platform_id, session_index),
+                FOREIGN KEY (module_day_id)
+                    REFERENCES formation_module_days(id) ON DELETE RESTRICT
             )
             """
         )
@@ -193,6 +271,8 @@ def init_database(_recovered_from_corruption: bool = False):
             "postponed_from": "TEXT",
             "postponed_at": "TEXT",
             "postponement_count": "INTEGER NOT NULL DEFAULT 0",
+            "module_day_id": "INTEGER",
+            "local_date": "TEXT",
         }
         for col, col_type in _course_session_audio_cols.items():
             if col not in course_session_columns:
@@ -440,6 +520,7 @@ def init_database(_recovered_from_corruption: bool = False):
                 password_debug_plaintext TEXT,
                 center_name TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
+                pipeline_access_enabled INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -463,6 +544,26 @@ def init_database(_recovered_from_corruption: bool = False):
         if "onboarding_completed_at" not in center_columns:
             cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN onboarding_completed_at TEXT")
             logger.info("✅ Colonne onboarding_completed_at ajoutée à training_center_accounts")
+        pipeline_permission_was_missing = (
+            "pipeline_access_enabled" not in center_columns
+        )
+        if pipeline_permission_was_missing:
+            cursor.execute(
+                "ALTER TABLE training_center_accounts "
+                "ADD COLUMN pipeline_access_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+            cursor.execute(
+                """
+                UPDATE training_center_accounts
+                SET pipeline_access_enabled = 1
+                WHERE LOWER(username) = ?
+                  AND is_active = 1
+                """,
+                ("newpiprod@gmail.com",),
+            )
+            logger.info(
+                "✅ Permission formation pipeline ajoutée à training_center_accounts"
+            )
         # Never retain reversible credentials. The compatibility column stays
         # temporarily so old binaries/migrations don't fail, but is always NULL.
         cursor.execute(
@@ -687,7 +788,10 @@ def init_database(_recovered_from_corruption: bool = False):
             platform_id INTEGER NOT NULL DEFAULT 1,
             name TEXT NOT NULL,
             position INTEGER NOT NULL DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            module_day_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (module_day_id)
+                REFERENCES formation_module_days(id) ON DELETE RESTRICT
         )
         """
         )
@@ -717,6 +821,11 @@ def init_database(_recovered_from_corruption: bool = False):
         try:
             cursor.execute("ALTER TABLE cours_folders ADD COLUMN formation_job_id INTEGER")
             logger.info("✅ Colonne formation_job_id ajoutée à cours_folders")
+        except Exception:
+            pass  # Colonne déjà présente
+        try:
+            cursor.execute("ALTER TABLE cours_folders ADD COLUMN module_day_id INTEGER")
+            logger.info("✅ Colonne module_day_id ajoutée à cours_folders")
         except Exception:
             pass  # Colonne déjà présente
 
@@ -802,8 +911,9 @@ def init_database(_recovered_from_corruption: bool = False):
             logger.info("✅ Colonne reviewed ajoutée à content_generation_segments")
         except Exception:
             pass
-        # Migration : colonne generated_via (trace d'origine API / Claude Code, valeurs :
-        # 'api' | 'claude_code_haiku' | 'claude_code_sonnet'). NULL tant que rien n'a tranché.
+        # Compatibilité historique : conserve la provenance des artefacts déjà
+        # produits avant le passage à DeepSeek uniquement. Le runtime n'écrit
+        # plus de nouvelles valeurs ``claude_code_*``.
         try:
             cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN generated_via TEXT")
             logger.info("✅ Colonne generated_via ajoutée à content_generation_segments")
@@ -957,6 +1067,10 @@ def init_database(_recovered_from_corruption: bool = False):
             daily_programs_validated INTEGER DEFAULT 0,
             status TEXT DEFAULT 'init',
             error_message TEXT,
+            schedule_schema_version INTEGER NOT NULL DEFAULT 1,
+            schedule_snapshot_json TEXT,
+            schedule_hash TEXT,
+            schedule_locked_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -972,10 +1086,51 @@ def init_database(_recovered_from_corruption: bool = False):
         if "rome_text" not in fpj_cols:
             cursor.execute("ALTER TABLE formation_pipeline_jobs ADD COLUMN rome_text TEXT")
             logger.info("✅ Colonne rome_text ajoutée à formation_pipeline_jobs")
+        _schedule_job_cols = {
+            "schedule_schema_version": "INTEGER NOT NULL DEFAULT 1",
+            "schedule_snapshot_json": "TEXT",
+            "schedule_hash": "TEXT",
+            "schedule_locked_at": "TIMESTAMP",
+        }
+        for col, col_type in _schedule_job_cols.items():
+            if col not in fpj_cols:
+                cursor.execute(
+                    f"ALTER TABLE formation_pipeline_jobs ADD COLUMN {col} {col_type}"
+                )
+                logger.info(f"✅ Colonne {col} ajoutée à formation_pipeline_jobs")
+        if pipeline_permission_was_missing:
+            cursor.execute(
+                """
+                UPDATE platform_config
+                SET center_account_id = (
+                    SELECT id
+                    FROM training_center_accounts
+                    WHERE LOWER(username) = ?
+                      AND is_active = 1
+                      AND pipeline_access_enabled = 1
+                    ORDER BY id
+                    LIMIT 1
+                )
+                WHERE center_account_id IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM formation_pipeline_jobs job
+                      WHERE job.platform_id = platform_config.id
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM training_center_accounts
+                      WHERE LOWER(username) = ?
+                        AND is_active = 1
+                        AND pipeline_access_enabled = 1
+                  )
+                """,
+                ("newpiprod@gmail.com", "newpiprod@gmail.com"),
+            )
 
-        # Migrations pour tracer l'origine API / Claude Code de chaque artefact
-        # (Phase 2 de memoire/03-decisions/pipeline-dual-api-et-claude-code.md).
-        # Valeurs attendues : 'api' | 'claude_code_haiku' | 'claude_code_sonnet'.
+        # Compatibilité historique des provenances. Les valeurs
+        # ``claude_code_*`` existantes restent lisibles, mais ne sont plus
+        # produites depuis le passage à DeepSeek uniquement.
         for col in ("kb_generated_via", "global_program_generated_via", "daily_programs_generated_via"):
             if col not in fpj_cols:
                 cursor.execute(f"ALTER TABLE formation_pipeline_jobs ADD COLUMN {col} TEXT")
@@ -1049,6 +1204,11 @@ def init_database(_recovered_from_corruption: bool = False):
             status TEXT DEFAULT 'validated',
             source_pipeline_job_id INTEGER UNIQUE,
             source_platform_id INTEGER,
+            nb_days INTEGER,
+            schedule_schema_version INTEGER NOT NULL DEFAULT 1,
+            schedule_hash TEXT,
+            schedule_locked_at TIMESTAMP,
+            reusable_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             validated_at TIMESTAMP,
             archived_at TIMESTAMP,
@@ -1086,6 +1246,35 @@ def init_database(_recovered_from_corruption: bool = False):
                 "ALTER TABLE formation_modules ADD COLUMN immutable INTEGER NOT NULL DEFAULT 1"
             )
             logger.info("✅ Colonne immutable ajoutée à formation_modules")
+        _module_schedule_cols = {
+            "nb_days": "INTEGER",
+            "schedule_schema_version": "INTEGER NOT NULL DEFAULT 1",
+            "schedule_hash": "TEXT",
+            "schedule_locked_at": "TIMESTAMP",
+            "reusable_at": "TIMESTAMP",
+        }
+        for col, col_type in _module_schedule_cols.items():
+            if col not in fm_cols:
+                cursor.execute(
+                    f"ALTER TABLE formation_modules ADD COLUMN {col} {col_type}"
+                )
+                logger.info(f"✅ Colonne {col} ajoutée à formation_modules")
+        cursor.execute("""
+            UPDATE formation_modules
+            SET nb_days = (
+                SELECT job.nb_days
+                FROM formation_pipeline_jobs job
+                WHERE job.id = formation_modules.source_pipeline_job_id
+            )
+            WHERE nb_days IS NULL
+              AND source_pipeline_job_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM formation_pipeline_jobs job
+                WHERE job.id = formation_modules.source_pipeline_job_id
+                  AND job.nb_days IS NOT NULL
+              )
+        """)
         cursor.execute("""
             UPDATE formation_modules
             SET center_account_id = (
@@ -1119,6 +1308,103 @@ def init_database(_recovered_from_corruption: bool = False):
                 )
             WHERE source_platform_id IS NOT NULL
         """)
+
+        # ─── Planning V2 : bibliothèque et snapshots immuables ──────────────
+        # Un template est modifiable tant qu'il n'a jamais été utilisé. Dès
+        # qu'il est appliqué à une formation, used_at/locked_at le figent. Une
+        # suppression reste logique afin de ne jamais invalider un module.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS day_schedule_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                center_account_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'deleted')),
+                schedule_schema_version INTEGER NOT NULL DEFAULT 2,
+                blocks_snapshot_json TEXT NOT NULL DEFAULT '[]',
+                blocks_hash TEXT NOT NULL,
+                block_count INTEGER NOT NULL DEFAULT 0,
+                total_duration_minutes INTEGER NOT NULL DEFAULT 0,
+                course_duration_minutes INTEGER NOT NULL DEFAULT 0,
+                used_at TIMESTAMP,
+                locked_at TIMESTAMP,
+                deleted_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (center_account_id)
+                    REFERENCES training_center_accounts(id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS day_schedule_template_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id INTEGER NOT NULL,
+                block_key TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                block_type TEXT NOT NULL
+                    CHECK (block_type IN ('course', 'qa', 'pause')),
+                pause_kind TEXT
+                    CHECK (pause_kind IS NULL OR pause_kind IN ('short', 'lunch')),
+                start_minute INTEGER NOT NULL,
+                end_minute INTEGER NOT NULL,
+                duration_minutes INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(template_id, position),
+                UNIQUE(template_id, block_key),
+                FOREIGN KEY (template_id)
+                    REFERENCES day_schedule_templates(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS formation_module_days (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                module_id INTEGER NOT NULL,
+                center_account_id INTEGER NOT NULL,
+                day_index INTEGER NOT NULL,
+                source_template_id INTEGER,
+                template_name TEXT NOT NULL,
+                schedule_schema_version INTEGER NOT NULL DEFAULT 2,
+                schedule_hash TEXT NOT NULL,
+                blocks_snapshot_json TEXT NOT NULL,
+                block_count INTEGER NOT NULL,
+                total_duration_minutes INTEGER NOT NULL,
+                course_duration_minutes INTEGER NOT NULL,
+                immutable INTEGER NOT NULL DEFAULT 1,
+                locked_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(module_id, day_index),
+                FOREIGN KEY (module_id)
+                    REFERENCES formation_modules(id),
+                FOREIGN KEY (center_account_id)
+                    REFERENCES training_center_accounts(id),
+                FOREIGN KEY (source_template_id)
+                    REFERENCES day_schedule_templates(id) ON DELETE SET NULL
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_day_schedule_templates_center_status "
+            "ON day_schedule_templates(center_account_id, status, updated_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_day_schedule_template_blocks_template "
+            "ON day_schedule_template_blocks(template_id, position)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_formation_module_days_center_module "
+            "ON formation_module_days(center_account_id, module_id, day_index)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_sessions_module_day_date "
+            "ON course_sessions(module_day_id, local_date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cours_folders_module_day "
+            "ON cours_folders(module_day_id)"
+        )
+        _install_module_day_fk_guards(cursor)
+        logger.info("✅ Tables de planning V2 créées/vérifiées")
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS formation_module_assets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

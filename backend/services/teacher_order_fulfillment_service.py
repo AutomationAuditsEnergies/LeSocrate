@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import datetime, time
+
+from config import FRANCE_TZ
 from services.pipeline_queue.contracts import PermanentWorkError, WorkItemSpec, WorkResult
 from repositories.billing_repository import (
     claim_order_for_fulfillment,
     complete_order_pipeline_fulfillment,
     fail_order_pipeline_fulfillment,
+    get_reusable_module,
     update_order_state,
 )
 from repositories.pipeline_repository import (
     create_pipeline_platform,
     create_postgres_pipeline_aggregate,
+    list_course_folder_ids_for_platform,
 )
 from repositories.hr_write_repository import (
     clone_canonical_module_course_structure,
@@ -19,11 +24,153 @@ from repositories.hr_write_repository import (
     set_postgres_platform_status,
 )
 from services.course_schedule_service import create_course_schedule
+from repositories.day_schedule_repository import (
+    bind_module_days_to_platform,
+    list_module_days,
+    lock_pipeline_schedule_snapshot,
+)
+from services.dynamic_day_schedule_service import (
+    SCHEDULE_SCHEMA_VERSION,
+    validate_new_module_lead_time,
+)
 from services.formation_pipeline_service import update_job
 from repositories.center_workspace_repository import set_platform_asset_binding_mode
 from services.teacher_asset_service import ensure_module_asset_manifest
 from services.canonical_teacher_service import resolve_compatible_canonical_teacher
 from services.platform_storage_service import ensure_platform_storage
+
+
+def _schedule_schema_version(schedule) -> int:
+    if not isinstance(schedule, dict):
+        return 1
+    raw_version = schedule.get(
+        "schedule_schema_version",
+        schedule.get("schema_version"),
+    )
+    if raw_version in (None, ""):
+        return SCHEDULE_SCHEMA_VERSION if "selected_dates" in schedule else 1
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise PermanentWorkError(
+            "La version du calendrier de la commande est invalide"
+        ) from exc
+    if version not in (1, SCHEDULE_SCHEMA_VERSION):
+        raise PermanentWorkError(
+            "La version du calendrier de la commande n’est pas prise en charge"
+        )
+    return version
+
+
+def _is_v2_schedule(schedule) -> bool:
+    return _schedule_schema_version(schedule) == SCHEDULE_SCHEMA_VERSION
+
+
+def _authoritative_reuse_schedule_version(module: dict, schedule) -> int:
+    try:
+        module_version = int(module.get("schedule_schema_version") or 1)
+    except (TypeError, ValueError) as exc:
+        raise PermanentWorkError(
+            "La version du planning durable du module est invalide"
+        ) from exc
+    if module_version not in (1, SCHEDULE_SCHEMA_VERSION):
+        raise PermanentWorkError(
+            "La version du planning durable du module n’est pas prise en charge"
+        )
+
+    payload_version = _schedule_schema_version(schedule)
+    if payload_version != module_version:
+        raise PermanentWorkError(
+            f"Le calendrier de réutilisation V{payload_version} ne correspond pas "
+            f"au module durable V{module_version}"
+        )
+    return module_version
+
+
+def _fulfillment_now() -> datetime:
+    return datetime.now(FRANCE_TZ)
+
+
+def _authorization_datetime(value) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError) as exc:
+            raise PermanentWorkError(
+                "La date d’autorisation de la commande est invalide"
+            ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return FRANCE_TZ.localize(parsed)
+    return parsed.astimezone(FRANCE_TZ)
+
+
+def _new_module_validation_at(order: dict) -> datetime:
+    """Use the latest real authorization/worker time, never order creation."""
+    now = _fulfillment_now()
+    if now.tzinfo is None or now.utcoffset() is None:
+        now = FRANCE_TZ.localize(now)
+    else:
+        now = now.astimezone(FRANCE_TZ)
+    authorized_at = _authorization_datetime(order.get("authorized_at"))
+    return max(now, authorized_at) if authorized_at is not None else now
+
+
+def _v2_first_start_at(schedule: dict) -> datetime:
+    try:
+        first_day = schedule["days"][0]
+        first_date = datetime.strptime(first_day["date"], "%Y-%m-%d").date()
+        start_minute = int(first_day["blocks"][0]["start_minute"])
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise PermanentWorkError("Premier créneau V2 invalide") from exc
+    return FRANCE_TZ.localize(
+        datetime.combine(
+            first_date,
+            time(start_minute // 60, start_minute % 60),
+        )
+    )
+
+
+def _reuse_schedule_with_module_days(
+    schedule: dict,
+    module_days: list[dict],
+) -> dict:
+    dates = list(schedule.get("selected_dates") or [])
+    dates = sorted(str(value) for value in dates)
+    if len(dates) != len(module_days):
+        raise PermanentWorkError(
+            "La réutilisation doit conserver exactement le nombre de journées du module"
+        )
+    days = []
+    for expected_index, (local_date, module_day) in enumerate(
+        zip(dates, module_days),
+        start=1,
+    ):
+        day_index = int(module_day.get("day_index") or 0)
+        if day_index != expected_index:
+            raise PermanentWorkError(
+                "Les journées durables du module ne sont pas ordonnées"
+            )
+        days.append(
+            {
+                "day_index": expected_index,
+                "date": local_date,
+                "module_day_id": int(module_day["id"]),
+                "blocks": module_day.get("blocks")
+                or module_day.get("blocks_snapshot_json")
+                or [],
+            }
+        )
+    return {
+        "schema_version": SCHEDULE_SCHEMA_VERSION,
+        "schedule_schema_version": SCHEDULE_SCHEMA_VERSION,
+        "day_count": len(days),
+        "selected_dates": dates,
+        "days": days,
+    }
 
 
 def complete_teacher_order_pipeline(item, job: dict) -> dict:
@@ -89,16 +236,37 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
         if order["operation_type"] == "new_teacher":
             formation = dict(payload.get("new_formation") or {})
             total_hours = int(formation.get("total_hours") or order["total_hours"])
-            nb_days = int((formation.get("schedule") or {}).get("total_training_days") or max(1, total_hours // 7))
+            schedule = formation.get("schedule") or {}
+            v2_schedule = _is_v2_schedule(schedule)
+            if v2_schedule:
+                nb_days = int(schedule.get("day_count") or len(schedule.get("days") or []))
+                if nb_days <= 0 or nb_days != len(schedule.get("days") or []):
+                    raise PermanentWorkError("Le planning V2 de la commande est incomplet")
+                try:
+                    validate_new_module_lead_time(
+                        _new_module_validation_at(order),
+                        _v2_first_start_at(schedule),
+                    )
+                except ValueError as exc:
+                    raise PermanentWorkError(
+                        "Le délai de 48 heures du planning V2 n’est pas respecté"
+                    ) from exc
+            else:
+                nb_days = int(
+                    schedule.get("total_training_days")
+                    or max(1, total_hours // 7)
+                )
             tp_name = str(formation.get("tp_name") or order["training_title"])
             rncp_code = str(formation.get("rncp_code") or order.get("rncp_code") or "")
-            canonical_match = resolve_compatible_canonical_teacher(
-                rncp_code=rncp_code,
-                tp_name=tp_name,
-                total_hours=total_hours,
-                nb_days=nb_days,
-                voice_type="fish_audio",
-            )
+            canonical_match = None
+            if not v2_schedule:
+                canonical_match = resolve_compatible_canonical_teacher(
+                    rncp_code=rncp_code,
+                    tp_name=tp_name,
+                    total_hours=total_hours,
+                    nb_days=nb_days,
+                    voice_type="fish_audio",
+                )
             if canonical_match:
                 module_id = int(canonical_match["module_id"])
                 platform = create_pipeline_platform(
@@ -124,7 +292,6 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                     )
                     lease.checkpoint()
                     set_platform_asset_binding_mode(platform_id, "shared")
-                    schedule = formation.get("schedule")
                     if schedule:
                         create_course_schedule(platform_id, schedule)
                     set_postgres_platform_status(
@@ -162,10 +329,27 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             )
             platform_id = int(aggregate["platform"]["id"])
             pipeline_job_id = int(aggregate["job_id"])
+            if v2_schedule:
+                try:
+                    lock_pipeline_schedule_snapshot(
+                        center_id,
+                        pipeline_job_id,
+                        schedule,
+                    )
+                except ValueError as exc:
+                    raise PermanentWorkError(
+                        "Le snapshot V2 de la commande ne peut pas être verrouillé"
+                    ) from exc
             ensure_platform_storage(aggregate["platform"])
-            schedule = formation.get("schedule")
             if schedule:
-                create_course_schedule(platform_id, schedule)
+                try:
+                    create_course_schedule(platform_id, schedule)
+                except ValueError as exc:
+                    if v2_schedule:
+                        raise PermanentWorkError(
+                            "Le calendrier V2 de la commande est invalide"
+                        ) from exc
+                    raise
             update_job(
                 pipeline_job_id,
                 auto_pilot_enabled=1,
@@ -226,6 +410,27 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
         module_id = int(order.get("source_module_id") or payload.get("module_id") or 0)
         if not module_id:
             raise PermanentWorkError("Ancien professeur IA absent de la commande")
+        schedule = payload.get("schedule")
+        module = get_reusable_module(module_id, center_id)
+        if not module:
+            raise PermanentWorkError(
+                "Le module durable de la commande n’est plus disponible ou "
+                "réutilisable pour ce centre"
+            )
+        module_schedule_version = _authoritative_reuse_schedule_version(
+            dict(module),
+            schedule,
+        )
+        explicit_schedule = None
+        if module_schedule_version == SCHEDULE_SCHEMA_VERSION:
+            module_days = list_module_days(
+                module_id,
+                center_account_id=center_id,
+            )
+            explicit_schedule = _reuse_schedule_with_module_days(
+                schedule,
+                module_days,
+            )
         platform = create_pipeline_platform(
             name=platform_name,
             center_account_id=center_id,
@@ -254,8 +459,20 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             source_folder_ids=clone["folder_id_map"].keys(),
         )
         set_platform_asset_binding_mode(platform_id, "shared")
-        schedule = payload.get("schedule")
-        if schedule:
+        if module_schedule_version == SCHEDULE_SCHEMA_VERSION:
+            try:
+                create_course_schedule(platform_id, explicit_schedule)
+                bind_module_days_to_platform(
+                    center_id,
+                    module_id,
+                    platform_id,
+                    list_course_folder_ids_for_platform(platform_id),
+                )
+            except ValueError as exc:
+                raise PermanentWorkError(
+                    "Le calendrier de réutilisation ne correspond pas au module"
+                ) from exc
+        elif schedule:
             create_course_schedule(platform_id, schedule)
         set_postgres_platform_status(platform_id, "ready", center_id, scope_to_center=True)
         update_order_state(

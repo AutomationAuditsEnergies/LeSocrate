@@ -151,8 +151,14 @@ def module_asset_count(module_id: int) -> int:
 def canonical_audio_manifest_complete(
     audio_assets: Iterable[dict[str, Any]],
     required_folder_count: int,
+    *,
+    required_paths_by_folder: dict[int, set[str]] | None = None,
 ) -> bool:
-    """Require the exact 19-file runtime playlist for every training day."""
+    """Require the exact immutable runtime playlist for every training day.
+
+    V1 callers keep the historic 19 paths. V2 callers provide the per-folder
+    manifest compiled from each immutable module-day snapshot.
+    """
     covered_by_folder: dict[int, set[str]] = {}
     for asset in audio_assets or ():
         source_folder_id = asset.get("source_folder_id")
@@ -160,14 +166,29 @@ def canonical_audio_manifest_complete(
         if source_folder_id is None or not logical_key:
             continue
         relative_path = logical_key.split(":", 3)[-1].lstrip("/")
-        if relative_path not in CANONICAL_AUDIO_PLAYLIST_PATHS:
+        expected_paths = (
+            required_paths_by_folder.get(int(source_folder_id), set())
+            if required_paths_by_folder is not None
+            else CANONICAL_AUDIO_PLAYLIST_PATHS
+        )
+        if relative_path not in expected_paths:
             continue
         covered_by_folder.setdefault(int(source_folder_id), set()).add(relative_path)
-    complete_folders = sum(
-        1
-        for paths in covered_by_folder.values()
-        if CANONICAL_AUDIO_PLAYLIST_PATHS.issubset(paths)
-    )
+    if required_paths_by_folder is not None:
+        if not required_paths_by_folder:
+            return False
+        complete_folders = sum(
+            1
+            for folder_id, expected_paths in required_paths_by_folder.items()
+            if expected_paths
+            and expected_paths.issubset(covered_by_folder.get(int(folder_id), set()))
+        )
+    else:
+        complete_folders = sum(
+            1
+            for paths in covered_by_folder.values()
+            if CANONICAL_AUDIO_PLAYLIST_PATHS.issubset(paths)
+        )
     return complete_folders >= max(1, int(required_folder_count or 1))
 
 
@@ -189,7 +210,7 @@ def get_module_audio_manifest_readiness(module_id: int) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT j.nb_days,
+                SELECT j.nb_days, m.schedule_schema_version,
                        COALESCE(
                            jsonb_agg(jsonb_build_object(
                                'source_folder_id', a.source_folder_id,
@@ -204,11 +225,44 @@ def get_module_audio_manifest_readiness(module_id: int) -> dict[str, Any]:
                  AND a.status = 'ready'
                  AND a.asset_kind = 'audio'
                 WHERE m.id = %s
-                GROUP BY j.nb_days
+                GROUP BY j.nb_days, m.schedule_schema_version
                 """,
                 (int(module_id),),
             )
             row = cur.fetchone()
+            required_paths_by_folder = None
+            if row and int(row.get("schedule_schema_version") or 1) == 2:
+                cur.execute(
+                    """
+                    SELECT cf.id AS folder_id, d.blocks_snapshot_json,
+                           d.schedule_hash, d.immutable
+                    FROM formation_module_days d
+                    LEFT JOIN cours_folders cf ON cf.module_day_id = d.id
+                    WHERE d.module_id = %s
+                    ORDER BY d.day_index ASC
+                    """,
+                    (int(module_id),),
+                )
+                day_rows = [dict(day_row) for day_row in cur.fetchall()]
+                required_paths_by_folder = {}
+                from repositories.day_schedule_repository import (
+                    validate_module_day_snapshot,
+                )
+                from services.day_playlist_service import build_playlist_items
+
+                for day_row in day_rows:
+                    folder_id = day_row.get("folder_id")
+                    if folder_id is None:
+                        continue
+                    validated_day = validate_module_day_snapshot(day_row)
+                    if validated_day is None:
+                        continue
+                    blocks = validated_day["blocks"]
+                    required_paths_by_folder[int(folder_id)] = {
+                        f"playlist/{filename}"
+                        for filename, _duration, _type, _course_index
+                        in build_playlist_items(blocks)
+                    }
     if not row:
         return {
             "module_id": int(module_id),
@@ -220,7 +274,11 @@ def get_module_audio_manifest_readiness(module_id: int) -> dict[str, Any]:
     required_folder_count = max(1, int(row.get("nb_days") or 1))
     return {
         "module_id": int(module_id),
-        "ready": canonical_audio_manifest_complete(audio_assets, required_folder_count),
+        "ready": canonical_audio_manifest_complete(
+            audio_assets,
+            required_folder_count,
+            required_paths_by_folder=required_paths_by_folder,
+        ),
         "required_folder_count": required_folder_count,
         "audio_asset_count": len(audio_assets),
     }
@@ -244,6 +302,7 @@ def find_canonical_reusable_module(canonical_fingerprint: str) -> dict[str, Any]
                 SELECT m.id AS module_id,
                        m.canonical_fingerprint,
                        m.canonical_generator_version,
+                       m.schedule_schema_version,
                        m.voice_type,
                        m.version,
                        j.nb_days,
@@ -271,6 +330,8 @@ def find_canonical_reusable_module(canonical_fingerprint: str) -> dict[str, Any]
                 WHERE m.canonical_fingerprint = %s
                   AND m.canonical_reuse_allowed = TRUE
                   AND m.status = 'validated'
+                  AND m.reusable_at IS NOT NULL
+                  AND m.reusable_at <= NOW()
                   AND m.archived_at IS NULL
                   AND m.voice_type != 'mock'
                 ORDER BY m.validated_at ASC NULLS LAST, m.id ASC
@@ -280,11 +341,19 @@ def find_canonical_reusable_module(canonical_fingerprint: str) -> dict[str, Any]
             )
             for raw_row in cur.fetchall():
                 row = dict(raw_row)
-                if not canonical_audio_manifest_complete(
-                    row.pop("audio_assets", []) or [],
-                    int(row.get("nb_days") or 1),
-                ):
+                audio_assets = row.pop("audio_assets", []) or []
+                if int(row.get("schedule_schema_version") or 1) == 2:
+                    manifest_ready = get_module_audio_manifest_readiness(
+                        int(row["module_id"])
+                    ).get("ready")
+                else:
+                    manifest_ready = canonical_audio_manifest_complete(
+                        audio_assets,
+                        int(row.get("nb_days") or 1),
+                    )
+                if not manifest_ready:
                     continue
+                row.pop("schedule_schema_version", None)
                 row.pop("nb_days", None)
                 return row
             return None

@@ -83,3 +83,34 @@ export async function apiFetch(path, options = {}) {
     callerSignal?.removeEventListener?.('abort', abortFromCaller)
   }
 }
+
+function downloadFilename(response, fallbackFilename) {
+  const disposition = response.headers.get('Content-Disposition') || ''
+  const encodedMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (encodedMatch) {
+    try {
+      return decodeURIComponent(encodedMatch[1])
+    } catch {
+      return encodedMatch[1]
+    }
+  }
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i)
+  return plainMatch?.[1] || fallbackFilename
+}
+
+export async function apiDownload(path, fallbackFilename = 'telechargement') {
+  const response = await apiFetch(path)
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    throw new Error(payload.error || `Téléchargement impossible (${response.status})`)
+  }
+
+  const objectUrl = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = downloadFilename(response, fallbackFilename)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+}

@@ -162,7 +162,55 @@ def publish_playlist_audio_to_platform(
         if blob.name.endswith(".mp3")
         and (not wanted or blob.name.split("/")[-1] in wanted)
     ]
-    if archive_existing and not source_blobs:
+    source_entries = [
+        {
+            "container": source_cc,
+            "blob_path": str(blob.name),
+            "filename": str(blob.name).split("/")[-1],
+            "registered": False,
+        }
+        for blob in source_blobs
+    ]
+    found_names = {entry["filename"] for entry in source_entries}
+
+    # Reused modules keep their MP3s in the immutable teacher manifest. If the
+    # mutable pipeline prefix has been archived or cleaned, publish directly
+    # from that registered durable path without invoking TTS again.
+    missing_wanted = wanted - found_names
+    if missing_wanted:
+        from repositories.teacher_asset_repository import resolve_registered_blob_path
+
+        for filename in sorted(missing_wanted):
+            asset = resolve_registered_blob_path(
+                folder_id=folder_id,
+                container_name="audiostts",
+                relative_path=f"playlist/{filename}",
+            )
+            if not asset:
+                continue
+            asset_container = tts_bsc.get_container_client(asset["container_name"])
+            asset_path = str(asset["blob_path"])
+            if not asset_container.get_blob_client(asset_path).exists():
+                continue
+            source_entries.append(
+                {
+                    "container": asset_container,
+                    "blob_path": asset_path,
+                    "filename": filename,
+                    "registered": bool(asset.get("registered")),
+                }
+            )
+
+    unresolved_wanted = wanted - {
+        entry["filename"] for entry in source_entries
+    }
+    if unresolved_wanted:
+        raise ValueError(
+            "Fichiers MP3 requis introuvables : "
+            + ", ".join(sorted(unresolved_wanted))
+        )
+
+    if archive_existing and not source_entries:
         raise ValueError("Aucun nouveau fichier MP3 généré à publier")
 
     archive_result = None
@@ -176,10 +224,15 @@ def publish_playlist_audio_to_platform(
     copied = []
     copied_blob_names = []
     errors = []
-    for blob in source_blobs:
-        filename = blob.name.split("/")[-1]
+    for entry in source_entries:
+        filename = entry["filename"]
         try:
-            audio_bytes = source_cc.get_blob_client(blob.name).download_blob().readall()
+            audio_bytes = (
+                entry["container"]
+                .get_blob_client(entry["blob_path"])
+                .download_blob()
+                .readall()
+            )
             destination_name = (
                 f"{occurrence_prefix}/{filename}"
                 if occurrence_prefix
@@ -195,7 +248,12 @@ def publish_playlist_audio_to_platform(
             )
             copied.append(filename)
             copied_blob_names.append(destination_name)
-            logger.info("📣 Audio publié vers %s/%s", dest_container, destination_name)
+            logger.info(
+                "📣 Audio publié vers %s/%s (source_durable=%s)",
+                dest_container,
+                destination_name,
+                bool(entry.get("registered")),
+            )
         except Exception as exc:
             logger.error("❌ Publication audio %s échouée: %s", filename, exc)
             errors.append({"filename": filename, "error": str(exc)})

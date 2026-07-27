@@ -72,6 +72,43 @@ class SlidesTenantScopeTest(unittest.TestCase):
                 response = getattr(self.client, method)(path, json={"text": "x"})
                 self.assertEqual(response.status_code, expected_status)
 
+    def test_script_generation_requires_pipeline_permission_before_tenant_lookup(self):
+        self._login()
+        with patch.object(
+            slides_routes,
+            "can_access_formation_pipeline",
+            return_value=False,
+        ) as permission, patch.object(
+            slides_routes,
+            "hr_resource_belongs_to_center",
+        ) as belongs, patch.object(
+            slides_routes,
+            "generate_slides_from_script",
+        ) as generate:
+            response = self.client.post(
+                "/api/slides/generate-from-script",
+                json={"folder_id": 22, "platform_id": 2},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        permission.assert_called_once_with("training_center", 10)
+        belongs.assert_not_called()
+        generate.assert_not_called()
+
+    def test_legacy_admin_cannot_generate_pipeline_slides(self):
+        self._login(account_type="legacy_admin", account_id=1)
+        with patch.object(
+            slides_routes,
+            "generate_slides_from_script",
+        ) as generate:
+            response = self.client.post(
+                "/api/slides/generate-from-script",
+                json={"folder_id": 22},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        generate.assert_not_called()
+
     def test_legacy_superadmin_keeps_prototype_status_access(self):
         self._login(account_type="legacy_admin", account_id=1)
         with patch.object(

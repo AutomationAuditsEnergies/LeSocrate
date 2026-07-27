@@ -563,7 +563,7 @@ export const DeckDayProgram7Steps = ({
     'Mise en pratique',
     'Synthèse',
     'Questions',
-  ]).slice(0, 9);
+  ]).slice(0, 10);
   const activeIndex = Math.max(0, Number(active_item || 1) - 1);
 
   return (

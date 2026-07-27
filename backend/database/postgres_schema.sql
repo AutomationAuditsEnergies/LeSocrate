@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS training_center_accounts (
     center_name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    pipeline_access_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     stripe_customer_id TEXT,
     billing_mode TEXT NOT NULL DEFAULT 'stripe_required',
     billing_exempt_reason TEXT,
@@ -241,6 +242,8 @@ CREATE TABLE IF NOT EXISTS course_sessions (
     postponed_from TIMESTAMPTZ,
     postponed_at TIMESTAMPTZ,
     postponement_count INTEGER NOT NULL DEFAULT 0,
+    module_day_id BIGINT,
+    local_date DATE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(platform_id, session_index)
@@ -289,6 +292,10 @@ ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS postponed_at TIMESTAMPTZ;
 ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS postponement_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS module_day_id BIGINT;
+ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS local_date DATE;
 
 CREATE TABLE IF NOT EXISTS course_session_postponements (
     id BIGSERIAL PRIMARY KEY,
@@ -666,9 +673,79 @@ CREATE TABLE IF NOT EXISTS formation_pipeline_jobs (
     auto_pilot_error TEXT,
     auto_pilot_locked_at TIMESTAMPTZ,
     auto_pilot_lock_owner TEXT,
+    schedule_schema_version INTEGER NOT NULL DEFAULT 1,
+    schedule_snapshot_json JSONB,
+    schedule_hash TEXT,
+    schedule_locked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS schedule_schema_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS schedule_snapshot_json JSONB;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS schedule_hash TEXT;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS schedule_locked_at TIMESTAMPTZ;
+
+-- Grant the initial Formation3 operator only when this permission is
+-- introduced. At the same one-time boundary, attach only orphan platforms
+-- which already own a pipeline job. Later schema applications preserve
+-- explicit grants, revocations and tenant ownership.
+DO $$
+DECLARE
+    pipeline_permission_was_missing BOOLEAN;
+    pipeline_operator_count INTEGER;
+BEGIN
+    SELECT NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'training_center_accounts'
+          AND column_name = 'pipeline_access_enabled'
+    )
+    INTO pipeline_permission_was_missing;
+
+    ALTER TABLE training_center_accounts
+        ADD COLUMN IF NOT EXISTS pipeline_access_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+    IF pipeline_permission_was_missing THEN
+        SELECT COUNT(*)
+        INTO pipeline_operator_count
+        FROM training_center_accounts
+        WHERE LOWER(username) = 'newpiprod@gmail.com';
+
+        IF pipeline_operator_count > 1 THEN
+            RAISE EXCEPTION
+                'Plusieurs comptes correspondent à newpiprod@gmail.com; bootstrap pipeline refusé';
+        END IF;
+
+        UPDATE training_center_accounts
+        SET pipeline_access_enabled = TRUE
+        WHERE LOWER(username) = 'newpiprod@gmail.com'
+          AND is_active = TRUE;
+
+        WITH pipeline_operator AS (
+            SELECT id
+            FROM training_center_accounts
+            WHERE LOWER(username) = 'newpiprod@gmail.com'
+              AND is_active = TRUE
+              AND pipeline_access_enabled = TRUE
+        )
+        UPDATE platform_config platform
+        SET center_account_id = pipeline_operator.id
+        FROM pipeline_operator
+        WHERE platform.center_account_id IS NULL
+          AND EXISTS (
+              SELECT 1
+              FROM formation_pipeline_jobs job
+              WHERE job.platform_id = platform.id
+          );
+    END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS formation_knowledge_base (
     id BIGSERIAL PRIMARY KEY,
@@ -699,8 +776,12 @@ CREATE TABLE IF NOT EXISTS cours_folders (
     name TEXT NOT NULL,
     position INTEGER NOT NULL DEFAULT 0,
     formation_job_id BIGINT REFERENCES formation_pipeline_jobs(id) ON DELETE SET NULL,
+    module_day_id BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE cours_folders
+    ADD COLUMN IF NOT EXISTS module_day_id BIGINT;
 
 CREATE TABLE IF NOT EXISTS cours_documents (
     id BIGSERIAL PRIMARY KEY,
@@ -853,6 +934,11 @@ CREATE TABLE IF NOT EXISTS formation_modules (
     canonical_signature_json JSONB,
     canonical_generator_version TEXT,
     canonical_reuse_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+    nb_days INTEGER,
+    schedule_schema_version INTEGER NOT NULL DEFAULT 1,
+    schedule_hash TEXT,
+    schedule_locked_at TIMESTAMPTZ,
+    reusable_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     validated_at TIMESTAMPTZ,
     archived_at TIMESTAMPTZ
@@ -874,6 +960,109 @@ ALTER TABLE formation_modules
     ADD COLUMN IF NOT EXISTS canonical_generator_version TEXT;
 ALTER TABLE formation_modules
     ADD COLUMN IF NOT EXISTS canonical_reuse_allowed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS nb_days INTEGER;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS schedule_schema_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS schedule_hash TEXT;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS schedule_locked_at TIMESTAMPTZ;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS reusable_at TIMESTAMPTZ;
+
+UPDATE formation_modules AS module
+SET nb_days = job.nb_days
+FROM formation_pipeline_jobs AS job
+WHERE job.id = module.source_pipeline_job_id
+  AND module.nb_days IS NULL
+  AND job.nb_days IS NOT NULL;
+
+-- Bibliothèque d'organisations de journées, propre à chaque centre. Le
+-- repository fige name + blocs dès used_at/locked_at; status='deleted' masque
+-- seulement le template de la bibliothèque et conserve son historique.
+CREATE TABLE IF NOT EXISTS day_schedule_templates (
+    id BIGSERIAL PRIMARY KEY,
+    center_account_id BIGINT NOT NULL
+        REFERENCES training_center_accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'deleted')),
+    schedule_schema_version INTEGER NOT NULL DEFAULT 2,
+    blocks_snapshot_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    blocks_hash TEXT NOT NULL,
+    block_count INTEGER NOT NULL DEFAULT 0,
+    total_duration_minutes INTEGER NOT NULL DEFAULT 0,
+    course_duration_minutes INTEGER NOT NULL DEFAULT 0,
+    used_at TIMESTAMPTZ,
+    locked_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS day_schedule_template_blocks (
+    id BIGSERIAL PRIMARY KEY,
+    template_id BIGINT NOT NULL
+        REFERENCES day_schedule_templates(id) ON DELETE CASCADE,
+    block_key TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    block_type TEXT NOT NULL
+        CHECK (block_type IN ('course', 'qa', 'pause')),
+    pause_kind TEXT
+        CHECK (pause_kind IS NULL OR pause_kind IN ('short', 'lunch')),
+    start_minute INTEGER NOT NULL,
+    end_minute INTEGER NOT NULL,
+    duration_minutes INTEGER NOT NULL,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(template_id, position),
+    UNIQUE(template_id, block_key)
+);
+
+-- Copie autonome et immuable du déroulé de chaque journée d'un module.
+-- Aucune date de promotion n'est stockée ici.
+CREATE TABLE IF NOT EXISTS formation_module_days (
+    id BIGSERIAL PRIMARY KEY,
+    module_id BIGINT NOT NULL
+        REFERENCES formation_modules(id) ON DELETE RESTRICT,
+    center_account_id BIGINT NOT NULL
+        REFERENCES training_center_accounts(id) ON DELETE CASCADE,
+    day_index INTEGER NOT NULL CHECK (day_index > 0),
+    source_template_id BIGINT
+        REFERENCES day_schedule_templates(id) ON DELETE SET NULL,
+    template_name TEXT NOT NULL,
+    schedule_schema_version INTEGER NOT NULL DEFAULT 2,
+    schedule_hash TEXT NOT NULL,
+    blocks_snapshot_json JSONB NOT NULL,
+    block_count INTEGER NOT NULL,
+    total_duration_minutes INTEGER NOT NULL,
+    course_duration_minutes INTEGER NOT NULL,
+    immutable BOOLEAN NOT NULL DEFAULT TRUE,
+    locked_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(module_id, day_index)
+);
+
+DO $$
+BEGIN
+    ALTER TABLE course_sessions
+        ADD CONSTRAINT course_sessions_module_day_fkey
+        FOREIGN KEY (module_day_id)
+        REFERENCES formation_module_days(id) ON DELETE RESTRICT;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE cours_folders
+        ADD CONSTRAINT cours_folders_module_day_fkey
+        FOREIGN KEY (module_day_id)
+        REFERENCES formation_module_days(id) ON DELETE RESTRICT;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 UPDATE attendance_daily_exports export
 SET teacher_module_id = module.id
@@ -971,6 +1160,8 @@ CREATE INDEX IF NOT EXISTS idx_course_sessions_platform_scheduled ON course_sess
 CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessions(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_course_sessions_audio_due
     ON course_sessions(audio_generation_status, audio_generation_next_retry_at, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_course_sessions_module_day_date
+    ON course_sessions(module_day_id, local_date);
 CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id);
 CREATE INDEX IF NOT EXISTS idx_course_reminder_rules_platform ON course_reminder_rules(platform_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_course_reminder_rule_recipients_recipient
@@ -1018,6 +1209,7 @@ CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_status ON formation_pipel
 CREATE INDEX IF NOT EXISTS idx_formation_knowledge_base_job ON formation_knowledge_base(job_id);
 CREATE INDEX IF NOT EXISTS idx_cours_folders_platform_position ON cours_folders(platform_id, position);
 CREATE INDEX IF NOT EXISTS idx_cours_folders_formation_job ON cours_folders(formation_job_id);
+CREATE INDEX IF NOT EXISTS idx_cours_folders_module_day ON cours_folders(module_day_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cours_folders_job_name
     ON cours_folders(formation_job_id, name)
     WHERE formation_job_id IS NOT NULL;
@@ -1043,6 +1235,12 @@ CREATE INDEX IF NOT EXISTS idx_formation_pipeline_events_folder ON formation_pip
     WHERE folder_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_formation_modules_center_rncp ON formation_modules(center_account_id, rncp_code);
 CREATE INDEX IF NOT EXISTS idx_formation_modules_source_platform ON formation_modules(source_platform_id);
+CREATE INDEX IF NOT EXISTS idx_day_schedule_templates_center_status
+    ON day_schedule_templates(center_account_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_day_schedule_template_blocks_template
+    ON day_schedule_template_blocks(template_id, position);
+CREATE INDEX IF NOT EXISTS idx_formation_module_days_center_module
+    ON formation_module_days(center_account_id, module_id, day_index);
 CREATE INDEX IF NOT EXISTS idx_formation_modules_canonical_reuse
     ON formation_modules(canonical_fingerprint, validated_at, id)
     WHERE status = 'validated'
@@ -1104,6 +1302,9 @@ ALTER TABLE content_script_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE content_review_reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE formation_pipeline_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE formation_modules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE day_schedule_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE day_schedule_template_blocks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE formation_module_days ENABLE ROW LEVEL SECURITY;
 ALTER TABLE formation_module_assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE script_slide_decks ENABLE ROW LEVEL SECURITY;
 

@@ -1,9 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { apiFetch } from '../api'
+import { hasAdminAccess } from '../adminAccess'
 import AppLoader from './AppLoader.jsx'
 
-export default function ProtectedAdminRoute({ children, loginPath = '/connexion-centre', allowedAccountTypes = null }) {
+const NO_REQUIRED_PERMISSIONS = []
+
+export default function ProtectedAdminRoute({
+  children,
+  loginPath = '/connexion-centre',
+  allowedAccountTypes = null,
+  requiredPermissions = NO_REQUIRED_PERMISSIONS,
+}) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
   const [isLoading, setIsLoading] = useState(true)
 
@@ -24,9 +32,11 @@ export default function ProtectedAdminRoute({ children, loginPath = '/connexion-
 
         if (response.ok) {
           const data = await response.json().catch(() => ({}))
-          const accountType = data.account?.type
           if (isMounted) {
-            setIsAuthenticated(!allowedAccountTypes || allowedAccountTypes.includes(accountType))
+            setIsAuthenticated(hasAdminAccess(data.account, {
+              allowedAccountTypes,
+              requiredPermissions,
+            }))
           }
         } else if (response.status === 403 || response.status === 401) {
           // Non authentifié
@@ -60,7 +70,7 @@ export default function ProtectedAdminRoute({ children, loginPath = '/connexion-
       window.clearTimeout(timeoutId)
       controller.abort()
     }
-  }, [allowedAccountTypes])
+  }, [allowedAccountTypes, requiredPermissions])
 
   if (isLoading) {
     return <AppLoader label="Vérification de votre accès" />

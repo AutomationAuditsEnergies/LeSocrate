@@ -91,6 +91,21 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertAlmostEqual(cgs._course_words_per_minute(), 165.7)
 
+    def test_course_role_uses_dynamic_last_course_position(self):
+        middle_role = cgs._course_block_role(
+            5,
+            next_item=("questions_reponses_5.mp3", 900, "qa", 5),
+            total_courses=8,
+        )
+        last_role = cgs._course_block_role(
+            5,
+            next_item=("questions_reponses_5.mp3", 900, "qa", 5),
+            total_courses=5,
+        )
+
+        self.assertNotIn("Fin de journée", middle_role)
+        self.assertIn("Fin de journée", last_role)
+
     def test_default_course_budget_uses_bloc_calibration_from_fish_audio_samples(self):
         playlist = [
             ("cours_9h00_9h45.mp3", 2700, "cours", 1),
@@ -107,6 +122,90 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         self.assertEqual(budget["target_words"], expected_c1 + expected_c6)
         self.assertEqual(budget["course_items"][0]["target_words"], expected_c1)
         self.assertEqual(budget["course_items"][1]["target_words"], expected_c6)
+
+    def test_dynamic_course_budget_uses_exact_single_thirty_second_margin(self):
+        playlist = [
+            ("course_01.mp3", 35 * 60, "cours", 1),
+            ("qa_01.mp3", 10 * 60, "qa", 1),
+            ("pause_01.mp3", 10 * 60, "pause", 1),
+            ("course_02.mp3", 45 * 60, "cours", 2),
+            ("qa_02.mp3", 10 * 60, "qa", 2),
+            ("pause_02.mp3", 60 * 60, "pause_midi", 2),
+            ("course_03.mp3", 90 * 60, "cours", 3),
+        ]
+
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            cgs, "_course_final_silence_sec", return_value=120.0,
+        ):
+            budget = cgs.get_course_day_word_budget(playlist)
+
+        expected = [
+            int((35 - 0.5) * 165.7),
+            int((45 - 0.5) * 165.7),
+            int((90 - 0.5) * 165.7),
+        ]
+        self.assertEqual(
+            [item["target_words"] for item in budget["course_items"]],
+            expected,
+        )
+        self.assertEqual(budget["target_words"], sum(expected))
+        self.assertTrue(budget["dynamic_schedule"])
+        self.assertEqual(budget["audio_margin_sec"], 30.0)
+        self.assertEqual(
+            budget["course_items"][0]["speakable_sec"],
+            (35 * 60) - 30,
+        )
+
+    def test_dynamic_voice_gate_reserves_exactly_thirty_seconds_total(self):
+        target_sec = 35 * 60
+        bloc = {
+            "bloc_number": 1,
+            "target_sec": target_sec,
+            "dynamic_schedule": True,
+        }
+
+        self.assertEqual(
+            cgs._course_voice_window_sec(target_sec, True),
+            target_sec - 30,
+        )
+        cgs._assert_course_voice_before_final_silence(
+            bloc,
+            target_sec - 30,
+        )
+        with self.assertRaisesRegex(ValueError, "silence final"):
+            cgs._assert_course_voice_before_final_silence(
+                bloc,
+                target_sec - 29.9,
+            )
+
+    def test_dynamic_generation_context_uses_the_matching_course_budget(self):
+        playlist = [
+            ("course_01.mp3", 35 * 60, "cours", 1),
+            ("qa_01.mp3", 5 * 60, "qa", 1),
+            ("pause_01.mp3", 60 * 60, "pause_midi", 1),
+            ("course_02.mp3", 90 * 60, "cours", 2),
+            ("qa_02.mp3", 5 * 60, "qa", 2),
+        ]
+        generation_context = {
+            "sub_part_index": 1,
+            "folder_position": 1,
+            "playlist_spec": playlist,
+        }
+
+        budget = cgs.get_course_segment_generation_budget(
+            generation_context=generation_context,
+        )
+        expected_course_words = int((90 - 0.5) * 165.7)
+
+        self.assertEqual(
+            budget["block_budget"]["target_words"],
+            expected_course_words,
+        )
+        self.assertEqual(budget["segment_count"], 3)
+        self.assertEqual(
+            budget["target_words"],
+            int(expected_course_words * 0.97 / 3),
+        )
 
     def test_actual_reading_summary_exposes_wpm_and_text_read(self):
         meta = {
@@ -219,7 +318,7 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             "role": "test",
         }
 
-        with patch.object(cgs, "_anthropic_post", return_value=overlong):
+        with patch.object(cgs, "_deepseek_post", return_value=overlong):
             calibrated, result = cgs._calibrate_single_audio_block(
                 block=block,
                 text=overlong,

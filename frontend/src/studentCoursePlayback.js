@@ -7,7 +7,6 @@ export function isBreakAudioType(type) {
 export function getStudentAudioProxyPath(audioInfo, audioName = '') {
   if (
     audioInfo?.status !== 'playing'
-    || isBreakAudioType(audioInfo.type)
     || !audioInfo.streamToken
   ) return ''
   const version = `${audioInfo.id || audioName}-${audioInfo.duration || 0}`

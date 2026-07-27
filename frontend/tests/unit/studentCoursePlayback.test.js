@@ -16,11 +16,17 @@ test('streams teaching audio through the authenticated API proxy', () => {
   )
 })
 
-test('does not download an audio file for silent break segments', () => {
+test('streams the timed MP3 for Q&A and break segments', () => {
   for (const type of ['qa', 'pause', 'pause_midi']) {
     assert.equal(
-      getStudentAudioProxyPath({ status: 'playing', id: 5, duration: 900, type }, 'pause.mp3'),
-      '',
+      getStudentAudioProxyPath({
+        status: 'playing',
+        id: 5,
+        duration: 900,
+        type,
+        streamToken: `ticket-${type}`,
+      }, 'pause.mp3'),
+      `/api/audio/stream?stream_token=ticket-${type}&v=5-900`,
     )
   }
 })

@@ -30,6 +30,7 @@ from repositories.pipeline_repository import (
     list_script_slide_deck_rows_for_audio_lookup,
     update_script_slide_deck_audio_sync_row,
 )
+from repositories.teacher_asset_repository import resolve_folder_asset_origin
 from services.content_pipeline.artifacts import (
     CONTENT_COURSE_SCRIPTS_BLOB,
     CONTENT_DRAFT_SECTIONS_BLOB,
@@ -37,7 +38,7 @@ from services.content_pipeline.artifacts import (
     load_content_artifact,
 )
 from services.content_pipeline.prompts import load_prompt_file
-from utils.anthropic_client import default_model, post_message
+from utils.deepseek_client import default_model, post_message
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -641,12 +642,56 @@ def _unique_ints(values: Iterable[int | None]) -> list[int]:
 def get_latest_script_slide_deck_for_audio(
     audio_filename: str,
     platform_id: int | None = None,
+    *,
+    folder_id: int | None = None,
+    module_day_id: int | None = None,
+    audio_storage_prefix: str | None = None,
 ) -> dict | None:
-    """Find the latest generated deck that contains timings for an audio file."""
+    """Find the latest generated deck that contains timings for an audio file.
+
+    A V2 lookup is deliberately folder-scoped. Dynamic day filenames such as
+    ``course_01.mp3`` repeat across module days, so the broad platform/job
+    search remains valid only for legacy V1 callers.
+    """
     _ensure_slide_deck_tables()
     target_audio = _audio_basename(audio_filename)
     if not target_audio:
         return None
+
+    v2_scope_requested = any(
+        value is not None
+        for value in (folder_id, module_day_id, audio_storage_prefix)
+    )
+    if v2_scope_requested:
+        scoped_folder_ids = _unique_ints([folder_id])
+        scoped_module_day_ids = _unique_ints([module_day_id])
+        normalized_prefix = str(audio_storage_prefix or "").strip("/")
+        if (
+            len(scoped_folder_ids) != 1
+            or len(scoped_module_day_ids) != 1
+            or re.fullmatch(r"course-sessions/[1-9]\d*", normalized_prefix) is None
+        ):
+            return None
+        requested_folder_id = scoped_folder_ids[0]
+        origin = resolve_folder_asset_origin(requested_folder_id)
+        source_folder_id = requested_folder_id
+        if origin:
+            try:
+                resolved_requested_id = int(
+                    origin.get("requested_folder_id") or requested_folder_id
+                )
+                source_folder_id = int(origin.get("source_folder_id"))
+            except (TypeError, ValueError):
+                return None
+            if (
+                resolved_requested_id != requested_folder_id
+                or source_folder_id <= 0
+            ):
+                return None
+        deck = get_latest_script_slide_deck(source_folder_id)
+        if not deck or not _deck_references_audio(deck, target_audio):
+            return None
+        return deck
 
     platform_ids = _unique_ints([platform_id])
     job_ids: list[int] = []
@@ -2595,7 +2640,7 @@ CATALOGUE TEMPLATES:
 TEMPLATES AUTORISÉS ET SCHÉMAS:
 - welcome: data={{"title":"Bienvenue","formation_name":"nom formation","day_label":"Journée X","meta_note":"note courte"}}
 - program_year: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Parcours annuel","phases":[{{"title":"phase","desc":"1 phrase"}}]}} avec exactement 2 phases
-- day_program_7_steps: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Feuille de route","active_item":1,"items":["thème 1","thème 2"]}} avec exactement 7 items
+- day_program_7_steps: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Feuille de route","active_item":1,"items":["thème 1","thème 2"]}} avec 4 à 10 items, exactement un par cours prévu dans la journée lorsque ce nombre est fourni
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
 - definition: data={{"term":"mot ou notion","eyebrow":"contexte court","definition":"1 phrase","isItems":["critère","critère"]}}
@@ -3057,7 +3102,9 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
         }
 
     if template in {"program_year", "day_program", "day_program_7_steps"}:
-        max_items = 7 if template == "day_program_7_steps" else 2
+        # The historical template name is kept for compatibility, but V2 day
+        # plans legitimately contain 4 to 10 course themes.
+        max_items = 10 if template == "day_program_7_steps" else 2
         items = []
         for item in _limit_list(data.get("phases") or data.get("items") or data.get("points"), max_items):
             if isinstance(item, dict):
@@ -3093,7 +3140,12 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "items": items or [_shorten(fallback_text, 90)],
         }
         if template == "day_program_7_steps":
-            normalized["active_item"] = _safe_int(data.get("active_item"), 1, 1, 7)
+            normalized["active_item"] = _safe_int(
+                data.get("active_item"),
+                1,
+                1,
+                max(1, len(items)),
+            )
         return normalized
 
     if template == "casestudy":

@@ -107,6 +107,307 @@ class PostgresMigrationUtilsTest(unittest.TestCase):
         conn.close()
         self.assertEqual(values, [1, "hash", None])
 
+    def test_pipeline_permission_is_normalized_as_a_boolean(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT 1 AS id, 0 AS pipeline_access_enabled"
+        ).fetchone()
+        values = normalize_row(
+            "training_center_accounts",
+            ["id", "pipeline_access_enabled"],
+            row,
+            assumed_timezone=timezone_from_name("Europe/Paris"),
+        )
+        conn.close()
+        self.assertEqual(values[0], 1)
+        self.assertIs(values[1], False)
+
+    def test_legacy_pipeline_bootstrap_preserves_an_explicit_revocation(self):
+        decision = core_migration.should_bootstrap_legacy_pipeline_operator
+
+        self.assertTrue(
+            decision(
+                source_has_permission_column=False,
+                previous_target_permission=None,
+            )
+        )
+        self.assertTrue(
+            decision(
+                source_has_permission_column=False,
+                previous_target_permission=True,
+            )
+        )
+        self.assertFalse(
+            decision(
+                source_has_permission_column=False,
+                previous_target_permission=False,
+            )
+        )
+        self.assertFalse(
+            decision(
+                source_has_permission_column=True,
+                previous_target_permission=None,
+            )
+        )
+
+    def test_reconcile_restores_target_revocation_after_stale_source_grant(self):
+        class FakeCursor:
+            def __init__(self, connection):
+                self.connection = connection
+                self.rows = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params):
+                normalized = " ".join(str(query).split())
+                if "SET pipeline_access_enabled = FALSE" in normalized:
+                    self.connection.permission_enabled = False
+                    self.rows = []
+                elif normalized.startswith(
+                    "SELECT id, is_active, pipeline_access_enabled"
+                ):
+                    self.rows = [
+                        (7, True, self.connection.permission_enabled)
+                    ]
+                elif normalized.startswith("UPDATE platform_config"):
+                    self.connection.platform_update_called = True
+                    self.rows = [(101,)]
+                else:
+                    raise AssertionError(f"Requête inattendue: {normalized} {params}")
+
+            def fetchall(self):
+                return list(self.rows)
+
+        class FakeConnection:
+            def __init__(self):
+                # Simule copy_table venant de réimporter TRUE depuis SQLite.
+                self.permission_enabled = True
+                self.platform_update_called = False
+
+            def cursor(self):
+                return FakeCursor(self)
+
+        sqlite_conn = sqlite3.connect(":memory:")
+        sqlite_conn.executescript(
+            """
+            CREATE TABLE training_center_accounts (
+                id INTEGER PRIMARY KEY,
+                pipeline_access_enabled INTEGER NOT NULL
+            );
+            CREATE TABLE formation_pipeline_jobs (
+                id INTEGER PRIMARY KEY,
+                platform_id INTEGER NOT NULL
+            );
+            INSERT INTO formation_pipeline_jobs VALUES (1, 101);
+            """
+        )
+        target = FakeConnection()
+
+        enabled, attached = (
+            core_migration.reconcile_pipeline_operator_after_core_copy(
+                sqlite_conn,
+                target,
+                previous_target_permission=False,
+            )
+        )
+
+        sqlite_conn.close()
+        self.assertFalse(enabled)
+        self.assertEqual(attached, 0)
+        self.assertFalse(target.permission_enabled)
+        self.assertFalse(target.platform_update_called)
+
+    def test_core_temporarily_neutralizes_v2_module_day_binding(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT 81 AS id, 42 AS module_day_id, "
+            "'2026-07-15 10:30:00' AS scheduled_at"
+        ).fetchone()
+        columns = ["id", "module_day_id", "scheduled_at"]
+
+        values = core_migration.normalize_row(
+            "course_sessions",
+            columns,
+            row,
+            assumed_timezone=timezone_from_name("Europe/Paris"),
+        )
+
+        conn.close()
+        self.assertEqual(values[0:2], [81, None])
+        self.assertEqual(values[2].isoformat(), "2026-07-15T08:30:00+00:00")
+
+    def test_pipeline_tables_follow_v2_foreign_key_order(self):
+        tables = pipeline_migration.PIPELINE_TABLES
+        for table in (
+            "day_schedule_templates",
+            "day_schedule_template_blocks",
+            "formation_module_days",
+            "formation_module_assets",
+        ):
+            self.assertIn(table, tables)
+        self.assertLess(tables.index("formation_pipeline_jobs"), tables.index("formation_modules"))
+        self.assertLess(tables.index("formation_modules"), tables.index("formation_module_days"))
+        self.assertLess(tables.index("day_schedule_templates"), tables.index("formation_module_days"))
+        self.assertLess(tables.index("formation_module_days"), tables.index("cours_folders"))
+        self.assertLess(tables.index("cours_folders"), tables.index("formation_module_assets"))
+
+    def test_pipeline_declares_every_v2_type_normalization(self):
+        self.assertEqual(
+            pipeline_migration.BOOL_COLUMNS["formation_module_days"],
+            {"immutable"},
+        )
+        self.assertEqual(
+            pipeline_migration.BOOL_COLUMNS["formation_module_assets"],
+            {"immutable"},
+        )
+        self.assertTrue(
+            {"immutable", "canonical_reuse_allowed"}.issubset(
+                pipeline_migration.BOOL_COLUMNS["formation_modules"]
+            )
+        )
+        expected_json = {
+            "formation_pipeline_jobs": "schedule_snapshot_json",
+            "formation_modules": "canonical_signature_json",
+            "day_schedule_templates": "blocks_snapshot_json",
+            "day_schedule_template_blocks": "metadata_json",
+            "formation_module_days": "blocks_snapshot_json",
+            "formation_module_assets": "generation_params_json",
+        }
+        for table, column in expected_json.items():
+            self.assertIn(column, pipeline_migration.JSON_COLUMNS[table])
+            self.assertIn(column, pipeline_migration.JSONB_COLUMNS[table])
+        expected_timestamps = {
+            "formation_pipeline_jobs": {"schedule_locked_at"},
+            "formation_modules": {"schedule_locked_at", "reusable_at"},
+            "day_schedule_templates": {
+                "used_at",
+                "locked_at",
+                "deleted_at",
+                "created_at",
+                "updated_at",
+            },
+            "day_schedule_template_blocks": {"created_at"},
+            "formation_module_days": {"locked_at", "created_at"},
+            "formation_module_assets": {
+                "last_verified_at",
+                "created_at",
+                "updated_at",
+            },
+        }
+        for table, columns in expected_timestamps.items():
+            self.assertTrue(columns.issubset(pipeline_migration.TIMESTAMP_COLUMNS[table]))
+
+    def test_pipeline_v2_values_are_normalized_and_jsonb_adapted(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT 7 AS id,
+                   1 AS immutable,
+                   '{"voice":"stable"}' AS canonical_signature_json,
+                   '2026-07-15 10:30:00' AS schedule_locked_at,
+                   '2026-07-16 10:30:00' AS reusable_at
+            """
+        ).fetchone()
+        columns = [
+            "id",
+            "immutable",
+            "canonical_signature_json",
+            "schedule_locked_at",
+            "reusable_at",
+        ]
+
+        values = pipeline_migration.normalize_row(
+            "formation_modules",
+            columns,
+            row,
+            assumed_timezone=timezone_from_name("Europe/Paris"),
+        )
+        prepared = pipeline_migration.prepare_postgres_row(
+            "formation_modules",
+            columns,
+            values,
+        )
+
+        conn.close()
+        self.assertIs(values[1], True)
+        self.assertEqual(values[3].isoformat(), "2026-07-15T08:30:00+00:00")
+        self.assertEqual(values[4].isoformat(), "2026-07-16T08:30:00+00:00")
+        self.assertEqual(prepared[2].obj, {"voice": "stable"})
+
+    def test_pipeline_restores_and_verifies_course_session_module_days(self):
+        class FakeCursor:
+            def __init__(self, session_ids, module_day_ids):
+                self.session_ids = set(session_ids)
+                self.module_day_ids = set(module_day_ids)
+                self.restored = {}
+                self.current = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, _query, params):
+                module_day_id, session_id, checked_module_day_id = params
+                if (
+                    module_day_id == checked_module_day_id
+                    and session_id in self.session_ids
+                    and module_day_id in self.module_day_ids
+                ):
+                    self.restored[session_id] = module_day_id
+                    self.current = (session_id, module_day_id)
+                else:
+                    self.current = None
+
+            def fetchone(self):
+                return self.current
+
+        class FakeConnection:
+            def __init__(self, cursor):
+                self._cursor = cursor
+
+            def cursor(self):
+                return self._cursor
+
+        sqlite_conn = sqlite3.connect(":memory:")
+        sqlite_conn.row_factory = sqlite3.Row
+        sqlite_conn.executescript(
+            """
+            CREATE TABLE course_sessions (
+                id INTEGER PRIMARY KEY,
+                module_day_id INTEGER
+            );
+            INSERT INTO course_sessions VALUES (10, 100), (11, NULL);
+            """
+        )
+        cursor = FakeCursor(session_ids={10, 11}, module_day_ids={100})
+
+        restored = pipeline_migration.restore_course_session_module_days(
+            sqlite_conn,
+            FakeConnection(cursor),
+        )
+
+        self.assertEqual(restored, 1)
+        self.assertEqual(cursor.restored, {10: 100})
+        cursor.module_day_ids.clear()
+        with self.assertRaisesRegex(
+            MigrationValidationError,
+            "session=10, module_day=100",
+        ):
+            pipeline_migration.restore_course_session_module_days(
+                sqlite_conn,
+                FakeConnection(cursor),
+            )
+        sqlite_conn.close()
+
     def test_core_preflight_reports_orphan_platform_data_before_copy(self):
         conn = sqlite3.connect(":memory:")
         conn.executescript(

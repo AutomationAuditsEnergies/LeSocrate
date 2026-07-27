@@ -199,6 +199,10 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
         lease = _Lease()
 
         with patch.object(service, "claim_order_for_fulfillment", return_value=order), patch.object(
+            service,
+            "get_reusable_module",
+            return_value={"id": 8, "schedule_schema_version": 1},
+        ), patch.object(
             service, "create_pipeline_platform", return_value={"id": 120}
         ) as create_platform, patch.object(
             service,

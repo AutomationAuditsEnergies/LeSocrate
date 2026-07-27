@@ -20,6 +20,8 @@ import {
 import { apiFetch } from '../api'
 import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
+import DayScheduleTemplates from './DayScheduleTemplates.jsx'
+import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
 import {
@@ -29,6 +31,7 @@ import {
 } from '../centerWorkspace'
 import { applyKnownRncpTraining, validateRecruitmentAnswer } from '../recruitmentConversation'
 import { buildTeacherDescription } from '../teacherIdentity'
+import { classifyFormationAudios } from '../audioLibrary'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -98,6 +101,7 @@ export default function HRDashboard() {
   const [expandedAttendancePlatform, setExpandedAttendancePlatform] = useState(null)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [createOrderError, setCreateOrderError] = useState('')
   const [newlyCreatedPlatformId, setNewlyCreatedPlatformId] = useState(null)
   const [retryingPlatformId, setRetryingPlatformId] = useState(null)
   // Modules formation disponibles (produits persistants des pipelines terminées).
@@ -120,21 +124,7 @@ export default function HRDashboard() {
   const [newFormTpName, setNewFormTpName] = useState('')
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
-  // Auto-pilot : si activé, une fois le job pipeline initié on appelle l'endpoint
-  // /run-auto qui chaîne toutes les étapes (REAC → KB → global → daily → content
-  // → conformité locale → Word 2). L'audio se lance ensuite à la demande.
-  // Sinon, comportement historique : redirection vers
-  // /formation-pipeline pour validation manuelle étape par étape.
-  const [autoPilot, setAutoPilot] = useState(false)
-  // Mode d'exécution des étapes IA (KB, global, daily, content, review) :
-  // - 'api'          : appels directs à l'API Anthropic (consomme ANTHROPIC_API_KEY)
-  // - 'api_deepseek' : appels directs à l'API DeepSeek (consomme DEEPSEEK_API_KEY)
-  // - 'claude_code'  : subprocess `claude` local (forfait Pro/Max via OAuth, gratuit côté API)
-  // - 'test'         : skip KB/global/daily/content, injecte des DOCX/TXT pré-rédigés.
-  //                    La pipeline ne tourne que finalize + conformité locale + Word 2.
-  //                    Permet de valider les étapes en aval en ~5 min au lieu de 30-60.
-  const [autoPilotMode, setAutoPilotMode] = useState('api')  // 'api' | 'api_deepseek' | 'claude_code' | 'test'
-  const [testDocs, setTestDocs] = useState([])  // File[] uploadés pour le mode test
+  const [initialScheduleV2, setInitialScheduleV2] = useState(null)
   const creatingRef = useRef(false)
   const creationRequestRef = useRef({ fingerprint: '', id: '' })
   const audioRef = useRef(null)
@@ -401,12 +391,30 @@ export default function HRDashboard() {
           }
           const schedule = project.new_formation?.schedule || project.schedule
           if (schedule) {
+            if (
+              Number(schedule.schedule_schema_version || schedule.schema_version) === 2
+              && Array.isArray(schedule.selected_dates)
+              && project.new_formation
+            ) {
+              setNewFormHours(String(schedule.selected_dates.length))
+            }
             setWeeklyCourseCount(String(schedule.weekly_course_count || 2))
             setTeachingDays(schedule.weekdays || [])
             setScheduleStartDate(schedule.start_date || todayDateInput())
             setScheduleStartTime('09:00')
+            setInitialScheduleV2(
+              Number(schedule.schedule_schema_version || schedule.schema_version) === 2
+                ? schedule
+                : null,
+            )
           }
-          creationRequestRef.current = { fingerprint: '', id: data.order.creation_request_id || '' }
+          creationRequestRef.current = {
+            fingerprint: JSON.stringify({
+              operation_type: data.order.operation_type,
+              project,
+            }),
+            id: data.order.creation_request_id || '',
+          }
           setShowCreateModal(true)
         })
         .catch((error) => console.error('Restauration commande impossible:', error))
@@ -918,8 +926,8 @@ export default function HRDashboard() {
     setNewFormTpName('')
     setNewFormRncp('')
     setNewFormHours('')
-    setAutoPilot(true)
-    setAutoPilotMode('api_deepseek')
+    setInitialScheduleV2(null)
+    setCreateOrderError('')
     creationRequestRef.current = { fingerprint: '', id: '' }
   }
 
@@ -960,6 +968,14 @@ export default function HRDashboard() {
     setModuleSearchQuery('')
   }
 
+  const showScheduleTemplatesView = () => {
+    setWorkspaceSection('schedule-templates')
+    setShowModulesModal(false)
+    setShowCreateModal(false)
+    setRecruitmentPrefilled(false)
+    setModuleSearchQuery('')
+  }
+
   const handleAssistantComplete = (draft) => {
     resetCreateForm()
     setTeacherFirstName(draft.teacherName)
@@ -990,8 +1006,9 @@ export default function HRDashboard() {
     return () => window.clearTimeout(timeoutId)
   }, [newlyCreatedPlatformId])
 
-  const handleCreatePlatform = async (teacherDescription = '') => {
+  const handleCreatePlatform = async (teacherDescription = '', schedule = null) => {
     if (creatingRef.current) return
+    setCreateOrderError('')
     const teacherName = teacherFirstName.trim()
     const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
     const trainingTitle = formationMode === 'existing'
@@ -1007,54 +1024,65 @@ export default function HRDashboard() {
       teacher_description: String(teacherDescription || '').trim(),
     }
     let operationType = 'new_teacher'
-    const weeklyCount = parseInt(weeklyCourseCount, 10)
-    if (!weeklyCount || weeklyCount <= 0 || teachingDays.length === 0 || weeklyCount !== teachingDays.length) {
-      alert('Choisissez autant de jours que de cours par semaine.')
-      return
-    }
-    if (!scheduleStartDate || !scheduleStartTime) {
-      alert('Indiquez la date de début et l’heure des journées.')
+    const scheduleVersion = Number(
+      schedule?.schedule_schema_version
+      || schedule?.schema_version
+      || (Array.isArray(schedule?.selected_dates) ? 2 : 1),
+    )
+    const selectedDates = Array.isArray(schedule?.selected_dates)
+      ? schedule.selected_dates
+      : []
+    if (
+      formationMode !== 'existing'
+      && (scheduleVersion !== 2 || selectedDates.length === 0)
+    ) {
+      setCreateOrderError('Validez le calendrier et l’organisation des journées avant de continuer.')
       return
     }
     if (formationMode === 'existing') {
       if (!selectedModuleId) {
-        alert('Sélectionnez un ancien professeur IA.')
+        setCreateOrderError('Sélectionnez un ancien professeur IA.')
         return
       }
+      const moduleScheduleVersion = Number(selectedModule?.schedule_schema_version || 1)
+      if (moduleScheduleVersion >= 2) {
+        if (scheduleVersion !== 2 || selectedDates.length === 0) {
+          setCreateOrderError('Sélectionnez toutes les nouvelles dates de ce module.')
+          return
+        }
+      } else {
+        const weeklyCount = Number(schedule?.weekly_course_count || 0)
+        const weekdays = Array.isArray(schedule?.weekdays) ? schedule.weekdays : []
+        if (
+          weeklyCount <= 0
+          || weeklyCount !== weekdays.length
+          || !schedule?.start_date
+          || schedule?.start_time !== '09:00'
+        ) {
+          setCreateOrderError('Complétez le calendrier classique de cet ancien module.')
+          return
+        }
+      }
       operationType = 'reuse_teacher'
-      const totalDays = Math.max(
-        1,
-        Number(selectedModule?.schedule?.total_training_days || Math.ceil(Number(selectedModule?.total_hours || 7) / 7)),
-      )
       project = {
         ...project,
         module_id: parseInt(selectedModuleId, 10),
-        schedule: {
-          total_training_days: totalDays,
-          weekly_course_count: weeklyCount,
-          weekdays: teachingDays,
-          start_date: scheduleStartDate,
-          start_time: scheduleStartTime,
-        },
+        schedule,
       }
     } else {
       const rncp = newFormRncp.trim()
-      const trainingDaysCount = parseInt(newFormHours, 10)
-      if (!trainingTitle || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
-        alert('Nom de formation, code RNCP et nombre de journées requis.')
+      const trainingDaysCount = selectedDates.length
+      if (!trainingTitle || !rncp || !trainingDaysCount) {
+        setCreateOrderError('Nom de formation, code RNCP et calendrier validé requis.')
         return
       }
       project.new_formation = {
         tp_name: trainingTitle,
         rncp_code: rncp,
+        // Champ de compatibilité V1. En V2, selected_dates est l’unique
+        // autorité pour le nombre de journées.
         total_hours: trainingDaysCount * 7,
-        schedule: {
-          total_training_days: trainingDaysCount,
-          weekly_course_count: weeklyCount,
-          weekdays: teachingDays,
-          start_date: scheduleStartDate,
-          start_time: scheduleStartTime,
-        },
+        schedule,
       }
     }
 
@@ -1082,7 +1110,7 @@ export default function HRDashboard() {
           project,
         }),
       })
-      const data = await resp.json()
+      const data = await resp.json().catch(() => ({}))
       if (resp.ok && data.success) {
         if (data.next_action === 'redirect' && data.checkout_url) {
           window.location.assign(data.checkout_url)
@@ -1098,11 +1126,11 @@ export default function HRDashboard() {
         resetCreateForm()
         setShowModulesModal(false)
       } else {
-        alert(data.error || 'Impossible de lancer la commande.')
+        throw new Error(data.error || data.message || 'Impossible de lancer la commande.')
       }
     } catch (e) {
       console.error('Erreur commande professeur IA:', e)
-      alert('Impossible de lancer la commande.')
+      setCreateOrderError(e.message || 'Impossible de lancer la commande.')
     } finally {
       creatingRef.current = false
       setCreating(false)
@@ -1164,8 +1192,7 @@ export default function HRDashboard() {
     return <AppLoader label="Chargement du tableau de bord" surface={darkMode ? 'dark' : 'light'} />
   }
 
-  // Palette blanche commune aux références Coursebox et Delos. Le violet reste
-  // réservé aux actions et aux états actifs de l'espace centre.
+  // Palette neutre commune au nouvel espace centre.
   const colors = {
     bg: '#FFFFFF',
     cardBg: '#FFFFFF',
@@ -1176,7 +1203,7 @@ export default function HRDashboard() {
     border: '#D9D9DE',
     borderLight: '#E9E9EC',
     hoverBg: '#F5F5F6',
-    primary: '#6D4AC7',
+    primary: '#18181B',
     gridOpacity: '0',
   }
   const platformsAlertIsWarning = platformsErrorTone === 'warning'
@@ -1191,6 +1218,7 @@ export default function HRDashboard() {
           activeSection={workspaceSection}
           onShowTeachers={showDashboardView}
           onShowRecruit={showRecruitView}
+          onShowScheduleTemplates={showScheduleTemplatesView}
           onLogout={handleLogout}
           loggingOut={loggingOut}
           language={interfaceLanguage}
@@ -1202,15 +1230,43 @@ export default function HRDashboard() {
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex h-14 items-center justify-between border-b px-4 md:hidden" style={{ borderColor: colors.borderLight, backgroundColor: colors.cardBg }}>
-            <span className="text-sm font-semibold" style={{ color: colors.text }}>
-              {workspaceSection === 'teachers' ? 'Mes professeurs' : 'Recruter un professeur'}
+            <span className="min-w-0 truncate pr-2 text-sm font-semibold" style={{ color: colors.text }}>
+              {workspaceSection === 'teachers'
+                ? 'Mes professeurs'
+                : workspaceSection === 'schedule-templates'
+                  ? 'Organisation des cours'
+                  : 'Recruter un professeur'}
             </span>
-            <div className="flex items-center gap-1">
-              <button type="button" onClick={showRecruitView} className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6]" aria-label="Recruter un professeur" style={{ color: '#3F3F46' }}>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={showRecruitView}
+                className="flex h-11 w-11 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+                aria-label="Recruter un professeur"
+                aria-current={workspaceSection === 'recruit' ? 'page' : undefined}
+                style={{ color: '#3F3F46', backgroundColor: workspaceSection === 'recruit' ? '#E9E9E7' : 'transparent' }}
+              >
                 <Icon name="person_add_alt_1" className="text-lg" />
               </button>
-              <button type="button" onClick={showDashboardView} className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6]" aria-label="Mes professeurs" style={{ color: '#3F3F46' }}>
+              <button
+                type="button"
+                onClick={showDashboardView}
+                className="flex h-11 w-11 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+                aria-label="Mes professeurs"
+                aria-current={workspaceSection === 'teachers' ? 'page' : undefined}
+                style={{ color: '#3F3F46', backgroundColor: workspaceSection === 'teachers' ? '#E9E9E7' : 'transparent' }}
+              >
                 <Icon name="groups" className="text-lg" />
+              </button>
+              <button
+                type="button"
+                onClick={showScheduleTemplatesView}
+                className="flex h-11 w-11 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+                aria-label="Organisation des cours"
+                aria-current={workspaceSection === 'schedule-templates' ? 'page' : undefined}
+                style={{ color: '#3F3F46', backgroundColor: workspaceSection === 'schedule-templates' ? '#E9E9E7' : 'transparent' }}
+              >
+                <Icon name="calendar_view_day" className="text-lg" />
               </button>
             </div>
           </div>
@@ -1336,16 +1392,12 @@ export default function HRDashboard() {
               setNewFormRncp={setNewFormRncp}
               newFormHours={newFormHours}
               setNewFormHours={setNewFormHours}
-              autoPilot={autoPilot}
-              setAutoPilot={setAutoPilot}
-              autoPilotMode={autoPilotMode}
-              setAutoPilotMode={setAutoPilotMode}
-              testDocs={testDocs}
-              setTestDocs={setTestDocs}
+              initialScheduleV2={initialScheduleV2}
               creating={creating}
               billing={billing}
               billingLoading={billingLoading}
               prefilledFromAssistant={recruitmentPrefilled}
+              submissionError={createOrderError}
               onCreate={handleCreatePlatform}
               onCancel={() => { setShowCreateModal(false); setRecruitmentPrefilled(false); resetCreateForm() }}
             />
@@ -1356,6 +1408,8 @@ export default function HRDashboard() {
               onComplete={handleAssistantComplete}
               onManualCreate={openCreateModal}
             />
+          ) : workspaceSection === 'schedule-templates' ? (
+            <DayScheduleTemplates />
           ) : (
             <PlatformCardsView
               platforms={platforms}
@@ -1896,6 +1950,7 @@ function CenterWorkspaceSidebar({
   activeSection,
   onShowTeachers,
   onShowRecruit,
+  onShowScheduleTemplates,
   onLogout,
   loggingOut,
   language,
@@ -1920,6 +1975,7 @@ function CenterWorkspaceSidebar({
   const navItems = [
     { id: 'recruit', label: 'Recruter un professeur', icon: UserPlus, onClick: onShowRecruit },
     { id: 'teachers', label: 'Mes professeurs', icon: UsersRound, onClick: onShowTeachers },
+    { id: 'schedule-templates', label: 'Organisation des cours', icon: CalendarDays, onClick: onShowScheduleTemplates },
   ]
 
   return (
@@ -1934,12 +1990,12 @@ function CenterWorkspaceSidebar({
     >
       <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
         {!collapsed && (
-          <img src="/socrate-mark.svg" alt="Le Socrate" className="h-8 w-8" />
+          <img src="/socrate-mark.svg" alt="Le Socrate" className="h-8 w-8 grayscale contrast-200" />
         )}
         <button
           type="button"
           onClick={() => setCollapsed((value) => !value)}
-          className="flex h-8 w-8 items-center justify-center rounded-md text-[#6B6B68] transition-colors duration-150 hover:bg-black/[0.055] hover:text-[#191918] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60"
+          className="flex h-11 w-11 items-center justify-center rounded-md text-[#6B6B68] transition-colors duration-150 hover:bg-black/[0.055] hover:text-[#191918] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
           aria-label={collapsed ? 'Déployer la barre latérale' : 'Réduire la barre latérale'}
           aria-expanded={!collapsed}
         >
@@ -1957,7 +2013,7 @@ function CenterWorkspaceSidebar({
               type="button"
               onClick={item.onClick}
               aria-current={selected ? 'page' : undefined}
-              className={`flex min-h-8 w-full items-center rounded-md py-1.5 text-left text-sm font-medium transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-2'}`}
+              className={`flex min-h-11 w-full items-center rounded-md py-1.5 text-left text-sm font-medium transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-2'}`}
               style={{
                 backgroundColor: selected ? '#E9E9E7' : 'transparent',
                 color: selected ? '#191918' : '#5F5E5A',
@@ -1973,7 +2029,7 @@ function CenterWorkspaceSidebar({
 
       <div className={`mt-auto ${collapsed ? 'p-2' : 'p-2'}`}>
         <details className="group relative" onToggle={(event) => { if (!event.currentTarget.open) setAccountPanel('menu') }}>
-          <summary className={`flex cursor-pointer list-none items-center rounded-md py-1.5 transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 ${collapsed ? 'justify-center px-1' : 'gap-2.5 px-2'}`}>
+          <summary className={`flex min-h-11 cursor-pointer list-none items-center rounded-md py-1.5 transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 ${collapsed ? 'justify-center px-1' : 'gap-2.5 px-2'}`}>
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#191918] text-[11px] font-semibold text-white">
               {initials}
             </span>
@@ -1991,11 +2047,11 @@ function CenterWorkspaceSidebar({
           <div className={`absolute bottom-[calc(100%+6px)] overflow-hidden rounded-lg border border-black/10 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.08)] ${collapsed ? 'left-0 w-[220px]' : 'left-0 w-full'}`}>
             {accountPanel === 'menu' && (
               <div className="p-1.5">
-                <button type="button" onClick={() => setAccountPanel('profile')} className="flex min-h-8 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                <button type="button" onClick={() => setAccountPanel('profile')} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
                   <UserRound size={16} strokeWidth={1.6} aria-hidden="true" />
                   <span>Profil</span>
                 </button>
-                <button type="button" onClick={() => setAccountPanel('settings')} className="flex min-h-8 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                <button type="button" onClick={() => setAccountPanel('settings')} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
                   <Settings size={16} strokeWidth={1.6} aria-hidden="true" />
                   <span>Paramètres</span>
                 </button>
@@ -2003,7 +2059,7 @@ function CenterWorkspaceSidebar({
                   type="button"
                   onClick={isSignedIn ? onLogout : () => window.location.assign('/connexion-centre')}
                   disabled={isSignedIn && loggingOut}
-                  className="flex min-h-8 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 disabled:opacity-60"
+                  className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 disabled:opacity-60"
                 >
                   {isSignedIn ? <LogOut size={16} strokeWidth={1.6} aria-hidden="true" /> : <LogIn size={16} strokeWidth={1.6} aria-hidden="true" />}
                   {isSignedIn ? (loggingOut ? 'Déconnexion…' : 'Se déconnecter') : 'Se connecter'}
@@ -2013,7 +2069,7 @@ function CenterWorkspaceSidebar({
 
             {accountPanel === 'profile' && (
               <div className="p-3">
-                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex min-h-11 items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
                   <ChevronLeft size={14} strokeWidth={1.6} aria-hidden="true" /> Retour
                 </button>
                 <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</p>
@@ -2023,13 +2079,13 @@ function CenterWorkspaceSidebar({
 
             {accountPanel === 'settings' && (
               <div className="p-3">
-                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex min-h-11 items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
                   <ChevronLeft size={14} strokeWidth={1.6} aria-hidden="true" /> Retour
                 </button>
                 <p className="mb-2 text-xs font-semibold" style={{ color: colors.text }}>Langue de l’interface</p>
                 <div className="grid grid-cols-2 gap-2">
                   {['fr', 'en'].map((option) => (
-                    <button key={option} type="button" onClick={() => onLanguageChange(option)} className="rounded-md border px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60" style={{ backgroundColor: language === option ? '#F2F9FF' : '#fff', borderColor: language === option ? '#97CFF8' : '#DFDCD9', color: language === option ? '#005BAB' : '#73736F' }}>
+                    <button key={option} type="button" onClick={() => onLanguageChange(option)} className="min-h-11 rounded-md border px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50" style={{ backgroundColor: language === option ? '#E9E9E7' : '#fff', borderColor: language === option ? '#A1A1AA' : '#DFDCD9', color: language === option ? '#18181B' : '#73736F' }}>
                       {option.toUpperCase()}
                     </button>
                   ))}
@@ -3636,6 +3692,10 @@ function inferTeacherName(module = {}) {
 
 function formatModuleCadence(module = {}) {
   const schedule = module.schedule
+  if (Number(module.schedule_schema_version || 1) >= 2) {
+    const total = module.nb_days || schedule?.total_training_days || module.nb_folders || 0
+    return `${total} journée${total > 1 ? 's' : ''} · planning personnalisé`
+  }
   if (!schedule) {
     return `${module.nb_folders || 0} journée${(module.nb_folders || 0) > 1 ? 's' : ''}`
   }
@@ -3713,9 +3773,9 @@ function ModulesCatalogueView({
         <button
           onClick={onCreateModule}
           className="flex flex-shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors"
-          style={{ backgroundColor: '#8B5CF6' }}
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
+          style={{ backgroundColor: '#18181B' }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#27272A' }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#18181B' }}
           title="Créer un nouveau professeur IA"
         >
           <Icon name="add" className="text-base" />
@@ -3774,8 +3834,8 @@ function ModulesCatalogueView({
                       <span
                         className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
                         style={{
-                          backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                          color: '#10b981',
+                          backgroundColor: '#F4F4F5',
+                          color: '#3F3F46',
                           letterSpacing: '0.15em',
                         }}
                       >
@@ -3795,8 +3855,8 @@ function ModulesCatalogueView({
                       <span
                         className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase"
                         style={{
-                          backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                          color: '#f59e0b',
+                          backgroundColor: '#F4F4F5',
+                          color: '#52525B',
                           letterSpacing: '0.15em',
                         }}
                       >
@@ -3827,9 +3887,9 @@ function ModulesCatalogueView({
                     <button
                       onClick={() => onUseModule(m)}
                       className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors"
-                      style={{ backgroundColor: '#8B5CF6' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
-                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
+                      style={{ backgroundColor: '#18181B' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#27272A' }}
+                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#18181B' }}
                       title="Restaurer ce professeur IA dans Mes professeurs IA"
                     >
                       <span>Réutiliser</span>
@@ -3881,10 +3941,12 @@ export function CreatePlatformView({
   setNewFormRncp,
   newFormHours,
   setNewFormHours,
+  initialScheduleV2,
   creating,
   billing,
   billingLoading,
   prefilledFromAssistant,
+  submissionError,
   onCreate,
   onCancel,
 }) {
@@ -3904,6 +3966,10 @@ export function CreatePlatformView({
   ]
   const selectedColor = teacherColors.find((color) => color.id === teacherColor) || teacherColors[0]
   const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
+  const usesLegacyReuseSchedule = (
+    formationMode === 'existing'
+    && Number(selectedModule?.schedule_schema_version || 1) < 2
+  )
   const trainingTitle = formationMode === 'existing'
     ? String(selectedModule?.tp_name || '').trim()
     : newFormTpName.trim()
@@ -3913,25 +3979,40 @@ export function CreatePlatformView({
   )
   const [teacherDescription, setTeacherDescription] = useState(generatedDescription)
   const [colorPickerOpen, setColorPickerOpen] = useState(false)
+  const [schedulePlan, setSchedulePlan] = useState({
+    payload: null,
+    valid: false,
+    dayCount: 0,
+  })
   const descriptionEditedRef = useRef(false)
   const operationType = formationMode === 'existing' ? 'reuse_teacher' : 'new_teacher'
   const product = billing?.products?.[operationType]
   const trainingDays = formationMode === 'existing'
-    ? Math.max(1, Number(selectedModule?.schedule?.total_training_days || Math.ceil(Number(selectedModule?.total_hours || 7) / 7)))
-    : Math.max(0, Number(newFormHours) || 0)
+    ? Math.max(
+      1,
+      Number(
+        selectedModule?.nb_days
+        || selectedModule?.schedule?.total_training_days
+        || Math.ceil(Number(selectedModule?.total_hours || 7) / 7),
+      ),
+    )
+    : schedulePlan.dayCount
   const estimatedAmountCents = typeof product?.unit_amount_cents === 'number'
     ? product.unit_amount_cents * trainingDays
     : null
   const paymentRequired = billing?.payment_required !== false
   const billingReady = Boolean(billing && (!paymentRequired || product?.configured))
-  const canCreateTeacher = (
-    teacherFirstName.trim()
-    && (formationMode === 'existing' ? selectedModule : (newFormTpName.trim() && newFormRncp.trim() && Number(newFormHours) > 0))
-    && Number(weeklyCourseCount) > 0
+  const legacyScheduleValid = (
+    Number(weeklyCourseCount) > 0
     && Number(weeklyCourseCount) === teachingDays.length
     && teachingDays.length > 0
     && scheduleStartDate
-    && scheduleStartTime
+    && scheduleStartTime === '09:00'
+  )
+  const canCreateTeacher = (
+    teacherFirstName.trim()
+    && (formationMode === 'existing' ? selectedModule : (newFormTpName.trim() && newFormRncp.trim()))
+    && (usesLegacyReuseSchedule ? legacyScheduleValid : schedulePlan.valid)
     && teacherDescription.trim()
     && billingReady
   )
@@ -3940,6 +4021,10 @@ export function CreatePlatformView({
     if (!descriptionEditedRef.current) setTeacherDescription(generatedDescription)
   }, [generatedDescription])
 
+  const regenerateDescription = () => {
+    descriptionEditedRef.current = false
+    setTeacherDescription(generatedDescription)
+  }
   const toggleTeachingDay = (dayId) => {
     setTeachingDays((current) => (
       current.includes(dayId)
@@ -3947,9 +4032,13 @@ export function CreatePlatformView({
         : [...current, dayId]
     ))
   }
-  const regenerateDescription = () => {
-    descriptionEditedRef.current = false
-    setTeacherDescription(generatedDescription)
+  const legacySchedulePayload = {
+    schedule_schema_version: 1,
+    total_training_days: trainingDays,
+    weekly_course_count: Number(weeklyCourseCount),
+    weekdays: teachingDays,
+    start_date: scheduleStartDate,
+    start_time: scheduleStartTime,
   }
   const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#E1E5EA] bg-white px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
@@ -3957,7 +4046,7 @@ export function CreatePlatformView({
     <section className="w-full">
       <div className="grid items-start overflow-visible rounded-xl border border-[#E7EAEE] bg-white lg:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.45fr)]">
         <aside
-          className="relative flex min-h-[44rem] flex-col overflow-visible rounded-t-xl bg-cover bg-center p-5 lg:sticky lg:top-6 lg:min-h-[calc(100vh-7rem)] lg:rounded-l-xl lg:rounded-tr-none xl:p-6"
+          className="relative flex min-h-[30rem] flex-col overflow-visible rounded-t-xl bg-cover bg-center p-5 sm:min-h-[38rem] lg:sticky lg:top-6 lg:min-h-[calc(100vh-7rem)] lg:rounded-l-xl lg:rounded-tr-none xl:p-6"
           style={{ backgroundImage: "url('/teacher-studio-background.webp')" }}
         >
           <div className="pointer-events-none absolute inset-0 rounded-t-xl bg-[linear-gradient(180deg,rgba(35,29,26,0.04)_0%,rgba(35,29,26,0)_48%,rgba(25,21,19,0.74)_100%)] lg:rounded-l-xl lg:rounded-tr-none" aria-hidden="true" />
@@ -3996,11 +4085,11 @@ export function CreatePlatformView({
                           setColorPickerOpen(false)
                         }}
                         aria-pressed={selected}
-                        className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium text-[#334155] transition-colors hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40"
+                        className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium text-[#334155] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40"
                       >
                         <span className="h-4 w-4 rounded-full" style={{ backgroundColor: color.swatch }} aria-hidden="true" />
                         <span className="flex-1 text-left">{color.label}</span>
-                        {selected && <Icon name="check" className="text-base text-[#7C3AED]" />}
+                        {selected && <Icon name="check" className="text-base text-[#18181B]" />}
                       </button>
                     )
                   })}
@@ -4014,7 +4103,7 @@ export function CreatePlatformView({
               key={selectedColor.id}
               src={selectedColor.image}
               alt={`Aperçu du professeur en ${selectedColor.label.toLowerCase()}`}
-              className="teacher-identity-avatar h-[24rem] w-[24rem] object-contain sm:h-[28rem] sm:w-[28rem] lg:h-[min(52vh,31rem)] lg:w-[min(52vh,31rem)]"
+              className="teacher-identity-avatar h-[17rem] w-[17rem] object-contain sm:h-[24rem] sm:w-[24rem] lg:h-[min(52vh,31rem)] lg:w-[min(52vh,31rem)]"
               draggable="false"
             />
           </div>
@@ -4057,8 +4146,8 @@ export function CreatePlatformView({
           </header>
 
           {prefilledFromAssistant && (
-            <div className="recruitment-review-enter mx-5 mb-1 flex items-start gap-3 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] px-4 py-3.5 sm:mx-6 lg:mx-8" role="status">
-              <Icon name="check_circle" className="mt-0.5 text-lg text-[#7C3AED]" />
+            <div className="recruitment-review-enter mx-5 mb-1 flex items-start gap-3 rounded-xl border border-[#D4D4D8] bg-[#F4F4F5] px-4 py-3.5 sm:mx-6 lg:mx-8" role="status">
+              <Icon name="check_circle" className="mt-0.5 text-lg text-[#3F3F46]" />
               <div>
                 <p className="text-sm font-semibold text-[#0F172A]">Réponses reportées dans le formulaire</p>
                 <p className="mt-0.5 text-xs leading-5 text-[#475569]">Vérifiez les informations avant de continuer.</p>
@@ -4092,6 +4181,25 @@ export function CreatePlatformView({
                     <label htmlFor="teacher-rncp" className="mb-2 block text-sm font-medium text-[#334155]">Code RNCP</label>
                     <input id="teacher-rncp" type="text" value={newFormRncp} onChange={(event) => setNewFormRncp(event.target.value)} placeholder="Ex. 35304" className={inputClassName} />
                   </div>
+                  <div>
+                    <label htmlFor="teacher-training-days" className="mb-2 block text-sm font-medium text-[#334155]">
+                      Nombre approximatif de journées
+                    </label>
+                    <input
+                      id="teacher-training-days"
+                      type="number"
+                      min="1"
+                      max="365"
+                      value={newFormHours}
+                      onChange={(event) => setNewFormHours(event.target.value)}
+                      placeholder="Ex. 16"
+                      className={inputClassName}
+                      aria-describedby="teacher-training-days-help"
+                    />
+                    <p id="teacher-training-days-help" className="mt-1.5 text-xs leading-5 text-[#64748B]">
+                      Aide au préremplissage uniquement. Le nombre final correspondra aux dates cochées.
+                    </p>
+                  </div>
                 </>
               )}
             </div>
@@ -4099,7 +4207,7 @@ export function CreatePlatformView({
             <div className="mt-5">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <label htmlFor="teacher-description" className="text-sm font-medium text-[#334155]">Description du professeur</label>
-                <button type="button" onClick={regenerateDescription} disabled={!generatedDescription} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-[#6D28D9] transition-colors hover:bg-[#F5F3FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" onClick={regenerateDescription} disabled={!generatedDescription} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 disabled:cursor-not-allowed disabled:opacity-40">
                   <Icon name="refresh" className="text-sm" />
                   Régénérer
                 </button>
@@ -4125,53 +4233,104 @@ export function CreatePlatformView({
           </div>
 
           <div className="border-t border-[#EEF0F3] px-5 py-6 sm:px-6 lg:px-8">
-            <h2 className="text-lg font-semibold text-[#0F172A]">Calendrier</h2>
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              {formationMode !== 'existing' && (
-                <div>
-                  <label htmlFor="teacher-training-days" className="mb-2 block text-sm font-medium text-[#334155]">Journées de formation</label>
-                  <input id="teacher-training-days" type="number" value={newFormHours} onChange={(event) => setNewFormHours(event.target.value)} placeholder="Ex. 104" min="1" className={inputClassName} aria-describedby="teacher-training-days-help" />
-                  <p id="teacher-training-days-help" className="mt-1.5 text-xs leading-5 text-[#64748B]">Indiquez le nombre total de journées prévues par le parcours.</p>
-                </div>
-              )}
-              <div>
-                <label htmlFor="teacher-weekly-count" className="mb-2 block text-sm font-medium text-[#334155]">Cours par semaine</label>
-                <input id="teacher-weekly-count" type="number" value={weeklyCourseCount} onChange={(event) => setWeeklyCourseCount(event.target.value)} min="1" max="5" className={inputClassName} />
-              </div>
-            </div>
+            {usesLegacyReuseSchedule ? (
+              <section aria-labelledby="legacy-schedule-title">
+                <h2 id="legacy-schedule-title" className="text-lg font-semibold text-[#18181B]">
+                  Calendrier du module historique
+                </h2>
+                <p className="mt-1.5 text-sm leading-6 text-[#52525B]">
+                  Ce professeur conserve son déroulé historique. Choisissez uniquement les nouvelles dates selon son calendrier classique.
+                </p>
 
-            <fieldset className="mt-5">
-              <legend className="mb-2 text-sm font-medium text-[#334155]">Jours de cours</legend>
-              <div className="grid grid-cols-5 gap-2">
-                {weekDays.map((day) => {
-                  const selected = teachingDays.includes(day.id)
-                  return (
-                    <button key={day.id} type="button" onClick={() => toggleTeachingDay(day.id)} aria-pressed={selected} className="min-h-11 rounded-lg border px-2 py-2 text-xs font-semibold transition-[background-color,border-color,transform] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 active:scale-[0.98]" style={{ color: selected ? '#FFFFFF' : '#334155', backgroundColor: selected ? '#8B5CF6' : '#FFFFFF', borderColor: selected ? '#8B5CF6' : '#E1E5EA' }}>
-                      {day.label}
-                    </button>
-                  )
-                })}
-              </div>
-              {Number(weeklyCourseCount) !== teachingDays.length && (
-                <p className="mt-2 text-xs font-medium text-[#B45309]" role="status">Choisissez {weeklyCourseCount || 0} jour{Number(weeklyCourseCount) > 1 ? 's' : ''} pour correspondre au rythme hebdomadaire.</p>
-              )}
-            </fieldset>
-
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <div>
-                <label htmlFor="teacher-start-date" className="mb-2 block text-sm font-medium text-[#334155]">Début de la formation</label>
-                <input id="teacher-start-date" type="date" value={scheduleStartDate} min={todayDateInput()} onChange={(event) => setScheduleStartDate(event.target.value)} className={inputClassName} />
-              </div>
-              <div>
-                <span className="mb-2 block text-sm font-medium text-[#334155]">Heure de chaque journée</span>
-                <div className="flex min-h-11 items-center justify-between rounded-lg border border-[#E1E5EA] bg-[#FCFCFD] px-3.5 py-2.5 text-sm">
-                  <span className="font-semibold text-[#0F172A]">09:00</span>
-                  <span className="text-xs text-[#64748B]">Horaire pédagogique fixe</span>
+                <div className="mt-5 grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label htmlFor="legacy-weekly-count" className="mb-2 block text-sm font-medium text-[#3F3F46]">
+                      Journées par semaine
+                    </label>
+                    <input
+                      id="legacy-weekly-count"
+                      type="number"
+                      value={weeklyCourseCount}
+                      onChange={(event) => setWeeklyCourseCount(event.target.value)}
+                      min="1"
+                      max="5"
+                      className={inputClassName}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="legacy-start-date" className="mb-2 block text-sm font-medium text-[#3F3F46]">
+                      Début de la formation
+                    </label>
+                    <input
+                      id="legacy-start-date"
+                      type="date"
+                      value={scheduleStartDate}
+                      min={todayDateInput()}
+                      onChange={(event) => setScheduleStartDate(event.target.value)}
+                      className={inputClassName}
+                    />
+                  </div>
                 </div>
-              </div>
-            </div>
-            <p className="mt-3 text-xs leading-5 text-[#64748B]">La journée suit la playlist de 09:00 à 18:30. L’audio est préparé automatiquement 24 h avant.</p>
+
+                <fieldset className="mt-5">
+                  <legend className="mb-2 text-sm font-medium text-[#3F3F46]">
+                    Jours de formation
+                  </legend>
+                  <div className="grid grid-cols-5 gap-2">
+                    {weekDays.map((day) => {
+                      const selected = teachingDays.includes(day.id)
+                      return (
+                        <button
+                          key={day.id}
+                          type="button"
+                          onClick={() => toggleTeachingDay(day.id)}
+                          aria-pressed={selected}
+                          className={`min-h-11 rounded-lg border px-2 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 ${
+                            selected
+                              ? 'border-[#18181B] bg-[#18181B] text-white'
+                              : 'border-[#D4D4D8] bg-white text-[#3F3F46] hover:bg-[#F4F4F5]'
+                          }`}
+                        >
+                          {day.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {Number(weeklyCourseCount) !== teachingDays.length && (
+                    <p className="mt-2 text-xs font-medium text-[#52525B]" role="status">
+                      Choisissez {weeklyCourseCount || 0} jour{Number(weeklyCourseCount) > 1 ? 's' : ''} pour correspondre au rythme hebdomadaire.
+                    </p>
+                  )}
+                </fieldset>
+
+                <div className="mt-5 flex min-h-11 items-center justify-between rounded-lg border border-[#D4D4D8] bg-[#F4F4F5] px-3.5 py-2.5 text-sm">
+                  <span className="font-semibold text-[#18181B]">09:00</span>
+                  <span className="text-xs text-[#71717A]">Horaire historique fixe</span>
+                </div>
+              </section>
+            ) : (
+              <FormationSchedulePlanner
+                key={`${formationMode}:${selectedModuleId || 'new'}`}
+                reuse={formationMode === 'existing'}
+                expectedDayCount={formationMode === 'existing' ? trainingDays : null}
+                initialSchedule={initialScheduleV2}
+                startDateHint={scheduleStartDate}
+                approximateDayCount={formationMode === 'existing' ? trainingDays : newFormHours}
+                daysPerWeekHint={weeklyCourseCount}
+                preferredWeekdaysHint={teachingDays}
+                onChange={setSchedulePlan}
+              />
+            )}
           </div>
+
+          {submissionError && (
+            <div className="border-t border-[#D4D4D8] bg-[#F4F4F5] px-5 py-3.5 text-sm text-[#3F3F46] sm:px-6 lg:px-8" role="alert">
+              <div className="flex items-start gap-2.5">
+                <Icon name="error_outline" className="mt-0.5 text-base" />
+                <span>{submissionError}</span>
+              </div>
+            </div>
+          )}
 
           <footer className="border-t border-[#EEF0F3] bg-[#FCFCFD] px-5 py-4 sm:px-6 lg:flex lg:items-center lg:justify-between lg:gap-5 lg:px-8">
             <div>
@@ -4180,8 +4339,8 @@ export function CreatePlatformView({
               {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && <p className="mt-0.5 text-xs text-[#64748B]">{formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}</p>}
             </div>
             <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row lg:mt-0">
-              <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#E1E5EA] bg-white px-4 py-2 text-sm font-semibold text-[#334155] transition-colors hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 disabled:opacity-50">Annuler</button>
-              <button type="button" onClick={() => onCreate(teacherDescription)} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#8B5CF6] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#7C3AED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A78BFA] disabled:opacity-60">
+              <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 py-2 text-sm font-semibold text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 disabled:opacity-50">Annuler</button>
+              <button type="button" onClick={() => onCreate(teacherDescription, usesLegacyReuseSchedule ? legacySchedulePayload : schedulePlan.payload)} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A1A1AA] disabled:opacity-60">
                 {creating ? 'Préparation de la commande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer` : 'Paiement temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
               </button>
             </div>
@@ -4200,35 +4359,8 @@ function AudiosModal({
   onClose,
   onRefreshAudios,
 }) {
-  const EXPECTED_AUDIOS = [
-    'cours_9h00_9h45.mp3',
-    'qa_9h45_9h55.mp3',
-    'pause_9h55_10h05.mp3',
-    'cours_10h05_10h50.mp3',
-    'qa_10h50_11h00.mp3',
-    'pause_11h00_11h05.mp3',
-    'cours_11h05_12h00.mp3',
-    'qa_12h00_12h10.mp3',
-    'pause_12h10_12h20.mp3',
-    'pause_midi_13h15_14h45.mp3',
-    'cours_12h20_13h05.mp3',
-    'qa_13h05_13h15.mp3',
-    'cours_14h45_15h45.mp3',
-    'qa_15h45_16h00.mp3',
-    'cours_16h00_17h00.mp3',
-    'qa_17h00_17h15.mp3',
-    'pause_17h15_17h25.mp3',
-    'cours_17h25_18h15.mp3',
-    'qa_18h15_18h30.mp3',
-  ]
-
-  const uploadedMap = Object.fromEntries(audios.map(a => [a.name, a]))
-  const mergedAudios = EXPECTED_AUDIOS.map(name => uploadedMap[name]
-    ? { ...uploadedMap[name], uploaded: true }
-    : { name, uploaded: false }
-  )
-
-  const coursAudios = mergedAudios.filter(a => a.name.startsWith('cours_'))
+  const audioGroups = classifyFormationAudios(audios)
+  const audioCount = Object.values(audioGroups).reduce((total, group) => total + group.length, 0)
 
   // ─── Remplir avec les audios ─────────────────────────────────────────
   const [showFillModal, setShowFillModal] = useState(false)
@@ -4245,10 +4377,15 @@ function AudiosModal({
     setLoadingFolders(true)
     try {
       const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`)
-      const data = await resp.json()
-      if (data.success) setFolders(data.folders)
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || data.message || 'Impossible de charger les dossiers audio.')
+      }
+      setFolders(Array.isArray(data.folders) ? data.folders : [])
     } catch (e) {
       console.error('Erreur chargement dossiers:', e)
+      setFolders([])
+      setFillResult({ success: false, error: e.message || 'Impossible de charger les dossiers audio.' })
     } finally {
       setLoadingFolders(false)
     }
@@ -4262,57 +4399,65 @@ function AudiosModal({
       const resp = await apiFetch(`/api/hr/platforms/${platformId}/fill-from-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_id: parseInt(selectedFillFolderId) }),
+        body: JSON.stringify({ folder_id: Number.parseInt(selectedFillFolderId, 10) }),
       })
-      const data = await resp.json()
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || data.message || 'Impossible de copier les audios.')
+      }
       setFillResult(data)
-      if (data.success && onRefreshAudios) {
+      if (onRefreshAudios) {
         onRefreshAudios()
       }
     } catch (e) {
       console.error('Erreur remplissage:', e)
-      setFillResult({ success: false, error: 'Erreur réseau' })
+      setFillResult({ success: false, error: e.message || 'Impossible de copier les audios.' })
     } finally {
       setFilling(false)
     }
   }
-  const pauseAudios = mergedAudios.filter(a => a.name.startsWith('pause_'))
-  const qaAudios = mergedAudios.filter(a => a.name.startsWith('qa_'))
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="formation-audios-title"
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl w-full overflow-hidden"
+        className="w-full overflow-hidden rounded-2xl bg-white shadow-2xl"
         style={{ maxWidth: '1400px', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E4E4E7] bg-white px-4 py-4 sm:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#18181B] text-white">
               <Icon name="audiotrack" className="text-xl" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-slate-900">Audios de la formation</h3>
-              <p className="text-sm text-slate-500">Playlist diffusée pendant la journée de cours</p>
+              <h3 id="formation-audios-title" className="text-lg font-semibold text-[#18181B]">Audios de la formation</h3>
+              <p className="text-sm text-[#71717A]">
+                {audioCount} fichier{audioCount > 1 ? 's' : ''} dans la playlist
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={handleOpenFillModal}
-              className="flex min-h-10 items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+              className="flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 sm:px-4"
             >
               <Icon name="drive_folder_upload" className="text-base" />
-              <span>Remplir avec les audios</span>
+              <span className="hidden sm:inline">Remplir avec les audios</span>
+              <span className="sm:hidden">Remplir</span>
             </button>
             <button
+              type="button"
               onClick={onClose}
               aria-label="Fermer"
-              className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 active:scale-[0.98]"
+              className="flex h-11 w-11 items-center justify-center rounded-lg text-[#71717A] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 active:scale-[0.98]"
             >
               <Icon name="close" className="text-xl" />
             </button>
@@ -4324,33 +4469,36 @@ function AudiosModal({
               className="fixed inset-0 z-60 flex items-center justify-center p-4"
               style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
               onClick={() => setShowFillModal(false)}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="fill-formation-audios-title"
             >
               <div
-                className="bg-white rounded-2xl shadow-2xl w-full p-6"
+                className="w-full rounded-2xl bg-white p-5 shadow-2xl sm:p-6"
                 style={{ maxWidth: '460px' }}
                 onClick={e => e.stopPropagation()}
               >
-                <div className="flex items-center gap-3 mb-5">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600">
+                <div className="mb-5 flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#18181B]">
                     <Icon name="drive_folder_upload" className="text-white text-xl" />
                   </div>
-                  <h4 className="text-base font-bold text-slate-800">Remplir avec les audios</h4>
+                  <h4 id="fill-formation-audios-title" className="text-base font-bold text-[#18181B]">Remplir avec les audios</h4>
                 </div>
 
-                <p className="text-sm text-slate-500 mb-4">
-                  Choisissez le dossier de cours à utiliser. Les 7 fichiers cours générés + les Q&A et pauses seront copiés dans la plateforme.
+                <p className="mb-4 text-sm leading-6 text-[#71717A]">
+                  Choisissez le dossier de cours à utiliser. Tous les fichiers audio réellement présents dans ce dossier seront copiés.
                 </p>
 
                 {loadingFolders ? (
                   <div className="flex justify-center py-4">
-                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-violet-500" />
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#D4D4D8] border-t-[#18181B]" />
                   </div>
                 ) : (
                   <select
                     value={selectedFillFolderId}
                     onChange={e => setSelectedFillFolderId(e.target.value)}
-                    className="w-full rounded-lg px-3 py-2.5 text-sm mb-4 outline-none"
-                    style={{ border: '1px solid #e2e8f0', color: '#1e293b', backgroundColor: '#F8F7F5' }}
+                    className="mb-4 min-h-11 w-full rounded-lg px-3 py-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+                    style={{ border: '1px solid #D4D4D8', color: '#18181B', backgroundColor: '#F4F4F5' }}
                   >
                     <option value="">— Sélectionner un dossier —</option>
                     {folders.map(f => (
@@ -4361,10 +4509,10 @@ function AudiosModal({
 
                 {fillResult && (
                   <div
-                    className="rounded-xl p-3 mb-4 text-sm"
+                    className="mb-4 rounded-xl border border-[#D4D4D8] bg-[#F4F4F5] p-3 text-sm text-[#3F3F46]"
+                    role={fillResult.success ? 'status' : 'alert'}
                     style={{
-                      backgroundColor: fillResult.success ? '#dcfce7' : '#fee2e2',
-                      color: fillResult.success ? '#166534' : '#991b1b',
+                      borderStyle: fillResult.success ? 'solid' : 'dashed',
                     }}
                   >
                     {fillResult.success
@@ -4373,20 +4521,20 @@ function AudiosModal({
                   </div>
                 )}
 
-                <div className="flex gap-3 justify-end">
+                <div className="flex justify-end gap-3">
                   <button
+                    type="button"
                     onClick={() => setShowFillModal(false)}
-                    className="rounded-lg px-4 py-2 text-sm font-medium"
-                    style={{ backgroundColor: '#f1f5f9', color: '#64748b' }}
+                    className="min-h-11 rounded-lg bg-[#F4F4F5] px-4 py-2 text-sm font-medium text-[#52525B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
                   >
                     {fillResult?.success ? 'Fermer' : 'Annuler'}
                   </button>
                   {!fillResult?.success && (
                     <button
+                      type="button"
                       onClick={handleFill}
                       disabled={!selectedFillFolderId || filling}
-                      className="rounded-lg px-5 py-2 text-sm font-medium text-white transition-all disabled:opacity-50"
-                      style={{ backgroundColor: filling || !selectedFillFolderId ? '#c4b5fd' : '#7c3aed' }}
+                      className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#A1A1AA]"
                     >
                       {filling ? 'Copie en cours...' : 'Remplir'}
                     </button>
@@ -4398,42 +4546,48 @@ function AudiosModal({
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 80px)' }}>
+        <div className="overflow-y-auto p-4 sm:p-6" style={{ maxHeight: 'calc(90vh - 80px)' }}>
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-violet-500" />
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#D4D4D8] border-t-[#18181B]" />
+            </div>
+          ) : audioCount === 0 ? (
+            <div className="rounded-xl border border-dashed border-[#D4D4D8] bg-[#FAFAFA] px-5 py-10 text-center">
+              <Icon name="graphic_eq" className="text-3xl text-[#71717A]" />
+              <p className="mt-3 text-sm font-semibold text-[#18181B]">Aucun audio disponible</p>
+              <p className="mt-1 text-sm text-[#71717A]">
+                Remplissez la plateforme depuis un dossier généré pour afficher sa playlist.
+              </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {/* Carte COURS */}
               <AudioCard
                 title="Cours"
                 icon="/cours.jpg"
-                bgColor="#eff6ff"
-                audios={coursAudios}
-                iconColor="#3b82f6"
-                buttonColor="#3b82f6"
+                audios={audioGroups.courses}
               />
 
               {/* Carte PAUSES */}
               <AudioCard
                 title="Pauses"
                 icon="/break-time.jpg"
-                bgColor="#fef3c7"
-                audios={pauseAudios}
-                iconColor="#f59e0b"
-                buttonColor="#f59e0b"
+                audios={audioGroups.pauses}
               />
 
               {/* Carte Q&A */}
               <AudioCard
-                title="Q&A"
+                title="Questions-réponses"
                 icon="/qa.jpg"
-                bgColor="#f0fdf4"
-                audios={qaAudios}
-                iconColor="#16a34a"
-                buttonColor="#16a34a"
+                audios={audioGroups.questions}
               />
+              {audioGroups.other.length > 0 && (
+                <AudioCard
+                  title="Autres audios"
+                  icon="/cours.jpg"
+                  audios={audioGroups.other}
+                />
+              )}
             </div>
           )}
         </div>
@@ -4697,41 +4851,41 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
 }
 
 // ─── Audio Card Component ────────────────────────────────────────────────────
-function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
+function AudioCard({ title, icon, audios }) {
   return (
-    <div className="rounded-2xl bg-white border shadow-sm p-6 flex flex-col" style={{ borderColor: '#e2e8f0' }}>
-      <div className="flex items-center gap-3 mb-4 pb-4 border-b" style={{ borderColor: '#e2e8f0' }}>
-        <div className="flex items-center justify-center size-12 rounded-xl overflow-hidden border-2" style={{ backgroundColor: bgColor, borderColor: '#000000' }}>
-          <img src={icon} alt={title} className="w-full h-full object-cover" />
+    <section className="flex flex-col rounded-2xl border border-[#E4E4E7] bg-white p-5 shadow-sm sm:p-6">
+      <div className="mb-4 flex items-center gap-3 border-b border-[#E4E4E7] pb-4">
+        <div className="flex size-12 items-center justify-center overflow-hidden rounded-xl border border-[#A1A1AA] bg-[#F4F4F5]">
+          <img src={icon} alt="" className="h-full w-full object-cover grayscale" />
         </div>
         <div>
-          <h3 className="text-lg font-bold" style={{ color: '#111418' }}>{title}</h3>
-          <p className="text-xs" style={{ color: '#64748b' }}>{audios.filter(a => a.uploaded).length}/{audios.length} fichiers</p>
+          <h3 className="text-lg font-bold text-[#18181B]">{title}</h3>
+          <p className="text-xs text-[#71717A]">
+            {audios.length} fichier{audios.length > 1 ? 's' : ''}
+          </p>
         </div>
       </div>
       <div className="flex-1 space-y-2">
-        {audios.map((audio, index) => (
-          <div key={index} className={`rounded-lg p-3 transition-all ${!audio.uploaded ? 'opacity-40' : ''}`}>
+        {audios.length === 0 ? (
+          <p className="rounded-lg bg-[#FAFAFA] px-3 py-4 text-xs text-[#71717A]">
+            Aucun fichier de ce type.
+          </p>
+        ) : audios.map((audio) => (
+          <div key={audio.name} className="rounded-lg bg-[#FAFAFA] p-3">
             <div className="flex items-center gap-2">
-              {audio.uploaded ? (
-                <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ backgroundColor: buttonColor, color: 'white' }}>
-                  <Icon name="check" className="text-sm" />
-                </div>
-              ) : (
-                <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ backgroundColor: '#f1f5f9', color: '#cbd5e1' }}>
-                  <Icon name="play_arrow" className="text-sm" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className={`text-xs truncate ${audio.uploaded ? 'font-medium' : ''}`} style={{ color: audio.uploaded ? '#111418' : '#94a3b8' }}>
-                  {audio.name.replace('cours_', '').replace('pause_', '').replace('pause_midi_', 'midi ').replace('qa_', '').replace('.mp3', '')}
+              <div className="flex size-7 flex-shrink-0 items-center justify-center rounded-full bg-[#18181B] text-white">
+                <Icon name="check" className="text-sm" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium text-[#18181B]" title={audio.name}>
+                  {audio.displayName}
                 </p>
               </div>
             </div>
           </div>
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 

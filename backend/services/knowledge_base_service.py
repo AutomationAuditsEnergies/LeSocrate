@@ -6,8 +6,8 @@ base de connaissances pédagogique dense (~120-150k mots exploitables) avant
 la génération du programme de formation.
 
 Flux :
-  1. Extraction des compétences structurées depuis le REAC brut (Claude)
-  2. Enrichissement de chaque compétence (Claude, 1 appel par compétence) :
+  1. Extraction des compétences structurées depuis le REAC brut (DeepSeek)
+  2. Enrichissement de chaque compétence (DeepSeek, 1 appel par compétence) :
      définition pédagogique, études de cas, pièges, vocabulaire métier,
      contexte terrain, liens connexes
   3. Stockage checkpointé en DB (table formation_knowledge_base)
@@ -34,22 +34,20 @@ from repositories.pipeline_repository import (
     save_enriched_knowledge_base_entry,
     upsert_pending_knowledge_base_entries,
 )
-from utils.anthropic_client import (
-    AnthropicAPIError,
-    AnthropicRateLimitError,
+from utils.deepseek_client import (
+    DeepSeekAPIError,
+    DeepSeekRateLimitError,
     default_model,
-    post_message as _anthropic_post,
+    post_message as _post_deepseek_message,
 )
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-CLAUDE_MODEL = default_model()
+DEEPSEEK_MODEL = default_model()
 
-# Concurrence enrichissement : 1 par défaut pour rester sous la limite
-# output-tokens/min d'Anthropic (ex. Haiku : 10 000 tokens/min — un seul appel
-# à max_tokens=8000 réserve 80 % du bucket, donc la parallélisation naïve
-# déclenche des 429 en cascade). Configurable via env pour les tiers plus hauts.
+# Concurrence enrichissement : 1 par défaut pour éviter les 429 en cascade.
+# Configurable via env pour les quotas DeepSeek plus élevés.
 KB_ENRICH_CONCURRENCY = int(os.environ.get("KB_ENRICH_CONCURRENCY", "1"))
 
 # Lock pour les écritures DB concurrentes (évite "database is locked" SQLite)
@@ -104,7 +102,7 @@ def _load_editorial_rules() -> str:
         logger.warning(f"⚠️ Impossible de charger les règles éditoriales : {e}")
         return ""
 
-# ─── Prompts Claude ───────────────────────────────────────────────────────────
+# ─── Prompts DeepSeek ─────────────────────────────────────────────────────────
 
 _EXTRACT_COMPETENCES_PROMPT = """Tu es un expert en ingénierie pédagogique spécialisé dans l'analyse des référentiels de titres professionnels (REAC, France Compétences).
 
@@ -234,16 +232,20 @@ Contraintes de densité :
 """
 
 
-# ─── Helper Claude ────────────────────────────────────────────────────────────
+# ─── Helper DeepSeek ──────────────────────────────────────────────────────────
 
-def _claude_post(messages, max_tokens=8000, model=None):
+def _deepseek_post(messages, max_tokens=8000, model=None):
     """Wrapper local qui injecte le modèle par défaut du service."""
-    return _anthropic_post(messages, max_tokens=max_tokens, model=model or CLAUDE_MODEL)
+    return _post_deepseek_message(
+        messages,
+        max_tokens=max_tokens,
+        model=model or DEEPSEEK_MODEL,
+    )
 
 
 def _parse_json_response(text: str) -> dict:
     """
-    Extrait un JSON depuis une réponse Claude (supporte ```json ... ``` ou JSON brut).
+    Extrait un JSON depuis une réponse DeepSeek (```json ... ``` ou JSON brut).
     Tolère les réponses tronquées (max_tokens atteint) en réparant le JSON :
     on coupe au dernier champ complet et on ferme les structures ouvertes.
     """
@@ -282,7 +284,7 @@ def _repair_truncated_json(text: str) -> str:
     2. Coupant à cette position
     3. Fermant les structures ({, [) encore ouvertes
 
-    Principe : si Claude a coupé au milieu d'un champ, on garde tous les
+    Principe : si DeepSeek a coupé au milieu d'un champ, on garde tous les
     champs précédents complets et on ferme proprement les crochets/accolades.
     """
     stack = []          # pile des caractères fermants attendus (']' ou '}')
@@ -424,7 +426,7 @@ def kb_stats(job_id: int) -> dict:
 # ─── Extraction compétences ───────────────────────────────────────────────────
 
 def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str = None) -> list:
-    """Appelle Claude pour extraire la liste structurée des compétences du REAC."""
+    """Appelle DeepSeek pour extraire les compétences structurées du REAC."""
     prompt = (
         _EXTRACT_COMPETENCES_PROMPT
         .replace("{TP_NAME}", tp_name)
@@ -434,7 +436,7 @@ def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str
     )
     for attempt in range(5):
         try:
-            response = _claude_post(
+            response = _deepseek_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=8000,
                 model=model,
@@ -442,10 +444,10 @@ def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str
             data = _parse_json_response(response)
             competences = data.get("competences", [])
             if not competences:
-                raise ValueError("Réponse Claude sans compétences")
+                raise ValueError("Réponse DeepSeek sans compétences")
             logger.info(f"✅ {len(competences)} compétences extraites du REAC")
             return competences
-        except AnthropicRateLimitError as e:
+        except DeepSeekRateLimitError as e:
             if attempt < 4:
                 logger.warning(f"⏳ Retry {attempt+1}/5 extraction (429, sleep {e.wait_seconds:.0f}s)")
                 time.sleep(e.wait_seconds)
@@ -462,7 +464,7 @@ def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str
 # ─── Enrichissement d'une compétence ──────────────────────────────────────────
 
 def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str = None) -> dict:
-    """Appelle Claude pour enrichir une compétence avec KB dense."""
+    """Appelle DeepSeek pour enrichir une compétence avec une KB dense."""
     prompt = (
         _ENRICH_COMPETENCE_PROMPT
         .replace("{TP_NAME}", tp_name)
@@ -474,13 +476,13 @@ def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str
     )
     for attempt in range(5):
         try:
-            response = _claude_post(
+            response = _deepseek_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=12000,  # augmenté de 8000 : JSON enrichi peut dépasser
                 model=model,
             )
             return _parse_json_response(response)
-        except AnthropicRateLimitError as e:
+        except DeepSeekRateLimitError as e:
             if attempt < 4:
                 logger.warning(
                     f"⏳ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' "
@@ -489,7 +491,7 @@ def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str
                 time.sleep(e.wait_seconds)
             else:
                 raise
-        except AnthropicAPIError as e:
+        except DeepSeekAPIError as e:
             # Fail-fast sur les erreurs déterministes (400, 401, 403, 404, 422) :
             # retry n'aidera pas (credit balance vide, mauvaise clé, modèle
             # invalide…). Propager le message lisible plutôt que de spammer.
@@ -552,7 +554,7 @@ def _build_kb_thread(job_id: int, model: str = None):
             return
 
         update_job(job_id, status="kb_building")
-        logger.info(f"🔄 Job {job_id} : construction knowledge base (modèle: {model or CLAUDE_MODEL})...")
+        logger.info(f"🔄 Job {job_id} : construction knowledge base (modèle: {model or DEEPSEEK_MODEL})...")
 
         # ── Étape 1 : déterminer la liste des compétences à enrichir ──
         # Si des entrées existent déjà en DB (reprise après crash), on les
@@ -595,7 +597,7 @@ def _build_kb_thread(job_id: int, model: str = None):
 
         # ── Étape 2 : enrichissement parallèle (pool de workers) ──
         # KB_ENRICH_CONCURRENCY workers simultanés pour accélérer × 3.
-        # Chaque worker gère sa propre requête Claude + écriture DB (lock).
+        # Chaque worker gère sa propre requête DeepSeek + écriture DB (lock).
         total_words_kb = sum(e["total_words"] for e in existing if e["status"] == "completed")
         to_enrich = [c for c in competences if c["_status_in_db"] != "completed"]
         skipped = len(competences) - len(to_enrich)

@@ -126,8 +126,6 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
             ("patch", "/api/hr/cours-folders/22", {"json": {"name": "X"}}, "folder", 22),
             ("delete", "/api/hr/cours-documents/33", {}, "document", 33),
             ("post", "/api/hr/cours-documents/33/generate-audio", {}, "document", 33),
-            ("post", "/api/hr/deletion-requests/44/approve", {}, "deletion_request", 44),
-            ("post", "/api/hr/deletion-requests/44/reject", {}, "deletion_request", 44),
             (
                 "patch",
                 "/api/hr/cours-folders/22/content-job/segment",
@@ -145,6 +143,20 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                     resource_id=resource_id,
                     **kwargs,
                 )
+
+    def test_legacy_recorder_deletion_routes_are_removed(self):
+        self._login()
+        cases = (
+            ("post", "/api/hr/deletion-requests", {"json": {}}),
+            ("get", "/api/hr/deletion-requests?status=all", {}),
+            ("post", "/api/hr/deletion-requests/44/approve", {}),
+            ("post", "/api/hr/deletion-requests/44/reject", {}),
+        )
+
+        for method, path, kwargs in cases:
+            with self.subTest(path=path):
+                response = getattr(self.client, method)(path, **kwargs)
+                self.assertEqual(response.status_code, 404)
 
     def test_body_folder_is_authorized_before_fill_from_folder_side_effects(self):
         self._login()
@@ -353,7 +365,7 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         open_file.assert_not_called()
 
-    def test_collection_reads_and_schedule_reset_stay_inside_current_center(self):
+    def test_schedule_reset_stays_inside_current_center(self):
         class _KeepOpenConnection(sqlite3.Connection):
             def close(self):
                 pass
@@ -370,22 +382,9 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                 center_account_id INTEGER,
                 playlist_mode TEXT
             );
-            CREATE TABLE deletion_requests (
-                id INTEGER PRIMARY KEY,
-                platform_id INTEGER,
-                filename TEXT,
-                requester_name TEXT,
-                reason TEXT,
-                status TEXT,
-                created_at TEXT,
-                resolved_at TEXT
-            );
             INSERT INTO platform_config VALUES
                 (1, 'Centre A', 10, 'hiver'),
                 (2, 'Centre B', 20, 'hiver');
-            INSERT INTO deletion_requests VALUES
-                (101, 1, 'a.mp3', 'Alice', '', 'pending', '2026-07-01', NULL),
-                (202, 2, 'b.mp3', 'Bob', '', 'pending', '2026-07-02', NULL);
             """
         )
         self._login()
@@ -397,17 +396,11 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                 "routes.hr_routes.hr_resource_belongs_to_center",
                 return_value=True,
             ):
-                list_response = self.client.get("/api/hr/deletion-requests?status=all")
                 schedule_response = self.client.post(
                     "/api/hr/schedule-config",
                     json={"mode": "ete", "platform_ids": [1]},
                 )
 
-            self.assertEqual(list_response.status_code, 200)
-            self.assertEqual(
-                [item["id"] for item in list_response.get_json()["requests"]],
-                [101],
-            )
             self.assertEqual(schedule_response.status_code, 200)
             rows = conn.execute(
                 "SELECT id, playlist_mode FROM platform_config ORDER BY id"
