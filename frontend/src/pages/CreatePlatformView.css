@@ -161,23 +161,23 @@
   display: grid;
   min-width: 0;
   grid-template-columns: 1fr;
-  gap: 12px;
+  gap: 8px;
 }
 
 .create-platform-workspace__identity-fields label,
 .create-platform-workspace__existing-module > span {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 4px;
   color: #52525b;
   font-size: 11px;
   font-weight: 650;
 }
 
 .create-platform-workspace__identity-fields input {
-  min-height: 40px;
+  min-height: 36px;
   border-color: #d4d4d8;
   border-radius: 8px;
-  padding: 8px 11px;
+  padding: 7px 10px;
 }
 
 .create-platform-workspace__existing-module {
@@ -185,11 +185,11 @@
 }
 
 .create-platform-workspace__existing-module > div {
-  min-height: 40px;
+  min-height: 36px;
   border: 1px solid #d4d4d8;
   border-radius: 8px;
   background: #fafafa;
-  padding: 6px 11px;
+  padding: 5px 10px;
 }
 
 .create-platform-workspace__existing-module p {
@@ -208,15 +208,17 @@
 
 .create-platform-workspace__identity-panel {
   position: absolute;
-  top: 80px;
+  bottom: 24px;
   left: 24px;
   z-index: 40;
-  width: min(calc(33.333% - 48px), 400px);
+  width: min(calc(33.333% - 48px), 360px);
   min-width: 280px;
+  max-height: calc(100% - 48px);
+  overflow-y: auto;
   border: 1px solid #d4d4d8;
   border-radius: 12px;
   background: #fff;
-  padding: 16px;
+  padding: 12px;
   color: #18181b;
   box-shadow: 0 6px 8px rgba(24, 24, 27, 0.16);
 }
@@ -225,8 +227,8 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .create-platform-workspace__identity-panel h2,
@@ -235,12 +237,12 @@
 }
 
 .create-platform-workspace__identity-panel h2 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
 }
 
 .create-platform-workspace__identity-panel header p {
-  margin-top: 3px;
+  margin-top: 2px;
   color: #71717a;
   font-size: 11px;
 }
@@ -269,7 +271,7 @@
   width: 100%;
   align-items: center;
   justify-content: center;
-  margin-top: 16px;
+  margin-top: 12px;
   border: 1px solid #18181b;
   border-radius: 8px;
   background: #18181b;
@@ -370,6 +372,7 @@
   .create-platform-workspace__identity-panel {
     top: 68px;
     right: 20px;
+    bottom: auto;
     left: 20px;
     width: auto;
     min-width: 0;
