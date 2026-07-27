@@ -11,7 +11,7 @@
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-columns: minmax(300px, 0.43fr) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 0.5fr) minmax(0, 1fr);
 }
 
 .create-platform-workspace__preview {
@@ -143,12 +143,6 @@
   letter-spacing: -0.025em;
 }
 
-.create-platform-workspace__identity-heading p {
-  margin: 3px 0 0;
-  color: #71717a;
-  font-size: 12px;
-}
-
 .create-platform-workspace__identity-fields {
   display: grid;
   min-width: 0;
@@ -204,7 +198,7 @@
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  padding: 14px 24px 12px;
+  padding: 12px 20px 10px;
 }
 
 .create-platform-workspace__schedule > .formation-schedule {
@@ -248,16 +242,12 @@
 
 @media (max-width: 1180px) {
   .create-platform-workspace__layout {
-    grid-template-columns: 260px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 
   .create-platform-workspace__identity {
     grid-template-columns: 1fr;
     gap: 10px;
-  }
-
-  .create-platform-workspace__identity-heading p {
-    display: none;
   }
 
   .create-platform-workspace__prefilled {

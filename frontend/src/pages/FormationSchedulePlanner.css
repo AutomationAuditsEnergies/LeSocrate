@@ -69,7 +69,7 @@
 
 .formation-schedule__helper {
   flex: none;
-  margin-top: 10px;
+  margin-top: 8px;
   border: 1px solid var(--fsp-border-soft);
   border-radius: 8px;
   background: var(--fsp-canvas);
@@ -77,11 +77,11 @@
 
 .formation-schedule__helper summary {
   display: flex;
-  min-height: 42px;
+  min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   cursor: pointer;
   list-style: none;
 }
@@ -99,20 +99,22 @@
   font-weight: 650;
 }
 
-.formation-schedule__helper summary small {
-  color: var(--fsp-muted);
-  font-size: 11px;
-}
-
 .formation-schedule__helper-content {
   border-top: 1px solid var(--fsp-border-soft);
-  padding: 12px;
+  padding: 8px 10px 10px;
+}
+
+.formation-schedule__helper-intro {
+  margin: 0 0 8px;
+  color: #52525b;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .formation-schedule__helper-fields {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
 }
 
 .formation-schedule__helper label > span,
@@ -139,7 +141,7 @@
 }
 
 .formation-schedule__helper fieldset {
-  margin: 14px 0 0;
+  margin: 8px 0 0;
   border: 0;
   padding: 0;
 }
@@ -147,7 +149,7 @@
 .formation-schedule__weekdays {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 7px;
+  gap: 4px;
 }
 
 .formation-schedule__weekdays button {
@@ -170,8 +172,8 @@
 .formation-schedule__helper-action {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .formation-schedule__helper-action button,
@@ -211,8 +213,9 @@
   min-height: 0;
   flex: 1;
   grid-template-columns: minmax(0, 1.75fr) minmax(210px, 0.75fr);
-  gap: 12px;
-  margin-top: 10px;
+  align-items: start;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .formation-schedule__calendar,
@@ -227,7 +230,8 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  padding: 12px;
+  align-self: start;
+  padding: 10px;
 }
 
 .formation-schedule__calendar > header {
@@ -280,7 +284,7 @@
 .formation-schedule__month-grid button {
   display: inline-flex;
   min-width: 0;
-  min-height: 42px;
+  min-height: 34px;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
@@ -294,8 +298,8 @@
 
 .formation-schedule__month-grid {
   min-height: 0;
-  flex: 1;
-  grid-template-rows: repeat(6, minmax(42px, 1fr));
+  flex: none;
+  grid-template-rows: repeat(6, minmax(34px, 44px));
 }
 
 .formation-schedule__month-grid button:hover:not(:disabled) {
@@ -319,27 +323,12 @@
   cursor: not-allowed;
 }
 
-.formation-schedule__calendar-help {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin: 8px 0 0;
-  border-top: 1px solid var(--fsp-border-soft);
-  padding-top: 11px;
-  color: var(--fsp-muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.formation-schedule__calendar-help svg {
-  flex: none;
-  margin-top: 1px;
-}
-
 .formation-schedule__dates {
   display: flex;
   min-height: 0;
   flex-direction: column;
+  align-self: start;
+  max-height: 430px;
   overflow: hidden;
 }
 
@@ -592,10 +581,6 @@
 
   .formation-schedule__helper {
     border-radius: 0;
-  }
-
-  .formation-schedule__helper summary small {
-    display: none;
   }
 
   .formation-schedule__helper-fields {

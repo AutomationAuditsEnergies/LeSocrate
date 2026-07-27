@@ -1217,6 +1217,7 @@ export default function HRDashboard() {
         <CenterWorkspaceSidebar
           colors={colors}
           activeSection={workspaceSection}
+          collapseOnCreate={showCreateModal}
           onShowTeachers={showDashboardView}
           onShowRecruit={showRecruitView}
           onShowScheduleTemplates={showScheduleTemplatesView}
@@ -1955,6 +1956,7 @@ export default function HRDashboard() {
 function CenterWorkspaceSidebar({
   colors,
   activeSection,
+  collapseOnCreate,
   onShowTeachers,
   onShowRecruit,
   onShowScheduleTemplates,
@@ -1984,6 +1986,10 @@ function CenterWorkspaceSidebar({
     { id: 'teachers', label: 'Mes professeurs', icon: UsersRound, onClick: onShowTeachers },
     { id: 'schedule-templates', label: 'Organisation des cours', icon: CalendarDays, onClick: onShowScheduleTemplates },
   ]
+
+  useEffect(() => {
+    if (collapseOnCreate) setCollapsed(true)
+  }, [collapseOnCreate])
 
   return (
     <aside
@@ -4124,9 +4130,8 @@ export function CreatePlatformView({
           <header className="create-platform-workspace__identity">
             <div className="create-platform-workspace__identity-heading">
               <h1>
-              {formationMode === 'existing' ? 'Réutiliser un professeur IA' : 'Recruter un professeur IA'}
+              {formationMode === 'existing' ? 'Réutiliser ce professeur IA' : 'Nouveau professeur IA'}
               </h1>
-              <p>Identité et formation</p>
             </div>
 
             <div className="create-platform-workspace__identity-fields">

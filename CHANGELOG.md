@@ -15,6 +15,11 @@ templates restent dans un rail secondaire à défilement interne. L’aide au
 préremplissage est désormais repliable afin de laisser le calendrier visible
 dès l’ouverture, sans retirer les réglages de rythme existants.
 
+La passe de densité suivante replie automatiquement la navigation à l’ouverture
+du recrutement manuel, tout en permettant de la rouvrir. Le panneau professeur
+gagne en largeur, le calendrier et le préremplissage deviennent plus compacts,
+et les textes redondants autour du planning sont retirés.
+
 ### fix(ci): alignement de la fixture planning V2
 
 La fixture SQLite des tests de parité du repository pipeline expose désormais

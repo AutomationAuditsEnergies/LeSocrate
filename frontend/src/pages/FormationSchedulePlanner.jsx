@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
-  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CircleCheck,
@@ -332,10 +331,7 @@ export default function FormationSchedulePlanner({
     <section className="formation-schedule" aria-labelledby="formation-schedule-title">
       <div className="formation-schedule__heading">
         <div>
-          <h2 id="formation-schedule-title">Calendrier et déroulé</h2>
-          <p>
-            Le préremplissage vous fait gagner du temps. Seules les dates cochées ci-dessous seront retenues.
-          </p>
+          <h2 id="formation-schedule-title">Calendrier et déroulé de la formation</h2>
         </div>
         <span className="formation-schedule__count">
           {normalizedDates.length} journée{normalizedDates.length > 1 ? 's' : ''}
@@ -349,9 +345,11 @@ export default function FormationSchedulePlanner({
             <WandSparkles size={16} aria-hidden="true" />
             Préremplir rapidement
           </span>
-          <small>Date de début, rythme et jours habituels</small>
         </summary>
         <div className="formation-schedule__helper-content" aria-label="Préremplissage du calendrier">
+          <p className="formation-schedule__helper-intro">
+            Le préremplissage vous fait gagner du temps. Seules les dates cochées dans le calendrier seront retenues.
+          </p>
           <div className="formation-schedule__helper-fields">
           <label>
             <span>Date de début</span>
@@ -456,10 +454,6 @@ export default function FormationSchedulePlanner({
               )
             })}
           </div>
-          <p className="formation-schedule__calendar-help">
-            <CalendarDays size={15} aria-hidden="true" />
-            Les dates finales sont triées chronologiquement pour former Journée 1, Journée 2, etc.
-          </p>
         </div>
 
         <div className="formation-schedule__dates">
