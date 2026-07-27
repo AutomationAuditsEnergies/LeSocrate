@@ -101,6 +101,78 @@ async function fetchAudioBlob(
     : new Blob([rawBlob], { type: 'audio/mpeg' })
 }
 
+async function fetchAudioBlobByRanges(
+  url,
+  totalSize,
+  {
+    credentials = 'include',
+    headers = {},
+    label = 'audio',
+    signal,
+    chunkSize = 4 * 1024 * 1024,
+  } = {},
+) {
+  const expectedSize = Number(totalSize)
+  if (!Number.isSafeInteger(expectedSize) || expectedSize <= 0) {
+    return fetchAudioBlob(url, {
+      credentials,
+      headers,
+      label,
+      signal,
+    })
+  }
+
+  const parts = []
+  for (let start = 0; start < expectedSize; start += chunkSize) {
+    const end = Math.min(expectedSize - 1, start + chunkSize - 1)
+    const expectedChunkSize = end - start + 1
+    let chunk = null
+    let lastError = null
+
+    for (let attempt = 1; attempt <= 2 && !chunk; attempt += 1) {
+      let resp
+      try {
+        resp = await fetch(url, {
+          method: 'GET',
+          credentials,
+          cache: 'no-store',
+          headers: {
+            ...headers,
+            Range: `bytes=${start}-${end}`,
+          },
+          signal,
+        })
+        if (resp.status !== 206) {
+          throw new Error(`HTTP ${resp.status} au lieu de 206`)
+        }
+        const received = await resp.blob()
+        if (received.size !== expectedChunkSize) {
+          throw new Error(
+            `plage ${start}-${end} incomplète (${received.size}/${expectedChunkSize} octets)`,
+          )
+        }
+        chunk = received
+      } catch (e) {
+        if (e?.name === 'AbortError') throw e
+        lastError = e
+        if (attempt === 1) {
+          console.warn(`${label} : nouvelle tentative pour la plage ${start}-${end}`, e)
+        }
+      }
+    }
+
+    if (!chunk) {
+      throw new Error(
+        `${label} interrompu à ${Math.round((start / expectedSize) * 100)} %`
+        + `${lastError?.message ? ` (${lastError.message})` : ''}`,
+      )
+    }
+    parts.push(chunk)
+  }
+
+  return new Blob(parts, { type: 'audio/mpeg' })
+}
+
 // Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
 // (pause_*.mp3 et pause_midi_*.mp3 → pause, qa_*.mp3 → qa).
 function breakSlideTemplateForFilename(filename) {
@@ -298,11 +370,15 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     )
     const data = await resp.json().catch(() => ({}))
     if (!resp.ok || !data.success || !data.url) {
-      throw new Error(data.error || 'URL audio indisponible')
+      const audioUrlError = new Error(data.error || 'URL audio indisponible')
+      audioUrlError.status = resp.status
+      throw audioUrlError
     }
-    const url = data.url
-    audioUrlRef.current = url
-    return url
+    audioUrlRef.current = data.url
+    return {
+      url: data.url,
+      size: Number(data.size) || 0,
+    }
   }, [clearAudioUrl, folderId, filename])
 
   const buildBackendAudioStreamUrl = useCallback(() => (
@@ -311,9 +387,11 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
   const loadWaveformAudio = useCallback(async (ws, { signal } = {}) => {
     let directError = null
+    let audioSize = 0
     try {
-      const directUrl = await buildAudioSasUrl({ signal })
-      const directBlob = await fetchAudioBlob(directUrl, {
+      const directAudio = await buildAudioSasUrl({ signal })
+      audioSize = directAudio.size
+      const directBlob = await fetchAudioBlob(directAudio.url, {
         credentials: 'omit',
         label: 'stockage audio',
         signal,
@@ -321,17 +399,22 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       return ws.loadBlob(directBlob)
     } catch (e) {
       if (e?.name === 'AbortError') throw e
+      if (e?.status === 422) throw e
       directError = e
       console.warn('Chargement audio Azure direct échoué, fallback backend:', e)
     }
 
     try {
-      const backendBlob = await fetchAudioBlob(buildBackendAudioStreamUrl(), {
-        credentials: 'include',
-        headers: audioFetchHeaders(),
-        label: 'proxy audio backend',
-        signal,
-      })
+      const backendBlob = await fetchAudioBlobByRanges(
+        buildBackendAudioStreamUrl(),
+        audioSize,
+        {
+          credentials: 'include',
+          headers: audioFetchHeaders(),
+          label: 'proxy audio backend',
+          signal,
+        },
+      )
       return ws.loadBlob(backendBlob)
     } catch (backendError) {
       if (backendError?.name === 'AbortError') throw backendError
