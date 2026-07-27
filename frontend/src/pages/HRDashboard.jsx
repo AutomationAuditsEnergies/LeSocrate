@@ -323,6 +323,29 @@ export default function HRDashboard() {
   }
 
   useEffect(() => {
+    const root = document.documentElement
+    const body = document.body
+    const previousStyles = {
+      rootOverflow: root.style.overflow,
+      rootOverscrollBehavior: root.style.overscrollBehavior,
+      bodyOverflow: body.style.overflow,
+      bodyOverscrollBehavior: body.style.overscrollBehavior,
+    }
+
+    root.style.overflow = 'hidden'
+    root.style.overscrollBehavior = 'none'
+    body.style.overflow = 'hidden'
+    body.style.overscrollBehavior = 'none'
+
+    return () => {
+      root.style.overflow = previousStyles.rootOverflow
+      root.style.overscrollBehavior = previousStyles.rootOverscrollBehavior
+      body.style.overflow = previousStyles.bodyOverflow
+      body.style.overscrollBehavior = previousStyles.bodyOverscrollBehavior
+    }
+  }, [])
+
+  useEffect(() => {
     fetchPlatforms()
   }, [])
 
@@ -1213,7 +1236,7 @@ export default function HRDashboard() {
 
   return (
     <div className={darkMode ? 'dark' : ''}>
-      <div className="relative flex h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
+      <div className="relative flex h-dvh overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
         <CenterWorkspaceSidebar
           colors={colors}
           activeSection={workspaceSection}
@@ -3992,6 +4015,7 @@ export function CreatePlatformView({
   )
   const [teacherDescription, setTeacherDescription] = useState(generatedDescription)
   const [colorPickerOpen, setColorPickerOpen] = useState(false)
+  const [identityEditorOpen, setIdentityEditorOpen] = useState(false)
   const [schedulePlan, setSchedulePlan] = useState({
     payload: null,
     valid: false,
@@ -4064,7 +4088,10 @@ export function CreatePlatformView({
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setColorPickerOpen((open) => !open)}
+                onClick={() => {
+                  setIdentityEditorOpen(false)
+                  setColorPickerOpen((open) => !open)
+                }}
                 aria-expanded={colorPickerOpen}
                 aria-controls="teacher-color-picker"
                 className="create-platform-workspace__customize-button"
@@ -4111,9 +4138,21 @@ export function CreatePlatformView({
 
           <div className="create-platform-workspace__preview-copy">
             <p className="text-sm font-medium text-white/70">{trainingTitle || 'Formation à renseigner'}</p>
-            <h2>
-              {teacherFirstName.trim() || 'Votre professeur'}
-            </h2>
+            <div className="create-platform-workspace__preview-name">
+              <h2>{teacherFirstName.trim() || 'Votre professeur'}</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setColorPickerOpen(false)
+                  setIdentityEditorOpen(true)
+                }}
+                aria-label="Modifier l’identité du professeur"
+                aria-expanded={identityEditorOpen}
+                aria-controls="teacher-identity-editor"
+              >
+                <PenLine size={17} aria-hidden="true" />
+              </button>
+            </div>
             <p className="create-platform-workspace__description">
               {teacherDescription || 'La description du professeur apparaîtra ici dès que vous aurez renseigné la formation.'}
             </p>
@@ -4127,48 +4166,14 @@ export function CreatePlatformView({
         </aside>
 
         <div className="create-platform-workspace__editor">
-          <header className="create-platform-workspace__identity">
-            <div className="create-platform-workspace__identity-heading">
-              <h1>
-              {formationMode === 'existing' ? 'Réutiliser ce professeur IA' : 'Nouveau professeur IA'}
-              </h1>
-            </div>
-
-            <div className="create-platform-workspace__identity-fields">
-              <div>
-                <label htmlFor="teacher-first-name">Prénom</label>
-                <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Lina" autoFocus className={inputClassName} />
-              </div>
-
-              {formationMode === 'existing' ? (
-                <div className="create-platform-workspace__existing-module">
-                  <span>Professeur à réutiliser</span>
-                  <div>
-                    <p className="text-sm font-semibold text-[#0F172A]">{selectedModule?.tp_name || 'Professeur introuvable'}</p>
-                    <p className="text-xs text-[#64748B]">{selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}</p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <label htmlFor="teacher-training-name">Formation</label>
-                    <input id="teacher-training-name" type="text" value={newFormTpName} onChange={(event) => setNewFormTpName(event.target.value)} placeholder="Ex. TP CRCD" className={inputClassName} />
-                  </div>
-                  <div>
-                    <label htmlFor="teacher-rncp">Code RNCP</label>
-                    <input id="teacher-rncp" type="text" value={newFormRncp} onChange={(event) => setNewFormRncp(event.target.value)} placeholder="Ex. 35304" className={inputClassName} />
-                  </div>
-                </>
-              )}
-            </div>
-
-            {prefilledFromAssistant && (
-              <p className="create-platform-workspace__prefilled recruitment-review-enter" role="status">
-                <Icon name="check_circle" className="text-base" />
-                Informations préremplies
-              </p>
-            )}
-          </header>
+          <button
+            type="button"
+            className="create-platform-workspace__mobile-identity-button"
+            onClick={() => setIdentityEditorOpen(true)}
+          >
+            <PenLine size={16} aria-hidden="true" />
+            Renseigner le professeur
+          </button>
 
           <div className="create-platform-workspace__schedule">
             {usesLegacyReuseSchedule ? (
@@ -4285,6 +4290,71 @@ export function CreatePlatformView({
           </footer>
         </div>
       </div>
+
+      {identityEditorOpen && (
+        <section
+          id="teacher-identity-editor"
+          className="create-platform-workspace__identity-panel"
+          aria-labelledby="teacher-identity-editor-title"
+        >
+          <header>
+            <div>
+              <h2 id="teacher-identity-editor-title">Identité du professeur</h2>
+              <p>Ces informations apparaissent sur sa fiche.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIdentityEditorOpen(false)}
+              aria-label="Fermer la modification de l’identité"
+            >
+              <Icon name="close" className="text-lg" />
+            </button>
+          </header>
+
+          <div className="create-platform-workspace__identity-fields">
+            <div>
+              <label htmlFor="teacher-first-name">Prénom</label>
+              <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Lina" autoFocus className={inputClassName} />
+            </div>
+
+            {formationMode === 'existing' ? (
+              <div className="create-platform-workspace__existing-module">
+                <span>Formation conservée</span>
+                <div>
+                  <p className="text-sm font-semibold text-[#0F172A]">{selectedModule?.tp_name || 'Professeur introuvable'}</p>
+                  <p className="text-xs text-[#64748B]">{selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label htmlFor="teacher-training-name">Formation</label>
+                  <input id="teacher-training-name" type="text" value={newFormTpName} onChange={(event) => setNewFormTpName(event.target.value)} placeholder="Ex. TP CRCD" className={inputClassName} />
+                </div>
+                <div>
+                  <label htmlFor="teacher-rncp">Code RNCP</label>
+                  <input id="teacher-rncp" type="text" value={newFormRncp} onChange={(event) => setNewFormRncp(event.target.value)} placeholder="Ex. 35304" className={inputClassName} />
+                </div>
+              </>
+            )}
+          </div>
+
+          {prefilledFromAssistant && (
+            <p className="create-platform-workspace__prefilled recruitment-review-enter" role="status">
+              <Icon name="check_circle" className="text-base" />
+              Informations préremplies
+            </p>
+          )}
+
+          <button
+            type="button"
+            className="create-platform-workspace__identity-done"
+            onClick={() => setIdentityEditorOpen(false)}
+          >
+            Terminer
+          </button>
+        </section>
+      )}
     </section>
   )
 }

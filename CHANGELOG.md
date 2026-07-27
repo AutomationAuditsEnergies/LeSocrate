@@ -20,6 +20,12 @@ du recrutement manuel, tout en permettant de la rouvrir. Le panneau professeur
 gagne en largeur, le calendrier et le préremplissage deviennent plus compacts,
 et les textes redondants autour du planning sont retirés.
 
+Les champs prénom, formation et RNCP quittent enfin le calendrier. Un bouton
+crayon placé directement sur la fiche professeur ouvre leur panneau de saisie
+sur l’aperçu de gauche, afin de réserver toute la partie droite au planning.
+Le dashboard verrouille maintenant le défilement du document et se cale sur la
+hauteur dynamique du viewport, sans supprimer les défilements internes utiles.
+
 ### fix(ci): alignement de la fixture planning V2
 
 La fixture SQLite des tests de parité du repository pipeline expose désormais
