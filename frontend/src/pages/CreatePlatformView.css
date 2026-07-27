@@ -168,15 +168,17 @@
 .create-platform-workspace__existing-module > span {
   display: block;
   margin-bottom: 4px;
-  color: #52525b;
+  color: rgba(255, 255, 255, 0.9);
   font-size: 11px;
   font-weight: 650;
+  text-shadow: 0 1px 2px rgba(24, 24, 27, 0.35);
 }
 
 .create-platform-workspace__identity-fields input {
   min-height: 36px;
-  border-color: #d4d4d8;
+  border-color: rgba(255, 255, 255, 0.72);
   border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
   padding: 7px 10px;
 }
 
@@ -186,9 +188,10 @@
 
 .create-platform-workspace__existing-module > div {
   min-height: 36px;
-  border: 1px solid #d4d4d8;
+  border: 1px solid rgba(255, 255, 255, 0.72);
   border-radius: 8px;
-  background: #fafafa;
+  background: rgba(255, 255, 255, 0.96);
+  color: #18181b;
   padding: 5px 10px;
 }
 
@@ -201,7 +204,7 @@
   align-items: center;
   gap: 6px;
   margin: 12px 0 0;
-  color: #52525b;
+  color: rgba(255, 255, 255, 0.9);
   font-size: 11px;
   font-weight: 650;
 }
@@ -215,12 +218,11 @@
   min-width: 280px;
   max-height: calc(100% - 48px);
   overflow-y: auto;
-  border: 1px solid #d4d4d8;
-  border-radius: 12px;
-  background: #fff;
-  padding: 12px;
-  color: #18181b;
-  box-shadow: 0 6px 8px rgba(24, 24, 27, 0.16);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: #fff;
 }
 
 .create-platform-workspace__identity-panel > header {
@@ -239,12 +241,14 @@
 .create-platform-workspace__identity-panel h2 {
   font-size: 15px;
   font-weight: 700;
+  text-shadow: 0 1px 3px rgba(24, 24, 27, 0.42);
 }
 
 .create-platform-workspace__identity-panel header p {
   margin-top: 2px;
-  color: #71717a;
+  color: rgba(255, 255, 255, 0.76);
   font-size: 11px;
+  text-shadow: 0 1px 2px rgba(24, 24, 27, 0.35);
 }
 
 .create-platform-workspace__identity-panel header > button {
@@ -253,10 +257,10 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  border: 1px solid #d4d4d8;
+  border: 1px solid rgba(255, 255, 255, 0.42);
   border-radius: 8px;
-  background: #fff;
-  color: #3f3f46;
+  background: rgba(24, 24, 27, 0.72);
+  color: #fff;
   cursor: pointer;
   padding: 0 12px;
   font-size: 12px;
@@ -264,7 +268,7 @@
 }
 
 .create-platform-workspace__identity-panel header > button:hover {
-  background: #f4f4f5;
+  background: rgba(24, 24, 27, 0.92);
 }
 
 .create-platform-workspace__mobile-identity-button {
@@ -363,6 +367,38 @@
     width: auto;
     min-width: 0;
     max-width: 400px;
+    border: 1px solid #d4d4d8;
+    border-radius: 12px;
+    background: #fff;
+    padding: 12px;
+    color: #18181b;
+    box-shadow: 0 6px 8px rgba(24, 24, 27, 0.16);
+  }
+
+  .create-platform-workspace__identity-panel h2 {
+    text-shadow: none;
+  }
+
+  .create-platform-workspace__identity-panel header p {
+    color: #71717a;
+    text-shadow: none;
+  }
+
+  .create-platform-workspace__identity-fields label,
+  .create-platform-workspace__existing-module > span,
+  .create-platform-workspace__prefilled {
+    color: #52525b;
+    text-shadow: none;
+  }
+
+  .create-platform-workspace__identity-panel header > button {
+    border-color: #d4d4d8;
+    background: #fff;
+    color: #3f3f46;
+  }
+
+  .create-platform-workspace__identity-panel header > button:hover {
+    background: #f4f4f5;
   }
 }
 
