@@ -51,7 +51,7 @@ class PostgresSchemaContractTest(unittest.TestCase):
             self.assertRegex(schema, rf"(?m)^\s*{column}\s+")
         self.assertIn("ALTER TABLE deletion_requests ENABLE ROW LEVEL SECURITY", schema)
 
-    def test_pipeline_access_bootstrap_is_targeted_and_one_time(self):
+    def test_pipeline_access_bootstrap_never_grants_tenant_ownership(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
         self.assertIn("pipeline_permission_was_missing", schema)
         self.assertIn("IF pipeline_permission_was_missing THEN", schema)
@@ -60,12 +60,29 @@ class PostgresSchemaContractTest(unittest.TestCase):
         self.assertIn("RAISE EXCEPTION", schema)
         self.assertIn("LOWER(username) = 'newpiprod@gmail.com'", schema)
         self.assertIn("pipeline_access_enabled = TRUE", schema)
-        self.assertIn("platform.center_account_id IS NULL", schema)
-        self.assertRegex(
-            schema,
-            r"EXISTS\s*\(\s*SELECT 1\s+FROM formation_pipeline_jobs job"
-            r"\s+WHERE job\.platform_id = platform\.id\s*\)",
+        permission_bootstrap = schema[
+            schema.index("-- Grant the initial Formation3 operator"):
+            schema.index("-- Correction one-shot du bootstrap historique")
+        ]
+        self.assertNotIn(
+            "UPDATE platform_config",
+            permission_bootstrap,
+            "Une permission pipeline ne doit jamais modifier la propriété tenant",
         )
+
+    def test_historical_bulk_ownership_cleanup_is_evidence_based_and_one_time(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        self.assertIn("CREATE TABLE IF NOT EXISTS app_schema_migrations", schema)
+        self.assertIn("20260727_remove_pipeline_operator_bulk_ownership_v1", schema)
+        self.assertIn("SET center_account_id = NULL", schema)
+        self.assertIn("center_platform_number = NULL", schema)
+        self.assertIn("platform.creation_request_id IS NULL", schema)
+        self.assertIn("FROM ai_teacher_orders AS teacher_order", schema)
+        self.assertIn("teacher_order.platform_id = platform.id", schema)
+        self.assertIn("teacher_order.pipeline_job_id", schema)
+        self.assertIn("DISABLE TRIGGER trg_assign_center_platform_number", schema)
+        self.assertIn("ENABLE TRIGGER trg_assign_center_platform_number", schema)
+        self.assertIn("ALTER TABLE app_schema_migrations ENABLE ROW LEVEL SECURITY", schema)
 
     def test_pipeline_tables_deny_direct_data_api_access_by_default(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")

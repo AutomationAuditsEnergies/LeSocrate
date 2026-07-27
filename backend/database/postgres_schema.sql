@@ -691,9 +691,9 @@ ALTER TABLE formation_pipeline_jobs
     ADD COLUMN IF NOT EXISTS schedule_locked_at TIMESTAMPTZ;
 
 -- Grant the initial Formation3 operator only when this permission is
--- introduced. At the same one-time boundary, attach only orphan platforms
--- which already own a pipeline job. Later schema applications preserve
--- explicit grants, revocations and tenant ownership.
+-- introduced. Pipeline permission and tenant ownership are intentionally
+-- independent: granting access to the pipeline must never make a centre the
+-- owner of pre-existing global platforms.
 DO $$
 DECLARE
     pipeline_permission_was_missing BOOLEAN;
@@ -726,23 +726,90 @@ BEGIN
         SET pipeline_access_enabled = TRUE
         WHERE LOWER(username) = 'newpiprod@gmail.com'
           AND is_active = TRUE;
+    END IF;
+END
+$$;
 
-        WITH pipeline_operator AS (
-            SELECT id
-            FROM training_center_accounts
-            WHERE LOWER(username) = 'newpiprod@gmail.com'
-              AND is_active = TRUE
-              AND pipeline_access_enabled = TRUE
-        )
-        UPDATE platform_config platform
-        SET center_account_id = pipeline_operator.id
-        FROM pipeline_operator
-        WHERE platform.center_account_id IS NULL
-          AND EXISTS (
-              SELECT 1
-              FROM formation_pipeline_jobs job
-              WHERE job.platform_id = platform.id
-          );
+-- Correction one-shot du bootstrap historique ci-dessus. Il avait rattaché
+-- tous les pipelines orphelins au premier opérateur Formation3. Les lignes
+-- restent intégralement persistées mais redeviennent globales quand aucune
+-- preuve durable ne les relie au centre (commande, job de commande ou demande
+-- de création). Les plateformes réellement recrutées par le centre gardent
+-- leur propriétaire.
+CREATE TABLE IF NOT EXISTS app_schema_migrations (
+    migration_key TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$
+DECLARE
+    migration_key_value CONSTANT TEXT :=
+        '20260727_remove_pipeline_operator_bulk_ownership_v1';
+    pipeline_operator_count INTEGER;
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM app_schema_migrations
+        WHERE migration_key = migration_key_value
+    ) THEN
+        SELECT COUNT(*)
+        INTO pipeline_operator_count
+        FROM training_center_accounts
+        WHERE LOWER(username) = 'newpiprod@gmail.com';
+
+        IF pipeline_operator_count > 1 THEN
+            RAISE EXCEPTION
+                'Plusieurs comptes correspondent à newpiprod@gmail.com; correction de propriété refusée';
+        END IF;
+
+        IF pipeline_operator_count = 1 THEN
+            -- Le trigger protège normalement l'identité propriétaire. Le
+            -- désactiver dans cette transaction est nécessaire uniquement
+            -- pour réparer l'attribution historique erronée ; tout rollback
+            -- restaure automatiquement son état.
+            ALTER TABLE platform_config
+                DISABLE TRIGGER trg_assign_center_platform_number;
+
+            WITH pipeline_operator AS (
+                SELECT id
+                FROM training_center_accounts
+                WHERE LOWER(username) = 'newpiprod@gmail.com'
+            )
+            UPDATE platform_config AS platform
+            SET center_account_id = NULL,
+                center_platform_number = NULL
+            FROM pipeline_operator
+            WHERE platform.center_account_id = pipeline_operator.id
+              AND platform.creation_request_id IS NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM formation_pipeline_jobs AS job
+                  WHERE job.platform_id = platform.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM ai_teacher_orders AS teacher_order
+                  WHERE teacher_order.center_account_id = pipeline_operator.id
+                    AND (
+                        teacher_order.platform_id = platform.id
+                        OR (
+                            teacher_order.pipeline_job_id IS NOT NULL
+                            AND EXISTS (
+                                SELECT 1
+                                FROM formation_pipeline_jobs AS ordered_job
+                                WHERE ordered_job.id = teacher_order.pipeline_job_id
+                                  AND ordered_job.platform_id = platform.id
+                            )
+                        )
+                    )
+              );
+
+            ALTER TABLE platform_config
+                ENABLE TRIGGER trg_assign_center_platform_number;
+        END IF;
+
+        INSERT INTO app_schema_migrations (migration_key)
+        VALUES (migration_key_value);
     END IF;
 END
 $$;
@@ -1272,6 +1339,7 @@ CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_auto_pilot_resume
 -- With no anon/authenticated policies, RLS denies direct Data API access while
 -- the Postgres owner and Supabase service role used by the backend keep access.
 ALTER TABLE training_center_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_schema_migrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE platform_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE deletion_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cours_config ENABLE ROW LEVEL SECURITY;
