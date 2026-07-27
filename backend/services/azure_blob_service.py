@@ -64,6 +64,13 @@ def blob_exists(container_name, blob_path):
     return blob_client.exists()
 
 
+def get_blob_size(container_name, blob_path):
+    """Retourne la taille du blob en octets."""
+    client = _get_blob_service_client()
+    blob_client = client.get_blob_client(container=container_name, blob=blob_path)
+    return int(blob_client.get_blob_properties().size or 0)
+
+
 def delete_blob(container_name, blob_path):
     """Supprime un blob"""
     client = _get_blob_service_client()
