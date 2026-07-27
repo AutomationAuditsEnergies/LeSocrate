@@ -88,6 +88,11 @@
   color: #fff;
 }
 
+.create-platform-workspace--identity-open .create-platform-workspace__preview-copy {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .create-platform-workspace__preview-copy h2 {
   margin: 4px 0 0;
   font-size: clamp(2rem, 3vw, 3rem);

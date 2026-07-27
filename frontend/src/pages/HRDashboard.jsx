@@ -4076,7 +4076,7 @@ export function CreatePlatformView({
   const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#E1E5EA] bg-white px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
   return (
-    <section className="create-platform-workspace">
+    <section className={`create-platform-workspace${identityEditorOpen ? ' create-platform-workspace--identity-open' : ''}`}>
       <div className="create-platform-workspace__layout">
         <aside
           className="create-platform-workspace__preview"
@@ -4136,7 +4136,7 @@ export function CreatePlatformView({
             />
           </div>
 
-          <div className="create-platform-workspace__preview-copy">
+          <div className="create-platform-workspace__preview-copy" aria-hidden={identityEditorOpen}>
             <p className="text-sm font-medium text-white/70">{trainingTitle || 'Formation à renseigner'}</p>
             <div className="create-platform-workspace__preview-name">
               <h2>{teacherFirstName.trim() || 'Votre professeur'}</h2>
