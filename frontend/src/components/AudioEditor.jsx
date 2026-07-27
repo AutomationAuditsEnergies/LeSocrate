@@ -51,6 +51,56 @@ function waitForMediaReadyAfterSeek(media, targetSeconds, timeoutMs = 1200) {
   })
 }
 
+async function fetchAudioBlob(
+  url,
+  {
+    credentials = 'omit',
+    headers = {},
+    label = 'audio',
+    signal,
+  } = {},
+) {
+  let resp
+  try {
+    resp = await fetch(url, {
+      method: 'GET',
+      credentials,
+      cache: 'no-store',
+      headers,
+      signal,
+    })
+  } catch (e) {
+    if (e?.name === 'AbortError') throw e
+    throw new Error(
+      e?.message === 'Failed to fetch'
+        ? `${label} inaccessible`
+        : (e?.message || `${label} indisponible`),
+    )
+  }
+
+  if (!resp.ok) {
+    const contentType = resp.headers.get('content-type') || ''
+    let detail = ''
+    if (contentType.includes('application/json')) {
+      const data = await resp.json().catch(() => ({}))
+      detail = data.error || data.message || ''
+    } else {
+      detail = (await resp.text().catch(() => '')).slice(0, 200)
+    }
+    throw new Error(
+      detail
+        ? `${label} indisponible : HTTP ${resp.status} (${detail})`
+        : `${label} indisponible : HTTP ${resp.status}`,
+    )
+  }
+
+  const rawBlob = await resp.blob()
+  if (!rawBlob.size) throw new Error(`${label} vide`)
+  return rawBlob.type === 'audio/mpeg'
+    ? rawBlob
+    : new Blob([rawBlob], { type: 'audio/mpeg' })
+}
+
 // Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
 // (pause_*.mp3 et pause_midi_*.mp3 → pause, qa_*.mp3 → qa).
 function breakSlideTemplateForFilename(filename) {
@@ -240,37 +290,56 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     }
   }, [])
 
-  const loadWaveformAudio = useCallback(async (ws, { signal } = {}) => {
+  const buildAudioSasUrl = useCallback(async ({ signal } = {}) => {
     clearAudioUrl()
-    const url = apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`)
+    const resp = await apiFetch(
+      `/api/hr/cours-folders/${folderId}/audio-url/${encodeURIComponent(filename)}?v=${Date.now()}`,
+      { signal },
+    )
+    const data = await resp.json().catch(() => ({}))
+    if (!resp.ok || !data.success || !data.url) {
+      throw new Error(data.error || 'URL audio indisponible')
+    }
+    const url = data.url
     audioUrlRef.current = url
+    return url
+  }, [clearAudioUrl, folderId, filename])
 
-    const resp = await fetch(url, {
-      credentials: 'include',
-      headers: audioFetchHeaders(),
-      signal,
-    })
+  const buildBackendAudioStreamUrl = useCallback(() => (
+    apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`)
+  ), [folderId, filename])
 
-    if (!resp.ok) {
-      const contentType = resp.headers.get('content-type') || ''
-      let detail = ''
-      if (contentType.includes('application/json')) {
-        const data = await resp.json().catch(() => ({}))
-        detail = data.error || data.message || ''
-      } else {
-        detail = (await resp.text().catch(() => '')).slice(0, 200)
-      }
-      throw new Error(detail ? `HTTP ${resp.status} - ${detail}` : `HTTP ${resp.status}`)
+  const loadWaveformAudio = useCallback(async (ws, { signal } = {}) => {
+    let directError = null
+    try {
+      const directUrl = await buildAudioSasUrl({ signal })
+      const directBlob = await fetchAudioBlob(directUrl, {
+        credentials: 'omit',
+        label: 'stockage audio',
+        signal,
+      })
+      return ws.loadBlob(directBlob)
+    } catch (e) {
+      if (e?.name === 'AbortError') throw e
+      directError = e
+      console.warn('Chargement audio Azure direct échoué, fallback backend:', e)
     }
 
-    const rawBlob = await resp.blob()
-    if (!rawBlob.size) throw new Error('réponse audio vide')
-    const audioBlob = rawBlob.type === 'audio/mpeg'
-      ? rawBlob
-      : new Blob([rawBlob], { type: 'audio/mpeg' })
-    if (signal?.aborted) throw new DOMException('Chargement annulé', 'AbortError')
-    return ws.loadBlob(audioBlob)
-  }, [audioFetchHeaders, clearAudioUrl, folderId, filename])
+    try {
+      const backendBlob = await fetchAudioBlob(buildBackendAudioStreamUrl(), {
+        credentials: 'include',
+        headers: audioFetchHeaders(),
+        label: 'proxy audio backend',
+        signal,
+      })
+      return ws.loadBlob(backendBlob)
+    } catch (backendError) {
+      if (backendError?.name === 'AbortError') throw backendError
+      throw new Error(
+        `${backendError.message}${directError ? ` (Azure direct : ${directError.message})` : ''}`,
+      )
+    }
+  }, [audioFetchHeaders, buildAudioSasUrl, buildBackendAudioStreamUrl])
 
   useEffect(() => {
     let cancelled = false

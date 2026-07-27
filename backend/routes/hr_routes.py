@@ -4,7 +4,7 @@ import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, session, jsonify, Response, stream_with_context
-from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
 from database.db import get_db_connection
@@ -55,51 +55,14 @@ def _is_local_platform(pid):
 
 
 def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
-    """Copie les MP3 générés du dossier vers le container audio public de la plateforme.
+    """Compatibilité des routes RH avec le service de publication partagé."""
+    from services.audio_publish_service import publish_playlist_audio_to_platform
 
-    La page /video lit les fichiers à la racine du container formationaudio-pX,
-    alors que la génération TTS écrit dans audiostts/platform-X/folder-Y/playlist/.
-    """
-    tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
-    audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING") or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-    if not tts_conn or not audio_conn:
-        raise ValueError("Connexions Azure audio manquantes")
-
-    wanted = {os.path.basename(str(name).split("?", 1)[0]) for name in (filenames or []) if name}
-    pinfo = _get_platform_info(int(platform_id))
-    dest_container = pinfo["audio_container"]
-    prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
-
-    tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
-    audio_bsc = BlobServiceClient.from_connection_string(audio_conn)
-    source_cc = tts_bsc.get_container_client("audiostts")
-    dest_cc = audio_bsc.get_container_client(dest_container)
-
-    copied = []
-    errors = []
-    for blob in source_cc.list_blobs(name_starts_with=prefix):
-        filename = blob.name.split("/")[-1]
-        if not filename.endswith(".mp3"):
-            continue
-        if wanted and filename not in wanted:
-            continue
-        try:
-            audio_bytes = source_cc.get_blob_client(blob.name).download_blob().readall()
-            dest_cc.get_blob_client(filename).upload_blob(
-                audio_bytes,
-                overwrite=True,
-                content_settings=ContentSettings(
-                    content_type="audio/mpeg",
-                    content_disposition=f'inline; filename="{filename}"',
-                ),
-            )
-            copied.append(filename)
-            logger.info(f"📣 Audio publié vers {dest_container}/{filename}")
-        except Exception as e:
-            logger.error(f"❌ Publication audio {filename} échouée: {e}")
-            errors.append({"filename": filename, "error": str(e)})
-
-    return {"published": copied, "publish_errors": errors}
+    return publish_playlist_audio_to_platform(
+        platform_id,
+        folder_id,
+        filenames,
+    )
 
 
 def _bool_arg(name, default=False):
@@ -3459,14 +3422,31 @@ def create_hr_blueprint(socketio):
                             mock=playlist_mock,
                         )
                         result["voice_type"] = voice_type
-                    try:
+                    if voice_type == "mock":
+                        result["publish"] = {
+                            "published": [],
+                            "publish_errors": [],
+                            "skipped": True,
+                        }
+                    else:
                         publish_filenames = None
                         if has_script and not playlist_mock and not include_breaks:
                             publish_filenames = result.get("files") or []
-                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id, publish_filenames)
-                    except Exception as publish_error:
-                        logger.error(f"❌ Publication playlist P{platform_id}/F{folder_id} échouée: {publish_error}")
-                        result["publish"] = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
+                        result["publish"] = _publish_playlist_audio_to_platform(
+                            platform_id,
+                            folder_id,
+                            publish_filenames,
+                        )
+                        publish_errors = result["publish"].get("publish_errors") or []
+                        published = result["publish"].get("published") or []
+                        if publish_errors:
+                            raise RuntimeError(
+                                f"Publication audio incomplète ({len(publish_errors)} erreur(s))"
+                            )
+                        if not published:
+                            raise RuntimeError(
+                                "Publication audio impossible : aucun MP3 trouvé dans la playlist"
+                            )
                     if has_script and not playlist_mock:
                         scope_label = "19 audios" if include_breaks else "7 cours"
                         done_msg = f"✅ Terminé ({voice_label}, {scope_label}) : {result['generated']} généré(s), {result.get('skipped', 0)} conservé(s)"
@@ -3605,11 +3585,21 @@ def create_hr_blueprint(socketio):
                         "filename": filename,
                         "sync_slides": sync_slides,
                     }
-                    try:
-                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id, [filename])
-                    except Exception as publish_error:
-                        logger.error(f"❌ Publication item {filename} P{platform_id}/F{folder_id} échouée: {publish_error}")
-                        result["publish"] = {"published": [], "publish_errors": [{"filename": filename, "error": str(publish_error)}]}
+                    result["publish"] = _publish_playlist_audio_to_platform(
+                        platform_id,
+                        folder_id,
+                        [filename],
+                    )
+                    publish_errors = result["publish"].get("publish_errors") or []
+                    published = result["publish"].get("published") or []
+                    if publish_errors:
+                        raise RuntimeError(
+                            f"Publication audio de {filename} échouée"
+                        )
+                    if filename not in published:
+                        raise RuntimeError(
+                            f"Publication audio de {filename} impossible : fichier introuvable"
+                        )
                     _playlist_jobs[folder_id].update({
                         "status": "completed",
                         "result": result,

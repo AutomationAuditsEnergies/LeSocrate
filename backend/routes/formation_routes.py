@@ -2770,7 +2770,7 @@ def generate_folder_audio(job_id, folder_id):
                     "single_folder": True,
                 },
             )
-            generate_audio_from_script(
+            audio_result = generate_audio_from_script(
                 folder_id,
                 on_progress=_make_audio_progress_logger(job_id, folder_id, voice_type),
                 force_all=force_all,
@@ -2785,6 +2785,28 @@ def generate_folder_audio(job_id, folder_id):
                 slide_model=model,
                 llm_model=model,
             )
+            publish_result = {
+                "published": [],
+                "publish_errors": [],
+                "skipped": bool(mock),
+            }
+            if not mock:
+                from services.audio_publish_service import publish_playlist_audio_to_platform
+
+                publish_result = publish_playlist_audio_to_platform(
+                    job["platform_id"],
+                    folder_id,
+                )
+                publish_errors = publish_result.get("publish_errors") or []
+                published = publish_result.get("published") or []
+                if publish_errors:
+                    raise RuntimeError(
+                        f"Publication audio incomplète ({len(publish_errors)} erreur(s))"
+                    )
+                if not published:
+                    raise RuntimeError(
+                        "Publication audio impossible : aucun MP3 trouvé dans la playlist"
+                    )
             n_dirty = _count_dirty_segments_for_job(job_id)
             finalize_result = None
             # L'audio d'une journée est une action d'exploitation à la demande :
@@ -2804,6 +2826,8 @@ def generate_folder_audio(job_id, folder_id):
                     "remaining_dirty_segments": n_dirty,
                     "finalized": False,
                     "finalize_result": finalize_result,
+                    "audio_result": audio_result,
+                    "publish": publish_result,
                     "single_folder": True,
                 },
             )

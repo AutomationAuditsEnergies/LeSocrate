@@ -12745,7 +12745,12 @@ def generate_audio_from_script(
         COURS_DURATIONS_MIN, PLAYLIST_SPEC, _pad_audio_to_duration, _measure_duration_ms
     )
     from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
-    from services.azure_blob_service import blob_exists, upload_blob, CONTAINER_AUDIOS
+    from services.azure_blob_service import (
+        blob_exists,
+        get_blob_size,
+        upload_blob,
+        CONTAINER_AUDIOS,
+    )
 
     def _progress(step, total, msg):
         if on_progress:
@@ -12956,10 +12961,27 @@ def generate_audio_from_script(
     azure_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
     existing_playlist_files = set()
     if preserve_existing:
-        for item_filename, _duration_sec, _file_type, _bloc_num in playlist_items:
+        minimum_course_bytes = max(
+            1,
+            int(os.getenv("COURSE_AUDIO_MIN_PRESERVE_BYTES", "100000")),
+        )
+        for item_filename, _duration_sec, file_type, _bloc_num in playlist_items:
             blob_path = f"{azure_prefix}{item_filename}"
             try:
                 if blob_exists(CONTAINER_AUDIOS, blob_path):
+                    if not mock and file_type == "cours":
+                        blob_size = get_blob_size(CONTAINER_AUDIOS, blob_path)
+                        if blob_size < minimum_course_bytes:
+                            logger.warning(
+                                "PIPELINE_AUDIO_INVALID_EXISTING formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bytes=%s minimum_bytes=%s action=regenerate",
+                                formation_job_id,
+                                job_id,
+                                folder_id,
+                                item_filename,
+                                blob_size,
+                                minimum_course_bytes,
+                            )
+                            continue
                     existing_playlist_files.add(item_filename)
             except Exception as exc:
                 logger.warning(
