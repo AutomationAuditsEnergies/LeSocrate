@@ -27,6 +27,7 @@ Audio (payant) et du mock silence (gratuit mais pas écoutable).
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -40,6 +41,7 @@ logger = get_logger(__name__)
 # et l'isolation des erreurs réseau sur de gros volumes.
 _CHUNK_MAX_CHARS = 4000
 _DEFAULT_VOICE = "fr-FR-DeniseNeural"
+_DEFAULT_CHUNK_MAX_CHARS = 2000
 
 
 def _skip_id3v2(audio_bytes: bytes) -> int:
@@ -119,11 +121,44 @@ def _speed_to_rate(speed: float) -> str:
     return f"{pct:+d}%"
 
 
+def _terminate_subprocess(proc: subprocess.Popen) -> None:
+    """Arrête le CLI edge-tts, y compris ses éventuels processus enfants."""
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name != "nt":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except (OSError, ProcessLookupError):
+        try:
+            proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
+    try:
+        proc.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
+
+
 def _synthesize_chunk_sync(text: str, voice: str, rate: str, volume: str) -> bytes:
-    """Synthèse d'un chunk via le CLI edge-tts, retourne les bytes MP3."""
-    timeout = float(os.getenv("EDGE_TTS_SUBPROCESS_TIMEOUT_SEC", "90"))
+    """Synthèse d'un chunk via le CLI edge-tts, retourne les bytes MP3.
+
+    Le timeout de ``subprocess.run`` peut rester bloqué lorsque Flask tourne
+    sous Eventlet. On surveille donc explicitement le processus avec une
+    horloge monotone et on tue son groupe complet à l'échéance.
+    """
+    try:
+        timeout = float(os.getenv("EDGE_TTS_SUBPROCESS_TIMEOUT_SEC", "90"))
+    except (TypeError, ValueError):
+        timeout = 90.0
+    timeout = max(10.0, timeout)
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         output_path = tmp.name
+    proc = None
     try:
         cmd = [
             sys.executable,
@@ -140,23 +175,30 @@ def _synthesize_chunk_sync(text: str, voice: str, rate: str, volume: str) -> byt
             "--write-media",
             output_path,
         ]
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
+            start_new_session=(os.name != "nt"),
         )
+        deadline = time.monotonic() + timeout
+        while proc.poll() is None:
+            if time.monotonic() >= deadline:
+                _terminate_subprocess(proc)
+                raise TimeoutError(f"edge-tts CLI timeout après {timeout:.0f}s")
+            time.sleep(0.2)
+
+        stdout_bytes, stderr_bytes = proc.communicate()
         if proc.returncode != 0:
-            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-            stdout = proc.stdout.decode("utf-8", errors="replace").strip()
+            stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+            stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
             detail = stderr or stdout or f"exit code {proc.returncode}"
             raise RuntimeError(f"edge-tts CLI a échoué: {detail[:500]}")
         with open(output_path, "rb") as f:
             return f.read()
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(f"edge-tts CLI timeout après {timeout:.0f}s") from exc
     finally:
+        if proc is not None and proc.poll() is None:
+            _terminate_subprocess(proc)
         try:
             os.remove(output_path)
         except OSError:
@@ -202,7 +244,14 @@ def convert_to_speech_basic(
         ImportError si edge-tts n'est pas installé.
         Exception si tous les retries échouent.
     """
-    chunks = _split_for_tts(text)
+    try:
+        chunk_max_chars = int(
+            os.getenv("EDGE_TTS_CHUNK_MAX_CHARS", str(_DEFAULT_CHUNK_MAX_CHARS))
+        )
+    except (TypeError, ValueError):
+        chunk_max_chars = _DEFAULT_CHUNK_MAX_CHARS
+    chunk_max_chars = max(500, min(_CHUNK_MAX_CHARS, chunk_max_chars))
+    chunks = _split_for_tts(text, max_chars=chunk_max_chars)
 
     inter_chunk_delay = float(os.getenv("BASIC_TTS_CHUNK_DELAY_SEC", "0.5"))
     if max_429_retries is None:
@@ -222,7 +271,8 @@ def convert_to_speech_basic(
 
     logger.info(
         f"🎙️ edge-tts : synthèse de {len(text)} caractères en {len(chunks)} chunk(s) "
-        f"(voice={voice}, rate={rate}, volume={volume}, max_retries={max_429_retries})"
+        f"(voice={voice}, rate={rate}, volume={volume}, chunk_max={chunk_max_chars}, "
+        f"max_retries={max_429_retries})"
     )
 
     def _synthesize_one(i: int, chunk: str) -> bytes:
