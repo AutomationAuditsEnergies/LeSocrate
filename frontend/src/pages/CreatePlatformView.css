@@ -160,7 +160,7 @@
 .create-platform-workspace__identity-fields {
   display: grid;
   min-width: 0;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 8px;
 }
 
@@ -225,10 +225,10 @@
 
 .create-platform-workspace__identity-panel > header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .create-platform-workspace__identity-panel h2,
@@ -249,36 +249,22 @@
 
 .create-platform-workspace__identity-panel header > button {
   display: inline-flex;
-  width: 44px;
-  height: 44px;
+  min-height: 44px;
   flex: none;
   align-items: center;
   justify-content: center;
-  border: 0;
+  border: 1px solid #d4d4d8;
   border-radius: 8px;
-  background: transparent;
+  background: #fff;
   color: #3f3f46;
   cursor: pointer;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .create-platform-workspace__identity-panel header > button:hover {
   background: #f4f4f5;
-}
-
-.create-platform-workspace__identity-done {
-  display: inline-flex;
-  min-height: 44px;
-  width: 100%;
-  align-items: center;
-  justify-content: center;
-  margin-top: 12px;
-  border: 1px solid #18181b;
-  border-radius: 8px;
-  background: #18181b;
-  color: #fff;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .create-platform-workspace__mobile-identity-button {

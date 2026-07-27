@@ -4305,9 +4305,8 @@ export function CreatePlatformView({
             <button
               type="button"
               onClick={() => setIdentityEditorOpen(false)}
-              aria-label="Fermer la modification de l’identité"
             >
-              <Icon name="close" className="text-lg" />
+              Terminer
             </button>
           </header>
 
@@ -4346,13 +4345,6 @@ export function CreatePlatformView({
             </p>
           )}
 
-          <button
-            type="button"
-            className="create-platform-workspace__identity-done"
-            onClick={() => setIdentityEditorOpen(false)}
-          >
-            Terminer
-          </button>
         </section>
       )}
     </section>
