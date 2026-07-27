@@ -3817,6 +3817,27 @@ def create_hr_blueprint(socketio):
             if not cs:
                 return jsonify({"success": False, "error": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}), 500
             blob_service_client = BlobServiceClient.from_connection_string(cs)
+            blob_client = blob_service_client.get_blob_client(
+                container="audiostts",
+                blob=blob_path,
+            )
+            audio_size = int(blob_client.get_blob_properties().size or 0)
+            minimum_course_bytes = max(
+                1,
+                int(os.getenv("COURSE_AUDIO_MIN_PRESERVE_BYTES", "100000")),
+            )
+            if (
+                os.path.basename(filename).lower().startswith("cours_")
+                and audio_size < minimum_course_bytes
+            ):
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        "Audio de cours invalide ou factice. "
+                        "Relancez une génération audio réelle."
+                    ),
+                    "size": audio_size,
+                }), 422
             account_name = blob_service_client.account_name
             account_key = blob_service_client.credential.account_key
             expiry = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -3831,7 +3852,7 @@ def create_hr_blueprint(socketio):
                 content_disposition=f'inline; filename="{os.path.basename(filename)}"',
             )
             url = f"https://{account_name}.blob.core.windows.net/audiostts/{blob_path}?{sas_token}"
-            return jsonify({"success": True, "url": url})
+            return jsonify({"success": True, "url": url, "size": audio_size})
         except Exception as e:
             logger.error(f"❌ get_audio_sas_url: {e}")
             return jsonify({"success": False, "error": str(e)}), 500

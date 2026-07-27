@@ -59,7 +59,13 @@ CORS(app, resources={
     r"/*": {
         "origins": _cors_origins,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token", "X-Platform-Id"],
+        "allow_headers": [
+            "Content-Type",
+            "Authorization",
+            "Range",
+            "X-Auth-Token",
+            "X-Platform-Id",
+        ],
         "supports_credentials": True
     }
 })
