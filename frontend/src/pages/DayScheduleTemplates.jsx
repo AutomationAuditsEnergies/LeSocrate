@@ -7,7 +7,6 @@ import {
   Coffee,
   Copy,
   GripHorizontal,
-  GripVertical,
   LockKeyhole,
   MessageCircleQuestion,
   PencilLine,
@@ -390,7 +389,7 @@ function SequencePalette({
 
         <button
           type="button"
-          className="day-schedule-add-task"
+          className="day-schedule-add-task day-schedule-sequence-source"
           draggable={!atMaximum}
           disabled={atMaximum}
           onDragStart={(event) => {
@@ -403,39 +402,6 @@ function SequencePalette({
           <span>Séquence pédagogique</span>
           <small>1 h 30</small>
         </button>
-
-        <div className="day-schedule-sequence-list">
-          {courseCount === 0 ? (
-            <div className="day-schedule-palette-empty">
-              <GripVertical size={18} aria-hidden="true" />
-              <p>Glissez la carte ci-dessus vers le calendrier.</p>
-            </div>
-          ) : Array.from({ length: courseCount }, (_, index) => (
-            <button
-              type="button"
-              className="day-schedule-sequence-source"
-              key={`sequence-card-${index + 1}`}
-              draggable={!atMaximum}
-              disabled={atMaximum}
-              onDragStart={(event) => {
-                event.dataTransfer.effectAllowed = 'copy'
-                event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
-              }}
-              onClick={onAdd}
-            >
-              <span className="day-schedule-source-meta">
-                <span>Séquence {index + 1}</span>
-                <span>3 blocs</span>
-              </span>
-              <strong>Cours + Q&amp;R + pause</strong>
-              <span className="day-schedule-source-preview" aria-hidden="true">
-                <span><BookOpen size={12} /> Cours</span>
-                <span><MessageCircleQuestion size={12} /> Q&amp;R</span>
-                <span><Coffee size={12} /> Pause</span>
-              </span>
-            </button>
-          ))}
-        </div>
       </aside>
     </div>
   )

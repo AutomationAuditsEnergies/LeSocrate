@@ -24,6 +24,11 @@ test('uses locked sequence drops and resize handles instead of per-block forms',
   assert.match(source, /draggable=\{!atMaximum\}/)
   assert.match(source, /application\/x-day-sequence/)
   assert.match(source, /Séquence pédagogique/)
+  assert.equal(
+    (source.match(/className="day-schedule-add-task day-schedule-sequence-source"/g) || []).length,
+    1,
+  )
+  assert.doesNotMatch(source, /sequence-card-/)
   assert.match(source, /onPointerDown=\{\(event\) => beginAdjustment\(event, index\)\}/)
   assert.match(source, /deltaSteps \* 5/)
   assert.doesNotMatch(source, /schedule-duration-/)
