@@ -4,6 +4,7 @@ import { apiUrl } from './api'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
 import AppLoader from './components/AppLoader.jsx'
+import AppErrorState from './components/AppErrorState.jsx'
 
 // Code splitting : les grosses pages restent chargées à la demande, mais les
 // routes du flux apprenant sont préchargées depuis la page d'accueil pour éviter
@@ -63,55 +64,7 @@ class AppErrorBoundary extends Component {
   render() {
     if (!this.state.error) return this.props.children
 
-    return (
-      <div
-        style={{
-          minHeight: '100vh',
-          background: '#F8F7F5',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 24,
-          fontFamily: 'Inter, system-ui, sans-serif',
-        }}
-      >
-        <div
-          style={{
-            width: '100%',
-            maxWidth: 440,
-            borderRadius: 20,
-            background: '#fff',
-            border: '1px solid #e5e7eb',
-            boxShadow: '0 18px 45px rgba(15, 23, 42, 0.12)',
-            padding: 28,
-            textAlign: 'center',
-          }}
-        >
-          <h1 style={{ margin: 0, color: '#111827', fontSize: 22, fontWeight: 700 }}>
-            Impossible d'afficher cette page
-          </h1>
-          <p style={{ margin: '12px 0 0', color: '#6b7280', lineHeight: 1.6 }}>
-            Rechargez la page. Si le problème revient, ouvrez la console et gardez le message d'erreur.
-          </p>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            style={{
-              marginTop: 22,
-              border: 0,
-              borderRadius: 12,
-              background: '#8B5CF6',
-              color: '#fff',
-              fontWeight: 700,
-              padding: '12px 18px',
-              cursor: 'pointer',
-            }}
-          >
-            Recharger
-          </button>
-        </div>
-      </div>
-    )
+    return <AppErrorState />
   }
 }
 
