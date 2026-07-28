@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { getSupabaseClient } from '../supabaseClient'
+import AppLoader from '../components/AppLoader.jsx'
 import './Auth.css'
 
 const AUTH_REQUEST_TIMEOUT_MS = 20_000
@@ -48,9 +49,57 @@ export default function LoginCentre({ preloadDashboardRoute }) {
   const [resetLoading, setResetLoading] = useState(false)
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(initialPasswordRecoveryMode)
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false)
+  const [checkingExistingSession, setCheckingExistingSession] = useState(
+    !initialPasswordRecoveryMode && initialAuthMode === 'login',
+  )
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (initialPasswordRecoveryMode || initialAuthMode !== 'login') {
+      setCheckingExistingSession(false)
+      return undefined
+    }
+
+    const storedToken = localStorage.getItem('admin_auth_token')
+    if (!storedToken) {
+      setCheckingExistingSession(false)
+      return undefined
+    }
+
+    let cancelled = false
+
+    const resumeExistingSession = async () => {
+      try {
+        const response = await apiFetch('/api/admin/session', {
+          method: 'GET',
+          timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
+        })
+        const data = await response.json().catch(() => ({}))
+
+        if (!cancelled && response.ok && data.authenticated) {
+          preloadDashboardRoute?.().catch(() => {})
+          navigate('/dashboard-centre', { replace: true })
+          return
+        }
+
+        if (!cancelled && (response.status === 401 || response.status === 403)) {
+          localStorage.removeItem('admin_auth_token')
+        }
+      } catch (sessionError) {
+        console.warn('Reprise de session centre indisponible:', sessionError)
+      } finally {
+        if (!cancelled) setCheckingExistingSession(false)
+      }
+    }
+
+    resumeExistingSession()
+
+    return () => {
+      cancelled = true
+    }
+  }, [initialAuthMode, initialPasswordRecoveryMode, navigate, preloadDashboardRoute])
 
   useEffect(() => {
     const preload = () => { preloadDashboardRoute?.().catch(() => {}) }
@@ -208,6 +257,10 @@ export default function LoginCentre({ preloadDashboardRoute }) {
     } finally {
       setResetLoading(false)
     }
+  }
+
+  if (checkingExistingSession) {
+    return <AppLoader label="Reprise de votre session" />
   }
 
   return (

@@ -20,3 +20,16 @@ test('opens a dedicated single-field forgot-password state', () => {
   assert.match(source, /Retour à la connexion/)
   assert.doesNotMatch(source, /dans le champ identifiant/)
 })
+
+test('resumes a valid center session instead of showing the login form again', () => {
+  assert.match(source, /localStorage\.getItem\('admin_auth_token'\)/)
+  assert.match(source, /apiFetch\('\/api\/admin\/session'/)
+  assert.match(source, /response\.ok && data\.authenticated/)
+  assert.match(source, /navigate\('\/dashboard-centre', \{ replace: true \}\)/)
+  assert.match(source, /<AppLoader label="Reprise de votre session" \/>/)
+})
+
+test('keeps recovery and explicit signup flows accessible', () => {
+  assert.match(source, /initialPasswordRecoveryMode \|\| initialAuthMode !== 'login'/)
+  assert.match(source, /setCheckingExistingSession\(false\)/)
+})
