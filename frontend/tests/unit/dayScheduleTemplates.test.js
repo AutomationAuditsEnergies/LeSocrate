@@ -81,6 +81,21 @@ test('moves the unique lunch designation and keeps both pause durations valid', 
   assert.equal(getScheduleStats(updated).lunchCount, 1)
 })
 
+test('allows the lunch break to be stretched to two hours', () => {
+  const draft = createScheduleTemplateDraft('Déjeuner de deux heures')
+  const lunchIndex = draft.blocks.findIndex(
+    (block) => block.block_type === 'pause' && block.pause_kind === 'lunch',
+  )
+  const stretched = updateScheduleBlockDuration(draft.blocks, lunchIndex, 120)
+
+  assert.equal(stretched[lunchIndex].duration_minutes, 120)
+  assert.equal(
+    stretched[lunchIndex].end_minute - stretched[lunchIndex].start_minute,
+    120,
+  )
+  assert.equal(validateScheduleTemplate({ ...draft, blocks: stretched }).valid, true)
+})
+
 test('reflows subsequent blocks after duration and boundary changes', () => {
   const draft = createScheduleTemplateDraft('Horaires libres')
   const longerCourse = updateScheduleBlockDuration(draft.blocks, 0, 75)

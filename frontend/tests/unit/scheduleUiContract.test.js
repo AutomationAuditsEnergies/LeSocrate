@@ -29,6 +29,8 @@ test('uses locked sequence drops and resize handles instead of per-block forms',
     1,
   )
   assert.doesNotMatch(source, /sequence-card-/)
+  assert.doesNotMatch(source, /day-schedule-editor-progress/)
+  assert.doesNotMatch(source, /Construisez votre journée/)
   assert.match(source, /onPointerDown=\{\(event\) => beginAdjustment\(event, index\)\}/)
   assert.match(source, /deltaSteps \* 5/)
   assert.doesNotMatch(source, /schedule-duration-/)

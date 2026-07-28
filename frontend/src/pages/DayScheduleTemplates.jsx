@@ -27,7 +27,6 @@ import {
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
-  removeLastScheduleSequence,
   setSchedulePauseKind,
   updateScheduleBlockDuration,
   updateScheduleBlockStart,
@@ -345,65 +344,35 @@ function ScheduleTimeline({
 function SequencePalette({
   blocks,
   onAdd,
-  onRemove,
 }) {
   const courseCount = blocks.filter((block) => block.block_type === 'course').length
   const atMaximum = courseCount >= DAY_SCHEDULE_RULES.maxCourses
   return (
-    <div className="day-schedule-builder-left">
-      <aside className="day-schedule-instructions" aria-label="Instructions">
+    <aside className="day-schedule-palette" aria-label="Séquence à planifier">
+      <div className="day-schedule-palette-title">
         <div>
-          <h2>Construisez votre journée</h2>
-          <p>Ajoutez les séquences nécessaires, puis ajustez chaque durée directement dans le calendrier.</p>
+          <h2>Séquence</h2>
+          <p>À glisser dans le calendrier</p>
         </div>
+        <span>{courseCount}/{DAY_SCHEDULE_RULES.maxCourses}</span>
+      </div>
 
-        <div className="day-schedule-instruction-card">
-          <LockKeyhole size={16} aria-hidden="true" />
-          <div>
-            <strong>Ordre pédagogique verrouillé</strong>
-            <p>Chaque séquence conserve toujours l’ordre Cours, Q&amp;R, Pause.</p>
-          </div>
-        </div>
-
-        <div className="day-schedule-instruction-actions">
-          <p><span>{courseCount}</span> séquence{courseCount > 1 ? 's' : ''} planifiée{courseCount > 1 ? 's' : ''}</p>
-          <button
-            type="button"
-            className={BUTTON_SECONDARY}
-            onClick={onRemove}
-            disabled={courseCount === 0}
-          >
-            Retirer la dernière
-          </button>
-        </div>
-      </aside>
-
-      <aside className="day-schedule-palette" aria-label="Séquences à planifier">
-        <div className="day-schedule-palette-title">
-          <div>
-            <h2>Séquences</h2>
-            <p>À déposer dans la journée</p>
-          </div>
-          <span>{courseCount}/{DAY_SCHEDULE_RULES.maxCourses}</span>
-        </div>
-
-        <button
-          type="button"
-          className="day-schedule-add-task day-schedule-sequence-source"
-          draggable={!atMaximum}
-          disabled={atMaximum}
-          onDragStart={(event) => {
-            event.dataTransfer.effectAllowed = 'copy'
-            event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
-          }}
-          onClick={onAdd}
-        >
-          <Plus size={15} aria-hidden="true" />
-          <span>Séquence pédagogique</span>
-          <small>1 h 30</small>
-        </button>
-      </aside>
-    </div>
+      <button
+        type="button"
+        className="day-schedule-add-task day-schedule-sequence-source"
+        draggable={!atMaximum}
+        disabled={atMaximum}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'copy'
+          event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
+        }}
+        onClick={onAdd}
+      >
+        <Plus size={15} aria-hidden="true" />
+        <span>Séquence pédagogique</span>
+        <small>1 h 30</small>
+      </button>
+    </aside>
   )
 }
 
@@ -706,11 +675,6 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
       <div className={`day-schedule-layout${hasSidePanel ? '' : ' day-schedule-layout--single'}${mode === 'edit' ? ' day-schedule-layout--editor' : ''}`}>
         {mode === 'edit' && visibleTemplate && (
           <div className="day-schedule-editor-header">
-            <div className="day-schedule-editor-progress" aria-label="Création du template">
-              <span data-done="true"><Check size={12} aria-hidden="true" /> Nommer</span>
-              <span data-done={validation.stats.courseCount > 0 ? 'true' : 'false'}>Planifier</span>
-              <span data-done={validation.valid ? 'true' : 'false'}>Vérifier</span>
-            </div>
             <div className="day-schedule-editor-header-main">
               <div className="day-schedule-editor-name">
                 <label htmlFor="day-schedule-template-name">Nom du template</label>
@@ -786,7 +750,6 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
           <SequencePalette
             blocks={visibleTemplate.blocks}
             onAdd={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
-            onRemove={() => updateDraftBlocks(removeLastScheduleSequence(draft.blocks))}
           />
         )}
 
