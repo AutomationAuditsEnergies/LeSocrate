@@ -73,6 +73,14 @@ function initialMonth(value) {
   return { year: Number(match[1]), month: Number(match[2]) - 1 }
 }
 
+function weekStart(value) {
+  const [year, month, day] = String(value).split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const isoWeekday = date.getUTCDay() === 0 ? 7 : date.getUTCDay()
+  date.setUTCDate(date.getUTCDate() - (isoWeekday - 1))
+  return date.toISOString().slice(0, 10)
+}
+
 function normalizeInitialAssignments(schedule) {
   if (Array.isArray(schedule?.template_assignments)) {
     return Object.fromEntries(schedule.template_assignments.map((assignment) => [
@@ -140,6 +148,9 @@ export default function FormationSchedulePlanner({
   const [lockedConfirmed, setLockedConfirmed] = useState(false)
   const [validationNow, setValidationNow] = useState(() => new Date())
   const [month, setMonth] = useState(() => initialMonth(initialDates[0] || safeStartHint))
+  const [focusedWeekStart, setFocusedWeekStart] = useState(
+    () => weekStart(initialDates[0] || today),
+  )
   const didInitialPrefill = useRef(false)
 
   const loadTemplates = useCallback(async () => {
@@ -283,12 +294,14 @@ export default function FormationSchedulePlanner({
     setSelectedDates(generated)
     setAssignments((current) => reconcileTemplateAssignments(current, generated))
     setMonth(initialMonth(generated[0]))
+    setFocusedWeekStart(weekStart(generated[0]))
     setHelperError('')
     invalidateConfirmation()
   }
 
   const toggleDate = (date) => {
     if (date < today) return
+    setFocusedWeekStart(weekStart(date))
     setSelectedDates((current) => (
       current.includes(date)
         ? current.filter((item) => item !== date)
@@ -424,27 +437,34 @@ export default function FormationSchedulePlanner({
       <div className="formation-schedule__workspace">
         <div className="formation-schedule__calendar">
           <header>
+            <h3>{monthLabel(month.year, month.month)}</h3>
             <button type="button" onClick={() => moveMonth(-1)} aria-label="Mois précédent">
               <ChevronLeft size={18} aria-hidden="true" />
             </button>
-            <h3>{monthLabel(month.year, month.month)}</h3>
             <button type="button" onClick={() => moveMonth(1)} aria-label="Mois suivant">
               <ChevronRight size={18} aria-hidden="true" />
             </button>
           </header>
           <div className="formation-schedule__weekday-labels" aria-hidden="true">
-            {TRAINING_WEEKDAYS.map((day) => <span key={day.id}>{day.short.slice(0, 1)}</span>)}
+            {TRAINING_WEEKDAYS.map((day) => (
+              <span key={day.id}>{day.short.slice(0, 2).toLocaleLowerCase('fr-FR')}</span>
+            ))}
           </div>
           <div className="formation-schedule__month-grid">
             {calendarDays.map((day) => {
               const selected = selectedSet.has(day.date)
               const disabled = day.date < today
+              const focused = day.date >= focusedWeekStart
+                && day.date <= addCalendarDays(focusedWeekStart, 6)
               return (
                 <button
                   key={day.date}
                   type="button"
                   disabled={disabled}
                   data-outside={!day.inMonth}
+                  data-focused-week={focused}
+                  data-week-start={focused && day.isoWeekday === 1}
+                  data-week-end={focused && day.isoWeekday === 7}
                   aria-pressed={selected}
                   aria-label={`${selected ? 'Retirer' : 'Ajouter'} le ${formatLongDate(day.date)}`}
                   onClick={() => toggleDate(day.date)}

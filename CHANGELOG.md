@@ -26,6 +26,10 @@ sur l’aperçu de gauche, afin de réserver toute la partie droite au planning.
 Le dashboard verrouille maintenant le défilement du document et se cale sur la
 hauteur dynamique du viewport, sans supprimer les défilements internes utiles.
 
+Le sélecteur mensuel adopte une présentation inspirée de Notion Calendar :
+jours sans cases, semaine active sur un bandeau gris continu, date cochée dans
+un carré sombre et jours hors mois atténués.
+
 ### fix(ci): alignement de la fixture planning V2
 
 La fixture SQLite des tests de parité du repository pipeline expose désormais

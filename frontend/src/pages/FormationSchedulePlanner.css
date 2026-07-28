@@ -231,25 +231,27 @@
   min-height: 0;
   flex-direction: column;
   align-self: start;
-  padding: 10px;
+  padding: 14px 16px 16px;
 }
 
 .formation-schedule__calendar > header {
   display: grid;
-  grid-template-columns: 42px 1fr 42px;
+  grid-template-columns: minmax(0, 1fr) 36px 36px;
   align-items: center;
+  gap: 2px;
+  padding: 0 2px;
 }
 
 .formation-schedule__calendar > header h3 {
-  text-align: center;
-  font-size: 14px;
+  text-align: left;
+  font-size: 15px;
   text-transform: capitalize;
 }
 
 .formation-schedule__calendar > header button {
   display: inline-flex;
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -267,60 +269,90 @@
 .formation-schedule__month-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
+  column-gap: 0;
 }
 
 .formation-schedule__weekday-labels {
-  margin: 8px 0 4px;
+  margin: 9px 0 2px;
 }
 
 .formation-schedule__weekday-labels span {
-  color: var(--fsp-muted);
-  font-size: 11px;
-  font-weight: 650;
+  color: #71717a;
+  font-size: 12px;
+  font-weight: 500;
   text-align: center;
 }
 
 .formation-schedule__month-grid button {
   display: inline-flex;
   min-width: 0;
-  min-height: 34px;
+  min-height: 40px;
   align-items: center;
   justify-content: center;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  border: 0;
+  border-radius: 0;
   background: transparent;
   color: var(--fsp-text);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
+  transition: background-color 120ms ease;
 }
 
 .formation-schedule__month-grid {
   min-height: 0;
   flex: none;
-  grid-template-rows: repeat(6, minmax(34px, 44px));
+  grid-template-rows: repeat(6, 40px);
 }
 
-.formation-schedule__month-grid button:hover:not(:disabled):not([aria-pressed="true"]) {
-  border-color: var(--fsp-border);
-  background: var(--fsp-canvas);
+.formation-schedule__month-grid button span {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.formation-schedule__month-grid button[data-focused-week="true"] {
+  background: #ededee;
+}
+
+.formation-schedule__month-grid button[data-week-start="true"] {
+  border-radius: 10px 0 0 10px;
+}
+
+.formation-schedule__month-grid button[data-week-end="true"] {
+  border-radius: 0 10px 10px 0;
+}
+
+.formation-schedule__month-grid button:hover:not(:disabled):not([aria-pressed="true"]) span {
+  background: #dedee0;
 }
 
 .formation-schedule__month-grid button[data-outside="true"] {
-  color: #52525b;
+  color: #a1a1aa;
 }
 
 .formation-schedule__month-grid button[aria-pressed="true"] {
-  border-color: #18181b;
-  background: #18181b;
   color: #fff;
   font-weight: 700;
 }
 
+.formation-schedule__month-grid button[aria-pressed="true"] span {
+  background: #18181b;
+}
+
 .formation-schedule__month-grid button:disabled {
-  color: #d4d4d8;
+  color: #c4c4c7;
   cursor: not-allowed;
+}
+
+.formation-schedule__month-grid button:disabled:not([aria-pressed="true"]) span {
+  background: transparent;
 }
 
 .formation-schedule__dates {
@@ -565,7 +597,7 @@
   }
 
   .formation-schedule__calendar {
-    min-height: 460px;
+    min-height: 0;
   }
 }
 
@@ -594,6 +626,10 @@
   .formation-schedule__weekdays button,
   .formation-schedule__month-grid button {
     min-height: 44px;
+  }
+
+  .formation-schedule__month-grid {
+    grid-template-rows: repeat(6, 44px);
   }
 
   .formation-schedule__helper-action,
