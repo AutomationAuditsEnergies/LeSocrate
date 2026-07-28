@@ -220,63 +220,51 @@ export default function LoginCentre({ preloadDashboardRoute }) {
 
           <div className="auth-visual__content">
             <p className="auth-eyebrow">Espace centre</p>
-            <h1>Pilotez le parcours. Gardez le rythme.</h1>
-            <p className="auth-visual__lead">
-              Cadrenza réunit vos modules, vos promotions et vos preuves RNCP dans un même poste de pilotage.
-            </p>
-            <div className="auth-robot-stage" aria-hidden="true">
-              <img src="/cadrenza-robot-fleet.webp" alt="" draggable={false} />
-            </div>
-          </div>
-
-          <div className="auth-visual__meta" aria-label="Fonctions de l'espace centre">
-            <span>Modules durables</span>
-            <span>Promotions synchronisées</span>
-            <span>Suivi centralisé</span>
+            <h1>Vos formations avancent. Vos équipes gardent le cap.</h1>
+            <p className="auth-visual__lead">Un seul espace pour créer, planifier et suivre chaque parcours.</p>
           </div>
         </aside>
 
         <section className="auth-panel" id="auth-main">
+          {!passwordRecoveryMode && (
+            <div className="auth-mode-switch" role="group" aria-label="Mode d'authentification">
+              {[
+                ['login', 'Connexion'],
+                ['signup', 'Créer un compte'],
+              ].map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={authMode === mode}
+                  onClick={() => {
+                    setAuthMode(mode)
+                    setError('')
+                    setNotice('')
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="auth-panel__inner">
             <Link to="/" className="auth-mobile-logo" aria-label="Cadrenza, retour à l'accueil">
               <CadrenzaLogo />
             </Link>
 
             <header className="auth-heading">
-              <p className="auth-heading__kicker">Centre de formation</p>
               <h2>
-                {passwordRecoveryMode ? 'Nouveau mot de passe' : (authMode === 'signup' ? 'Créer votre espace' : 'Bon retour parmi nous')}
+                {passwordRecoveryMode ? 'Nouveau mot de passe' : (authMode === 'signup' ? 'Créer votre espace' : 'Bienvenue sur Cadrenza')}
               </h2>
               <p>
                 {passwordRecoveryMode
-                  ? 'Définissez un nouveau mot de passe pour retrouver votre tableau de bord.'
+                  ? 'Définissez un nouveau mot de passe pour retrouver votre espace.'
                   : authMode === 'signup'
-                    ? 'Créez l’accès administrateur qui vous permettra de structurer vos parcours.'
-                    : 'Connectez-vous pour reprendre le pilotage de vos formations.'}
+                    ? 'Renseignez les informations de votre centre pour commencer.'
+                    : 'Connectez-vous à votre espace centre de formation.'}
               </p>
             </header>
-
-            {!passwordRecoveryMode && (
-              <div className="auth-mode-switch" role="group" aria-label="Mode d'authentification">
-                {[
-                  ['login', 'Connexion'],
-                  ['signup', 'Créer un compte'],
-                ].map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={authMode === mode}
-                    onClick={() => {
-                      setAuthMode(mode)
-                      setError('')
-                      setNotice('')
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
 
             {error && (
               <div className="auth-alert auth-alert--error" role="alert" aria-live="assertive">
