@@ -45,7 +45,7 @@ const BUTTON_PRIMARY = `${BUTTON_BASE} bg-[#18181B] text-white hover:bg-black`
 const BUTTON_SECONDARY = `${BUTTON_BASE} border border-[#D4D4D8] bg-white text-[#3F3F46] hover:bg-[#F4F4F5]`
 const CALENDAR_START_MINUTE = 8 * 60
 const CALENDAR_MIN_END_MINUTE = 18 * 60
-const CALENDAR_PIXELS_PER_MINUTE = 0.9
+const CALENDAR_PIXELS_PER_MINUTE = 1.05
 
 function TemplateState({ template }) {
   const used = isScheduleTemplateUsed(template)
@@ -308,7 +308,7 @@ function ScheduleTimeline({
                 )}
 
                 <div className="day-schedule-event-copy">
-                  <BlockIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+                  <BlockIcon size={16} strokeWidth={1.8} aria-hidden="true" />
                   <div className="min-w-0">
                     <h3>
                       {presentation.title}
@@ -342,7 +342,7 @@ function ScheduleTimeline({
                     aria-label={`Modifier la durée de ${presentation.title}, ${bounds.min} à ${bounds.max} minutes`}
                     title={`Étirez pour régler la durée, ${bounds.min} à ${bounds.max} min`}
                   >
-                    <GripHorizontal size={18} aria-hidden="true" />
+                    <GripHorizontal size={20} aria-hidden="true" />
                   </button>
                 )}
               </article>
@@ -388,7 +388,7 @@ function SequencePalette({
         }}
         onClick={onAdd}
       >
-        <Plus size={15} aria-hidden="true" />
+        <Plus size={18} aria-hidden="true" />
         <span>Séquence pédagogique</span>
         <small>1 h 30</small>
       </button>
@@ -673,7 +673,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
 
   return (
     <section className="day-schedule-page pb-12" aria-labelledby="day-schedule-title">
-      <header className="mb-6 flex flex-col justify-between gap-4 border-b border-[#ECECEF] pb-5 sm:flex-row sm:items-end">
+      <header className="day-schedule-page-header">
         <div>
           <h1 id="day-schedule-title" className="text-2xl font-semibold tracking-[-0.025em] text-[#18181B]">
             Organisation des cours
@@ -682,12 +682,25 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
             Préparez des journées réutilisables. Un template devient immuable dès sa première utilisation dans une formation.
           </p>
         </div>
-        {mode !== 'edit' && templates.length > 0 && (
-          <button type="button" className={`${BUTTON_PRIMARY} shrink-0`} onClick={startCreate}>
-            <Plus size={16} aria-hidden="true" />
-            Créer un template
-          </button>
-        )}
+        <div className="day-schedule-page-actions">
+          {mode === 'edit' ? (
+            <>
+              <button type="button" className={BUTTON_SECONDARY} onClick={cancelEdit} disabled={saving}>
+                <X size={15} aria-hidden="true" />
+                Annuler
+              </button>
+              <button type="button" className={BUTTON_PRIMARY} onClick={saveDraft} disabled={saving}>
+                <Save size={15} aria-hidden="true" />
+                {saving ? 'Enregistrement…' : 'Enregistrer'}
+              </button>
+            </>
+          ) : templates.length > 0 && (
+            <button type="button" className={BUTTON_PRIMARY} onClick={startCreate}>
+              <Plus size={16} aria-hidden="true" />
+              Créer un template
+            </button>
+          )}
+        </div>
       </header>
 
       {feedback && (
@@ -702,38 +715,26 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
         </div>
       )}
 
-      <div className={`day-schedule-layout${hasSidePanel ? '' : ' day-schedule-layout--single'}${mode === 'edit' ? ' day-schedule-layout--editor' : ''}${showTemplateOverview ? ' day-schedule-layout--overview' : ''}`}>
-        {mode === 'edit' && visibleTemplate && (
-          <div className="day-schedule-editor-header">
-            <div className="day-schedule-editor-header-main">
-              <div className="day-schedule-editor-name">
-                <label htmlFor="day-schedule-template-name">Nom du template</label>
-                <input
-                  id="day-schedule-template-name"
-                  className="day-schedule-name-input"
-                  value={draft.name}
-                  placeholder="Ex. Journée standard"
-                  autoFocus={!draft.id}
-                  onChange={(event) => setDraft((current) => ({
-                    ...current,
-                    name: event.target.value,
-                  }))}
-                />
-              </div>
-              <div className="day-schedule-editor-actions">
-                <button type="button" className={BUTTON_SECONDARY} onClick={cancelEdit} disabled={saving}>
-                  <X size={15} aria-hidden="true" />
-                  Annuler
-                </button>
-                <button type="button" className={BUTTON_PRIMARY} onClick={saveDraft} disabled={saving}>
-                  <Save size={15} aria-hidden="true" />
-                  {saving ? 'Enregistrement…' : 'Enregistrer'}
-                </button>
-              </div>
-            </div>
+      {mode === 'edit' && visibleTemplate && (
+        <div className="day-schedule-editor-name-row">
+          <div className="day-schedule-editor-name">
+            <label htmlFor="day-schedule-template-name">Nom du template</label>
+            <input
+              id="day-schedule-template-name"
+              className="day-schedule-name-input"
+              value={draft.name}
+              placeholder="Ex. Journée standard"
+              autoFocus={!draft.id}
+              onChange={(event) => setDraft((current) => ({
+                ...current,
+                name: event.target.value,
+              }))}
+            />
           </div>
-        )}
+        </div>
+      )}
 
+      <div className={`day-schedule-layout${hasSidePanel ? '' : ' day-schedule-layout--single'}${mode === 'edit' ? ' day-schedule-layout--editor' : ''}${showTemplateOverview ? ' day-schedule-layout--overview' : ''}`}>
         {showTemplateOverview && (
           <TemplateList
             templates={templates}
