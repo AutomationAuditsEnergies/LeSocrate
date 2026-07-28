@@ -612,10 +612,6 @@
   font-size: 0.92rem;
 }
 
-.cadrenza-auth--center .auth-assurance {
-  margin-top: 26px;
-}
-
 @media (max-width: 760px) {
   .cadrenza-auth--center .auth-panel {
     padding: 132px 24px 48px;

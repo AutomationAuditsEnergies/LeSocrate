@@ -376,7 +376,6 @@ export default function LoginCentre({ preloadDashboardRoute }) {
               </button>
             </form>
 
-            <p className="auth-assurance">Accès chiffré · Données de formation cloisonnées</p>
           </div>
         </section>
       </div>
