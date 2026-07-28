@@ -265,6 +265,19 @@ function ScheduleTimeline({
             const blockTop = (block.start_minute - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE
             const sequenceNumber = counters.course
             const isCourse = block.block_type === 'course'
+            const canSelectAsLunch = (
+              !readOnly
+              && block.block_type === 'pause'
+              && index < blocks.length - 1
+            )
+            const toggleLunch = () => {
+              if (!canSelectAsLunch) return
+              onBlocksChange(setSchedulePauseKind(
+                blocks,
+                index,
+                block.pause_kind === 'lunch' ? 'short' : 'lunch',
+              ))
+            }
             return (
               <article
                 key={block.block_key}
@@ -273,12 +286,28 @@ function ScheduleTimeline({
                 data-invalid={errors.length ? 'true' : 'false'}
                 data-resizing={activeResizeIndex === index ? 'true' : 'false'}
                 data-compact={blockHeight < 34 ? 'true' : 'false'}
+                data-selectable={canSelectAsLunch ? 'true' : 'false'}
                 title={errors.join(' ')}
                 style={{
                   '--day-schedule-event-top': `${blockTop}px`,
                   '--day-schedule-event-height': `${blockHeight}px`,
                 }}
               >
+                {canSelectAsLunch && (
+                  <button
+                    type="button"
+                    className="day-schedule-pause-select"
+                    aria-label={block.pause_kind === 'lunch'
+                      ? 'Repasser cette pause en pause courte'
+                      : 'Choisir cette pause comme pause déjeuner'}
+                    aria-pressed={block.pause_kind === 'lunch'}
+                    title={block.pause_kind === 'lunch'
+                      ? 'Cliquez pour repasser en pause courte'
+                      : 'Cliquez pour choisir la pause déjeuner'}
+                    onClick={toggleLunch}
+                  />
+                )}
+
                 <div className="day-schedule-event-copy">
                   <BlockIcon size={14} strokeWidth={1.8} aria-hidden="true" />
                   <div className="min-w-0">
@@ -292,18 +321,10 @@ function ScheduleTimeline({
                   </div>
                 </div>
 
-                {block.block_type === 'pause' && !readOnly && index < blocks.length - 1 && (
-                  <button
-                    type="button"
-                    className="day-schedule-pause-kind"
-                    onClick={() => onBlocksChange(setSchedulePauseKind(
-                      blocks,
-                      index,
-                      block.pause_kind === 'lunch' ? 'short' : 'lunch',
-                    ))}
-                  >
-                    {block.pause_kind === 'lunch' ? 'Déjeuner' : 'Pause courte'}
-                  </button>
+                {canSelectAsLunch && (
+                  <span className="day-schedule-pause-kind" aria-hidden="true">
+                    {block.pause_kind === 'lunch' ? 'Déjeuner choisi' : 'Choisir déjeuner'}
+                  </span>
                 )}
 
                 {!readOnly && (

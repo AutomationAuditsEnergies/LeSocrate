@@ -97,8 +97,8 @@ function makeSequenceBlocks(courseNumber, includePause = true) {
     sequence.push({
       block_key: `pause-${courseNumber}`,
       block_type: 'pause',
-      pause_kind: courseNumber === 2 ? 'lunch' : 'short',
-      duration_minutes: courseNumber === 2 ? 60 : 15,
+      pause_kind: 'short',
+      duration_minutes: 15,
     })
   }
   return sequence

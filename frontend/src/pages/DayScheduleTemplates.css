@@ -114,7 +114,7 @@
 .day-schedule-add-task:focus-visible,
 .day-schedule-empty-timeline:focus-visible,
 .day-schedule-resize-button:focus-visible,
-.day-schedule-pause-kind:focus-visible {
+.day-schedule-pause-select:focus-visible {
   outline: 2px solid #292824;
   outline-offset: 2px;
 }
@@ -442,9 +442,9 @@
 }
 
 .day-schedule-calendar-event[data-kind="lunch"] {
-  border-color: #c5c7c8;
-  background: #e0e2e3;
-  color: #41464a;
+  border-color: #35373a;
+  background: #35373a;
+  color: #fff;
 }
 
 .day-schedule-calendar-event[data-invalid="true"] {
@@ -457,11 +457,33 @@
   box-shadow: rgb(0 0 0 / 12%) 0 2px 6px;
 }
 
+.day-schedule-calendar-event[data-selectable="true"] {
+  cursor: pointer;
+}
+
+.day-schedule-calendar-event[data-selectable="true"]:hover {
+  border-color: #686a6d;
+}
+
+.day-schedule-pause-select {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
 .day-schedule-event-copy {
+  position: relative;
+  z-index: 2;
   display: flex;
   min-width: 0;
   align-items: flex-start;
   gap: 5px;
+  pointer-events: none;
 }
 
 .day-schedule-event-copy > svg {
@@ -512,19 +534,22 @@
 }
 
 .day-schedule-pause-kind {
+  position: relative;
+  z-index: 2;
   flex: none;
   border: 1px solid rgb(0 0 0 / 12%);
   border-radius: 3px;
   background: rgb(255 255 255 / 66%);
   color: inherit;
-  cursor: pointer;
   padding: 3px 5px;
   font-size: 8px;
   font-weight: 600;
+  pointer-events: none;
 }
 
 .day-schedule-resize-button {
   position: absolute;
+  z-index: 3;
   right: 0;
   bottom: 0;
   left: 0;

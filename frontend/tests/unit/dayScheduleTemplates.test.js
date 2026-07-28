@@ -21,7 +21,11 @@ import {
 
 test('creates a valid full-day template with four course sequences', () => {
   const draft = createScheduleTemplateDraft('Journée standard')
-  const result = validateScheduleTemplate(draft)
+  const pauseIndexes = draft.blocks
+    .map((block, index) => block.block_type === 'pause' ? index : -1)
+    .filter((index) => index >= 0)
+  const blocks = setSchedulePauseKind(draft.blocks, pauseIndexes[1], 'lunch')
+  const result = validateScheduleTemplate({ ...draft, blocks })
 
   assert.equal(result.valid, true)
   assert.deepEqual(result.stats, {
@@ -53,12 +57,16 @@ test('starts the interactive builder empty and adds one locked trio at a time', 
 
   assert.equal(emptyDraft.blocks.length, 0)
   assert.deepEqual(firstSequence.map((block) => block.block_type), ['course', 'qa', 'pause'])
+  assert.equal(firstSequence.at(-1).pause_kind, 'short')
+  assert.equal(getScheduleStats(firstSequence).lunchCount, 0)
   assert.equal(removeLastScheduleSequence(firstSequence).length, 0)
 })
 
 test('supports an optional final short pause', () => {
   const draft = createScheduleTemplateDraft('Avec pause finale')
-  const withPause = setScheduleFinalPause(draft.blocks, true)
+  const firstPauseIndex = draft.blocks.findIndex((block) => block.block_type === 'pause')
+  const withLunch = setSchedulePauseKind(draft.blocks, firstPauseIndex, 'lunch')
+  const withPause = setScheduleFinalPause(withLunch, true)
 
   assert.equal(withPause.length, 12)
   assert.equal(withPause.at(-1).block_type, 'pause')
@@ -72,7 +80,8 @@ test('moves the unique lunch designation and keeps both pause durations valid', 
   const pauseIndexes = draft.blocks
     .map((block, index) => block.block_type === 'pause' ? index : -1)
     .filter((index) => index >= 0)
-  const updated = setSchedulePauseKind(draft.blocks, pauseIndexes[2], 'lunch')
+  const withEarlierLunch = setSchedulePauseKind(draft.blocks, pauseIndexes[1], 'lunch')
+  const updated = setSchedulePauseKind(withEarlierLunch, pauseIndexes[2], 'lunch')
 
   assert.equal(updated[pauseIndexes[2]].pause_kind, 'lunch')
   assert.equal(updated[pauseIndexes[2]].duration_minutes, 60)
@@ -83,10 +92,11 @@ test('moves the unique lunch designation and keeps both pause durations valid', 
 
 test('allows the lunch break to be stretched to two hours', () => {
   const draft = createScheduleTemplateDraft('Déjeuner de deux heures')
-  const lunchIndex = draft.blocks.findIndex(
-    (block) => block.block_type === 'pause' && block.pause_kind === 'lunch',
-  )
-  const stretched = updateScheduleBlockDuration(draft.blocks, lunchIndex, 120)
+  const lunchIndex = draft.blocks
+    .map((block, index) => block.block_type === 'pause' ? index : -1)
+    .filter((index) => index >= 0)[1]
+  const withLunch = setSchedulePauseKind(draft.blocks, lunchIndex, 'lunch')
+  const stretched = updateScheduleBlockDuration(withLunch, lunchIndex, 120)
 
   assert.equal(stretched[lunchIndex].duration_minutes, 120)
   assert.equal(
