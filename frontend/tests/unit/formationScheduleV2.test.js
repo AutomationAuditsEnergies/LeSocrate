@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  assignTemplateToAll,
   dateTimeInTimeZone,
   fillUnassignedTemplate,
   getCalendarMonthDays,
@@ -97,6 +98,16 @@ test('apply-to-all fills only dates without an assignment', () => {
   ), {
     '2026-09-01': '7',
     '2026-09-02': '12',
+  })
+})
+
+test('applies one template to every selected day and replaces earlier choices', () => {
+  assert.deepEqual(assignTemplateToAll(
+    ['2026-09-02', '2026-09-01'],
+    42,
+  ), {
+    '2026-09-01': '42',
+    '2026-09-02': '42',
   })
 })
 

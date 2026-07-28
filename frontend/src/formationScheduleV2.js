@@ -221,6 +221,15 @@ export function fillUnassignedTemplate(assignments, selectedDates, templateId) {
   return next
 }
 
+export function assignTemplateToAll(selectedDates, templateId) {
+  if (templateId === null || templateId === undefined || templateId === '') return {}
+  return Object.fromEntries(
+    normalizeSelectedTrainingDates(selectedDates).map(
+      (date) => [date, String(templateId)],
+    ),
+  )
+}
+
 export function reconcileTemplateAssignments(assignments, selectedDates) {
   const allowedDates = new Set(normalizeSelectedTrainingDates(selectedDates))
   return Object.fromEntries(

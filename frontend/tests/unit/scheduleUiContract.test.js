@@ -31,6 +31,8 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.doesNotMatch(plannerSource, /Je confirme ce calendrier définitif/)
   assert.doesNotMatch(plannerSource, /formation-schedule__date-list/)
   assert.match(plannerSource, /Naviguer entre les journées/)
+  assert.match(plannerSource, /Appliquer le même template à toutes les journées/)
+  assert.match(plannerSource, /formation-schedule__day-navigation/)
   assert.match(dashboardSource, /Confirmer le planning définitif/)
   assert.match(dashboardSource, /La première date doit être au minimum à J\+2/)
   assert.match(dashboardSource, /Associez un template à/)

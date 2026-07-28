@@ -9,7 +9,7 @@ import { listDayScheduleTemplates } from '../dayScheduleTemplateApi.js'
 import {
   TRAINING_WEEKDAYS,
   addCalendarDays,
-  fillUnassignedTemplate,
+  assignTemplateToAll,
   getCalendarMonthDays,
   isValidCalendarDate,
   normalizeSelectedTrainingDates,
@@ -136,6 +136,7 @@ export default function FormationSchedulePlanner({
     () => normalizeInitialAssignments(initialSchedule),
   )
   const [bulkTemplateId, setBulkTemplateId] = useState('')
+  const [applyAllDays, setApplyAllDays] = useState(false)
   const [helperStartDate, setHelperStartDate] = useState(
     initialDates[0] || safeStartHint,
   )
@@ -249,9 +250,6 @@ export default function FormationSchedulePlanner({
     () => new Set(templates.map((template) => String(template.id))),
     [templates],
   )
-  const unassignedCount = reuse
-    ? 0
-    : normalizedDates.filter((date) => !cleanAssignments[date]).length
   const activeDate = normalizedDates.includes(activeDateKey)
     ? activeDateKey
     : normalizedDates[0] || ''
@@ -294,6 +292,11 @@ export default function FormationSchedulePlanner({
       setActiveDateKey(normalizedDates[0])
     }
   }, [activeDateKey, normalizedDates])
+
+  useEffect(() => {
+    if (!applyAllDays || !bulkTemplateId || !normalizedDates.length) return
+    setAssignments(assignTemplateToAll(normalizedDates, bulkTemplateId))
+  }, [applyAllDays, bulkTemplateId, normalizedDates])
 
   const togglePreferredWeekday = (weekday) => {
     setPreferredWeekdays((current) => (
@@ -366,14 +369,6 @@ export default function FormationSchedulePlanner({
       ...current,
       [date]: String(templateId),
     }))
-  }
-
-  const applyTemplateToUnassigned = () => {
-    setAssignments((current) => fillUnassignedTemplate(
-      current,
-      normalizedDates,
-      bulkTemplateId,
-    ))
   }
 
   return (
@@ -523,26 +518,6 @@ export default function FormationSchedulePlanner({
                   : 'Sélectionnez une date dans le calendrier.'}
               </p>
             </div>
-            {normalizedDates.length > 0 && (
-              <nav className="formation-schedule__day-navigation" aria-label="Naviguer entre les journées">
-                <button
-                  type="button"
-                  onClick={() => setActiveDateKey(normalizedDates[activeDateIndex - 1])}
-                  disabled={activeDateIndex <= 0}
-                  aria-label="Journée précédente"
-                >
-                  <ChevronLeft size={18} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveDateKey(normalizedDates[activeDateIndex + 1])}
-                  disabled={activeDateIndex < 0 || activeDateIndex >= normalizedDates.length - 1}
-                  aria-label="Journée suivante"
-                >
-                  <ChevronRight size={18} aria-hidden="true" />
-                </button>
-              </nav>
-            )}
           </div>
 
           {!reuse && templatesLoading && (
@@ -567,7 +542,6 @@ export default function FormationSchedulePlanner({
                 !activeAssignment || !selectedTemplateIds.has(activeAssignment)
               )}
             >
-              <span className="formation-schedule__day-index">{activeDateIndex + 1}</span>
               <div className="formation-schedule__active-day-copy">
                 <strong>{formatLongDate(activeDate)}</strong>
                 <span>Journée {activeDateIndex + 1}</span>
@@ -579,7 +553,7 @@ export default function FormationSchedulePlanner({
                   <span>Template de la journée</span>
                   <select
                     value={activeAssignment}
-                    disabled={templatesLoading || templates.length === 0}
+                    disabled={templatesLoading || templates.length === 0 || applyAllDays}
                     onChange={(event) => assignTemplate(activeDate, event.target.value)}
                     aria-invalid={!activeAssignment || !selectedTemplateIds.has(activeAssignment)}
                   >
@@ -595,29 +569,56 @@ export default function FormationSchedulePlanner({
                   Créez d’abord un template dans « Organisation des cours ».
                 </p>
               )}
+              <nav className="formation-schedule__day-navigation" aria-label="Naviguer entre les journées">
+                <button
+                  type="button"
+                  onClick={() => setActiveDateKey(normalizedDates[activeDateIndex - 1])}
+                  disabled={activeDateIndex <= 0}
+                  aria-label="Journée précédente"
+                >
+                  <ChevronLeft size={19} aria-hidden="true" />
+                  <span>Précédente</span>
+                </button>
+                <span aria-hidden="true">{activeDateIndex + 1} / {normalizedDates.length}</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveDateKey(normalizedDates[activeDateIndex + 1])}
+                  disabled={activeDateIndex < 0 || activeDateIndex >= normalizedDates.length - 1}
+                  aria-label="Journée suivante"
+                >
+                  <span>Suivante</span>
+                  <ChevronRight size={19} aria-hidden="true" />
+                </button>
+              </nav>
             </div>
           )}
           {!reuse && templates.length > 0 && normalizedDates.length > 1 && (
             <div className="formation-schedule__bulk">
-              <label htmlFor="formation-template-bulk">Appliquer aux journées non renseignées</label>
-              <div>
+              <label className="formation-schedule__bulk-toggle">
+                <input
+                  type="checkbox"
+                  checked={applyAllDays}
+                  onChange={(event) => {
+                    const checked = event.target.checked
+                    setApplyAllDays(checked)
+                  }}
+                />
+                <span>Appliquer le même template à toutes les journées</span>
+              </label>
+              {applyAllDays && (
                 <select
                   id="formation-template-bulk"
                   value={bulkTemplateId}
-                  onChange={(event) => setBulkTemplateId(event.target.value)}
+                  aria-label="Template à appliquer à toutes les journées"
+                  onChange={(event) => {
+                    setBulkTemplateId(event.target.value)
+                  }}
                 >
                   {templates.map((template) => (
                     <option key={template.id} value={String(template.id)}>{template.name}</option>
                   ))}
                 </select>
-                <button
-                  type="button"
-                  onClick={applyTemplateToUnassigned}
-                  disabled={!bulkTemplateId || unassignedCount === 0}
-                >
-                  Appliquer ({unassignedCount})
-                </button>
-              </div>
+              )}
             </div>
           )}
         </div>

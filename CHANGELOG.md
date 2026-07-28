@@ -39,6 +39,11 @@ Le clic sur « Lancer la préparation » signale précisément les journées
 incomplètes ou une première date avant J+2, puis ouvre une modale récapitulative
 pour la confirmation définitive.
 
+Le panneau d’organisation est désormais aligné sur toute la hauteur du
+calendrier. La fiche journée n’est plus décalée par un numéro latéral et ses
+flèches de navigation sont intégrées en bas. Une option compacte permet
+d’appliquer, et de maintenir, le même template sur toutes les journées.
+
 ### fix(ci): alignement de la fixture planning V2
 
 La fixture SQLite des tests de parité du repository pipeline expose désormais
