@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { getSupabaseClient } from '../supabaseClient'
-import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
 import './Auth.css'
 
 const AUTH_REQUEST_TIMEOUT_MS = 20_000
@@ -210,21 +209,9 @@ export default function LoginCentre({ preloadDashboardRoute }) {
   }
 
   return (
-    <main className="cadrenza-auth">
+    <main className={`cadrenza-auth cadrenza-auth--center${authMode === 'signup' && !passwordRecoveryMode ? ' cadrenza-auth--signup' : ''}`}>
       <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
       <div className="auth-layout">
-        <aside className="auth-visual" aria-label="Cadrenza pour les centres de formation">
-          <Link to="/" className="auth-home-link" aria-label="Cadrenza, retour à l'accueil">
-            <CadrenzaLogo />
-          </Link>
-
-          <div className="auth-visual__content">
-            <p className="auth-eyebrow">Espace centre</p>
-            <h1>Vos formations avancent. Vos équipes gardent le cap.</h1>
-            <p className="auth-visual__lead">Un seul espace pour créer, planifier et suivre chaque parcours.</p>
-          </div>
-        </aside>
-
         <section className="auth-panel" id="auth-main">
           {!passwordRecoveryMode && (
             <div className="auth-mode-switch" role="group" aria-label="Mode d'authentification">
@@ -249,10 +236,6 @@ export default function LoginCentre({ preloadDashboardRoute }) {
           )}
 
           <div className="auth-panel__inner">
-            <Link to="/" className="auth-mobile-logo" aria-label="Cadrenza, retour à l'accueil">
-              <CadrenzaLogo />
-            </Link>
-
             <header className="auth-heading">
               <h2>
                 {passwordRecoveryMode ? 'Nouveau mot de passe' : (authMode === 'signup' ? 'Créer votre espace' : 'Bienvenue sur Cadrenza')}
