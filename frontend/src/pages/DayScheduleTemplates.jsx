@@ -43,7 +43,6 @@ import './DayScheduleTemplates.css'
 const BUTTON_BASE = 'day-schedule-focusable inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40'
 const BUTTON_PRIMARY = `${BUTTON_BASE} bg-[#18181B] text-white hover:bg-black`
 const BUTTON_SECONDARY = `${BUTTON_BASE} border border-[#D4D4D8] bg-white text-[#3F3F46] hover:bg-[#F4F4F5]`
-const BUTTON_GHOST = `${BUTTON_BASE} text-[#52525B] hover:bg-[#F4F4F5]`
 const CALENDAR_START_MINUTE = 8 * 60
 const CALENDAR_MIN_END_MINUTE = 18 * 60
 const CALENDAR_PIXELS_PER_MINUTE = 0.9
@@ -399,13 +398,15 @@ function SequencePalette({
 
 function TemplateList({
   templates,
-  selectedId,
   loading,
   search,
   onSearchChange,
-  onSelect,
-  onCreate,
   onRetry,
+  onEdit,
+  onDuplicate,
+  onDelete,
+  onUse,
+  deleting,
   error,
 }) {
   const filtered = useMemo(() => {
@@ -415,39 +416,35 @@ function TemplateList({
   }, [search, templates])
 
   return (
-    <aside className="day-schedule-library" aria-label="Bibliothèque des templates">
-      <div className="border-b border-[#ECECEF] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-[#18181B]">Bibliothèque</h2>
-            <p className="mt-0.5 text-xs text-[#71717A]">{templates.length} template{templates.length > 1 ? 's' : ''}</p>
-          </div>
-          <button type="button" className={BUTTON_PRIMARY} onClick={onCreate}>
-            <Plus size={15} aria-hidden="true" />
-            Créer
-          </button>
+    <section className="day-schedule-library" aria-labelledby="day-schedule-library-title">
+      <div className="day-schedule-library-toolbar">
+        <div>
+          <h2 id="day-schedule-library-title">Mes templates</h2>
+          <p>{templates.length} organisation{templates.length > 1 ? 's' : ''} enregistrée{templates.length > 1 ? 's' : ''}</p>
         </div>
-        <label className="relative mt-3 block">
-          <span className="sr-only">Rechercher un template</span>
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#71717A]" aria-hidden="true" />
-          <input
-            type="search"
-            className="day-schedule-search pl-9"
-            placeholder="Rechercher"
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-          />
-        </label>
+        {templates.length > 3 && (
+          <label className="relative block">
+            <span className="sr-only">Rechercher un template</span>
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#71717A]" aria-hidden="true" />
+            <input
+              type="search"
+              className="day-schedule-search pl-9"
+              placeholder="Rechercher un template"
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+            />
+          </label>
+        )}
       </div>
 
       {loading ? (
-        <div className="space-y-3 p-4" aria-label="Chargement des templates">
+        <div className="day-schedule-library-list" aria-label="Chargement des templates">
           {[1, 2, 3].map((item) => (
-            <div key={item} className="h-16 animate-pulse rounded-lg bg-[#EEEEEF]" />
+            <div key={item} className="h-40 animate-pulse rounded-lg bg-[#EEEEEF]" />
           ))}
         </div>
       ) : error ? (
-        <div className="p-4" role="alert">
+        <div className="day-schedule-library-message" role="alert">
           <p className="text-sm font-semibold text-[#18181B]">Bibliothèque indisponible</p>
           <p className="mt-1 text-xs leading-5 text-[#71717A]">{error}</p>
           <button type="button" className={`${BUTTON_SECONDARY} mt-3`} onClick={onRetry}>
@@ -470,28 +467,47 @@ function TemplateList({
           {filtered.map((template) => {
             const stats = getScheduleStats(template.blocks)
             return (
-              <button
-                type="button"
-                key={template.id}
-                className="day-schedule-template-row"
-                aria-current={String(template.id) === String(selectedId) ? 'true' : undefined}
-                onClick={() => onSelect(template.id)}
-              >
-                <span className="flex items-start justify-between gap-2">
-                  <span className="min-w-0 truncate text-sm font-semibold">{template.name}</span>
+              <article key={template.id} className="day-schedule-template-card">
+                <div className="day-schedule-template-card-heading">
+                  <h3>{template.name}</h3>
                   <TemplateState template={template} />
-                </span>
-                <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#71717A]">
+                </div>
+                <div className="day-schedule-template-card-stats">
                   <span>{stats.courseCount} cours</span>
                   <span>{formatDuration(stats.dayMinutes)}</span>
                   <span>{stats.blockCount} blocs</span>
-                </span>
-              </button>
+                </div>
+                <div className="day-schedule-template-card-actions">
+                  {!isScheduleTemplateUsed(template) && (
+                    <button type="button" className={BUTTON_SECONDARY} onClick={() => onEdit(template)}>
+                      <PencilLine size={14} aria-hidden="true" />
+                      Modifier
+                    </button>
+                  )}
+                  <button type="button" className={BUTTON_SECONDARY} onClick={() => onDuplicate(template)}>
+                    <Copy size={14} aria-hidden="true" />
+                    Dupliquer
+                  </button>
+                  <button
+                    type="button"
+                    className="day-schedule-template-delete day-schedule-focusable"
+                    onClick={() => onDelete(template)}
+                    disabled={deleting}
+                    aria-label={`Supprimer ${template.name}`}
+                    title="Supprimer"
+                  >
+                    <Trash2 size={15} aria-hidden="true" />
+                  </button>
+                  <button type="button" className={BUTTON_PRIMARY} onClick={() => onUse(template)}>
+                    Utiliser
+                  </button>
+                </div>
+              </article>
             )
           })}
         </div>
       )}
-    </aside>
+    </section>
   )
 }
 
@@ -546,11 +562,12 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     setFeedback(null)
   }
 
-  const startEdit = () => {
-    if (!selectedTemplate || isScheduleTemplateUsed(selectedTemplate)) return
+  const startEdit = (template = selectedTemplate) => {
+    if (!template || isScheduleTemplateUsed(template)) return
+    setSelectedId(template.id)
     setDraft({
-      ...selectedTemplate,
-      blocks: selectedTemplate.blocks.map((block) => ({ ...block })),
+      ...template,
+      blocks: template.blocks.map((block) => ({ ...block })),
     })
     setMode('edit')
     setFeedback(null)
@@ -605,19 +622,19 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     }
   }
 
-  const removeTemplate = async () => {
-    if (!selectedTemplate || deleting) return
+  const removeTemplate = async (template = selectedTemplate) => {
+    if (!template || deleting) return
     const confirmed = window.confirm(
-      `Supprimer « ${selectedTemplate.name} » de la bibliothèque ? Les formations existantes conserveront leur organisation.`,
+      `Supprimer « ${template.name} » de la bibliothèque ? Les formations existantes conserveront leur organisation.`,
     )
     if (!confirmed) return
 
     setDeleting(true)
     setFeedback(null)
     try {
-      await deleteDayScheduleTemplate(selectedTemplate.id)
+      await deleteDayScheduleTemplate(template.id)
       const remaining = templates.filter(
-        (template) => String(template.id) !== String(selectedTemplate.id),
+        (item) => String(item.id) !== String(template.id),
       )
       setTemplates(remaining)
       setSelectedId(remaining[0]?.id ?? null)
@@ -635,32 +652,24 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     }
   }
 
-  const useTemplate = () => {
-    if (!selectedTemplate) return
-    window.sessionStorage.setItem('selected_day_schedule_template_id', String(selectedTemplate.id))
+  const useTemplate = (template = selectedTemplate) => {
+    if (!template) return
+    setSelectedId(template.id)
+    window.sessionStorage.setItem('selected_day_schedule_template_id', String(template.id))
     setFeedback({
       tone: 'success',
-      message: `« ${selectedTemplate.name} » est retenu pour la prochaine formation.`,
+      message: `« ${template.name} » est retenu pour la prochaine formation.`,
     })
-    onUseTemplate?.(selectedTemplate)
+    onUseTemplate?.(template)
   }
 
   const updateDraftBlocks = (blocks) => {
     setDraft((current) => current ? { ...current, blocks } : current)
   }
 
-  const rules = [
-    '4 à 10 cours',
-    'Cours 35 à 90 min',
-    'Q&R 5 à 30 min',
-    'Pause 5 à 30 min',
-    'Déjeuner 60 à 120 min',
-    'Cours cumulés ≥ 4 h',
-    'Journée ≥ 6 h',
-  ]
-  const showTemplateLibrary = mode === 'preview' && templates.length > 0
+  const showTemplateOverview = mode === 'preview' && templates.length > 0
   const showSequencePalette = mode === 'edit'
-  const hasSidePanel = showTemplateLibrary || showSequencePalette
+  const hasSidePanel = showSequencePalette
 
   return (
     <section className="day-schedule-page pb-12" aria-labelledby="day-schedule-title">
@@ -673,7 +682,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
             Préparez des journées réutilisables. Un template devient immuable dès sa première utilisation dans une formation.
           </p>
         </div>
-        {mode !== 'edit' && (
+        {mode !== 'edit' && templates.length > 0 && (
           <button type="button" className={`${BUTTON_PRIMARY} shrink-0`} onClick={startCreate}>
             <Plus size={16} aria-hidden="true" />
             Créer un template
@@ -693,7 +702,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
         </div>
       )}
 
-      <div className={`day-schedule-layout${hasSidePanel ? '' : ' day-schedule-layout--single'}${mode === 'edit' ? ' day-schedule-layout--editor' : ''}`}>
+      <div className={`day-schedule-layout${hasSidePanel ? '' : ' day-schedule-layout--single'}${mode === 'edit' ? ' day-schedule-layout--editor' : ''}${showTemplateOverview ? ' day-schedule-layout--overview' : ''}`}>
         {mode === 'edit' && visibleTemplate && (
           <div className="day-schedule-editor-header">
             <div className="day-schedule-editor-header-main">
@@ -710,11 +719,6 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
                     name: event.target.value,
                   }))}
                 />
-                <div className="day-schedule-editor-stats">
-                  <span>{validation.stats.courseCount} cours</span>
-                  <span>{formatDuration(validation.stats.courseMinutes)} de cours</span>
-                  <span>{formatDuration(validation.stats.dayMinutes)} d’amplitude</span>
-                </div>
               </div>
               <div className="day-schedule-editor-actions">
                 <button type="button" className={BUTTON_SECONDARY} onClick={cancelEdit} disabled={saving}>
@@ -727,43 +731,21 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
                 </button>
               </div>
             </div>
-            <div className="day-schedule-rule-strip" aria-label="Règles de validation">
-              {rules.map((rule) => <span key={rule} className="day-schedule-rule">{rule}</span>)}
-            </div>
-            <div
-              className="day-schedule-editor-validation"
-              data-valid={validation.valid ? 'true' : 'false'}
-              role={validation.valid ? 'status' : undefined}
-            >
-              {validation.valid
-                ? <Check size={13} aria-hidden="true" />
-                : <Clock3 size={13} aria-hidden="true" />}
-              <strong>{validation.valid ? 'Planning conforme' : 'Planning à compléter'}</strong>
-              {!validation.valid && validation.errors.length > 0 && (
-                <span>
-                  {validation.errors[0]}
-                  {validation.errors.length > 1 ? ` + ${validation.errors.length - 1} critères` : ''}
-                </span>
-              )}
-            </div>
           </div>
         )}
 
-        {showTemplateLibrary && (
+        {showTemplateOverview && (
           <TemplateList
             templates={templates}
-            selectedId={selectedId}
             loading={loading}
             search={search}
             onSearchChange={setSearch}
-            onSelect={(templateId) => {
-              setSelectedId(templateId)
-              setMode('preview')
-              setDraft(null)
-              setFeedback(null)
-            }}
-            onCreate={startCreate}
             onRetry={loadTemplates}
+            onEdit={startEdit}
+            onDuplicate={startDuplicate}
+            onDelete={removeTemplate}
+            onUse={useTemplate}
+            deleting={deleting}
             error={error}
           />
         )}
@@ -774,111 +756,39 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
           />
         )}
 
-        <div className={`day-schedule-workspace${mode === 'edit' ? ' day-schedule-workspace--editor' : ''}`}>
-          {!visibleTemplate ? (
-            loading ? (
-              <div className="flex min-h-80 flex-col items-center justify-center px-6 py-12 text-center" aria-live="polite">
-                <div className="h-7 w-7 animate-pulse rounded-full bg-[#E4E4E7]" aria-hidden="true" />
-                <p className="mt-4 text-sm font-semibold text-[#52525B]">Chargement des templates…</p>
-              </div>
-            ) : error ? (
-              <div className="flex min-h-80 flex-col items-center justify-center px-6 py-12 text-center" role="alert">
-                <CircleAlert size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
-                <h2 className="mt-4 text-base font-semibold text-[#18181B]">Templates indisponibles</h2>
-                <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">{error}</p>
-                <button type="button" className={`${BUTTON_SECONDARY} mt-5`} onClick={loadTemplates}>
-                  Réessayer
-                </button>
-              </div>
-            ) : (
-              <div className="flex min-h-80 flex-col items-center justify-center px-6 py-12 text-center">
-                <Clock3 size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
-                <h2 className="mt-4 text-base font-semibold text-[#18181B]">Créez une organisation de journée</h2>
-                <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">
-                  La timeline impose l’ordre cours, questions-réponses et pause.
-                </p>
-                <button type="button" className={`${BUTTON_PRIMARY} mt-5`} onClick={startCreate}>
-                  <Plus size={15} aria-hidden="true" />
-                  Créer le premier template
-                </button>
-              </div>
-            )
-          ) : (
-            <>
-              {mode === 'preview' && (
-                <div className="border-b border-[#ECECEF] p-4 sm:p-5">
-                <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="min-w-0 truncate text-lg font-semibold text-[#18181B]">
-                        {selectedTemplate.name}
-                      </h2>
-                      <TemplateState template={selectedTemplate} />
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#71717A]">
-                      <span>{validation.stats.courseCount} cours</span>
-                      <span>{formatDuration(validation.stats.courseMinutes)} de cours vocal</span>
-                      <span>{formatDuration(validation.stats.dayMinutes)} d’amplitude</span>
-                      <span>{validation.stats.blockCount} fichiers prévus</span>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    {!isScheduleTemplateUsed(selectedTemplate) && (
-                      <button type="button" className={BUTTON_SECONDARY} onClick={startEdit}>
-                        <PencilLine size={15} aria-hidden="true" />
-                        Modifier
-                      </button>
-                    )}
-                    <button type="button" className={BUTTON_SECONDARY} onClick={() => startDuplicate()}>
-                      <Copy size={15} aria-hidden="true" />
-                      Dupliquer
-                    </button>
-                    <button type="button" className={BUTTON_GHOST} onClick={removeTemplate} disabled={deleting}>
-                      <Trash2 size={15} aria-hidden="true" />
-                      {deleting ? 'Suppression…' : 'Supprimer'}
-                    </button>
-                    <button type="button" className={BUTTON_PRIMARY} onClick={useTemplate}>
-                      Utiliser
-                    </button>
-                  </div>
+        {!showTemplateOverview && (
+          <div className={`day-schedule-workspace${mode === 'edit' ? ' day-schedule-workspace--editor' : ' day-schedule-workspace--empty'}`}>
+            {!visibleTemplate ? (
+              loading ? (
+                <div className="day-schedule-empty-state" aria-live="polite">
+                  <div className="h-7 w-7 animate-pulse rounded-full bg-[#E4E4E7]" aria-hidden="true" />
+                  <p className="mt-4 text-sm font-semibold text-[#52525B]">Chargement des templates…</p>
                 </div>
-
-                <div className="day-schedule-rule-strip mt-4" aria-label="Règles de validation">
-                  {rules.map((rule) => <span key={rule} className="day-schedule-rule">{rule}</span>)}
+              ) : error ? (
+                <div className="day-schedule-empty-state" role="alert">
+                  <CircleAlert size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
+                  <h2 className="mt-4 text-base font-semibold text-[#18181B]">Templates indisponibles</h2>
+                  <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">{error}</p>
+                  <button type="button" className={`${BUTTON_SECONDARY} mt-5`} onClick={loadTemplates}>
+                    Réessayer
+                  </button>
                 </div>
-
-                </div>
-              )}
-
-              {mode === 'preview' && isScheduleTemplateUsed(selectedTemplate) && (
-                <div className="mx-4 mt-4 flex items-start gap-2.5 rounded-lg border border-[#D4D4D8] bg-[#F4F4F5] px-3.5 py-3 text-xs leading-5 text-[#52525B] sm:mx-5">
-                  <LockKeyhole size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-                  <p>
-                    Ce template a déjà été utilisé. Son organisation est verrouillée. Dupliquez-le pour créer une variante.
+              ) : (
+                <div className="day-schedule-empty-state">
+                  <Clock3 size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
+                  <h2 className="mt-4 text-base font-semibold text-[#18181B]">Créez une organisation de journée</h2>
+                  <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">
+                    La timeline impose l’ordre cours, questions-réponses et pause.
                   </p>
+                  <button type="button" className={`${BUTTON_PRIMARY} mt-5`} onClick={startCreate}>
+                    <Plus size={15} aria-hidden="true" />
+                    Créer le premier template
+                  </button>
                 </div>
-              )}
-
+              )
+            ) : (
+              <>
               <div className="p-4 sm:p-5">
-                {mode === 'preview' && (
-                  <div className="day-schedule-validation mb-4">
-                    <div className="flex items-center gap-2">
-                      {validation.valid
-                        ? <Check size={15} aria-hidden="true" />
-                        : <Clock3 size={15} aria-hidden="true" />}
-                      <p className="text-xs font-semibold text-[#18181B]">
-                        {validation.valid ? 'Planning conforme' : 'Planning à compléter'}
-                      </p>
-                    </div>
-                    {!validation.valid && validation.errors.length > 0 && (
-                      <ul className="text-xs leading-5 text-[#52525B]">
-                        {validation.errors.map((message) => <li key={message}>{message}</li>)}
-                      </ul>
-                    )}
-                  </div>
-                )}
-
                 <ScheduleTimeline
                   blocks={visibleTemplate.blocks}
                   readOnly={mode !== 'edit'}
@@ -888,9 +798,10 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
                   canAddSequence={validation.stats.courseCount < DAY_SCHEDULE_RULES.maxCourses}
                 />
               </div>
-            </>
-          )}
-        </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </section>
   )
