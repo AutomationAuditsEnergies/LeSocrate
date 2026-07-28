@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  CircleCheck,
   WandSparkles,
 } from 'lucide-react'
 
@@ -147,12 +145,12 @@ export default function FormationSchedulePlanner({
   const [helperDaysPerWeek, setHelperDaysPerWeek] = useState(String(initialWeeklyCount))
   const [preferredWeekdays, setPreferredWeekdays] = useState(initialPreferredDays)
   const [helperError, setHelperError] = useState('')
-  const [lockedConfirmed, setLockedConfirmed] = useState(false)
   const [validationNow, setValidationNow] = useState(() => new Date())
   const [month, setMonth] = useState(() => initialMonth(initialDates[0] || safeStartHint))
   const [focusedWeekStart, setFocusedWeekStart] = useState(
     () => weekStart(initialDates[0] || today),
   )
+  const [activeDateKey, setActiveDateKey] = useState(initialDates[0] || '')
   const didInitialPrefill = useRef(false)
 
   const loadTemplates = useCallback(async () => {
@@ -254,18 +252,48 @@ export default function FormationSchedulePlanner({
   const unassignedCount = reuse
     ? 0
     : normalizedDates.filter((date) => !cleanAssignments[date]).length
+  const activeDate = normalizedDates.includes(activeDateKey)
+    ? activeDateKey
+    : normalizedDates[0] || ''
+  const activeDateIndex = activeDate ? normalizedDates.indexOf(activeDate) : -1
+  const activeAssignment = activeDate ? cleanAssignments[activeDate] || '' : ''
+  const scheduleDays = useMemo(() => {
+    const templatesById = new Map(templates.map(
+      (template) => [String(template.id), template],
+    ))
+    return normalizedDates.map((date, index) => {
+      const templateId = cleanAssignments[date] || ''
+      return {
+        date,
+        dayNumber: index + 1,
+        label: formatLongDate(date),
+        templateId,
+        templateName: reuse
+          ? 'Déroulé conservé'
+          : String(templatesById.get(templateId)?.name || ''),
+      }
+    })
+  }, [cleanAssignments, normalizedDates, reuse, templates])
 
   useEffect(() => {
     onChange?.({
       payload,
-      valid: validation.valid && lockedConfirmed,
+      valid: validation.valid,
       validation,
-      lockedConfirmed,
       dayCount: normalizedDates.length,
+      days: scheduleDays,
     })
-  }, [lockedConfirmed, normalizedDates.length, onChange, payload, validation])
+  }, [normalizedDates.length, onChange, payload, scheduleDays, validation])
 
-  const invalidateConfirmation = () => setLockedConfirmed(false)
+  useEffect(() => {
+    if (!normalizedDates.length) {
+      setActiveDateKey('')
+      return
+    }
+    if (!normalizedDates.includes(activeDateKey)) {
+      setActiveDateKey(normalizedDates[0])
+    }
+  }, [activeDateKey, normalizedDates])
 
   const togglePreferredWeekday = (weekday) => {
     setPreferredWeekdays((current) => (
@@ -305,13 +333,14 @@ export default function FormationSchedulePlanner({
     setAssignments((current) => reconcileTemplateAssignments(current, generated))
     setMonth(initialMonth(generated[0]))
     setFocusedWeekStart(weekStart(generated[0]))
+    setActiveDateKey(generated[0])
     setHelperError('')
-    invalidateConfirmation()
   }
 
   const toggleDate = (date) => {
     if (date < today) return
     setFocusedWeekStart(weekStart(date))
+    if (!selectedDates.includes(date)) setActiveDateKey(date)
     setSelectedDates((current) => (
       current.includes(date)
         ? current.filter((item) => item !== date)
@@ -323,7 +352,6 @@ export default function FormationSchedulePlanner({
       delete next[date]
       return next
     })
-    invalidateConfirmation()
   }
 
   const moveMonth = (amount) => {
@@ -338,7 +366,6 @@ export default function FormationSchedulePlanner({
       ...current,
       [date]: String(templateId),
     }))
-    invalidateConfirmation()
   }
 
   const applyTemplateToUnassigned = () => {
@@ -347,7 +374,6 @@ export default function FormationSchedulePlanner({
       normalizedDates,
       bulkTemplateId,
     ))
-    invalidateConfirmation()
   }
 
   return (
@@ -490,31 +516,32 @@ export default function FormationSchedulePlanner({
         <div className="formation-schedule__dates">
           <div className="formation-schedule__dates-header">
             <div>
-              <h3>Dates retenues</h3>
-              <p>{reuse ? 'Le déroulé du module reste inchangé.' : 'Une organisation est obligatoire pour chaque date.'}</p>
+              <h3>Organisation de la journée</h3>
+              <p>
+                {activeDateIndex >= 0
+                  ? `Journée ${activeDateIndex + 1} sur ${normalizedDates.length}`
+                  : 'Sélectionnez une date dans le calendrier.'}
+              </p>
             </div>
-            {!reuse && templates.length > 0 && (
-              <div className="formation-schedule__bulk">
-                <label htmlFor="formation-template-bulk">Template par défaut</label>
-                <div>
-                  <select
-                    id="formation-template-bulk"
-                    value={bulkTemplateId}
-                    onChange={(event) => setBulkTemplateId(event.target.value)}
-                  >
-                    {templates.map((template) => (
-                      <option key={template.id} value={String(template.id)}>{template.name}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={applyTemplateToUnassigned}
-                    disabled={!bulkTemplateId || unassignedCount === 0}
-                  >
-                    Affecter aux non remplies ({unassignedCount})
-                  </button>
-                </div>
-              </div>
+            {normalizedDates.length > 0 && (
+              <nav className="formation-schedule__day-navigation" aria-label="Naviguer entre les journées">
+                <button
+                  type="button"
+                  onClick={() => setActiveDateKey(normalizedDates[activeDateIndex - 1])}
+                  disabled={activeDateIndex <= 0}
+                  aria-label="Journée précédente"
+                >
+                  <ChevronLeft size={18} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveDateKey(normalizedDates[activeDateIndex + 1])}
+                  disabled={activeDateIndex < 0 || activeDateIndex >= normalizedDates.length - 1}
+                  aria-label="Journée suivante"
+                >
+                  <ChevronRight size={18} aria-hidden="true" />
+                </button>
+              </nav>
             )}
           </div>
 
@@ -527,85 +554,72 @@ export default function FormationSchedulePlanner({
               <button type="button" onClick={loadTemplates}>Réessayer</button>
             </div>
           )}
-          {!reuse && !templatesLoading && !templatesError && templates.length === 0 && (
-            <div className="formation-schedule__empty">
-              <p>La bibliothèque ne contient encore aucun template.</p>
-              <span>Créez-en un depuis « Organisation des cours », puis revenez ici.</span>
-            </div>
-          )}
           {normalizedDates.length === 0 && (
             <div className="formation-schedule__empty">
               <p>Aucune date cochée.</p>
               <span>Utilisez le préremplissage ou cochez directement une date dans le calendrier.</span>
             </div>
           )}
-          {normalizedDates.length > 0 && (
-            <ol className="formation-schedule__date-list">
-              {normalizedDates.map((date, index) => {
-                const assignment = cleanAssignments[date] || ''
-                const assignmentMissing = !reuse && !assignment
-                const assignmentUnknown = assignment && !selectedTemplateIds.has(assignment)
-                return (
-                  <li key={date} data-invalid={assignmentMissing || assignmentUnknown}>
-                    <span className="formation-schedule__day-index">{index + 1}</span>
-                    <div>
-                      <strong>{formatLongDate(date)}</strong>
-                      <span>Journée {index + 1}</span>
-                    </div>
-                    {reuse ? (
-                      <span className="formation-schedule__locked-layout">Déroulé conservé</span>
-                    ) : (
-                      <label>
-                        <span className="sr-only">Template pour le {formatLongDate(date)}</span>
-                        <select
-                          value={assignment}
-                          onChange={(event) => assignTemplate(date, event.target.value)}
-                          aria-invalid={assignmentMissing || assignmentUnknown}
-                        >
-                          <option value="">Choisir un template</option>
-                          {templates.map((template) => (
-                            <option key={template.id} value={String(template.id)}>{template.name}</option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                  </li>
-                )
-              })}
-            </ol>
-          )}
-          <div className="formation-schedule__review">
-            <div className="formation-schedule__review-copy">
-              <AlertTriangle size={19} aria-hidden="true" />
-              <div>
-                <h3>Validation définitive</h3>
-                <p>
-                  {reuse
-                    ? `Sélectionnez exactement ${expectedDayCount || 0} nouvelles dates. Le déroulé reste inchangé.`
-                    : 'Planning verrouillé après validation. Première date à J+2 minimum.'}
+          {activeDate && (
+            <div
+              className="formation-schedule__active-day"
+              data-invalid={!reuse && (
+                !activeAssignment || !selectedTemplateIds.has(activeAssignment)
+              )}
+            >
+              <span className="formation-schedule__day-index">{activeDateIndex + 1}</span>
+              <div className="formation-schedule__active-day-copy">
+                <strong>{formatLongDate(activeDate)}</strong>
+                <span>Journée {activeDateIndex + 1}</span>
+              </div>
+              {reuse ? (
+                <span className="formation-schedule__locked-layout">Déroulé conservé</span>
+              ) : (
+                <label>
+                  <span>Template de la journée</span>
+                  <select
+                    value={activeAssignment}
+                    disabled={templatesLoading || templates.length === 0}
+                    onChange={(event) => assignTemplate(activeDate, event.target.value)}
+                    aria-invalid={!activeAssignment || !selectedTemplateIds.has(activeAssignment)}
+                  >
+                    <option value="">Choisir un template</option>
+                    {templates.map((template) => (
+                      <option key={template.id} value={String(template.id)}>{template.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {!reuse && !templatesLoading && !templatesError && templates.length === 0 && (
+                <p className="formation-schedule__template-hint">
+                  Créez d’abord un template dans « Organisation des cours ».
                 </p>
+              )}
+            </div>
+          )}
+          {!reuse && templates.length > 0 && normalizedDates.length > 1 && (
+            <div className="formation-schedule__bulk">
+              <label htmlFor="formation-template-bulk">Appliquer aux journées non renseignées</label>
+              <div>
+                <select
+                  id="formation-template-bulk"
+                  value={bulkTemplateId}
+                  onChange={(event) => setBulkTemplateId(event.target.value)}
+                >
+                  {templates.map((template) => (
+                    <option key={template.id} value={String(template.id)}>{template.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={applyTemplateToUnassigned}
+                  disabled={!bulkTemplateId || unassignedCount === 0}
+                >
+                  Appliquer ({unassignedCount})
+                </button>
               </div>
             </div>
-
-            {validation.errors.length > 0 && (
-              <ul className="formation-schedule__errors" aria-label="Points à corriger">
-                {validation.errors.map((error) => <li key={error}>{error}</li>)}
-              </ul>
-            )}
-
-            <label className="formation-schedule__confirmation">
-              <input
-                type="checkbox"
-                checked={lockedConfirmed && validation.valid}
-                disabled={!validation.valid}
-                onChange={(event) => setLockedConfirmed(event.target.checked)}
-              />
-              <span>
-                <CircleCheck size={17} aria-hidden="true" />
-                Je confirme ce calendrier définitif.
-              </span>
-            </label>
-          </div>
+          )}
         </div>
       </div>
     </section>

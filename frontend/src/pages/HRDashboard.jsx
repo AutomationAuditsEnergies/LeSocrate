@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowUp,
@@ -4020,7 +4020,11 @@ export function CreatePlatformView({
     payload: null,
     valid: false,
     dayCount: 0,
+    days: [],
+    validation: null,
   })
+  const [scheduleAttemptErrors, setScheduleAttemptErrors] = useState([])
+  const [scheduleReviewOpen, setScheduleReviewOpen] = useState(false)
   const descriptionEditedRef = useRef(false)
   const operationType = formationMode === 'existing' ? 'reuse_teacher' : 'new_teacher'
   const product = billing?.products?.[operationType]
@@ -4049,14 +4053,70 @@ export function CreatePlatformView({
   const canCreateTeacher = (
     teacherFirstName.trim()
     && (formationMode === 'existing' ? selectedModule : (newFormTpName.trim() && newFormRncp.trim()))
-    && (usesLegacyReuseSchedule ? legacyScheduleValid : schedulePlan.valid)
+    && (usesLegacyReuseSchedule ? legacyScheduleValid : schedulePlan.payload)
     && teacherDescription.trim()
     && billingReady
   )
 
+  const handleSchedulePlanChange = useCallback((nextPlan) => {
+    setSchedulePlan(nextPlan)
+    setScheduleAttemptErrors([])
+  }, [])
+
+  const handleLaunchRequest = () => {
+    if (usesLegacyReuseSchedule) {
+      onCreate(teacherDescription, legacySchedulePayload)
+      return
+    }
+
+    const missingDays = (schedulePlan.days || []).filter(
+      (day) => formationMode !== 'existing' && !day.templateName,
+    )
+    const errors = []
+    if (missingDays.length) {
+      errors.push(
+        `Associez un template à ${missingDays.map(
+          (day) => `la journée ${day.dayNumber} (${day.label})`,
+        ).join(', ')}.`,
+      )
+    }
+    for (const error of schedulePlan.validation?.errors || []) {
+      if (missingDays.length && error.startsWith('Affectez un template')) continue
+      if (error.includes('48 h')) {
+        errors.push('La première date doit être au minimum à J+2.')
+      } else {
+        errors.push(error)
+      }
+    }
+
+    const uniqueErrors = [...new Set(errors)]
+    if (uniqueErrors.length) {
+      setScheduleAttemptErrors(uniqueErrors)
+      setScheduleReviewOpen(false)
+      return
+    }
+
+    setScheduleAttemptErrors([])
+    setScheduleReviewOpen(true)
+  }
+
+  const confirmScheduleAndCreate = () => {
+    setScheduleReviewOpen(false)
+    onCreate(teacherDescription, schedulePlan.payload)
+  }
+
   useEffect(() => {
     if (!descriptionEditedRef.current) setTeacherDescription(generatedDescription)
   }, [generatedDescription])
+
+  useEffect(() => {
+    if (!scheduleReviewOpen) return undefined
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape' && !creating) setScheduleReviewOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [creating, scheduleReviewOpen])
 
   const toggleTeachingDay = (dayId) => {
     setTeachingDays((current) => (
@@ -4261,10 +4321,19 @@ export function CreatePlatformView({
                 approximateDayCount={formationMode === 'existing' ? trainingDays : newFormHours}
                 daysPerWeekHint={weeklyCourseCount}
                 preferredWeekdaysHint={teachingDays}
-                onChange={setSchedulePlan}
+                onChange={handleSchedulePlanChange}
               />
             )}
           </div>
+
+          {scheduleAttemptErrors.length > 0 && (
+            <div className="create-platform-workspace__error" role="alert">
+              <strong>Planning à compléter</strong>
+              <ul>
+                {scheduleAttemptErrors.map((error) => <li key={error}>{error}</li>)}
+              </ul>
+            </div>
+          )}
 
           {submissionError && (
             <div className="create-platform-workspace__error" role="alert">
@@ -4283,7 +4352,7 @@ export function CreatePlatformView({
             </div>
             <div className="create-platform-workspace__actions">
               <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 py-2 text-sm font-semibold text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 disabled:opacity-50">Annuler</button>
-              <button type="button" onClick={() => onCreate(teacherDescription, usesLegacyReuseSchedule ? legacySchedulePayload : schedulePlan.payload)} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A1A1AA] disabled:opacity-60">
+              <button type="button" onClick={handleLaunchRequest} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A1A1AA] disabled:opacity-60">
                 {creating ? 'Préparation de la commande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer` : 'Paiement temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
               </button>
             </div>
@@ -4346,6 +4415,66 @@ export function CreatePlatformView({
           )}
 
         </section>
+      )}
+
+      {scheduleReviewOpen && createPortal(
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/45 sm:items-center sm:p-5">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="schedule-review-title"
+            className="flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white text-[#18181B] sm:max-w-[640px] sm:rounded-2xl"
+          >
+            <header className="border-b border-[#E4E4E7] px-5 py-4 sm:px-6">
+              <p className="m-0 text-xs font-semibold text-[#71717A]">
+                {schedulePlan.dayCount} journée{schedulePlan.dayCount > 1 ? 's' : ''}
+              </p>
+              <h2 id="schedule-review-title" className="mt-1 text-xl font-bold tracking-[-0.025em]">
+                Confirmer le planning définitif
+              </h2>
+              <p className="mt-2 max-w-[58ch] text-sm leading-6 text-[#52525B]">
+                Vérifiez les dates et leurs templates. Après confirmation, cette organisation ne pourra plus être modifiée.
+              </p>
+            </header>
+
+            <ol className="m-0 min-h-0 flex-1 list-none overflow-y-auto p-0">
+              {(schedulePlan.days || []).map((day) => (
+                <li key={day.date} className="grid grid-cols-[32px_minmax(0,1fr)] items-center gap-3 border-b border-[#E4E4E7] px-5 py-3 last:border-b-0 sm:px-6">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#E4E4E7] text-xs font-bold text-[#3F3F46]">
+                    {day.dayNumber}
+                  </span>
+                  <div className="min-w-0">
+                    <strong className="block text-sm capitalize">{day.label}</strong>
+                    <span className="mt-0.5 block truncate text-xs text-[#71717A]">
+                      {day.templateName}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+
+            <footer className="flex flex-col-reverse gap-2 border-t border-[#E4E4E7] bg-[#FAFAFA] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+              <button
+                type="button"
+                onClick={() => setScheduleReviewOpen(false)}
+                disabled={creating}
+                autoFocus
+                className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-50"
+              >
+                Revenir au planning
+              </button>
+              <button
+                type="button"
+                onClick={confirmScheduleAndCreate}
+                disabled={creating}
+                className="min-h-11 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white hover:bg-[#27272A] disabled:bg-[#A1A1AA]"
+              >
+                {creating ? 'Préparation en cours…' : 'Confirmer et lancer'}
+              </button>
+            </footer>
+          </section>
+        </div>,
+        document.body,
       )}
     </section>
   )

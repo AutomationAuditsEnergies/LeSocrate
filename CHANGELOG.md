@@ -33,6 +33,12 @@ Le préremplissage refuse désormais explicitement les dates inexistantes, comme
 le 31 septembre, et remplace toute suggestion initiale invalide par la première
 date réellement autorisée.
 
+L’affectation des templates se fait maintenant journée par journée dans un
+carrousel à flèches, sans longue liste ni validation permanente dans le rail.
+Le clic sur « Lancer la préparation » signale précisément les journées
+incomplètes ou une première date avant J+2, puis ouvre une modale récapitulative
+pour la confirmation définitive.
+
 ### fix(ci): alignement de la fixture planning V2
 
 La fixture SQLite des tests de parité du repository pipeline expose désormais

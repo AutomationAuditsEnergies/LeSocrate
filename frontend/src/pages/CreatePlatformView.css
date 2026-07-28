@@ -305,6 +305,17 @@
   font-size: 13px;
 }
 
+.create-platform-workspace__error strong {
+  display: block;
+  color: #18181b;
+}
+
+.create-platform-workspace__error ul {
+  margin: 5px 0 0;
+  padding-left: 18px;
+  line-height: 1.5;
+}
+
 .create-platform-workspace__footer {
   display: flex;
   min-height: 72px;

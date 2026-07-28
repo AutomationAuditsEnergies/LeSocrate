@@ -18,6 +18,24 @@ test('keeps the planning and template UI strictly monochrome', async () => {
   }
 })
 
+test('reviews the definitive schedule only when preparation is requested', async () => {
+  const plannerSource = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+  const dashboardSource = await readFile(
+    new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.doesNotMatch(plannerSource, /Je confirme ce calendrier définitif/)
+  assert.doesNotMatch(plannerSource, /formation-schedule__date-list/)
+  assert.match(plannerSource, /Naviguer entre les journées/)
+  assert.match(dashboardSource, /Confirmer le planning définitif/)
+  assert.match(dashboardSource, /La première date doit être au minimum à J\+2/)
+  assert.match(dashboardSource, /Associez un template à/)
+})
+
 test('uses locked sequence drops and resize handles instead of per-block forms', async () => {
   const source = await readFile(new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url), 'utf8')
 
