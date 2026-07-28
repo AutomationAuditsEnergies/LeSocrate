@@ -222,40 +222,41 @@ function ScheduleTimeline({
         )}
       </div>
 
-      <div
-        className="day-schedule-calendar"
-        aria-label="Déroulé de la journée"
-        style={{ '--day-schedule-calendar-height': `${calendarHeight}px` }}
-      >
-        <div className="day-schedule-calendar-hours" aria-hidden="true">
-          {hourMarkers.map((minute) => (
-            <div
-              key={minute}
-              className="day-schedule-calendar-hour"
-              style={{
-                '--day-schedule-hour-top': `${(minute - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE}px`,
-              }}
-            >
-              <time>{formatScheduleMinute(minute)}</time>
-              <span />
-            </div>
-          ))}
-        </div>
+      <div className="day-schedule-calendar-scroll">
+        <div
+          className="day-schedule-calendar"
+          aria-label="Déroulé de la journée"
+          style={{ '--day-schedule-calendar-height': `${calendarHeight}px` }}
+        >
+          <div className="day-schedule-calendar-hours" aria-hidden="true">
+            {hourMarkers.map((minute) => (
+              <div
+                key={minute}
+                className="day-schedule-calendar-hour"
+                style={{
+                  '--day-schedule-hour-top': `${(minute - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE}px`,
+                }}
+              >
+                <time>{formatScheduleMinute(minute)}</time>
+                <span />
+              </div>
+            ))}
+          </div>
 
-        {blocks.length === 0 ? (
-          <button
-            type="button"
-            className="day-schedule-empty-timeline"
-            onClick={onAddSequence}
-            disabled={readOnly || !canAddSequence}
-          >
-            <Plus size={16} aria-hidden="true" />
-            <strong>Planifier une séquence</strong>
-            <span>Glissez la carte depuis la colonne de gauche.</span>
-          </button>
-        ) : (
-          <div className="day-schedule-calendar-events">
-          {blocks.map((block, index) => {
+          {blocks.length === 0 ? (
+            <button
+              type="button"
+              className="day-schedule-empty-timeline"
+              onClick={onAddSequence}
+              disabled={readOnly || !canAddSequence}
+            >
+              <Plus size={16} aria-hidden="true" />
+              <strong>Planifier une séquence</strong>
+              <span>Glissez la carte depuis la colonne de gauche.</span>
+            </button>
+          ) : (
+            <div className="day-schedule-calendar-events">
+            {blocks.map((block, index) => {
             const presentation = blockPresentation(block, counters)
             const BlockIcon = presentation.icon
             const bounds = durationBounds(block)
@@ -347,9 +348,10 @@ function ScheduleTimeline({
                 )}
               </article>
             )
-          })}
-          </div>
-        )}
+            })}
+            </div>
+          )}
+        </div>
       </div>
 
       {dropActive && (
@@ -672,7 +674,10 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
   const hasSidePanel = showSequencePalette
 
   return (
-    <section className="day-schedule-page pb-12" aria-labelledby="day-schedule-title">
+    <section
+      className={`day-schedule-page pb-12${mode === 'edit' ? ' day-schedule-page--editor' : ''}`}
+      aria-labelledby="day-schedule-title"
+    >
       <header className="day-schedule-page-header">
         <div>
           <h1 id="day-schedule-title" className="text-2xl font-semibold tracking-[-0.025em] text-[#18181B]">

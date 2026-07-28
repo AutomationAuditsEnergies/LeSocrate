@@ -6,9 +6,20 @@
   --schedule-border-soft: #efefed;
   --schedule-canvas: #fafaf9;
   --schedule-surface: #ffffff;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   color: var(--schedule-ink);
   font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+.day-schedule-page--editor {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+  padding-bottom: 0 !important;
 }
 
 .day-schedule-page-header {
@@ -47,6 +58,13 @@
   width: min(100%, 1160px);
   gap: 28px;
   margin-inline: auto;
+}
+
+.day-schedule-page--editor .day-schedule-layout--editor {
+  min-height: 0;
+  flex: 1;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .day-schedule-editor-name-row {
@@ -301,8 +319,15 @@
 }
 
 .day-schedule-workspace--editor {
+  min-height: 0;
+  overflow: hidden;
   border: 0;
   border-radius: 0;
+}
+
+.day-schedule-page--editor .day-schedule-workspace--editor > div:first-child {
+  height: 100%;
+  min-height: 0;
 }
 
 .day-schedule-workspace--empty {
@@ -358,6 +383,10 @@
 }
 
 .day-schedule-workspace--editor .day-schedule-timeline-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   border: 0;
   border-radius: 0;
 }
@@ -419,6 +448,17 @@
   min-height: 630px;
   overflow: hidden;
   background: #fff;
+}
+
+.day-schedule-calendar-scroll {
+  min-height: 0;
+}
+
+.day-schedule-page--editor .day-schedule-calendar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .day-schedule-calendar-hours,

@@ -66,6 +66,27 @@ test('uses locked sequence drops and resize handles instead of per-block forms',
   assert.doesNotMatch(source, /Déplacer le début du bloc/)
 })
 
+test('locks the template editor page and scrolls only the calendar', async () => {
+  const templateSource = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
+    'utf8',
+  )
+  const templateStyles = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.css', import.meta.url),
+    'utf8',
+  )
+  const dashboardSource = await readFile(
+    new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(templateSource, /day-schedule-page--editor/)
+  assert.match(templateSource, /day-schedule-calendar-scroll/)
+  assert.match(templateStyles, /\.day-schedule-page--editor\s*\{[\s\S]*?overflow: hidden/)
+  assert.match(templateStyles, /\.day-schedule-page--editor \.day-schedule-calendar-scroll\s*\{[\s\S]*?overflow-y: auto/)
+  assert.match(dashboardSource, /scheduleTemplatesVisible \? 'overflow-hidden'/)
+})
+
 test('renders the audio modal from the real playlist instead of the legacy 19-file list', async () => {
   const source = await readFile(new URL('../../src/pages/HRDashboard.jsx', import.meta.url), 'utf8')
   const modalStart = source.indexOf('function AudiosModal(')
