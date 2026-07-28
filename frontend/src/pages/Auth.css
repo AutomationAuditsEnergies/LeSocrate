@@ -582,38 +582,38 @@
 }
 
 .cadrenza-auth--center .auth-heading {
-  margin-bottom: 34px;
+  margin-bottom: 30px;
 }
 
 .cadrenza-auth--center .auth-heading h2 {
-  font-size: clamp(2.1rem, 3vw, 2.6rem);
+  font-size: 2rem;
   font-weight: 600;
-  letter-spacing: -0.048em;
+  letter-spacing: -0.035em;
 }
 
 .cadrenza-auth--center .auth-heading p {
-  margin-top: 17px;
-  font-size: 1rem;
+  margin-top: 15px;
+  font-size: 0.92rem;
 }
 
 .cadrenza-auth--center .auth-form {
-  gap: 18px;
+  gap: 15px;
 }
 
 .cadrenza-auth--center .auth-field input {
-  height: 64px;
-  padding-inline: 18px;
-  font-size: 0.94rem;
+  height: 48px;
+  padding-inline: 16px;
+  font-size: 0.88rem;
 }
 
 .cadrenza-auth--center.cadrenza-auth--signup .auth-field input {
-  height: 56px;
+  height: 48px;
 }
 
 .cadrenza-auth--center .auth-submit {
-  min-height: 52px;
-  margin-top: 6px;
-  font-size: 0.92rem;
+  min-height: 46px;
+  margin-top: 5px;
+  font-size: 0.86rem;
 }
 
 @media (max-width: 760px) {
