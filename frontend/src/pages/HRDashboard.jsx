@@ -133,7 +133,12 @@ export default function HRDashboard() {
   const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
   const [cardPage, setCardPage] = useState(0)
   const [teacherRosterFilter, setTeacherRosterFilter] = useState('all')
-  const [workspaceSection, setWorkspaceSection] = useState('recruit')
+  const [workspaceSection, setWorkspaceSection] = useState(() => {
+    const savedSection = localStorage.getItem('center_workspace_section')
+    return ['recruit', 'teachers', 'schedule-templates'].includes(savedSection)
+      ? savedSection
+      : 'recruit'
+  })
   const [interfaceLanguage, setInterfaceLanguage] = useState(() => localStorage.getItem('center_interface_language') || 'fr')
   const [recruitmentPrefilled, setRecruitmentPrefilled] = useState(false)
   const [attendancePlatformId, setAttendancePlatformId] = useState('')
@@ -999,6 +1004,10 @@ export default function HRDashboard() {
     setRecruitmentPrefilled(false)
     setModuleSearchQuery('')
   }
+
+  useEffect(() => {
+    localStorage.setItem('center_workspace_section', workspaceSection)
+  }, [workspaceSection])
 
   const handleAssistantComplete = (draft) => {
     resetCreateForm()
@@ -2026,7 +2035,7 @@ function CenterWorkspaceSidebar({
     >
       <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
         {!collapsed && (
-          <img src="/socrate-mark.svg" alt="Le Socrate" className="h-8 w-8 grayscale contrast-200" />
+          <img src="/socrate-mark.svg" alt="Le Socrate" className="h-8 w-8" />
         )}
         <button
           type="button"
