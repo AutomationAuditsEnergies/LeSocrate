@@ -203,9 +203,10 @@
   top: 32px;
   right: clamp(32px, 4vw, 64px);
   z-index: 2;
-  display: flex;
+  display: grid;
+  width: 252px;
+  grid-template-columns: 104px 148px;
   align-items: center;
-  gap: 22px;
 }
 
 .auth-mode-switch button {
@@ -217,6 +218,7 @@
   cursor: pointer;
   font-size: 0.86rem;
   font-weight: 600;
+  text-align: center;
 }
 
 .auth-mode-switch button[aria-pressed="true"] {
@@ -336,7 +338,7 @@
   padding-right: 88px;
 }
 
-.auth-password-toggle {
+.cadrenza-auth .auth-password-toggle {
   position: absolute;
   top: 50%;
   right: 8px;
@@ -352,7 +354,7 @@
   transform: translateY(-50%);
 }
 
-.auth-password-toggle:hover {
+.cadrenza-auth .auth-password-toggle:hover {
   background: #e8e8eb;
   color: var(--auth-ink);
 }
@@ -363,24 +365,47 @@
   font-size: 0.73rem;
 }
 
-.auth-text-button {
+.cadrenza-auth .auth-text-button {
   border: 0;
   background: transparent;
-  color: var(--auth-ink);
+  color: var(--auth-copy);
   cursor: pointer;
   padding: 0;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 0.72rem;
+  font-weight: 450;
 }
 
-.auth-text-button:hover {
+.cadrenza-auth .auth-text-button:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
-.auth-text-button:disabled {
+.cadrenza-auth .auth-text-button:disabled {
   color: var(--auth-muted);
   cursor: wait;
+}
+
+.auth-forgot-row {
+  margin-top: 7px;
+  text-align: left;
+}
+
+.cadrenza-auth .auth-back-button {
+  width: fit-content;
+  margin: -2px auto 0;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--auth-copy);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.cadrenza-auth .auth-back-button:hover {
+  color: var(--auth-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .auth-submit {
@@ -565,11 +590,7 @@
 .cadrenza-auth--center .auth-panel {
   min-height: 100vh;
   align-items: flex-start;
-  padding: clamp(170px, 23vh, 220px) 32px 72px;
-}
-
-.cadrenza-auth--center.cadrenza-auth--signup .auth-panel {
-  padding-top: clamp(88px, 12vh, 118px);
+  padding: clamp(108px, 14vh, 136px) 32px 72px;
 }
 
 .cadrenza-auth--center .auth-panel__inner {
@@ -614,6 +635,14 @@
   min-height: 46px;
   margin-top: 5px;
   font-size: 0.86rem;
+}
+
+.cadrenza-auth--center.cadrenza-auth--forgot .auth-panel__inner {
+  width: min(100%, 416px);
+}
+
+.cadrenza-auth--center.cadrenza-auth--forgot .auth-heading p {
+  max-width: 410px;
 }
 
 @media (max-width: 760px) {
