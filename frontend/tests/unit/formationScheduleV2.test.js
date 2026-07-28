@@ -6,6 +6,7 @@ import {
   fillUnassignedTemplate,
   getCalendarMonthDays,
   hasMinimumLeadTime,
+  isValidCalendarDate,
   normalizeSelectedTrainingDates,
   prefillTrainingDates,
   serializeFormationScheduleV2,
@@ -64,6 +65,18 @@ test('requires the preferred weekday count to match the approximate weekly count
     weeks: 4,
     daysPerWeek: 2,
     preferredWeekdays: [2],
+  }), [])
+})
+
+test('rejects impossible calendar dates before attempting a prefill', () => {
+  assert.equal(isValidCalendarDate('2026-09-30'), true)
+  assert.equal(isValidCalendarDate('2026-09-31'), false)
+  assert.deepEqual(prefillTrainingDates({
+    startDate: '2026-09-31',
+    weeks: 20,
+    daysPerWeek: 2,
+    preferredWeekdays: [3, 5],
+    limit: 11,
   }), [])
 })
 

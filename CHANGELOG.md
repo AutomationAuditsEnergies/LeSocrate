@@ -29,6 +29,9 @@ hauteur dynamique du viewport, sans supprimer les défilements internes utiles.
 Le sélecteur mensuel adopte une présentation inspirée de Notion Calendar :
 jours sans cases, semaine active sur un bandeau gris continu, date cochée dans
 un carré sombre et jours hors mois atténués.
+Le préremplissage refuse désormais explicitement les dates inexistantes, comme
+le 31 septembre, et remplace toute suggestion initiale invalide par la première
+date réellement autorisée.
 
 ### fix(ci): alignement de la fixture planning V2
 

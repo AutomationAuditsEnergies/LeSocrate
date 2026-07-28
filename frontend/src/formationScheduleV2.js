@@ -24,6 +24,10 @@ function asUtcDate(value) {
   return date
 }
 
+export function isValidCalendarDate(value) {
+  return Boolean(asUtcDate(value))
+}
+
 function toIsoDate(date) {
   return date.toISOString().slice(0, 10)
 }

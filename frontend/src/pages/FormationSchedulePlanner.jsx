@@ -13,6 +13,7 @@ import {
   addCalendarDays,
   fillUnassignedTemplate,
   getCalendarMonthDays,
+  isValidCalendarDate,
   normalizeSelectedTrainingDates,
   prefillTrainingDates,
   reconcileTemplateAssignments,
@@ -106,7 +107,8 @@ export default function FormationSchedulePlanner({
 }) {
   const today = useMemo(localToday, [])
   const earliestSuggestedDate = reuse ? today : addCalendarDays(today, 3)
-  const safeStartHint = startDateHint && startDateHint >= earliestSuggestedDate
+  const safeStartHint = isValidCalendarDate(startDateHint)
+    && startDateHint >= earliestSuggestedDate
     ? startDateHint
     : earliestSuggestedDate
   const initialDates = useMemo(
@@ -276,6 +278,14 @@ export default function FormationSchedulePlanner({
 
   const applyPrefill = () => {
     const weeklyCount = Number(helperDaysPerWeek)
+    if (!helperStartDate) {
+      setHelperError('Choisissez une date de début.')
+      return
+    }
+    if (!isValidCalendarDate(helperStartDate)) {
+      setHelperError('La date de début n’existe pas. Choisissez une date valide.')
+      return
+    }
     if (preferredWeekdays.length !== weeklyCount) {
       setHelperError(`Choisissez exactement ${weeklyCount} jour${weeklyCount > 1 ? 's' : ''} préféré${weeklyCount > 1 ? 's' : ''}.`)
       return
@@ -368,8 +378,9 @@ export default function FormationSchedulePlanner({
             <span>Date de début</span>
             <input
               type="date"
-              min={today}
+              min={earliestSuggestedDate}
               value={helperStartDate}
+              aria-invalid={Boolean(helperError) && !isValidCalendarDate(helperStartDate)}
               onChange={(event) => {
                 setHelperStartDate(event.target.value)
                 setHelperError('')
