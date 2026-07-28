@@ -601,9 +601,13 @@
 }
 
 .cadrenza-auth--center .auth-field input {
-  height: 56px;
+  height: 64px;
   padding-inline: 18px;
   font-size: 0.94rem;
+}
+
+.cadrenza-auth--center.cadrenza-auth--signup .auth-field input {
+  height: 56px;
 }
 
 .cadrenza-auth--center .auth-submit {
