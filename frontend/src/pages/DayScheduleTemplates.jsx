@@ -779,6 +779,22 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
             <div className="day-schedule-rule-strip" aria-label="Règles de validation">
               {rules.map((rule) => <span key={rule} className="day-schedule-rule">{rule}</span>)}
             </div>
+            <div
+              className="day-schedule-editor-validation"
+              data-valid={validation.valid ? 'true' : 'false'}
+              role={validation.valid ? 'status' : undefined}
+            >
+              {validation.valid
+                ? <Check size={13} aria-hidden="true" />
+                : <Clock3 size={13} aria-hidden="true" />}
+              <strong>{validation.valid ? 'Planning conforme' : 'Planning à compléter'}</strong>
+              {!validation.valid && validation.errors.length > 0 && (
+                <span>
+                  {validation.errors[0]}
+                  {validation.errors.length > 1 ? ` + ${validation.errors.length - 1} critères` : ''}
+                </span>
+              )}
+            </div>
           </div>
         )}
 
@@ -895,21 +911,23 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
               )}
 
               <div className="p-4 sm:p-5">
-                <div className="day-schedule-validation mb-4">
-                  <div className="flex items-center gap-2">
-                    {validation.valid
-                      ? <Check size={15} aria-hidden="true" />
-                      : <Clock3 size={15} aria-hidden="true" />}
-                    <p className="text-xs font-semibold text-[#18181B]">
-                      {validation.valid ? 'Planning conforme' : 'Planning à compléter'}
-                    </p>
+                {mode === 'preview' && (
+                  <div className="day-schedule-validation mb-4">
+                    <div className="flex items-center gap-2">
+                      {validation.valid
+                        ? <Check size={15} aria-hidden="true" />
+                        : <Clock3 size={15} aria-hidden="true" />}
+                      <p className="text-xs font-semibold text-[#18181B]">
+                        {validation.valid ? 'Planning conforme' : 'Planning à compléter'}
+                      </p>
+                    </div>
+                    {!validation.valid && validation.errors.length > 0 && (
+                      <ul className="text-xs leading-5 text-[#52525B]">
+                        {validation.errors.map((message) => <li key={message}>{message}</li>)}
+                      </ul>
+                    )}
                   </div>
-                  {!validation.valid && validation.errors.length > 0 && (
-                    <ul className="text-xs leading-5 text-[#52525B]">
-                      {validation.errors.map((message) => <li key={message}>{message}</li>)}
-                    </ul>
-                  )}
-                </div>
+                )}
 
                 <ScheduleTimeline
                   blocks={visibleTemplate.blocks}

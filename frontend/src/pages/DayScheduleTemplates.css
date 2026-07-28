@@ -450,6 +450,38 @@
   white-space: nowrap;
 }
 
+.day-schedule-editor-validation {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--schedule-border-soft);
+  background: #f8f8f7;
+  color: var(--schedule-muted);
+  padding: 6px 18px;
+  font-size: 9px;
+}
+
+.day-schedule-editor-validation svg {
+  flex: none;
+}
+
+.day-schedule-editor-validation strong {
+  color: var(--schedule-text);
+  font-size: 10px;
+}
+
+.day-schedule-editor-validation span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-schedule-editor-validation[data-valid="true"] {
+  background: #f4f4f2;
+}
+
 .day-schedule-name-input,
 .day-schedule-search,
 .day-schedule-start-control input {
