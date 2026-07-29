@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
+import { SalesHackingSourceSlide } from "../../../../components/slides/templates/SalesHackingSourceSlides";
 import "./AgentCarousel.css";
 
 type ArrowId = "slides" | "training" | "students";
@@ -313,12 +314,13 @@ export const AgentCarousel = () => {
               className="cadrenza-classroom-monitor__camera"
               aria-hidden="true"
             />
-            <span className="cadrenza-classroom-monitor__display">
-              <img
-                src="/cadrenza-chapter-slide-clean.png"
-                alt="Diapo du chapitre 1 sur la communication professionnelle"
-              />
-            </span>
+            <div
+              className="cadrenza-classroom-monitor__display"
+              role="img"
+              aria-label="Diapo Chapitre 1 : L'obstacle invisible. Le brouillard de la distance et les biais de perception."
+            >
+              <SalesHackingSourceSlide sourceId="chapter_opener" />
+            </div>
           </figure>
           <img
             className="cadrenza-pierre-foreground"
