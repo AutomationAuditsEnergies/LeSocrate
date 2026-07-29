@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-07-29
+
+### refactor(pipeline): suppression définitive du runner Claude Code local
+
+Le service `claude_code_mission_service.py` et ses tests exclusivement liés aux
+exports, imports et subprocess locaux sont supprimés. La pipeline ne peut plus
+lancer Claude Code en local et continue d'utiliser son chemin API DeepSeek.
+
+Les responsabilités encore actives ont été isolées avant la suppression :
+l'audit de volume est désormais un service de lecture indépendant, l'état
+transitoire des relances manuelles ne dépend plus du runner historique, et les
+anciens rapports stockés dans `review_queue` restent lisibles pour préserver la
+compatibilité avec les formations déjà générées.
+
 ## 2026-07-27
 
 ### feat(ui): calendrier de recrutement en plein espace

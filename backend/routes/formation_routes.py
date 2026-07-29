@@ -52,6 +52,7 @@ from services.knowledge_base_service import (
 )
 from utils.logger import get_logger
 from services.admin_access_service import can_access_formation_pipeline
+from services.formation_runtime_state import PIPELINE_EXECUTION_STATE
 
 logger = get_logger(__name__)
 
@@ -1396,7 +1397,7 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
     import json as _json
     import os
     from datetime import datetime
-    from services.claude_code_mission_service import mission_dir
+    from services.formation_review_artifact_service import review_artifact_dir
     from repositories.pipeline_repository import get_text_folder_state
 
     folder = get_text_folder_state(folder_id)
@@ -1489,7 +1490,7 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
 
     suffix = "review_api" if review_kind == "compliance" else f"review_{review_kind}_api"
     chunk_id = f"day_{int(position or 0) + 1}_{suffix}"
-    chunk_dir = os.path.join(mission_dir(job_id, "review"), chunk_id)
+    chunk_dir = os.path.join(review_artifact_dir(job_id, "review"), chunk_id)
     try:
         os.makedirs(chunk_dir, exist_ok=True)
         with open(os.path.join(chunk_dir, "review_report.json"), "w", encoding="utf-8") as f:
@@ -1503,11 +1504,11 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
 
 
 def _review_chunk_ids_for_position(position: int) -> list[str]:
-    from services.claude_code_mission_service import _REVIEW_RULE_GROUPS
+    from services.content_generation_service import _COMPLIANCE_REVIEW_RULE_GROUPS
 
     day = int(position or 0) + 1
     return (
-        [f"day_{day}_review_{g['id']}" for g in _REVIEW_RULE_GROUPS]
+        [f"day_{day}_review_{g['id']}" for g in _COMPLIANCE_REVIEW_RULE_GROUPS]
         + [
             f"day_{day}_review_api",
             f"day_{day}_review_local_compliance_api",
@@ -1532,14 +1533,14 @@ def _delete_active_review_artifacts(job_id: int, position: int) -> int:
     """
     import os
     import shutil
-    from services.claude_code_mission_service import mission_dir
+    from services.formation_review_artifact_service import review_artifact_dir
 
     deleted = 0
     for step_key, chunk_ids in (
         ("review", _review_chunk_ids_for_position(position)),
         ("humanization_review", _humanization_chunk_ids_for_position(position)),
     ):
-        base_dir = mission_dir(job_id, step_key)
+        base_dir = review_artifact_dir(job_id, step_key)
         for chunk_id in chunk_ids:
             path = os.path.join(base_dir, chunk_id)
             if os.path.isdir(path):
@@ -1616,8 +1617,8 @@ def _db_review_report_is_complete(report: dict | None) -> bool:
 )
 def get_review_report(job_id, folder_id):
     """Retourne le rapport JSON détaillé de la révision conformité pour 1
-    journée. Lit `review_queue/job_X/step_review/day_N_review/review_report.json`
-    (chunked) ou son équivalent archivé dans `_done/`.
+    journée. La DB est prioritaire; les anciens artefacts
+    `review_queue/job_X/step_review/` restent lisibles comme compatibilité.
 
     Format de retour :
     {
@@ -1635,8 +1636,10 @@ def get_review_report(job_id, folder_id):
 
     import os
     import json as _json
-    from services.claude_code_mission_service import (
-        mission_dir, _DONE_ROOT, _REVIEW_QUEUE_ROOT,
+    from services.formation_review_artifact_service import (
+        DONE_ARTIFACT_ROOT,
+        extract_json,
+        review_artifact_dir,
     )
 
     # Trouver la position du folder pour reconstruire le chunk_id (day_N_review)
@@ -1665,13 +1668,18 @@ def get_review_report(job_id, folder_id):
             f"folder={folder_id} : {e}"
         )
 
-    # Multi-agents : 1 chunk_dir par groupe de règles. On cherche le rapport
-    # courant, mais après une relance aval on ignore tout rapport plus ancien.
+    # Les anciens rapports pouvaient être découpés par groupe de règles. On
+    # cherche le rapport courant, mais après une relance aval on ignore tout
+    # rapport plus ancien.
     chunk_id_candidates = _review_chunk_ids_for_position(position)
 
-    if os.path.isdir(_DONE_ROOT):
+    if os.path.isdir(DONE_ARTIFACT_ROOT):
         archived = sorted(
-            (d for d in os.listdir(_DONE_ROOT) if d.endswith(f"-job{job_id}-review")),
+            (
+                directory
+                for directory in os.listdir(DONE_ARTIFACT_ROOT)
+                if directory.endswith(f"-job{job_id}-review")
+            ),
             reverse=True,
         )
     else:
@@ -1680,9 +1688,22 @@ def get_review_report(job_id, folder_id):
     # Collecte tous les review_report.json existants (multi-chunks)
     sub_reports = []
     for cid in chunk_id_candidates:
-        paths = [os.path.join(mission_dir(job_id, "review"), cid, "review_report.json")]
+        paths = [
+            os.path.join(
+                review_artifact_dir(job_id, "review"),
+                cid,
+                "review_report.json",
+            )
+        ]
         for arch in archived:
-            paths.append(os.path.join(_DONE_ROOT, arch, cid, "review_report.json"))
+            paths.append(
+                os.path.join(
+                    DONE_ARTIFACT_ROOT,
+                    arch,
+                    cid,
+                    "review_report.json",
+                )
+            )
         for p in paths:
             if os.path.exists(p):
                 try:
@@ -1779,11 +1800,15 @@ def get_review_report(job_id, folder_id):
     output_md_paths = []
     for cid in chunk_id_candidates:
         output_md_paths.append(
-            os.path.join(mission_dir(job_id, "review"), cid, "output.md")
+            os.path.join(
+                review_artifact_dir(job_id, "review"),
+                cid,
+                "output.md",
+            )
         )
         for arch in archived:
             output_md_paths.append(
-                os.path.join(_DONE_ROOT, arch, cid, "output.md")
+                os.path.join(DONE_ARTIFACT_ROOT, arch, cid, "output.md")
             )
 
     chunk_dir_with_output = None
@@ -1812,8 +1837,7 @@ def get_review_report(job_id, folder_id):
     try:
         with open(os.path.join(chunk_dir_with_output, "output.md"), "r", encoding="utf-8") as f:
             output_text = f.read()
-        from services.claude_code_mission_service import _extract_json
-        parsed = _json.loads(_extract_json(output_text))
+        parsed = _json.loads(extract_json(output_text))
         reviews = parsed.get("reviews", [])
     except Exception as e:
         return jsonify({"error": f"output.md illisible : {e}"}), 500
@@ -1989,7 +2013,7 @@ def volume_audit(job_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    from services.claude_code_mission_service import compute_volume_audit
+    from services.formation_volume_audit_service import compute_volume_audit
     try:
         audit = compute_volume_audit(job_id)
         return jsonify(audit), 200
@@ -2036,8 +2060,9 @@ def volume_safety_status(job_id, folder_id):
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
 
-    from services.claude_code_mission_service import _EXECUTION_STATE
-    state = _EXECUTION_STATE.get((job_id, f"volume_safety_{folder_id}"))
+    state = PIPELINE_EXECUTION_STATE.get(
+        (job_id, f"volume_safety_{folder_id}")
+    )
     if not state:
         return jsonify({"status": "idle"}), 200
     return jsonify(state), 200
@@ -2102,8 +2127,8 @@ def resume_content(job_id):
 
 
 # ─── Étape 6bis : Révision conformité via reviewer API DeepSeek ──────────────
-# Phase 1 de memoire/03-decisions/pipeline-dual-api-et-claude-code.md
-# Scope strict : API uniquement, pas de refonte UI double colonne ici.
+# Le runner CLI local historique a été supprimé : cette route utilise
+# exclusivement le reviewer API de la pipeline courante.
 
 @formation_bp.route(
     "/api/formation/<int:job_id>/content/<int:folder_id>/review",
@@ -3754,15 +3779,14 @@ def continue_after_text(job_id, folder_id):
             (folder_resolution or {}).get("reason"),
         )
 
-    from services.claude_code_mission_service import _EXECUTION_STATE
     state_key = (job_id, f"continue_after_text_{folder_id}")
-    prev_state = _EXECUTION_STATE.get(state_key, {})
+    prev_state = PIPELINE_EXECUTION_STATE.get(state_key, {})
     if prev_state.get("status") == "running":
         # Stale lock : si l'état mémoire dit "running" mais que rien ne tourne
         # vraiment (typique après un crash + redémarrage gunicorn), on libère.
         # Heuristique : on accepte de re-prendre la main si pas de heartbeat
-        # récent (le greenlet aurait mis à jour _EXECUTION_STATE en cas de
-        # vraie activité). En l'absence de timestamp dans _EXECUTION_STATE,
+        # récent (le greenlet aurait mis à jour PIPELINE_EXECUTION_STATE en cas
+        # de vraie activité). En l'absence de timestamp dans cet état mémoire,
         # on log et on libère systématiquement — l'utilisateur a explicitement
         # demandé une nouvelle relance, c'est un signal fort.
         logger.warning(
@@ -3770,7 +3794,7 @@ def continue_after_text(job_id, folder_id):
             "prev_state=%s — l'utilisateur force une nouvelle relance",
             job_id, folder_id, {k: prev_state.get(k) for k in ("status", "model", "error")},
         )
-        _EXECUTION_STATE.pop(state_key, None)
+        PIPELINE_EXECUTION_STATE.pop(state_key, None)
 
     update_job(
         job_id,
@@ -3815,7 +3839,11 @@ def continue_after_text(job_id, folder_id):
             "details": str(e)[:500],
         }), 500
 
-    _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "folder_id": folder_id}
+    PIPELINE_EXECUTION_STATE[state_key] = {
+        "status": "running",
+        "model": str(model),
+        "folder_id": folder_id,
+    }
     logger.info(
         "PIPELINE_RESUME_SPAWN formation_job_id=%s folder_id=%s from_step=%s model=%s fast_tts_pipeline=%s",
         job_id, folder_id, from_step, model, fast_tts_pipeline,
@@ -4172,7 +4200,7 @@ def continue_after_text(job_id, folder_id):
                         "slides": (slide_result or {}).get("stats") or {},
                     },
                 )
-                _EXECUTION_STATE[state_key] = {
+                PIPELINE_EXECUTION_STATE[state_key] = {
                     "status": "done",
                     "model": str(model),
                     "folder_id": folder_id,
@@ -4246,7 +4274,7 @@ def continue_after_text(job_id, folder_id):
                     "fast_tts_pipeline": fast_tts_pipeline,
                 },
             )
-            _EXECUTION_STATE[state_key] = {
+            PIPELINE_EXECUTION_STATE[state_key] = {
                 "status": "done",
                 "model": str(model),
                 "folder_id": folder_id,
@@ -4284,7 +4312,7 @@ def continue_after_text(job_id, folder_id):
                 )
             except Exception:
                 pass
-            _EXECUTION_STATE[state_key] = {
+            PIPELINE_EXECUTION_STATE[state_key] = {
                 "status": "error",
                 "model": str(model),
                 "folder_id": folder_id,
@@ -5786,7 +5814,7 @@ def formation_pipeline_diagnostic(job_id):
         }
 
     try:
-        from services.claude_code_mission_service import compute_volume_audit
+        from services.formation_volume_audit_service import compute_volume_audit
         volume_audit = compute_volume_audit(job_id)
     except Exception as e:
         logger.warning(f"⚠️ Diagnostic volume job {job_id} : {e}")

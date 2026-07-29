@@ -8,7 +8,6 @@ from unittest.mock import Mock, patch
 from flask import Flask
 
 from routes.hr_routes import create_hr_blueprint
-from services import claude_code_mission_service as ccms
 from services import content_generation_service as cgs
 
 
@@ -312,62 +311,6 @@ class DynamicCourseProgressAndContextTest(unittest.TestCase):
             any("Sous-partie 5/5" in message for message in messages),
             messages,
         )
-
-
-class LocalMissionDynamicCountTest(unittest.TestCase):
-    def test_content_mission_describes_each_day_dynamic_count(self):
-        job = {
-            "tp_name": "TP Test",
-            "nb_days": 2,
-            "daily_programs": json.dumps([
-                {"sub_parts": [{"name": str(index)} for index in range(5)]},
-                {"sub_parts": [{"name": str(index)} for index in range(8)]},
-            ]),
-        }
-        with tempfile.TemporaryDirectory() as tmp, patch.object(
-            ccms,
-            "_content_segment_word_budget",
-            return_value={"target_words": 1200},
-        ), patch.object(
-            ccms,
-            "_load_rules_text",
-            return_value="règles",
-        ):
-            ccms._build_content_mission(tmp, job, "model-test")
-            prompt = Path(tmp, "task.md").read_text(encoding="utf-8")
-
-        self.assertIn("respectivement 5, 8 cours", prompt)
-        self.assertIn("3 segments par cours", prompt)
-        self.assertNotIn("21 segments par journée", prompt)
-
-    def test_daily_mission_uses_v2_counts_instead_of_seven(self):
-        schedule_days = [
-            {
-                "blocks": [
-                    {"block_type": "course"}
-                    for _ in range(course_count)
-                ],
-            }
-            for course_count in (4, 6)
-        ]
-        job = {
-            "tp_name": "TP Test",
-            "nb_days": 2,
-            "global_program": "Programme",
-        }
-        with tempfile.TemporaryDirectory() as tmp, patch(
-            "services.formation_pipeline_service._v2_schedule_days",
-            return_value=schedule_days,
-        ), patch(
-            "services.formation_pipeline_service._course_audio_slots_prompt",
-            return_value="manifeste dynamique",
-        ):
-            ccms._build_daily_mission(tmp, job, "model-test")
-            prompt = Path(tmp, "task.md").read_text(encoding="utf-8")
-
-        self.assertIn("journée 1 = 4 cours", prompt)
-        self.assertIn("journée 2 = 6 cours", prompt)
-        self.assertNotIn("exactement 7 cours", prompt)
 
 
 if __name__ == "__main__":
