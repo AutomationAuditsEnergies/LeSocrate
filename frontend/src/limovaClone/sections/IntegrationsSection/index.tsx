@@ -41,25 +41,40 @@ export const IntegrationsSection = () => {
     <section id="pilotage" className="cadrenza-savings">
       <div className="cadrenza-savings__inner">
         <header className="cadrenza-savings__header">
-          <span>Votre budget formation</span>
-          <h2>Formez davantage, sans multiplier les coûts.</h2>
+          <div>
+            <span>Simulateur de budget</span>
+            <h2>Estimez le coût de votre parcours.</h2>
+          </div>
           <p>
-            Comparez directement votre budget formateur avec celui d’un
-            professeur IA Cadrenza.
+            Ajustez le rythme et la durée de la formation. L’estimation compare
+            immédiatement un formateur freelance avec Pierre, professeur IA
+            Cadrenza.
           </p>
         </header>
 
         <div className="cadrenza-savings__comparison">
           <div className="cadrenza-savings__calculator">
-            <label className="cadrenza-savings__range cadrenza-savings__range--frequency">
+            <div className="cadrenza-savings__panel-heading">
+              <strong>Paramètres du parcours</strong>
+              <span>{result.totalTrainingDays} jours au total</span>
+            </div>
+
+            <label
+              className="cadrenza-savings__range cadrenza-savings__range--frequency"
+              htmlFor="weekly-training-days"
+            >
               <span className="cadrenza-savings__range-heading">
                 <span>
                   <strong>Journées de formation</strong>
                   <small>Rythme hebdomadaire</small>
                 </span>
-                <strong>{weeklyTrainingDays} / semaine</strong>
+                <output htmlFor="weekly-training-days">
+                  {weeklyTrainingDays} jour{weeklyTrainingDays > 1 ? "s" : ""}
+                  <small> / semaine</small>
+                </output>
               </span>
               <input
+                id="weekly-training-days"
                 type="range"
                 min="1"
                 max="5"
@@ -71,19 +86,27 @@ export const IntegrationsSection = () => {
                   setWeeklyTrainingDays(event.currentTarget.valueAsNumber)
                 }
               />
+              <span className="cadrenza-savings__range-limits" aria-hidden="true">
+                <span>1 jour</span>
+                <span>5 jours</span>
+              </span>
             </label>
 
-            <label className="cadrenza-savings__range cadrenza-savings__range--duration">
+            <label
+              className="cadrenza-savings__range cadrenza-savings__range--duration"
+              htmlFor="training-weeks"
+            >
               <span className="cadrenza-savings__range-heading">
                 <span>
                   <strong>Durée du parcours</strong>
-                  <small>De 1 à 52 semaines</small>
+                  <small>Calendrier prévisionnel</small>
                 </span>
-                <strong>
+                <output htmlFor="training-weeks">
                   {trainingWeeks} semaine{trainingWeeks > 1 ? "s" : ""}
-                </strong>
+                </output>
               </span>
               <input
+                id="training-weeks"
                 type="range"
                 min="1"
                 max="52"
@@ -95,45 +118,62 @@ export const IntegrationsSection = () => {
                   setTrainingWeeks(event.currentTarget.valueAsNumber)
                 }
               />
+              <span className="cadrenza-savings__range-limits" aria-hidden="true">
+                <span>1 semaine</span>
+                <span>52 semaines</span>
+              </span>
             </label>
+          </div>
 
-            <div
-              className="cadrenza-savings__budgets"
-              aria-label="Budgets estimés pour la formation"
-            >
-              <span>
-                <small>Formateur freelance</small>
-                <strong>{formatEuros(result.freelanceCost)}</strong>
-              </span>
-              <span>
-                <small>Professeur IA Pierre</small>
-                <strong>{formatEuros(result.cadrenzaCost)}</strong>
-              </span>
+          <div className="cadrenza-savings__estimate" aria-live="polite">
+            <div className="cadrenza-savings__panel-heading">
+              <strong>Estimation hors taxes</strong>
+              <span>{result.totalTrainingDays} jours de formation</span>
             </div>
 
-            <div className="cadrenza-savings__result" aria-live="polite">
+            <dl className="cadrenza-savings__budgets">
+              <div>
+                <dt>
+                  <strong>Formateur freelance</strong>
+                  <small>{formatEuros(FREELANCE_DAY_RATE)} par jour</small>
+                </dt>
+                <dd>{formatEuros(result.freelanceCost)}</dd>
+              </div>
+              <div className="cadrenza-savings__budget--cadrenza">
+                <dt>
+                  <strong>Pierre, professeur IA</strong>
+                  <small>{formatEuros(CADRENZA_DAY_PRICE)} par jour</small>
+                </dt>
+                <dd>{formatEuros(result.cadrenzaCost)}</dd>
+              </div>
+            </dl>
+
+            <div className="cadrenza-savings__result">
               <span>
-                <small>Économie estimée sur toute la formation</small>
+                <small>Budget économisé</small>
                 <strong>{formatEuros(result.savings)}</strong>
               </span>
-              <span className="cadrenza-savings__percentage">
-                {result.rate}% de budget en moins
-              </span>
+              <p>
+                Votre estimation est inférieure de <strong>{result.rate}%</strong>{" "}
+                au budget freelance.
+              </p>
             </div>
+
+            <a
+              className="cadrenza-savings__cta"
+              href="/connexion-centre?mode=signup"
+            >
+              Créer un espace centre
+              <span aria-hidden="true">→</span>
+            </a>
           </div>
         </div>
 
-        <div className="cadrenza-savings__footer">
-          <p>
-            Simulation HT basée sur {formatEuros(CADRENZA_DAY_PRICE)} par
-            journée Cadrenza et {formatEuros(FREELANCE_DAY_RATE)} par journée
-            freelance.
-          </p>
-          <a href="/connexion-centre?mode=signup">
-            Créer un espace
-            <span aria-hidden="true">→</span>
-          </a>
-        </div>
+        <p className="cadrenza-savings__note">
+          Estimation indicative, calculée sur une base de{" "}
+          {formatEuros(CADRENZA_DAY_PRICE)} par journée Cadrenza et{" "}
+          {formatEuros(FREELANCE_DAY_RATE)} par journée freelance.
+        </p>
       </div>
     </section>
   );
