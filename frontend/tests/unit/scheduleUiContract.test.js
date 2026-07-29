@@ -82,8 +82,13 @@ test('locks the template editor page and scrolls only the calendar', async () =>
 
   assert.match(templateSource, /day-schedule-page--editor/)
   assert.match(templateSource, /day-schedule-calendar-scroll/)
+  assert.match(templateSource, /const CALENDAR_START_MINUTE = 0/)
+  assert.match(templateSource, /const CALENDAR_END_MINUTE = 24 \* 60/)
+  assert.match(templateSource, /const CALENDAR_INITIAL_MINUTE = 8 \* 60/)
+  assert.match(templateSource, /ref=\{calendarScrollRef\}/)
   assert.match(templateStyles, /\.day-schedule-page--editor\s*\{[\s\S]*?overflow: hidden/)
   assert.match(templateStyles, /\.day-schedule-page--editor \.day-schedule-calendar-scroll\s*\{[\s\S]*?overflow-y: auto/)
+  assert.match(templateStyles, /box-shadow: inset 0 0 0 1px #292824/)
   assert.match(dashboardSource, /scheduleTemplatesVisible \? 'overflow-hidden'/)
 })
 

@@ -43,9 +43,11 @@ import './DayScheduleTemplates.css'
 const BUTTON_BASE = 'day-schedule-focusable inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40'
 const BUTTON_PRIMARY = `${BUTTON_BASE} bg-[#18181B] text-white hover:bg-black`
 const BUTTON_SECONDARY = `${BUTTON_BASE} border border-[#D4D4D8] bg-white text-[#3F3F46] hover:bg-[#F4F4F5]`
-const CALENDAR_START_MINUTE = 8 * 60
-const CALENDAR_MIN_END_MINUTE = 18 * 60
+const CALENDAR_START_MINUTE = 0
+const CALENDAR_END_MINUTE = 24 * 60
+const CALENDAR_INITIAL_MINUTE = 8 * 60
 const CALENDAR_PIXELS_PER_MINUTE = 1.05
+const CALENDAR_EDGE_PADDING = 24
 
 function TemplateState({ template }) {
   const used = isScheduleTemplateUsed(template)
@@ -106,8 +108,17 @@ function ScheduleTimeline({
   canAddSequence,
 }) {
   const adjustmentRef = useRef(null)
+  const calendarScrollRef = useRef(null)
   const [activeResizeIndex, setActiveResizeIndex] = useState(null)
   const [dropActive, setDropActive] = useState(false)
+
+  useEffect(() => {
+    const scrollContainer = calendarScrollRef.current
+    if (!scrollContainer) return
+    scrollContainer.scrollTop = (
+      (CALENDAR_INITIAL_MINUTE - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE
+    )
+  }, [])
 
   useEffect(() => () => {
     const adjustment = adjustmentRef.current
@@ -159,13 +170,10 @@ function ScheduleTimeline({
 
   const counters = { course: 0, qa: 0 }
   const firstBlock = blocks[0]
-  const lastBlock = blocks.at(-1)
-  const calendarEndMinute = Math.min(
-    24 * 60,
-    Math.max(CALENDAR_MIN_END_MINUTE, (lastBlock?.end_minute || CALENDAR_MIN_END_MINUTE) + 60),
-  )
-  const calendarMinutes = calendarEndMinute - CALENDAR_START_MINUTE
-  const calendarHeight = calendarMinutes * CALENDAR_PIXELS_PER_MINUTE
+  const calendarMinutes = CALENDAR_END_MINUTE - CALENDAR_START_MINUTE
+  const calendarHeight = (
+    calendarMinutes * CALENDAR_PIXELS_PER_MINUTE
+  ) + (CALENDAR_EDGE_PADDING * 2)
   const hourMarkers = Array.from(
     { length: Math.floor(calendarMinutes / 60) + 1 },
     (_, index) => CALENDAR_START_MINUTE + (index * 60),
@@ -222,11 +230,17 @@ function ScheduleTimeline({
         )}
       </div>
 
-      <div className="day-schedule-calendar-scroll">
+      <div ref={calendarScrollRef} className="day-schedule-calendar-scroll">
         <div
           className="day-schedule-calendar"
           aria-label="Déroulé de la journée"
-          style={{ '--day-schedule-calendar-height': `${calendarHeight}px` }}
+          style={{
+            '--day-schedule-calendar-height': `${calendarHeight}px`,
+            '--day-schedule-edge-padding': `${CALENDAR_EDGE_PADDING}px`,
+            '--day-schedule-empty-top': `${
+              CALENDAR_EDGE_PADDING + ((10 * 60 - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE)
+            }px`,
+          }}
         >
           <div className="day-schedule-calendar-hours" aria-hidden="true">
             {hourMarkers.map((minute) => (
@@ -234,7 +248,10 @@ function ScheduleTimeline({
                 key={minute}
                 className="day-schedule-calendar-hour"
                 style={{
-                  '--day-schedule-hour-top': `${(minute - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE}px`,
+                  '--day-schedule-hour-top': `${
+                    CALENDAR_EDGE_PADDING
+                    + ((minute - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE)
+                  }px`,
                 }}
               >
                 <time>{formatScheduleMinute(minute)}</time>
@@ -262,7 +279,10 @@ function ScheduleTimeline({
             const bounds = durationBounds(block)
             const errors = blockErrors[block.block_key] || []
             const blockHeight = Math.max(12, block.duration_minutes * CALENDAR_PIXELS_PER_MINUTE)
-            const blockTop = (block.start_minute - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE
+            const blockTop = (
+              CALENDAR_EDGE_PADDING
+              + ((block.start_minute - CALENDAR_START_MINUTE) * CALENDAR_PIXELS_PER_MINUTE)
+            )
             const sequenceNumber = counters.course
             const isCourse = block.block_type === 'course'
             const canSelectAsLunch = (

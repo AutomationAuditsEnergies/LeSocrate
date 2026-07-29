@@ -368,9 +368,9 @@
 .day-schedule-name-input:focus-visible,
 .day-schedule-search:focus-visible,
 .day-schedule-start-control input:focus-visible {
-  border-color: #77756e;
-  outline: 2px solid #292824;
-  outline-offset: 1px;
+  border-color: #292824;
+  outline: none;
+  box-shadow: inset 0 0 0 1px #292824;
 }
 
 .day-schedule-timeline-shell {
@@ -669,7 +669,7 @@
 .day-schedule-empty-timeline {
   position: absolute;
   z-index: 2;
-  top: 110px;
+  top: var(--day-schedule-empty-top);
   right: 24px;
   left: 78px;
   display: flex;
