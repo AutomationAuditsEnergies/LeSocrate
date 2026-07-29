@@ -9,6 +9,7 @@ import {
   GripHorizontal,
   LockKeyhole,
   MessageCircleQuestion,
+  Minus,
   PencilLine,
   Plus,
   Save,
@@ -27,6 +28,7 @@ import {
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
+  removeLastScheduleSequence,
   setSchedulePauseKind,
   updateScheduleBlockDuration,
   updateScheduleBlockStart,
@@ -175,7 +177,7 @@ function ScheduleTimeline({
     calendarMinutes * CALENDAR_PIXELS_PER_MINUTE
   ) + (CALENDAR_EDGE_PADDING * 2)
   const hourMarkers = Array.from(
-    { length: Math.floor(calendarMinutes / 60) + 1 },
+    { length: Math.ceil(calendarMinutes / 60) },
     (_, index) => CALENDAR_START_MINUTE + (index * 60),
   )
 
@@ -288,7 +290,6 @@ function ScheduleTimeline({
             const canSelectAsLunch = (
               !readOnly
               && block.block_type === 'pause'
-              && index < blocks.length - 1
             )
             const toggleLunch = () => {
               if (!canSelectAsLunch) return
@@ -386,9 +387,11 @@ function ScheduleTimeline({
 function SequencePalette({
   blocks,
   onAdd,
+  onRemove,
 }) {
   const courseCount = blocks.filter((block) => block.block_type === 'course').length
   const atMaximum = courseCount >= DAY_SCHEDULE_RULES.maxCourses
+  const isEmpty = courseCount === 0
   return (
     <aside className="day-schedule-palette" aria-label="Séquence à planifier">
       <div className="day-schedule-palette-title">
@@ -399,21 +402,31 @@ function SequencePalette({
         <span>{courseCount}/{DAY_SCHEDULE_RULES.maxCourses}</span>
       </div>
 
-      <button
-        type="button"
-        className="day-schedule-add-task day-schedule-sequence-source"
-        draggable={!atMaximum}
-        disabled={atMaximum}
-        onDragStart={(event) => {
-          event.dataTransfer.effectAllowed = 'copy'
-          event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
-        }}
-        onClick={onAdd}
-      >
-        <Plus size={18} aria-hidden="true" />
-        <span>Séquence pédagogique</span>
-        <small>1 h 30</small>
-      </button>
+      <div className="day-schedule-palette-actions">
+        <button
+          type="button"
+          className="day-schedule-add-task day-schedule-sequence-source"
+          draggable={!atMaximum}
+          disabled={atMaximum}
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = 'copy'
+            event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
+          }}
+          onClick={onAdd}
+        >
+          <Plus size={18} aria-hidden="true" />
+          <span>Séquence pédagogique</span>
+        </button>
+        <button
+          type="button"
+          className="day-schedule-remove-task day-schedule-focusable"
+          disabled={isEmpty}
+          onClick={onRemove}
+        >
+          <Minus size={16} aria-hidden="true" />
+          <span>Retirer la dernière séquence</span>
+        </button>
+      </div>
     </aside>
   )
 }
@@ -779,6 +792,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
           <SequencePalette
             blocks={visibleTemplate.blocks}
             onAdd={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
+            onRemove={() => updateDraftBlocks(removeLastScheduleSequence(draft.blocks))}
           />
         )}
 
