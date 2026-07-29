@@ -287,7 +287,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
                     setNotice('')
                   }}
                 >
-                  {label}
+                  <span>{label}</span>
                 </button>
               ))}
             </div>

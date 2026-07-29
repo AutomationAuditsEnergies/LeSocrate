@@ -204,14 +204,15 @@
   right: clamp(32px, 4vw, 64px);
   z-index: 2;
   display: grid;
-  width: 252px;
-  grid-template-columns: 104px 148px;
+  width: 286px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
+  gap: 12px;
 }
 
 .auth-mode-switch button {
   min-height: 40px;
-  padding: 0;
+  padding: 0 4px;
   border: 0;
   background: transparent;
   color: var(--auth-muted);
@@ -221,15 +222,24 @@
   text-align: center;
 }
 
+.auth-mode-switch button > span {
+  position: relative;
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+}
+
 .auth-mode-switch button[aria-pressed="true"] {
   color: var(--auth-ink);
 }
 
-.auth-mode-switch button[aria-pressed="true"]::after {
-  display: block;
-  width: 100%;
+.auth-mode-switch button[aria-pressed="true"] > span::after {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  left: 0;
   height: 2px;
-  margin-top: -5px;
   border-radius: 2px;
   background: var(--auth-ink);
   content: "";
@@ -550,7 +560,8 @@
   }
 
   .auth-mode-switch {
-    gap: 14px;
+    width: min(286px, calc(100vw - 40px));
+    gap: 8px;
   }
 
   .auth-mode-switch button {
