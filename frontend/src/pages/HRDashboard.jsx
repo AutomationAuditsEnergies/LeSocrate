@@ -2000,6 +2000,7 @@ function CenterWorkspaceSidebar({
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [accountPanel, setAccountPanel] = useState('menu')
+  const accountDetailsRef = useRef(null)
   const accountEmail = localStorage.getItem('center_account_email') || 'Compte centre'
   const accountName = localStorage.getItem('center_account_name') || 'Centre de formation'
   const isSignedIn = Boolean(
@@ -2023,6 +2024,33 @@ function CenterWorkspaceSidebar({
   useEffect(() => {
     if (collapseOnCreate) setCollapsed(true)
   }, [collapseOnCreate])
+
+  useEffect(() => {
+    const closeAccountMenu = (event) => {
+      const details = accountDetailsRef.current
+      if (!details?.open) return
+
+      if (event.type === 'keydown') {
+        if (event.key !== 'Escape') return
+        details.open = false
+        setAccountPanel('menu')
+        details.querySelector('summary')?.focus()
+        return
+      }
+
+      if (!details.contains(event.target)) {
+        details.open = false
+        setAccountPanel('menu')
+      }
+    }
+
+    document.addEventListener('pointerdown', closeAccountMenu)
+    document.addEventListener('keydown', closeAccountMenu)
+    return () => {
+      document.removeEventListener('pointerdown', closeAccountMenu)
+      document.removeEventListener('keydown', closeAccountMenu)
+    }
+  }, [])
 
   return (
     <aside
@@ -2074,7 +2102,11 @@ function CenterWorkspaceSidebar({
       </nav>
 
       <div className={`mt-auto ${collapsed ? 'p-2' : 'p-2'}`}>
-        <details className="group relative" onToggle={(event) => { if (!event.currentTarget.open) setAccountPanel('menu') }}>
+        <details
+          ref={accountDetailsRef}
+          className="group relative"
+          onToggle={(event) => { if (!event.currentTarget.open) setAccountPanel('menu') }}
+        >
           <summary className={`flex min-h-11 cursor-pointer list-none items-center rounded-md py-1.5 transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 ${collapsed ? 'justify-center px-1' : 'gap-2.5 px-2'}`}>
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#191918] text-[11px] font-semibold text-white">
               {initials}

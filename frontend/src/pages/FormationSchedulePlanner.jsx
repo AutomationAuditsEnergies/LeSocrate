@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   WandSparkles,
@@ -389,6 +390,11 @@ export default function FormationSchedulePlanner({
             <WandSparkles size={16} aria-hidden="true" />
             Préremplir rapidement
           </span>
+          <ChevronDown
+            className="formation-schedule__helper-chevron"
+            size={16}
+            aria-hidden="true"
+          />
         </summary>
         <div className="formation-schedule__helper-content" aria-label="Préremplissage du calendrier">
           <p className="formation-schedule__helper-intro">
