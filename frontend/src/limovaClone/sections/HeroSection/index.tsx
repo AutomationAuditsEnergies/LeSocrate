@@ -39,7 +39,18 @@ export const HeroSection = () => {
                 className="box-border caret-transparent text-[32.6923px] font-semibold tracking-[-1.14423px] leading-[35.9615px] outline-[3px] text-center no-underline font-instrumentsans md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]"
               >
                 <span className="box-border caret-transparent text-[32.6923px] tracking-[-1.14423px] leading-[35.9615px] outline-[3px] no-underline md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]">
-                  Des professeurs IA
+                  Des{" "}
+                  <span className="cadrenza-hero-highlight">
+                    professeurs IA
+                    <svg
+                      className="cadrenza-hero-highlight__underline"
+                      viewBox="0 0 100 14"
+                      preserveAspectRatio="none"
+                      aria-hidden="true"
+                    >
+                      <path d="M2 10 C18 5 35 9 51 6 C68 3 82 9 98 5" />
+                    </svg>
+                  </span>
                 </span>
                 {" "}
                 <span className="cadrenza-hero-teacher-portrait" aria-hidden="true">
