@@ -317,9 +317,9 @@ export const AgentCarousel = () => {
             <div
               className="cadrenza-classroom-monitor__display"
               role="img"
-              aria-label="Diapo Chapitre 1 : L'obstacle invisible. Le brouillard de la distance et les biais de perception."
+              aria-label="Diapo Traiter une demande : identifier, qualifier, agir et clore."
             >
-              <SalesHackingSourceSlide sourceId="chapter_opener" />
+              <SalesHackingSourceSlide sourceId="flow" />
             </div>
           </figure>
           <img
