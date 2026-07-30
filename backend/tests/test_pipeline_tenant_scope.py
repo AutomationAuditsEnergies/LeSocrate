@@ -154,7 +154,7 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             "repositories.pipeline_repository.create_pipeline_platform",
         ) as create_platform, patch(
             "repositories.pipeline_repository.create_postgres_pipeline_aggregate",
-        ) as create_aggregate, patch("routes.formation_routes.create_job") as create_job:
+        ) as create_aggregate:
             response = self.client.post(
                 "/api/formation/init",
                 json={
@@ -168,7 +168,6 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         create_platform.assert_not_called()
         create_aggregate.assert_not_called()
-        create_job.assert_not_called()
 
     def test_admin_session_without_explicit_account_type_is_fail_closed(self):
         with self.client.session_transaction() as session:

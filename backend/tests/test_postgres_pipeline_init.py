@@ -30,9 +30,7 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
             "repositories.pipeline_repository.create_postgres_pipeline_aggregate",
         ) as create_aggregate, patch(
             "repositories.pipeline_repository.create_pipeline_platform",
-        ) as create_platform, patch(
-            "routes.formation_routes.create_job",
-        ) as create_job:
+        ) as create_platform:
             response = self.client.post(
                 "/api/formation/init",
                 json={
@@ -47,23 +45,19 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "teacher_order_required")
         create_aggregate.assert_not_called()
         create_platform.assert_not_called()
-        create_job.assert_not_called()
 
     def test_manual_test_init_is_also_retired_before_any_database_write(self):
         with patch(
             "repositories.pipeline_repository.create_postgres_pipeline_aggregate",
         ) as create_aggregate, patch(
             "repositories.pipeline_repository.create_pipeline_platform",
-        ) as create_platform, patch(
-            "routes.formation_routes.create_job",
-        ) as create_job:
+        ) as create_platform:
             response = self.client.post("/api/formation/init-test")
 
         self.assertEqual(response.status_code, 410)
         self.assertEqual(response.get_json()["code"], "teacher_order_required")
         create_aggregate.assert_not_called()
         create_platform.assert_not_called()
-        create_job.assert_not_called()
 
     def test_training_center_without_permission_cannot_reach_retired_init(self):
         with patch(

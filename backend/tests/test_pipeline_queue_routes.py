@@ -189,8 +189,6 @@ class PipelineQueueRouteTest(unittest.TestCase):
         ) as get_job, patch(
             "routes.formation_routes.update_job",
         ) as update_job, patch(
-            "routes.formation_routes.create_job",
-        ) as create_job, patch(
             "repositories.pipeline_repository.create_postgres_pipeline_aggregate",
         ) as create_aggregate:
             responses = [self.client.post(path, json={}) for path in paths]
@@ -208,7 +206,6 @@ class PipelineQueueRouteTest(unittest.TestCase):
         )
         get_job.assert_not_called()
         update_job.assert_not_called()
-        create_job.assert_not_called()
         create_aggregate.assert_not_called()
 
     def test_resume_preserves_paid_teacher_order_until_terminal_completion(self):

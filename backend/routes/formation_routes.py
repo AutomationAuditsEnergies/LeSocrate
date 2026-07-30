@@ -15,21 +15,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, jsonify, request, session, send_file
 from io import BytesIO
 
-from config import PIPELINE_DATABASE_BACKEND
 from services.formation_pipeline_service import (
     search_rncp,
     download_reac_text_with_retry,
     download_rc_text,
     fetch_rome_data,
     launch_global_program_generation,
-    launch_daily_split,
     run_daily_split,
-    launch_tts_for_all_days,
-    create_job,
     update_job,
     get_job,
-    HOURS_PER_DAY,
-    COURSE_AUDIO_SLOTS,
     _normalize_day_audio_slots,
     _format_slot_generation_source,
 )
@@ -317,408 +311,20 @@ def search_rncp_route():
         return jsonify({"error": str(e)}), 500
 
 
-# ─── Helpers parsing DOCX/TXT pour le mode test ──────────────────────────────
-
-# Sous-parties standard par défaut pour les jobs de test où on n'a pas de
-# vrai daily split. Aligné sur la playlist cours : 7 créneaux × 3 passes = 21 segments.
-_TEST_SUB_PARTS = [
-    f"{slot['label']} — {slot['start']}-{slot['end']} — Créneau test {slot['index'] + 1}"
-    for slot in COURSE_AUDIO_SLOTS
-]
-
-
-def _read_doc_text(file_storage) -> str:
-    """Lit un FileStorage uploadé (.docx ou .txt) et retourne le texte brut."""
-    filename = (file_storage.filename or "").lower()
-    if filename.endswith(".txt"):
-        raw = file_storage.read()
-        try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return raw.decode("latin-1", errors="ignore")
-    if filename.endswith(".docx"):
-        from docx import Document
-        doc = Document(file_storage)
-        return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    raise ValueError(f"Format de fichier non supporté : {filename} (attendu .docx ou .txt)")
-
-
-def _split_into_21_chunks(text: str) -> list:
-    """Découpe un texte en 21 chunks à peu près équilibrés en paragraphes.
-
-    21 = 7 créneaux cours × 3 passes (playlist audio réelle).
-    Si le texte a moins de 21 paragraphes, on le pad par duplication. Le but
-    n'est pas de produire du contenu pédagogique fin (c'est un mode test) mais
-    d'avoir 21 segments avec du texte non vide pour que la review et l'audio
-    aient quelque chose à mâcher.
-    """
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if len(paragraphs) < 21:
-        # Pad par duplication cyclique
-        paragraphs = (paragraphs * (21 // max(len(paragraphs), 1) + 1))[: max(21, len(paragraphs))]
-
-    chunks = []
-    paras_per_chunk = max(1, len(paragraphs) // 21)
-    for i in range(21):
-        start = i * paras_per_chunk
-        end = start + paras_per_chunk if i < 20 else len(paragraphs)
-        chunks.append("\n\n".join(paragraphs[start:end]).strip() or paragraphs[i % len(paragraphs)])
-    return chunks
-
-
 # ─── Initialisation d'un job ──────────────────────────────────────────────────
 
 @formation_bp.route("/api/formation/init", methods=["POST"])
 def init_formation():
-    """
-    Crée un job pipeline formation + une nouvelle plateforme dédiée.
-    Body: { "platform_name": "TP CRCD 2026", "tp_name": "TP CRCD", "total_hours": 70, "rncp_code": "35304" }
-    """
-    data = request.get_json() or {}
-    platform_name = (data.get("platform_name") or "").strip()
-    tp_name = (data.get("tp_name") or "").strip()
-    rncp_code = (data.get("rncp_code") or "").strip()
-    total_hours = data.get("total_hours")
-    model_choice = _normalize_pipeline_model_choice(data.get("model"))
-
-    if not platform_name:
-        return jsonify({"error": "Le champ 'platform_name' est requis"}), 400
-    if not tp_name:
-        return jsonify({"error": "Le champ 'tp_name' est requis"}), 400
-    if not rncp_code:
-        return jsonify({"error": "Le champ 'rncp_code' est requis"}), 400
-    if not total_hours or int(total_hours) <= 0:
-        return jsonify({"error": "Le champ 'total_hours' doit être > 0"}), 400
-
-    total_hours = int(total_hours)
-    if total_hours % HOURS_PER_DAY != 0:
-        return jsonify({
-            "error": f"Le champ 'total_hours' doit être un multiple de {HOURS_PER_DAY} (1 journée = {HOURS_PER_DAY}h)",
-        }), 400
-    nb_days = total_hours // HOURS_PER_DAY
-
-    try:
-        from repositories.pipeline_repository import (
-            create_postgres_pipeline_aggregate,
-            create_pipeline_platform,
-            link_pipeline_platform_to_job,
-        )
-
-        center_account_id = _training_center_account_id()
-        if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
-            aggregate = create_postgres_pipeline_aggregate(
-                platform_name=platform_name,
-                center_account_id=center_account_id,
-                tp_name=tp_name,
-                rncp_code=rncp_code,
-                total_hours=total_hours,
-                nb_days=nb_days,
-                model=model_choice,
-            )
-            platform = aggregate["platform"]
-            job_id = int(aggregate["job_id"])
-            new_platform_id = int(platform["id"])
-        else:
-            platform = create_pipeline_platform(
-                name=platform_name,
-                center_account_id=center_account_id,
-            )
-            new_platform_id = int(platform["id"])
-            job_id = create_job(
-                platform_id=new_platform_id,
-                tp_name=tp_name,
-                rncp_code=rncp_code,
-                total_hours=total_hours,
-                nb_days=nb_days,
-            )
-            link_pipeline_platform_to_job(new_platform_id, job_id)
-            if model_choice:
-                update_job(job_id, auto_pilot_model=model_choice)
-
-        logger.info(f"✅ Nouvelle plateforme créée : id={new_platform_id} '{platform_name}'")
-        logger.info(f"✅ Job formation créé : {job_id} ({tp_name}, {total_hours}h, {nb_days} jours, plateforme {new_platform_id})")
-        return jsonify({
-            "job_id": job_id,
-            "platform_id": new_platform_id,
-            "platform_name": platform_name,
-            "tp_name": tp_name,
-            "rncp_code": rncp_code,
-            "total_hours": total_hours,
-            "nb_days": nb_days,
-            "model": model_choice,
-            "status": "init",
-        }), 201
-
-    except Exception as e:
-        logger.error(f"❌ init_formation : {e}")
-        return jsonify({"error": str(e)}), 500
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("init_formation")
 
 
 # ─── Mode test : init avec DOCX pré-injectés (skip génération content) ───────
 
 @formation_bp.route("/api/formation/init-test", methods=["POST"])
 def init_test_pipeline():
-    """Crée une plateforme + job + folders + segments en mode TEST.
-
-    L'auto-pilot relancé dessus skippera naturellement KB/global/daily/content
-    (car tous les artefacts sont déjà en DB) et ne tournera que finalize +
-    review + audio + health-check. Permet de valider la pipeline en aval en
-    ~5-10 min au lieu de 30-60.
-
-    Multipart form-data :
-      - platform_name (str, requis)
-      - tp_name (str, requis)
-      - rncp_code (str, requis)
-      - total_hours (int, requis) — doit être un multiple de 7 (1 doc par 7h)
-      - tts_mode (str, optionnel, défaut 'mock')
-      - auto_pilot (bool, optionnel, défaut true)
-      - docs (files[], requis) — N fichiers .docx ou .txt, où N = total_hours/7
-
-    Retourne 202 avec { job_id, platform_id, nb_days, segments_inserted }.
-    """
-    platform_name = (request.form.get("platform_name") or "").strip()
-    tp_name = (request.form.get("tp_name") or "").strip()
-    rncp_code = (request.form.get("rncp_code") or "").strip()
-    total_hours_raw = request.form.get("total_hours") or "0"
-    tts_mode = (request.form.get("tts_mode") or "mock").lower()
-    auto_pilot = (request.form.get("auto_pilot") or "true").lower() == "true"
-
-    if not platform_name or not tp_name or not rncp_code:
-        return jsonify({"error": "platform_name, tp_name, rncp_code sont requis"}), 400
-    try:
-        total_hours = int(total_hours_raw)
-    except ValueError:
-        return jsonify({"error": "total_hours doit être un entier"}), 400
-    if total_hours <= 0:
-        return jsonify({"error": "total_hours doit être > 0"}), 400
-    if total_hours % HOURS_PER_DAY != 0:
-        return jsonify({
-            "error": f"total_hours doit être un multiple de {HOURS_PER_DAY} (1 journée = {HOURS_PER_DAY}h)",
-        }), 400
-
-    nb_days = total_hours // HOURS_PER_DAY
-    docs = request.files.getlist("docs")
-    if len(docs) != nb_days:
-        return jsonify({
-            "error": f"Tu dois fournir exactement {nb_days} fichier(s) (1 par journée de 7h). Reçu : {len(docs)}",
-        }), 400
-
-    # Validate every upload before creating the platform/job aggregate.  A
-    # malformed second document must not leave a valid first day (or an empty
-    # platform) behind in either SQLite or PostgreSQL.
-    prepared_docs = []
-    for doc_file in docs:
-        try:
-            full_text = _read_doc_text(doc_file)
-            if not full_text.strip():
-                raise ValueError("fichier vide")
-            chunks_21 = _split_into_21_chunks(full_text)
-            if len(chunks_21) != 21 or any(not chunk.strip() for chunk in chunks_21):
-                raise ValueError("le document ne produit pas 21 segments texte valides")
-        except Exception as exc:
-            return jsonify({
-                "error": f"Lecture fichier '{doc_file.filename}': {exc}",
-            }), 400
-        prepared_docs.append({
-            "filename": doc_file.filename,
-            "chunks": chunks_21,
-        })
-
-    try:
-        import json
-        from repositories.pipeline_repository import (
-            create_course_folder_for_job,
-            create_postgres_pipeline_aggregate,
-            create_pipeline_platform,
-            get_content_generation_job_by_folder,
-            link_pipeline_platform_to_job,
-            reset_and_upsert_content_generation_job,
-            save_completed_content_segments,
-            update_content_generation_job,
-        )
-
-        # 1. Crée la plateforme (idem init_formation)
-        center_account_id = (
-            session.get("admin_account_id")
-            if session.get("admin_account_type") == "training_center"
-            else None
-        )
-        model_choice = "pro"
-        if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
-            aggregate = create_postgres_pipeline_aggregate(
-                platform_name=platform_name,
-                center_account_id=center_account_id,
-                tp_name=tp_name,
-                rncp_code=rncp_code,
-                total_hours=total_hours,
-                nb_days=nb_days,
-                model=model_choice,
-            )
-            platform = aggregate["platform"]
-            job_id = int(aggregate["job_id"])
-        else:
-            platform = create_pipeline_platform(
-                name=platform_name,
-                center_account_id=center_account_id,
-            )
-            job_id = create_job(
-                platform_id=int(platform["id"]), tp_name=tp_name, rncp_code=rncp_code,
-                total_hours=total_hours, nb_days=nb_days,
-            )
-            link_pipeline_platform_to_job(int(platform["id"]), job_id)
-        platform_id = int(platform["id"])
-        logger.info(f"🧪 [TEST] Plateforme créée : id={platform_id} '{platform_name}'")
-
-        # 2. Complète le job pipeline avec stubs (REAC mock, global mock, daily mock)
-
-        daily_programs_stub = [
-            _normalize_day_audio_slots({
-                "day_number": i + 1,
-                "title": f"Journée {i+1} (test)",
-                "sub_parts": [
-                    {
-                        "index": idx,
-                        "name": sp_name,
-                        "module_content": f"Contenu test créneau cours {idx+1}",
-                    }
-                    for idx, sp_name in enumerate(_TEST_SUB_PARTS)
-                ],
-                "day_recap": "" if i == 0 else "Lors de la dernière séance, nous avons vu les fondamentaux.",
-                "day_transition": "À la prochaine séance, nous aborderons la suite du programme.",
-            })
-            for i in range(nb_days)
-        ]
-        update_job(
-            job_id,
-            reac_text=f"[TEST STUB] REAC mock pour {tp_name} (RNCP {rncp_code})",
-            global_program=f"[TEST STUB] Programme global mock pour {tp_name}",
-            daily_programs=json.dumps(daily_programs_stub, ensure_ascii=False),
-            global_program_validated=1,
-            daily_programs_validated=1,
-            status="daily_validated",
-        )
-        logger.info(f"🧪 [TEST] Job pipeline {job_id} créé avec stubs (KB/global/daily seront skippés par l'auto-pilot)")
-
-        # 3. Crée N cours_folders + cg_jobs + 21 segments par cg_job
-        segments_inserted = 0
-        for day_idx, prepared_doc in enumerate(prepared_docs):
-            day_num = day_idx + 1
-            folder_name = f"Jour {day_num} — Journée {day_num} (test)"
-
-            folder = create_course_folder_for_job(
-                platform_id=platform_id,
-                folder_name=folder_name,
-                formation_job_id=job_id,
-            )
-            folder_id = int(folder["id"])
-            reset_and_upsert_content_generation_job(
-                folder_id=folder_id,
-                platform_id=platform_id,
-                program_text=f"[TEST] Programme journée {day_num}",
-                program_title=tp_name,
-                sub_parts_json=json.dumps(_TEST_SUB_PARTS, ensure_ascii=False),
-                from_scratch=True,
-                module_contents_json=json.dumps(
-                    {sp: f"Contenu test {sp}" for sp in _TEST_SUB_PARTS},
-                    ensure_ascii=False,
-                ),
-            )
-            content_job = get_content_generation_job_by_folder(folder_id)
-            if not content_job:
-                raise RuntimeError(f"Content job non créé pour folder {folder_id}")
-            cg_job_id = int(content_job["id"])
-
-            chunks_21 = prepared_doc["chunks"]
-
-            # Insère 21 segments (7 créneaux cours × 3 passes)
-            day_segments = []
-            day_total_words = 0
-            for sub_idx in range(len(_TEST_SUB_PARTS)):
-                for passe in range(1, 4):
-                    seg_idx = sub_idx * 3 + (passe - 1)
-                    text = chunks_21[seg_idx]
-                    word_count = len(text.split())
-                    day_total_words += word_count
-                    day_segments.append({
-                        "job_id": cg_job_id,
-                        "sub_part_index": sub_idx,
-                        "sub_part_name": _TEST_SUB_PARTS[sub_idx],
-                        "passe": passe,
-                        "text_content": text,
-                        "word_count": word_count,
-                    })
-                    segments_inserted += 1
-            save_completed_content_segments(day_segments)
-            update_content_generation_job(
-                cg_job_id,
-                status="completed",
-                total_words=day_total_words,
-                current_sub_part=len(_TEST_SUB_PARTS),
-                current_passe=3,
-                error_message=None,
-            )
-
-            logger.info(
-                f"🧪 [TEST] Folder {folder_id} (Jour {day_num}) : "
-                f"21 segments injectés depuis '{prepared_doc['filename']}'"
-            )
-
-        # 4. Si auto_pilot demandé, lancer la machine d'état DeepSeek.
-        # Important : même si KB/global/daily/content sont skippés (segments déjà
-        # en DB), la conformité locale en aval CONSOMME de l'IA et donc du crédit :
-        #   - Review conformité : audit règles hors micro-éthique, par morceau
-        # Ces appels passent par l'API DeepSeek configurée.
-        # L'audio est désormais découplé : l'auto-pilot prépare le texte/Word 2,
-        # puis la synthèse se lance séparément par journée/semaine.
-        dispatch = None
-        if auto_pilot:
-            update_job(job_id,
-                       auto_pilot_enabled=1,
-                       auto_pilot_model=model_choice,
-                       auto_pilot_tts_mode=tts_mode,
-                       auto_pilot_use_cc=0,
-                       auto_pilot_skip_vs=1,   # volume safety skippée en mode TEST
-                       auto_pilot_generate_audio=0,
-                       auto_pilot_volume_done=0,
-                       auto_pilot_post_review_docs_done=0,
-                       auto_pilot_error=None)
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "pipeline_started",
-                    step="start",
-                    status="running",
-                    model=model_choice,
-                    message="Auto-pilot test lancé",
-                    data={"tts_mode": tts_mode, "test_mode": True},
-                )
-            except Exception:
-                pass
-            dispatch = _dispatch_auto_pilot_tick(job_id, reason="init_test")
-            logger.info(
-                f"🧪 [TEST] Auto-pilot (DB state machine) spawné pour job {job_id} "
-                f"(tts={tts_mode}, model={model_choice}, volume_safety skippée)"
-            )
-
-        return jsonify({
-            "ok": True,
-            "job_id": job_id,
-            "platform_id": platform_id,
-            "platform_name": platform_name,
-            "nb_days": nb_days,
-            "segments_inserted": segments_inserted,
-            "auto_pilot_started": auto_pilot,
-            "dispatch": dispatch,
-            "tts_mode": tts_mode,
-            "test_mode": True,
-        }), 202
-
-    except Exception as e:
-        logger.error(f"❌ init_test_pipeline : {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("init_test_pipeline")
 
 
 # ─── Statut d'un job ──────────────────────────────────────────────────────────
@@ -747,137 +353,16 @@ def get_formation_job(job_id):
 
 @formation_bp.route("/api/formation/<int:job_id>/fetch-reac", methods=["POST"])
 def fetch_reac(job_id):
-    """
-    Télécharge le REAC PDF depuis France Compétences et en extrait le texte.
-    Lance en background (peut prendre ~10s).
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    if job["status"] not in ("init", "error", "reac_ready"):
-        return jsonify({"error": f"Impossible de télécharger depuis le statut '{job['status']}'"}), 400
-
-    def _fetch_thread():
-        try:
-            update_job(job_id, status="reac_fetching")
-            rncp_code = job["rncp_code"]
-
-            # Télécharger REAC + RC + ROME en parallèle
-            results = {"reac": "", "rc": "", "rome": ""}
-            errors = []
-
-            def _log_reac_attempt(**payload):
-                try:
-                    from services.formation_observability_service import log_pipeline_event
-                    status = payload.get("status") or "info"
-                    attempt = payload.get("attempt")
-                    total = payload.get("total")
-                    wait_seconds = payload.get("wait_seconds") or 0
-                    error = payload.get("error")
-                    message = f"REAC tentative {attempt}/{total} : {status}"
-                    if status == "retrying":
-                        message += f" — nouvelle tentative dans {wait_seconds:.0f}s"
-                    log_pipeline_event(
-                        job_id,
-                        "reac_download_attempt",
-                        step="reac",
-                        status="error" if status == "failed" else status,
-                        message=message,
-                        data={
-                            "attempt": attempt,
-                            "total": total,
-                            "wait_seconds": wait_seconds,
-                            "rncp_code": rncp_code,
-                        },
-                        error=error,
-                    )
-                except Exception:
-                    pass
-
-            def _dl_reac():
-                try:
-                    results["reac"] = download_reac_text_with_retry(
-                        rncp_code,
-                        attempts=3,
-                        on_attempt=_log_reac_attempt,
-                    )
-                except Exception as e:
-                    errors.append(f"REAC: {e}")
-
-            def _dl_rc():
-                try:
-                    results["rc"] = download_rc_text(rncp_code)
-                except Exception as e:
-                    logger.warning(f"⚠️ RC optionnel non disponible : {e}")
-
-            def _dl_rome():
-                try:
-                    results["rome"] = fetch_rome_data(rncp_code)
-                except Exception as e:
-                    logger.warning(f"⚠️ ROME optionnel non disponible : {e}")
-
-            threads = [
-                threading.Thread(target=_dl_reac, daemon=True),
-                threading.Thread(target=_dl_rc, daemon=True),
-                threading.Thread(target=_dl_rome, daemon=True),
-            ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            if errors:
-                raise Exception("; ".join(errors))
-
-            update_job(
-                job_id,
-                status="reac_ready",
-                reac_text=results["reac"],
-                rc_text=results["rc"] or None,
-                rome_text=results["rome"] or None,
-            )
-            logger.info(
-                f"✅ Job {job_id} : REAC={len(results['reac'])}c "
-                f"RC={len(results['rc'])}c ROME={len(results['rome'])}c"
-            )
-        except Exception as e:
-            logger.error(f"❌ Job {job_id} fetch-reac : {e}")
-            update_job(job_id, status="error", error_message=str(e))
-
-    threading.Thread(target=_fetch_thread, daemon=True).start()
-    return jsonify({"message": "Téléchargement REAC lancé", "status": "reac_fetching"})
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("fetch_reac")
 
 
 # ─── Couche 1 : Enrichissement REAC → Knowledge Base ─────────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/enrich-reac", methods=["POST"])
 def enrich_reac(job_id):
-    """
-    Lance la construction de la knowledge base enrichie à partir du REAC.
-    DeepSeek extrait les compétences puis les enrichit une par une (définition,
-    études de cas, pièges, vocabulaire, contexte terrain, liens connexes).
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    if not job.get("reac_text"):
-        return jsonify({"error": "REAC non disponible. Lancez d'abord fetch-reac."}), 400
-
-    if job["status"] not in ("reac_ready", "kb_ready", "error", "kb_building"):
-        return jsonify({"error": f"Statut '{job['status']}' invalide pour cette action"}), 400
-
-    data = request.get_json() or {}
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-    launch_kb_building(job_id, model=model)
-    return jsonify({"message": "Construction knowledge base lancée", "status": "kb_building", "model": model})
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("enrich_reac")
 
 
 @formation_bp.route("/api/formation/<int:job_id>/kb", methods=["GET"])
@@ -899,190 +384,48 @@ def get_kb(job_id):
 
 @formation_bp.route("/api/formation/<int:job_id>/generate-global", methods=["POST"])
 def generate_global(job_id):
-    """Lance la génération du programme global depuis le REAC + KB enrichie."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    if not job.get("reac_text"):
-        return jsonify({"error": "REAC non disponible. Lancez d'abord fetch-reac."}), 400
-
-    if job["status"] not in ("reac_ready", "kb_ready", "error", "global_ready"):
-        return jsonify({"error": f"Statut '{job['status']}' invalide pour cette action"}), 400
-
-    data = request.get_json() or {}
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-    launch_global_program_generation(job_id, model=model)
-    return jsonify({"message": "Génération programme global lancée", "status": "global_generating", "model": model})
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("generate_global")
 
 
 # ─── Validation programme global ──────────────────────────────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/validate-global", methods=["POST"])
 def validate_global(job_id):
-    """
-    Valide (et éventuellement corrige) le programme global.
-    Body (optionnel): { "program_text": "...texte édité par l'humain..." }
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    if job["status"] not in ("global_ready", "daily_ready"):
-        return jsonify({"error": "Programme global pas encore généré"}), 400
-
-    data = request.get_json() or {}
-    edited_program = data.get("program_text")  # None = garder le texte généré
-
-    update_kwargs = {"global_program_validated": 1, "status": "global_validated"}
-    if edited_program:
-        update_kwargs["global_program"] = edited_program
-
-    update_job(job_id, **update_kwargs)
-    logger.info(f"✅ Job {job_id} : programme global validé{' (édité)' if edited_program else ''}")
-    return jsonify({"message": "Programme global validé", "status": "global_validated"})
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("validate_global")
 
 
 # ─── Découpage en journées ────────────────────────────────────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/split-daily", methods=["POST"])
 def split_daily(job_id):
-    """Lance le découpage du programme global en N journées."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    if not job.get("global_program"):
-        return jsonify({"error": "Programme global non disponible"}), 400
-
-    if job["status"] not in ("global_validated", "global_ready", "error", "daily_ready"):
-        return jsonify({"error": f"Statut '{job['status']}' invalide pour cette action"}), 400
-
-    data = request.get_json() or {}
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-    launch_daily_split(job_id, model=model)
-    return jsonify({"message": "Découpage journées lancé", "status": "daily_splitting", "model": model})
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("split_daily")
 
 
 # ─── Validation programmes journée ───────────────────────────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/validate-daily", methods=["POST"])
 def validate_daily(job_id):
-    """
-    Valide (et éventuellement corrige) les programmes journée.
-    Body (optionnel): { "daily_programs": [...array JSON édité...] }
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    if job["status"] not in ("daily_ready", "daily_validated"):
-        return jsonify({"error": "Programmes journée pas encore générés"}), 400
-
-    data = request.get_json() or {}
-    edited_programs = data.get("daily_programs")  # None = garder les programmes générés
-
-    import json
-    update_kwargs = {"daily_programs_validated": 1, "status": "daily_validated"}
-    if edited_programs:
-        update_kwargs["daily_programs"] = json.dumps(edited_programs, ensure_ascii=False)
-
-    update_job(job_id, **update_kwargs)
-    logger.info(f"✅ Job {job_id} : programmes journée validés{' (édités)' if edited_programs else ''}")
-    return jsonify({"message": "Programmes journée validés", "status": "daily_validated"})
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("validate_daily")
 
 
 # ─── Lancement TTS ────────────────────────────────────────────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/launch-tts", methods=["POST"])
 def launch_tts(job_id):
-    """
-    Crée les dossiers cours (un par journée) et lance la génération TTS from scratch.
-    Les programmes journée doivent être validés.
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    if not job.get("daily_programs_validated"):
-        return jsonify({"error": "Les programmes journée doivent être validés avant de lancer le TTS"}), 400
-
-    if job["status"] == "tts_launched":
-        return jsonify({"error": "TTS déjà lancé pour ce job"}), 400
-
-    platform_id = job["platform_id"]
-    data = request.get_json() or {}
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-
-    try:
-        folder_ids = launch_tts_for_all_days(job_id, platform_id, model=model)
-        return jsonify({
-            "message": f"Génération TTS lancée pour {len(folder_ids)} journées",
-            "folder_ids": folder_ids,
-            "model": model,
-            "status": "tts_launched",
-        })
-    except Exception as e:
-        logger.error(f"❌ Job {job_id} launch-tts : {e}")
-        return jsonify({"error": str(e)}), 500
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("launch_tts")
 
 
 # ─── Affinage IA (refine) ─────────────────────────────────────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/refine", methods=["POST"])
 def refine(job_id):
-    """
-    Affine un contenu généré via une instruction en langage naturel.
-    Body: { content_type: "global"|"daily", instruction: "...", current_content: "...", model: "..." }
-    Retourne: { revised_content: "..." }
-    Appel synchrone (l'utilisateur attend la réponse).
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    data = request.get_json() or {}
-    content_type = data.get("content_type", "global")
-    instruction = (data.get("instruction") or "").strip()
-    current_content = (data.get("current_content") or "").strip()
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-
-    if not instruction:
-        return jsonify({"error": "Le champ 'instruction' est requis"}), 400
-    if not current_content:
-        return jsonify({"error": "Le champ 'current_content' est requis"}), 400
-
-    try:
-        from services.formation_pipeline_service import refine_content
-        revised = refine_content(
-            content_type=content_type,
-            current_content=current_content,
-            instruction=instruction,
-            tp_name=job["tp_name"],
-            model=model,
-        )
-        return jsonify({"revised_content": revised})
-    except Exception as e:
-        logger.error(f"❌ Job {job_id} refine : {e}")
-        return jsonify({"error": str(e)}), 500
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("refine")
 
 
 # ─── Étape 6 : Contenu des journées (lecture + PDF) ──────────────────────────
@@ -2027,25 +1370,8 @@ def volume_audit(job_id):
     methods=["POST"],
 )
 def launch_volume_safety(job_id, folder_id):
-    """Ancienne sécurité volume append-only, désactivée.
-
-    Le rattrapage de volume doit se faire pendant le calibrage budget texte,
-    avant les reviews, avec le plan verrouillé et les sections comme contexte.
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    return jsonify({
-        "error": (
-            "Sécurité volume désactivée : cette ancienne réparation append-only "
-            "pouvait ajouter du texte après les conclusions/Q-R. Relance la "
-            "génération structurée pour utiliser le calibrage budget texte."
-        )
-    }), 410
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("launch_volume_safety")
 
 
 @formation_bp.route(
@@ -2095,122 +1421,8 @@ def resume_content(job_id):
     methods=["POST"],
 )
 def review_content(job_id, folder_id):
-    """
-    Lance la révision conformité du texte généré pour un dossier cours.
-    Relit les segments non validés ou validés avec une ancienne signature de
-    règles. `force=true` relance explicitement tous les segments completed.
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job pipeline introuvable"}), 404
-
-    # Vérifier que le folder appartient bien à ce job formation
-    from repositories.pipeline_repository import get_text_folder_state
-    folder = get_text_folder_state(folder_id)
-    if not folder or int(folder.get("formation_job_id") or 0) != int(job_id):
-        return jsonify({"error": "Folder inexistant ou hors pipeline"}), 404
-
-    data = request.get_json(silent=True) or {}
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-    force = bool(data.get("force") or data.get("force_review"))
-
-    import eventlet
-    from services.content_generation_service import run_content_review
-
-    def _run_review(_folder_id):
-        import sys, traceback
-        logger.info(f"🚀 SPAWN review greenlet job={job_id} folder={_folder_id} model={model} force={force}")
-        sys.stdout.flush()
-        started_at = time.time()
-        try:
-            from services.formation_observability_service import log_pipeline_event
-            log_pipeline_event(
-                job_id,
-                "review_started",
-                step="review",
-                status="running",
-                folder_id=_folder_id,
-                model=str(model) if model else None,
-                message="Révision conformité API démarrée",
-                data={"force": force},
-            )
-        except Exception:
-            pass
-        try:
-            result = run_content_review(_folder_id, model=model, force=force)
-            duration_ms = int((time.time() - started_at) * 1000)
-            try:
-                _write_api_review_report(job_id, _folder_id, result, model)
-            except Exception as report_error:
-                logger.error(
-                    f"❌ Rapport review API non persisté job={job_id} "
-                    f"folder={_folder_id} : {report_error}"
-                )
-                raise
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "review_completed",
-                    step="review",
-                    status="completed",
-                    folder_id=_folder_id,
-                    model=str(model) if model else None,
-                    duration_ms=duration_ms,
-                    message="Révision conformité API terminée",
-                    data={
-                        "segments_reviewed": result.get("segments_reviewed", 0),
-                        "segments_already_current": result.get("segments_already_current", 0),
-                        "patches_proposed": result.get("patches_proposed", 0),
-                        "patches_applied": result.get("patches_applied", 0),
-                        "patches_rejected": result.get("patches_rejected", 0),
-                        "segments_failed": result.get("segments_failed", 0),
-                        "review_signature": result.get("review_signature"),
-                        "force": result.get("force", force),
-                    },
-                )
-            except Exception:
-                pass
-            logger.info(
-                f"✅ Review job={job_id} folder={_folder_id} : "
-                f"{result['segments_reviewed']} audités, "
-                f"{result.get('patches_proposed', 0)} proposés, "
-                f"{result['patches_applied']} appliqués, "
-                f"{result['patches_rejected']} rejetés"
-            )
-            sys.stdout.flush()
-        except Exception as e:
-            duration_ms = int((time.time() - started_at) * 1000)
-            logger.error(f"❌ Review job={job_id} folder={_folder_id} : échec : {e}")
-            logger.error(traceback.format_exc())
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "review_failed",
-                    step="review",
-                    status="error",
-                    folder_id=_folder_id,
-                    model=str(model) if model else None,
-                    duration_ms=duration_ms,
-                    message="Révision conformité API échouée",
-                    error=str(e)[:500],
-                )
-            except Exception:
-                pass
-            sys.stdout.flush()
-
-    eventlet.spawn(_run_review, folder_id)
-
-    return jsonify({
-        "message": "Révision conformité lancée en arrière-plan",
-        "folder_id": folder_id,
-        "model": model,
-        "force": force,
-    }), 202
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("review_content")
 
 
 # ─── Pre-flight et health-check (audit pipeline) ─────────────────────────────
@@ -3156,327 +2368,14 @@ def start_folder_audio_generation(
 
 @formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
 def generate_folder_audio(job_id, folder_id):
-    """Génère l'audio d'une seule journée/semaine, après pipeline texte complète."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-    payload, status = start_folder_audio_generation(
-        job_id,
-        folder_id,
-        request.get_json(silent=True) or {},
-        trigger_source="manual",
-    )
-    return jsonify(payload), status
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("generate_folder_audio")
 
 
 @formation_bp.route("/api/formation/<int:job_id>/launch-audio", methods=["POST"])
 def launch_audio(job_id):
-    """
-    Lance la synthèse audio Fish Audio S2-Pro pour toutes les journées du job.
-    Pré-requis : chaque dossier cours doit avoir son content_generation_job en
-    status 'completed' (textes générés par la pipeline). Boucle sur les dossiers et
-    spawn un greenlet eventlet par journée qui appelle generate_audio_from_script.
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-    if not _legacy_bulk_audio_enabled():
-        return jsonify({
-            "error": (
-                "La synthèse de toutes les journées est désactivée. "
-                "Chaque séance est générée automatiquement dans sa fenêtre J-1."
-            ),
-            "code": "scheduled_audio_required",
-        }), 409
-
-    from repositories.pipeline_repository import list_completed_content_jobs_for_folders
-    from services.formation_pipeline_service import get_expected_course_folders
-    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
-    if not folder_ids:
-        return jsonify({"error": "Aucun cours_folder attendu pour ce job"}), 400
-    completed_rows = list_completed_content_jobs_for_folders(folder_ids)
-    completed_ids = {int(row["folder_id"]) for row in completed_rows}
-    missing = [int(folder_id) for folder_id in folder_ids if int(folder_id) not in completed_ids]
-
-    if missing:
-        return jsonify({
-            "error": f"Textes pas encore prêts pour {len(missing)} dossier(s)",
-            "missing_folder_ids": missing,
-        }), 400
-
-    not_review_ready = []
-    for fid in folder_ids:
-        ok, detail = _folder_text_reviews_ready(job_id, fid)
-        if not ok:
-            not_review_ready.append({"folder_id": fid, **detail})
-    if not_review_ready:
-        return jsonify({
-            "error": "Conformité locale incomplète : audio bloqué tant que les textes ne sont pas validés.",
-            "folders": not_review_ready,
-        }), 400
-
-    data = request.get_json(silent=True) or {}
-    # force_all=True par défaut au lancement initial : les segments fraîchement
-    # générés ont dirty=0, donc sans force_all, generate_audio_from_script
-    # skipperait tous les blocs ("non modifiés, conservés") et aucun MP3 ne
-    # serait produit. force_all=True garantit la 1re synthèse complète. Les
-    # régénérations partielles ultérieures (via édition segment) utilisent le
-    # dirty flag naturellement.
-    force_all = bool(data.get("force_all", True))
-    preserve_existing = bool(data.get("preserve_existing", True))
-    # 3 modes de synthèse audio (priorité décroissante) :
-    # - mock=True      → MP3 silence 1s, test gratuit
-    # - basic_tts=True → Edge TTS (voix basique gratuite ; identifiant DB historique "gtts")
-    # - (défaut)       → Fish Audio S2-Pro (voix studio payante)
-    mock = bool(data.get("mock", False))
-    basic_tts = bool(data.get("basic_tts", False))
-    sync_slides = bool(data.get("sync_slides", False))
-    auto_generate_slides = bool(data.get("auto_generate_slides", False))
-    if mock and basic_tts:
-        return jsonify({"error": "mock et basic_tts sont mutuellement exclusifs"}), 400
-
-    # Parallélisation inter-folders (1 greenlet par journée en simultané).
-    # Réservé à Edge TTS / mock pour éviter le rate limit Fish Audio.
-    # Côté backend on hard-cap à 1 si basic_tts=False (donc Fish) — défense
-    # en profondeur, le frontend ne doit pas l'envoyer pour les boutons Fish.
-    raw_parallel = data.get("parallel_folders")
-    try:
-        parallel_folders = int(raw_parallel) if raw_parallel is not None else int(os.getenv("AUDIO_PARALLEL_FOLDERS", "1"))
-    except (TypeError, ValueError):
-        parallel_folders = 1
-    parallel_folders = max(1, parallel_folders)
-    if not (basic_tts or mock):
-        # Hard guard : Fish Audio paye à l'usage et a un rate limit strict.
-        # On refuse la parallélisation côté serveur même si le client la
-        # demande. Le frontend ne devrait pas l'envoyer pour les boutons
-        # payants — c'est un filet de sécurité supplémentaire.
-        if parallel_folders > 1:
-            logger.warning(
-                f"⚠️ parallel_folders={parallel_folders} ignoré : Fish Audio reste séquentiel "
-                f"(coût + rate limit)"
-            )
-        parallel_folders = 1
-    parallel_folders = min(parallel_folders, len(folder_ids))
-
-    import eventlet
-    from services.content_generation_service import generate_audio_from_script
-
-    def _run_audio(folder_id, next_folder_id=None, is_last_folder=False):
-        import sys, traceback
-        mode_label = "[MOCK]" if mock else "[BASIC edge-tts]" if basic_tts else ""
-        logger.info(f"🚀 SPAWN greenlet job={job_id} folder={folder_id} mock={mock} basic_tts={basic_tts} engine={'edge-tts' if basic_tts else 'fish_audio'} force_all={force_all}")
-        sys.stdout.flush()
-        started_at = time.time()
-        voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
-        try:
-            from services.formation_observability_service import log_pipeline_event
-            log_pipeline_event(
-                job_id,
-                "audio_folder_started",
-                step="audio",
-                status="running",
-                folder_id=folder_id,
-                message="Synthèse audio journée démarrée",
-                model=_resolve_pipeline_api_model(job),
-                data={
-                    "voice_type": voice_type,
-                    "force_all": force_all,
-                    "preserve_existing": preserve_existing,
-                    "sync_slides": sync_slides,
-                    "auto_generate_slides": auto_generate_slides,
-                },
-            )
-        except Exception:
-            pass
-        try:
-            logger.info(f"🎙️ {mode_label} Job {job_id} folder {folder_id} : synthèse audio démarrée")
-            sys.stdout.flush()
-            generate_audio_from_script(
-                folder_id,
-                on_progress=_make_audio_progress_logger(job_id, folder_id, voice_type),
-                force_all=force_all,
-                mock=mock,
-                basic_tts=basic_tts,
-                next_folder_id=next_folder_id,
-                is_last_folder=is_last_folder,
-                sync_slides=sync_slides,
-                auto_generate_slides=auto_generate_slides,
-                llm_model=_resolve_pipeline_api_model(job),
-                preserve_existing=preserve_existing,
-            )
-            duration_ms = int((time.time() - started_at) * 1000)
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "audio_folder_completed",
-                    step="audio",
-                    status="completed",
-                    folder_id=folder_id,
-                    duration_ms=duration_ms,
-                    message="Synthèse audio journée terminée",
-                    model=_resolve_pipeline_api_model(job),
-                    data={"voice_type": voice_type},
-                )
-            except Exception:
-                pass
-            logger.info(f"✅ {mode_label} Job {job_id} folder {folder_id} : synthèse audio terminée")
-            sys.stdout.flush()
-            return True
-        except Exception as e:
-            duration_ms = int((time.time() - started_at) * 1000)
-            logger.error(f"❌ Job {job_id} folder {folder_id} : synthèse audio échouée : {e}")
-            logger.error(traceback.format_exc())
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "audio_folder_failed",
-                    step="audio",
-                    status="error",
-                    folder_id=folder_id,
-                    duration_ms=duration_ms,
-                    message="Synthèse audio journée échouée",
-                    model=_resolve_pipeline_api_model(job),
-                    data={"voice_type": voice_type},
-                    error=str(e)[:500],
-                )
-            except Exception:
-                pass
-            sys.stdout.flush()
-            try:
-                update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {str(e)[:500]}")
-            except Exception as ue:
-                logger.error(f"❌ Impossible de marquer job {job_id} en audio_error : {ue}")
-            return False
-
-    # Synthèse audio : séquentielle par défaut, ou parallèle si parallel_folders>1.
-    # - Séquentiel (Fish Audio + défaut) : 1 folder à la fois + cooldown 30s.
-    #   Évite le rate limit côté Fish Audio (qui est payant et a un quota strict).
-    # - Parallèle (Edge TTS uniquement, sur demande explicite frontend ou env) :
-    #   tous les folders en simultané dans un GreenPool. Pas de cooldown.
-    #   Pas de carryover inter-jours (next_folder_id=None) parce que Jour 2 démarre
-    #   avant que Jour 1 ne sache s'il a du surplus à reporter.
-    def _run_all_audios():
-        run_started_at = time.time()
-        failures = []
-
-        if parallel_folders > 1 and len(folder_ids) > 1:
-            import eventlet as _ev
-            logger.info(
-                f"🚀 PARALLEL audio: {len(folder_ids)} folder(s) sur pool de "
-                f"{parallel_folders} (mode={'edge' if basic_tts else 'mock'})"
-            )
-            pool = _ev.GreenPool(size=parallel_folders)
-            pile = _ev.GreenPile(pool)
-            for fid in folder_ids:
-                # En parallèle, pas de carryover inter-jours (cf. raison ci-dessus).
-                pile.spawn(_run_audio, fid, None, True)
-            for idx, ok in enumerate(pile):
-                if not ok:
-                    failures.append(folder_ids[idx])
-        else:
-            for idx, fid in enumerate(folder_ids):
-                next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
-                ok = _run_audio(fid, next_folder_id=next_fid, is_last_folder=next_fid is None)
-                if not ok:
-                    failures.append(fid)
-                # Petit cooldown entre folders pour aérer le rate limit côté
-                # API tierce. Configurable, surtout utile pour Fish Audio.
-                import eventlet as _ev
-                cooldown = int(os.getenv("AUDIO_COOLDOWN_BETWEEN_FOLDERS_SEC", "30"))
-                if cooldown > 0 and idx + 1 < len(folder_ids):
-                    logger.info(f"⏸ Cooldown {cooldown}s avant folder suivant")
-                    _ev.sleep(cooldown)
-        try:
-            from services.formation_observability_service import log_pipeline_event
-            if failures:
-                log_pipeline_event(
-                    job_id,
-                    "audio_failed",
-                    step="audio",
-                    status="error",
-                    duration_ms=int((time.time() - run_started_at) * 1000),
-                    message=f"Synthèse audio terminée avec {len(failures)} échec(s)",
-                    data={"failed_folder_ids": failures, "folder_ids": folder_ids},
-                    error=f"{len(failures)} dossier(s) audio en erreur",
-                )
-            else:
-                log_pipeline_event(
-                    job_id,
-                    "audio_completed",
-                    step="audio",
-                    status="completed",
-                    duration_ms=int((time.time() - run_started_at) * 1000),
-                    message=f"Synthèse audio terminée pour {len(folder_ids)} journée(s)",
-                    data={"folder_ids": folder_ids},
-                )
-        except Exception:
-            pass
-        if failures:
-            update_job(
-                job_id,
-                status="audio_error",
-                error_message=f"Synthèse audio incomplète : {len(failures)} dossier(s) en erreur",
-            )
-        else:
-            update_job(job_id, status="audio_completed", error_message=None)
-            _finalize_audio_ready_state(
-                job_id,
-                "mock" if mock else ("gtts" if basic_tts else "fish_audio"),
-            )
-
-    update_job(job_id, status="audio_running", error_message=None)
-    try:
-        from services.formation_observability_service import log_pipeline_event
-        log_pipeline_event(
-            job_id,
-            "audio_started",
-            step="audio",
-            status="running",
-            message=f"Synthèse audio lancée pour {len(folder_ids)} journée(s)",
-            data={
-                "folder_ids": folder_ids,
-                "voice_type": "mock" if mock else ("gtts" if basic_tts else "fish_audio"),
-                "force_all": force_all,
-                "preserve_existing": preserve_existing,
-                "sync_slides": sync_slides,
-                "auto_generate_slides": auto_generate_slides,
-            },
-        )
-    except Exception:
-        pass
-
-    eventlet.spawn(_run_all_audios)
-
-    # Le texte est exploitable immédiatement, mais le module reste en draft
-    # tant que tous les audios ne sont pas réellement terminés.
-    try:
-        _finalize_text_ready_state(job_id)
-        logger.info(f"✅ Plateforme {job['platform_id']} : texte prêt, module draft")
-    except Exception as e:
-        logger.warning(f"⚠️ Impossible de marquer la plateforme ready : {e}")
-
-    if mock:
-        mode_suffix = " (MOCK — silence 1s)"
-    elif basic_tts:
-        mode_suffix = " (Edge TTS — voix basique gratuite)"
-    else:
-        mode_suffix = ""
-    if sync_slides:
-        mode_suffix += " + slides synchronisées"
-    logger.info(f"🚀 Job {job_id} : synthèse audio lancée pour {len(folder_ids)} dossiers{mode_suffix}")
-    return jsonify({
-        "message": f"Synthèse audio lancée pour {len(folder_ids)} journées{mode_suffix}",
-        "folder_ids": folder_ids,
-        "status": "audio_running",
-        "mock": mock,
-        "basic_tts": basic_tts,
-        "sync_slides": sync_slides,
-        "auto_generate_slides": auto_generate_slides,
-    })
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("launch_audio")
 
 
 def _completed_text_folder_candidates(job_id: int) -> list[dict]:
@@ -4650,47 +3549,8 @@ def resume_auto_pilot(job_id):
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/stop", methods=["POST"])
 def stop_auto_pilot(job_id):
-    """Annule le work-item durable courant pour une intervention support."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    update_job(
-        job_id,
-        auto_pilot_enabled=0,
-        auto_pilot_step="stopped",
-        auto_pilot_error=None,
-    )
-    cancelled_work_item_id = None
-    try:
-        from services.pipeline_queue import cancel_latest_work_item
-
-        cancelled_item = cancel_latest_work_item(job_id)
-        cancelled_work_item_id = cancelled_item.id if cancelled_item else None
-    except Exception:
-        logger.warning("PIPELINE_QUEUE_CANCEL_FAILED job=%s", job_id, exc_info=True)
-    try:
-        from services.formation_observability_service import log_pipeline_event
-        log_pipeline_event(
-            job_id,
-            "pipeline_stopped",
-            step=job.get("auto_pilot_step") or "unknown",
-            status="stopped",
-            model=job.get("auto_pilot_model"),
-            message="Auto-pilot stoppé manuellement",
-        )
-    except Exception:
-        pass
-    logger.warning("🤖 Auto-pilot job %s stoppé manuellement", job_id)
-    return jsonify({
-        "ok": True,
-        "status": "stopped",
-        "queue_work_item_cancelled": bool(cancelled_work_item_id),
-        "queue_work_item_id": cancelled_work_item_id,
-    }), 200
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("stop_auto_pilot")
 
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/status", methods=["GET"])
