@@ -383,6 +383,20 @@ def _stripe():
     return stripe
 
 
+def _stripe_checkout_configured() -> bool:
+    """Only advertise Checkout when both payment and fulfillment are usable.
+
+    A secret API key alone can create and capture a Checkout payment, but the
+    application must also receive the signed webhook before it is allowed to
+    provision the paid service.  Failing closed here prevents accepting money
+    into an environment that cannot authorize fulfillment.
+    """
+    return bool(
+        os.getenv("STRIPE_SECRET_KEY", "").strip()
+        and os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+    )
+
+
 def _production_cost_per_day_cents() -> int:
     raw = os.getenv("AI_TEACHER_COST_PER_DAY_CENTS", "1500").strip()
     try:
@@ -397,7 +411,7 @@ def _production_cost_per_day_cents() -> int:
 def get_product_catalog(*, allow_fallback: bool = True) -> dict[str, dict[str, Any]]:
     del allow_fallback  # kept for compatibility with older callers
     production_cost = _production_cost_per_day_cents()
-    stripe_configured = bool(os.getenv("STRIPE_SECRET_KEY", "").strip())
+    stripe_configured = _stripe_checkout_configured()
     catalog = {}
     for operation_type, product in PRODUCTS.items():
         unit_amount = (
@@ -758,6 +772,9 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
     public_id = str(order["public_id"])
     checkout_params = dict(
         mode="payment",
+        # Keep the first production rollout synchronous and predictable.
+        # Card wallets such as Apple Pay/Google Pay still use the card rail.
+        payment_method_types=["card"],
         line_items=[{
             "price_data": {
                 "currency": order["currency"],

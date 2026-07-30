@@ -45,10 +45,26 @@ class BillingServiceTest(unittest.TestCase):
         self.assertFalse(project["teacher_description"].startswith(" "))
 
     def test_catalog_applies_margin_to_daily_production_cost(self):
-        with patch.dict(os.environ, {"AI_TEACHER_COST_PER_DAY_CENTS": "1500", "STRIPE_SECRET_KEY": "sk_test"}):
+        with patch.dict(os.environ, {
+            "AI_TEACHER_COST_PER_DAY_CENTS": "1500",
+            "STRIPE_SECRET_KEY": "sk_test",
+            "STRIPE_WEBHOOK_SECRET": "whsec_test",
+        }):
             catalog = billing_service.get_product_catalog()
         self.assertEqual(catalog["new_teacher"]["unit_amount_cents"], 3000)
         self.assertEqual(catalog["reuse_teacher"]["unit_amount_cents"], 2250)
+        self.assertTrue(catalog["new_teacher"]["configured"])
+
+    def test_catalog_refuses_checkout_without_signed_webhook(self):
+        with patch.dict(os.environ, {
+            "AI_TEACHER_COST_PER_DAY_CENTS": "1500",
+            "STRIPE_SECRET_KEY": "sk_test",
+            "STRIPE_WEBHOOK_SECRET": "",
+        }, clear=True):
+            catalog = billing_service.get_product_catalog()
+
+        self.assertFalse(catalog["new_teacher"]["configured"])
+        self.assertFalse(catalog["reuse_teacher"]["configured"])
 
     def test_audio_preparation_window_supports_new_settings_and_legacy_fallback(self):
         with patch.dict(os.environ, {
@@ -308,9 +324,14 @@ class BillingServiceTest(unittest.TestCase):
             result = billing_service.create_teacher_order(9, payload)
 
         self.assertEqual(result["next_action"], "redirect")
-        line_items = checkout_create.call_args.kwargs["line_items"]
+        checkout_args = checkout_create.call_args.kwargs
+        line_items = checkout_args["line_items"]
         self.assertEqual(line_items[0]["price_data"]["unit_amount"], 3000)
         self.assertEqual(line_items[0]["quantity"], 10)
+        self.assertEqual(checkout_args["mode"], "payment")
+        self.assertEqual(checkout_args["payment_method_types"], ["card"])
+        self.assertIn(str(order["public_id"]), checkout_args["success_url"])
+        self.assertIn(str(order["public_id"]), checkout_args["cancel_url"])
 
     @patch.object(billing_service, "create_order")
     @patch.object(billing_service, "get_product_catalog")

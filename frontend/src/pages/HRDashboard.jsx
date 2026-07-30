@@ -385,11 +385,9 @@ export default function HRDashboard() {
     const checkout = params.get('checkout')
     const orderId = params.get('order')
     if (!checkout || !orderId) return
-    // State is intentionally initialized from the external Checkout redirect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setActiveTeacherOrderId(orderId)
     setFailedTeacherOrderId(null)
     if (checkout === 'success') {
+      setActiveTeacherOrderId(orderId)
       setOrderNotice({
         tone: 'info',
         title: 'Vérification du paiement',
@@ -398,6 +396,7 @@ export default function HRDashboard() {
       setShowCreateModal(false)
       setShowModulesModal(false)
     } else if (checkout === 'cancelled') {
+      setActiveTeacherOrderId(null)
       setOrderNotice({
         tone: 'warning',
         title: 'Paiement interrompu',
@@ -480,6 +479,31 @@ export default function HRDashboard() {
             message: 'Votre paiement est conservé. Notre système n’effectuera aucun second prélèvement.',
           })
           setActiveTeacherOrderId(null)
+        } else if (['failed', 'expired'].includes(order.payment_status)) {
+          setFailedTeacherOrderId(null)
+          setOrderNotice({
+            tone: 'error',
+            title: 'Paiement non finalisé',
+            message: 'La commande n’a pas été débitée. Reprenez la création pour ouvrir une nouvelle page de paiement.',
+          })
+          setActiveTeacherOrderId(null)
+        } else if (order.payment_status === 'refunded') {
+          setFailedTeacherOrderId(null)
+          setOrderNotice({
+            tone: 'warning',
+            title: 'Paiement remboursé',
+            message: 'Cette commande ne sera pas préparée. Contactez l’équipe technique si vous avez besoin d’aide.',
+          })
+          setActiveTeacherOrderId(null)
+        } else if (
+          order.payment_status === 'paid'
+          && ['not_started', 'queued', 'running'].includes(order.fulfillment_status)
+        ) {
+          setOrderNotice({
+            tone: 'info',
+            title: 'Paiement confirmé',
+            message: 'Votre commande est payée et sa préparation est maintenant prise en charge.',
+          })
         }
       } catch (error) {
         console.error('Suivi commande impossible:', error)
