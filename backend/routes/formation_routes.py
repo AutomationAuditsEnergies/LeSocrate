@@ -1,19 +1,8 @@
-"""
-Routes pipeline formation automatisé.
+"""API de suivi de la pipeline Formation 3.
 
-POST /api/formation/search-rncp           Recherche RNCP depuis nom TP
-POST /api/formation/init                  Crée un job (tp_name, total_hours, rncp_code)
-GET  /api/formation/<job_id>              Statut + données du job
-POST /api/formation/<job_id>/fetch-reac   Télécharge + extrait le REAC
-POST /api/formation/<job_id>/generate-global   Lance génération programme global
-POST /api/formation/<job_id>/validate-global   Valide (et éventuellement édite) le programme global
-POST /api/formation/<job_id>/split-daily       Lance le découpage en journées
-POST /api/formation/<job_id>/validate-daily    Valide les programmes journée
-POST /api/formation/<job_id>/launch-tts        Crée les dossiers et lance la génération TEXTE des cours
-GET  /api/formation/<job_id>/content      Liste les dossiers cours (journées) + état génération texte
-GET  /api/formation/<job_id>/content/<folder_id>/docx  Télécharge le document Word d'une journée
-POST /api/formation/<job_id>/launch-audio Lance la synthèse TTS Fish Audio sur toutes les journées
-GET  /api/formation/list                  Liste les jobs de la plateforme
+La commande d'un professeur IA est l'unique point d'entrée de création. Le
+worker durable enchaîne les étapes. Ces routes exposent uniquement la lecture,
+les artefacts et la reprise globale d'une pipeline interrompue.
 """
 
 import json
@@ -72,6 +61,28 @@ _LEGACY_PIPELINE_MODEL_CHOICES = {
     "haiku": "flash",
     "claude-haiku-4-5-20251001": "flash",
 }
+
+_RETIRED_MANUAL_PIPELINE_ENDPOINTS = frozenset({
+    "init_formation",
+    "init_test_pipeline",
+    "fetch_reac",
+    "enrich_reac",
+    "generate_global",
+    "validate_global",
+    "split_daily",
+    "validate_daily",
+    "launch_tts",
+    "refine",
+    "launch_volume_safety",
+    "review_content",
+    "generate_folder_audio",
+    "launch_audio",
+    "stop_auto_pilot",
+})
+_RETIRED_MANUAL_PIPELINE_CREATION_ENDPOINTS = frozenset({
+    "init_formation",
+    "init_test_pipeline",
+})
 
 
 def _slides_folder_workers(default: int = 3) -> int:
@@ -187,6 +198,29 @@ def _formation_admin_forbidden():
     return jsonify({"error": "Non autorisé"}), 403
 
 
+def _retired_manual_pipeline_response(endpoint_name: str):
+    if endpoint_name in _RETIRED_MANUAL_PIPELINE_CREATION_ENDPOINTS:
+        return jsonify({
+            "error": (
+                "La création manuelle d'une pipeline a été retirée. "
+                "La pipeline démarre automatiquement après la commande d'un professeur IA."
+            ),
+            "code": "teacher_order_required",
+        }), 410
+
+    job_id = (request.view_args or {}).get("job_id")
+    payload = {
+        "error": (
+            "Cette ancienne commande manuelle a été retirée. "
+            "Le worker durable enchaîne automatiquement toutes les étapes."
+        ),
+        "code": "durable_pipeline_only",
+    }
+    if job_id is not None:
+        payload["resume_endpoint"] = f"/api/formation/{int(job_id)}/run-auto/resume"
+    return jsonify(payload), 410
+
+
 @formation_bp.before_request
 def _enforce_pipeline_job_tenant_scope():
     """Authenticate and scope every Formation HTTP route before execution.
@@ -251,6 +285,10 @@ def _enforce_pipeline_job_tenant_scope():
             folder_allowed = False
         if not folder_allowed:
             return _pipeline_job_not_found()
+
+    endpoint_name = str(request.endpoint or "").rsplit(".", 1)[-1]
+    if endpoint_name in _RETIRED_MANUAL_PIPELINE_ENDPOINTS:
+        return _retired_manual_pipeline_response(endpoint_name)
     return None
 
 

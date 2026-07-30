@@ -51,7 +51,7 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             if account_id is not None:
                 session["admin_account_id"] = account_id
 
-    def test_center_a_can_read_and_mutate_its_job(self):
+    def test_center_a_can_read_but_manual_mutations_are_retired(self):
         self._login(account_id=10)
         with patch(
             "repositories.pipeline_repository.pipeline_job_belongs_to_center",
@@ -69,16 +69,15 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(read_response.status_code, 200)
-        self.assertEqual(mutation_response.status_code, 200)
+        self.assertEqual(mutation_response.status_code, 410)
+        self.assertEqual(
+            mutation_response.get_json()["code"],
+            "durable_pipeline_only",
+        )
         self.assertEqual(belongs.call_count, 2)
         belongs.assert_called_with(42, 10)
-        self.assertEqual(get_job.call_count, 2)
-        update_job.assert_called_once_with(
-            42,
-            global_program_validated=1,
-            status="global_validated",
-            global_program="Programme Centre A",
-        )
+        get_job.assert_called_once_with(42)
+        update_job.assert_not_called()
 
     def test_center_b_is_hidden_before_mutation_run_and_stop_side_effects(self):
         self._login(account_id=20)
@@ -108,7 +107,7 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
         dispatch.assert_not_called()
         observe.assert_not_called()
 
-    def test_center_a_sees_manual_start_retired_and_can_stop_its_job(self):
+    def test_center_a_sees_manual_start_and_stop_retired(self):
         self._login(account_id=10)
         with patch(
             "repositories.pipeline_repository.pipeline_job_belongs_to_center",
@@ -132,8 +131,9 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
 
         self.assertEqual(run_response.status_code, 410)
         self.assertEqual(run_response.get_json()["code"], "teacher_order_required")
-        self.assertEqual(stop_response.status_code, 200)
-        self.assertEqual(update_job.call_count, 1)
+        self.assertEqual(stop_response.status_code, 410)
+        self.assertEqual(stop_response.get_json()["code"], "durable_pipeline_only")
+        update_job.assert_not_called()
 
     def test_training_center_without_account_id_is_fail_closed(self):
         self._login(account_id=None)

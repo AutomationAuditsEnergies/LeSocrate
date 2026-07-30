@@ -149,23 +149,67 @@ class PipelineQueueRouteTest(unittest.TestCase):
         finalize.assert_not_called()
         update.assert_not_called()
 
-    def test_stop_returns_cancelled_work_item_id_not_dataclass(self):
-        cancelled = SimpleNamespace(id="work-cancelled")
+    def test_manual_stop_cannot_cancel_the_durable_worker(self):
         with patch(
-            "routes.formation_routes.get_job", return_value=_job(auto_pilot_step="review")
-        ), patch(
-            "routes.formation_routes.update_job"
-        ), patch(
-            "services.pipeline_queue.cancel_latest_work_item", return_value=cancelled
-        ), patch(
-            "services.formation_observability_service.log_pipeline_event"
-        ):
+            "routes.formation_routes.get_job",
+        ) as get_job, patch(
+            "routes.formation_routes.update_job",
+        ) as update_job, patch(
+            "services.pipeline_queue.cancel_latest_work_item",
+        ) as cancel:
             response = self.client.post("/api/formation/42/run-auto/stop")
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 410)
         payload = response.get_json()
-        self.assertTrue(payload["queue_work_item_cancelled"])
-        self.assertEqual(payload["queue_work_item_id"], "work-cancelled")
+        self.assertEqual(payload["code"], "durable_pipeline_only")
+        get_job.assert_not_called()
+        update_job.assert_not_called()
+        cancel.assert_not_called()
+
+    def test_all_historical_stage_commands_are_retired_before_side_effects(self):
+        paths = [
+            "/api/formation/init",
+            "/api/formation/init-test",
+            "/api/formation/42/fetch-reac",
+            "/api/formation/42/enrich-reac",
+            "/api/formation/42/generate-global",
+            "/api/formation/42/validate-global",
+            "/api/formation/42/split-daily",
+            "/api/formation/42/validate-daily",
+            "/api/formation/42/launch-tts",
+            "/api/formation/42/refine",
+            "/api/formation/42/content/301/volume-safety",
+            "/api/formation/42/content/301/review",
+            "/api/formation/42/content/301/generate-audio",
+            "/api/formation/42/launch-audio",
+            "/api/formation/42/run-auto/stop",
+        ]
+        with patch(
+            "routes.formation_routes.get_job",
+        ) as get_job, patch(
+            "routes.formation_routes.update_job",
+        ) as update_job, patch(
+            "routes.formation_routes.create_job",
+        ) as create_job, patch(
+            "repositories.pipeline_repository.create_postgres_pipeline_aggregate",
+        ) as create_aggregate:
+            responses = [self.client.post(path, json={}) for path in paths]
+
+        self.assertTrue(all(response.status_code == 410 for response in responses))
+        self.assertEqual(
+            [response.get_json()["code"] for response in responses[:2]],
+            ["teacher_order_required", "teacher_order_required"],
+        )
+        self.assertTrue(
+            all(
+                response.get_json()["code"] == "durable_pipeline_only"
+                for response in responses[2:]
+            )
+        )
+        get_job.assert_not_called()
+        update_job.assert_not_called()
+        create_job.assert_not_called()
+        create_aggregate.assert_not_called()
 
     def test_resume_preserves_paid_teacher_order_until_terminal_completion(self):
         dead_lettered = SimpleNamespace(
