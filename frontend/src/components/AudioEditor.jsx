@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
-import { apiFetch, apiRequestHeaders, apiUrl } from '../api'
+import { apiFetch } from '../api'
 import { breakDurationLabel, buildAudioSlideTimings } from './slides/audioSlideSync'
 import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
 
@@ -51,21 +51,7 @@ function waitForMediaReadyAfterSeek(media, targetSeconds, timeoutMs = 1200) {
   })
 }
 
-async function fetchAudioBlob(url, { credentials = 'omit', headers = {}, label = 'audio' } = {}) {
-  let resp
-  try {
-    resp = await fetch(url, {
-      method: 'GET',
-      credentials,
-      cache: 'no-store',
-      headers,
-    })
-  } catch (e) {
-    throw new Error(e?.message === 'Failed to fetch'
-      ? `${label} inaccessible`
-      : (e?.message || `${label} indisponible`))
-  }
-
+async function readAudioBlobResponse(resp, label = 'audio') {
   if (!resp.ok) {
     let detail = ''
     const contentType = resp.headers.get('content-type') || ''
@@ -87,6 +73,40 @@ async function fetchAudioBlob(url, { credentials = 'omit', headers = {}, label =
     return blob
   }
   return new Blob([blob], { type: 'audio/mpeg' })
+}
+
+async function fetchAudioBlob(url, { credentials = 'omit', headers = {}, label = 'audio' } = {}) {
+  let resp
+  try {
+    resp = await fetch(url, {
+      method: 'GET',
+      credentials,
+      cache: 'no-store',
+      headers,
+    })
+  } catch (e) {
+    throw new Error(e?.message === 'Failed to fetch'
+      ? `${label} inaccessible`
+      : (e?.message || `${label} indisponible`))
+  }
+
+  return readAudioBlobResponse(resp, label)
+}
+
+async function fetchProtectedAudioBlob(path, label = 'audio') {
+  let resp
+  try {
+    resp = await apiFetch(path, {
+      method: 'GET',
+      cache: 'no-store',
+    })
+  } catch (e) {
+    throw new Error(e?.message === 'Failed to fetch'
+      ? `${label} inaccessible`
+      : (e?.message || `${label} indisponible`))
+  }
+
+  return readAudioBlobResponse(resp, label)
 }
 
 // Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
@@ -268,10 +288,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     audioUrlRef.current = null
   }, [])
 
-  const audioFetchHeaders = useCallback(() => {
-    return apiRequestHeaders('/api/hr')
-  }, [])
-
   const buildAudioStreamUrl = useCallback(async () => {
     clearAudioUrl()
     const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/audio-url/${encodeURIComponent(filename)}?v=${Date.now()}`)
@@ -284,8 +300,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     return url
   }, [clearAudioUrl, folderId, filename])
 
-  const buildBackendAudioStreamUrl = useCallback(() => (
-    apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`)
+  const buildBackendAudioStreamPath = useCallback(() => (
+    `/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`
   ), [folderId, filename])
 
   const loadAudioIntoWaveSurfer = useCallback(async (ws) => {
@@ -300,16 +316,15 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     }
 
     try {
-      const blob = await fetchAudioBlob(buildBackendAudioStreamUrl(), {
-        credentials: 'include',
-        headers: audioFetchHeaders(),
-        label: 'proxy audio backend',
-      })
+      const blob = await fetchProtectedAudioBlob(
+        buildBackendAudioStreamPath(),
+        'proxy audio backend',
+      )
       return ws.loadBlob(blob)
     } catch (backendError) {
       throw new Error(`${backendError.message}${sasError ? ` (Azure direct: ${sasError.message})` : ''}`)
     }
-  }, [audioFetchHeaders, buildAudioStreamUrl, buildBackendAudioStreamUrl])
+  }, [buildAudioStreamUrl, buildBackendAudioStreamPath])
 
   // ── Écoute splicée côté client (Web Audio API) ──
   const stopStitchedPlayback = useCallback(() => {
@@ -710,13 +725,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setSaving(true)
     setError(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/cut`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/cut`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ start_ms: Math.round(region.start), end_ms: Math.round(region.end) }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -751,13 +765,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setPreviewId(null)
     setPreviewAudio(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-preview`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-preview`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: replaceText }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -790,17 +803,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setSaving(true)
     setError(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-confirm`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-confirm`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             preview_id: previewId,
             start_ms: Math.round(region.start),
             end_ms: Math.round(region.end),
           }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()

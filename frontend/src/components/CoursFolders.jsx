@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiFetch, apiUrl } from '../api'
+import { apiDownload, apiFetch } from '../api'
 import AudioEditor from './AudioEditor'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
@@ -201,7 +201,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const fetchFolders = async () => {
     setLoading(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`)
       const data = await resp.json()
       if (data.success) {
         setFolders(data.folders)
@@ -216,7 +216,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   // ─── Fetch documents ───────────────────────────────────────────────────
   const fetchDocuments = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/documents`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/documents`)
       const data = await resp.json()
       if (data.success) {
         setDocuments(data.documents)
@@ -229,7 +229,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   // ─── Fetch TTS status (polling) ────────────────────────────────────────
   const fetchTtsStatus = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/tts-status`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/tts-status`)
       const data = await resp.json()
       if (data.success) {
         setTtsStatus(data)
@@ -252,7 +252,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       fetchDocuments(selectedFolder.id)
 
       const checkProcessing = async () => {
-        const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/tts-status`), { credentials: 'include' })
+        const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/tts-status`)
         const data = await resp.json()
         if (data.success) {
           const hasProcessing = data.documents.some(d => d.status === 'processing')
@@ -299,11 +299,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setCreatingFolder(true)
     setCreateFolderError('')
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders`), {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -332,9 +331,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
   const deleteFolder = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}`, {
         method: 'DELETE',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -351,7 +349,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   // ─── Génération de contenu TTS-direct ─────────────────────────────────
   const fetchContentJob = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/content-job`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/content-job`)
       const data = await resp.json()
       if (data.success) setContentJob(data.job)
     } catch (e) { console.error('Erreur fetchContentJob:', e) }
@@ -361,7 +359,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (contentPollingRef.current) return
     contentPollingRef.current = setInterval(async () => {
       try {
-        const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/content-job`), { credentials: 'include' })
+        const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/content-job`)
         const data = await resp.json()
         if (data.success) {
           setContentJob(data.job)
@@ -386,11 +384,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!programText.trim() || !selectedFolder) return
     setExtracting(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ program_text: programText }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -409,11 +406,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const handleStartContentGeneration = async (mode = 'normal') => {
     if (!selectedFolder) return
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/start`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -431,9 +427,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder) return
     stopContentPolling()
     try {
-      await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/cancel`), {
+      await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/cancel`, {
         method: 'POST',
-        credentials: 'include',
       })
       await fetchContentJob(selectedFolder.id)
     } catch (e) { console.error('Erreur cancel:', e) }
@@ -442,7 +437,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const handlePreviewPrompt = async () => {
     if (!selectedFolder) return
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/preview`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/preview`)
       const data = await resp.json()
       if (data.success) {
         setPromptPreview(data.prompt_preview)
@@ -538,7 +533,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setSavingAnnotation(true)
     setAnnotationError('')
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -551,7 +546,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
           paragraph_context: scriptSelection.paragraph_context || '',
           comment,
         }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -578,9 +572,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const deleteScriptAnnotation = async (annotationId) => {
     if (!selectedFolder || !annotationId) return
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}`, {
         method: 'DELETE',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -597,17 +590,24 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     }
   }
 
-  const downloadAnnotationsMarkdown = () => {
+  const downloadAnnotationsMarkdown = async () => {
     if (!selectedFolder) return
-    window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/markdown`), '_blank')
+    try {
+      await apiDownload(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/markdown`,
+        `annotations-cours-${selectedFolder.id}.md`,
+      )
+    } catch (e) {
+      console.error('Erreur téléchargement annotations:', e)
+      alert(e.message)
+    }
   }
 
   const loadScriptRules = async () => {
     if (!selectedFolder) return
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`),
-        { credentials: 'include' }
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`,
       )
       const data = await resp.json()
       if (data.success) setScriptRules(data)
@@ -619,9 +619,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const resumeActiveTextReview = async () => {
     if (!selectedFolder) return
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/active`),
-        { credentials: 'include' }
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/active`,
       )
       const data = await resp.json()
       if (!data.success || !data.task) return
@@ -647,9 +646,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setExtractingRules(true)
     setRulesError('')
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/extract`),
-        { method: 'POST', credentials: 'include' }
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/extract`,
+        { method: 'POST' },
       )
       const data = await resp.json()
       if (data.success) {
@@ -666,9 +665,17 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     }
   }
 
-  const downloadRulesMarkdown = () => {
+  const downloadRulesMarkdown = async () => {
     if (!selectedFolder) return
-    window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/markdown`), '_blank')
+    try {
+      await apiDownload(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/markdown`,
+        `regles-cours-${selectedFolder.id}.md`,
+      )
+    } catch (e) {
+      console.error('Erreur téléchargement règles:', e)
+      alert(e.message)
+    }
   }
 
   const startEditingRules = () => {
@@ -688,13 +695,12 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setSavingRules(true)
     setRulesError('')
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules_markdown: rulesDraft }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -731,13 +737,12 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setRulesError('')
     setRulesReviewSummary(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-post-tts`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-post-tts`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dry_run: !!dryRun }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -758,9 +763,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder || !taskId) return
     const tick = async () => {
       try {
-        const resp = await fetch(
-          apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/status/${taskId}`),
-          { credentials: 'include' }
+        const resp = await apiFetch(
+          `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/status/${taskId}`,
         )
         const data = await resp.json()
         if (!data.success) {
@@ -801,13 +805,12 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setTextReviewProgress(null)
     if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dry_run: !!dryRun }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -827,9 +830,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const applyAnnotationCorrection = async (annotationId) => {
     if (!selectedFolder || !annotationId) return
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/apply`),
-        { method: 'POST', credentials: 'include' }
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/apply`,
+        { method: 'POST' },
       )
       const data = await resp.json()
       if (data.success) {
@@ -849,9 +852,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const rejectAnnotationCorrection = async (annotationId) => {
     if (!selectedFolder || !annotationId) return
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/reject`),
-        { method: 'POST', credentials: 'include' }
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/reject`,
+        { method: 'POST' },
       )
       const data = await resp.json()
       if (data.success) {
@@ -883,11 +886,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder || !editingSegment) return
     setSavingEdit(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/segment`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/segment`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sub_part_index: editingSegment.sub_part_index, passe: editingSegment.passe, text: editText }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -929,11 +931,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder || !editingSegment || editingSegment.type !== 'course') return
     setSavingEdit(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/course-bloc`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/course-bloc`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ bloc_number: editingSegment.bloc_number, text: editText }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -973,7 +974,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder || !editingSegment || editingSegment.type !== 'break') return
     setSavingEdit(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/break`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/break`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -981,7 +982,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
           intro: editBreakDraft.intro,
           outro: editBreakDraft.outro,
         }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -1007,7 +1007,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
   const fetchDirtyBlocs = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/content-job/dirty-blocs`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/content-job/dirty-blocs`)
       const data = await resp.json()
       if (data.success) setDirtyBlocs(data)
     } catch (e) { /* silencieux */ }
@@ -1046,11 +1046,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     // Persistance côté serveur
     const order = reordered.map((f, i) => ({ id: f.id, position: i }))
     try {
-      await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders/reorder`), {
+      await apiFetch(`/api/hr/platforms/${platformId}/cours-folders/reorder`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order }),
-        credentials: 'include',
       })
     } catch (e) {
       console.error('Erreur réordonnancement:', e)
@@ -1133,9 +1132,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       const formData = new FormData()
       files.forEach(f => formData.append('files', f))
 
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/upload`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/upload`, {
         method: 'POST',
-        credentials: 'include',
         body: formData,
       })
       const data = await resp.json()
@@ -1162,9 +1160,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
   const deleteDocument = async (documentId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-documents/${documentId}`), {
+      const resp = await apiFetch(`/api/hr/cours-documents/${documentId}`, {
         method: 'DELETE',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -1200,19 +1197,34 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setDeletingItem(false)
   }
 
-  const handleDownloadPdf = (documentId) => {
-    window.open(apiUrl(`/api/hr/cours-documents/${documentId}/download`), '_blank')
+  const handleDownloadPdf = async (documentId) => {
+    try {
+      await apiDownload(
+        `/api/hr/cours-documents/${documentId}/download`,
+        `document-${documentId}.pdf`,
+      )
+    } catch (e) {
+      console.error('Erreur téléchargement document:', e)
+      alert(e.message)
+    }
   }
 
-  const handleDownloadAudio = (documentId) => {
-    window.open(apiUrl(`/api/hr/cours-documents/${documentId}/audio`), '_blank')
+  const handleDownloadAudio = async (documentId) => {
+    try {
+      await apiDownload(
+        `/api/hr/cours-documents/${documentId}/audio`,
+        `audio-${documentId}.mp3`,
+      )
+    } catch (e) {
+      console.error('Erreur téléchargement audio:', e)
+      alert(e.message)
+    }
   }
 
   const handleGenerateAudio = async (documentId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-documents/${documentId}/generate-audio`), {
+      const resp = await apiFetch(`/api/hr/cours-documents/${documentId}/generate-audio`, {
         method: 'POST',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -1229,9 +1241,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const handleGenerateAll = async () => {
     setGeneratingAll(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-all-audio`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-all-audio`, {
         method: 'POST',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -1426,11 +1437,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setMockUploadQueue([{ name: 'Lecture de output_jour1/...', status: 'uploading' }])
 
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/mock-upload-local`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/mock-upload-local`,
         {
           method: 'POST',
-          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ source_dir: 'output_jour1' }),
         }
@@ -1467,7 +1477,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setAnalysing(true)
     setWordAnalysis(null)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/analyse`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/analyse`)
       const data = await resp.json()
       if (data.success) {
         setWordAnalysis(data)

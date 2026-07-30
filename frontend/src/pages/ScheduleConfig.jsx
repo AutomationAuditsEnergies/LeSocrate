@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { apiUrl } from '../api'
+import { apiFetch } from '../api'
 import AppLoader from '../components/AppLoader.jsx'
 
 const Icon = ({ name, className = '' }) => (
@@ -28,7 +28,7 @@ export default function ScheduleConfig() {
 
   const fetchPrompt = async () => {
     try {
-      const resp = await fetch(apiUrl('/api/hr/tts-prompt'), { credentials: 'include' })
+      const resp = await apiFetch('/api/hr/tts-prompt')
       const data = await resp.json()
       if (data.success) setPromptContent(data.content || '')
     } catch (e) {
@@ -42,10 +42,9 @@ export default function ScheduleConfig() {
     setPromptSaving(true)
     setPromptSaved(false)
     try {
-      const resp = await fetch(apiUrl('/api/hr/tts-prompt'), {
+      const resp = await apiFetch('/api/hr/tts-prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ content: promptContent }),
       })
       const data = await resp.json()
@@ -62,7 +61,7 @@ export default function ScheduleConfig() {
 
   const fetchConfig = async () => {
     try {
-      const resp = await fetch(apiUrl('/api/hr/schedule-config'), { credentials: 'include' })
+      const resp = await apiFetch('/api/hr/schedule-config')
       const data = await resp.json()
       if (data.success) {
         setPlatforms(data.platforms)
@@ -90,10 +89,9 @@ export default function ScheduleConfig() {
     setSaving(true)
     setSaved(false)
     try {
-      const resp = await fetch(apiUrl('/api/hr/schedule-config'), {
+      const resp = await apiFetch('/api/hr/schedule-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ mode, platform_ids: selectedIds }),
       })
       const data = await resp.json()
