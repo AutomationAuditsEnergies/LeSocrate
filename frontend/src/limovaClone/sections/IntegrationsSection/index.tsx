@@ -45,11 +45,6 @@ export const IntegrationsSection = () => {
             <span>Simulateur de budget</span>
             <h2>Estimez le coût de votre parcours.</h2>
           </div>
-          <p>
-            Ajustez le rythme et la durée de la formation. L’estimation compare
-            immédiatement un formateur freelance avec Pierre, professeur IA
-            Cadrenza.
-          </p>
         </header>
 
         <div className="cadrenza-savings__comparison">
