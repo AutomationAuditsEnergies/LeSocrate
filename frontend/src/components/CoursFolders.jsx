@@ -1785,7 +1785,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between gap-4 border-b px-5 py-3" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+        <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 py-2' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
           <div className="flex min-w-0 items-center gap-2.5">
             <Icon name={audioEditorFile ? 'content_cut' : 'folder_special'} style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />
             <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
@@ -1806,7 +1806,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
         {/* Modal Body */}
         <div
-          className={`${audioEditorFile ? 'overflow-hidden p-0' : 'overflow-y-auto p-5'} min-h-0 flex-1`}
+          className={`${audioEditorFile ? 'overflow-hidden p-0' : embedded ? 'overflow-y-auto p-3' : 'overflow-y-auto p-5'} min-h-0 flex-1`}
           style={{ maxHeight: embedded ? 'none' : 'calc(92vh - 58px)', backgroundColor: darkMode ? colors.bg : '#ffffff' }}
         >
           {audioEditorFile && selectedFolder ? (

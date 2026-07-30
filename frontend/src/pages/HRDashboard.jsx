@@ -3504,29 +3504,29 @@ function TeacherToolPanel({
       aria-label={title}
       style={{ backgroundColor: colors.cardBg }}
     >
-      <header className="flex flex-shrink-0 items-center gap-3 border-b px-4 py-3 pr-12 sm:px-5 sm:pr-12" style={{ borderColor: colors.border }}>
+      <header className="flex flex-shrink-0 items-center gap-2 border-b px-3 py-2 pr-10" style={{ borderColor: colors.border }}>
         <button
           type="button"
           onClick={onBack}
           autoFocus
           aria-label="Revenir aux outils du professeur"
-          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
           style={{ color: colors.textMuted }}
         >
-          <Icon name="arrow_back" className="text-xl" />
+          <Icon name="arrow_back" className="text-lg" />
         </button>
         <span
-          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl"
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
           style={{ backgroundColor: colors.innerBg, color: darkMode ? '#c4b5fd' : '#7c3aed' }}
           aria-hidden="true"
         >
-          <Icon name={icon} className="text-xl" />
+          <Icon name={icon} className="text-base" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold tracking-tight" style={{ color: colors.text }}>
+          <h2 className="truncate text-sm font-semibold tracking-tight" style={{ color: colors.text }}>
             {title}
           </h2>
-          <p className="mt-0.5 truncate text-xs" style={{ color: colors.textMuted }}>{subtitle}</p>
+          <p className="truncate text-[11px]" style={{ color: colors.textMuted }}>{subtitle}</p>
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -4406,7 +4406,12 @@ function AudiosModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E4E4E7] bg-white px-4 py-4 sm:px-6">
+        <div className={`flex items-center justify-between border-b border-[#E4E4E7] bg-white ${embedded ? 'gap-2 px-3 py-2' : 'flex-wrap gap-3 px-4 py-4 sm:px-6'}`}>
+          {embedded ? (
+            <p className="text-[11px] font-medium text-[#71717A]">
+              {audioCount} fichier{audioCount > 1 ? 's' : ''}
+            </p>
+          ) : (
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#18181B] text-white">
               <Icon name="audiotrack" className="text-xl" />
@@ -4420,15 +4425,15 @@ function AudiosModal({
               </p>
             </div>
           </div>
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={handleOpenFillModal}
-              className="flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 sm:px-4"
+              className={`flex items-center gap-1.5 rounded-lg bg-[#18181B] font-medium text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 ${embedded ? 'min-h-8 px-2.5 py-1 text-xs' : 'min-h-11 px-3 py-2 text-sm sm:px-4'}`}
             >
               <Icon name="drive_folder_upload" className="text-base" />
-              <span className="hidden sm:inline">Remplir avec les audios</span>
-              <span className="sm:hidden">Remplir</span>
+              <span>{embedded ? 'Remplir' : 'Remplir avec les audios'}</span>
             </button>
             {!embedded && (
               <button
@@ -4525,7 +4530,7 @@ function AudiosModal({
         </div>
 
         {/* Modal Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5" style={embedded ? undefined : { maxHeight: 'calc(90vh - 80px)' }}>
+        <div className={`min-h-0 flex-1 overflow-y-auto ${embedded ? 'p-3' : 'p-4 sm:p-5'}`} style={embedded ? undefined : { maxHeight: 'calc(90vh - 80px)' }}>
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#D4D4D8] border-t-[#18181B]" />
@@ -4539,6 +4544,37 @@ function AudiosModal({
               </p>
             </div>
           ) : (
+            embedded ? (
+              <div className="space-y-3">
+                {[
+                  ['Cours', audioGroups.courses],
+                  ['Pauses', audioGroups.pauses],
+                  ['Questions-réponses', audioGroups.questions],
+                  ...(audioGroups.other.length ? [['Autres audios', audioGroups.other]] : []),
+                ].map(([title, audios]) => (
+                  <section key={title}>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-[#18181B]">{title}</h3>
+                      <span className="text-[10px] tabular-nums text-[#71717A]">{audios.length}</span>
+                    </div>
+                    {audios.length ? (
+                      <div className="divide-y divide-[#E4E4E7] overflow-hidden rounded-lg border border-[#E4E4E7]">
+                        {audios.map((audio) => (
+                          <div key={audio.name} className="flex items-center gap-2 bg-white px-2.5 py-2">
+                            <Icon name="check_circle" className="text-sm text-[#71717A]" />
+                            <span className="min-w-0 flex-1 truncate text-[11px] text-[#3F3F46]" title={audio.name}>
+                              {audio.displayName}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="rounded-lg bg-[#FAFAFA] px-2.5 py-2 text-[11px] text-[#A1A1AA]">Aucun fichier</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {/* Carte COURS */}
               <AudioCard
@@ -4568,6 +4604,7 @@ function AudiosModal({
                 />
               )}
             </div>
+            )
           )}
         </div>
       </div>
@@ -4666,12 +4703,12 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
         )}
 
         {/* Modal Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6" style={embedded ? undefined : { maxHeight: 'calc(90vh - 80px)' }}>
-          <section className="mb-6 rounded-xl border p-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#F8F7F5' }}>
+        <div className={`min-h-0 flex-1 overflow-y-auto ${embedded ? 'p-3' : 'p-5 sm:p-6'}`} style={embedded ? undefined : { maxHeight: 'calc(90vh - 80px)' }}>
+          <section className={`rounded-xl border ${embedded ? 'mb-3 p-3' : 'mb-6 p-4'}`} style={{ borderColor: '#e2e8f0', backgroundColor: '#F8F7F5' }}>
             <div className="mb-3 flex items-start justify-between gap-4">
               <div>
                 <h4 className="text-sm font-semibold" style={{ color: '#111418' }}>Supports de cours générés</h4>
-                <p className="mt-1 text-xs leading-5" style={{ color: '#64748b' }}>
+                <p className={`mt-1 text-xs ${embedded ? 'leading-4' : 'leading-5'}`} style={{ color: '#64748b' }}>
                   Un PDF sans balises techniques est créé avec les audios de chaque journée lors de la préparation H-24.
                 </p>
               </div>
@@ -4726,11 +4763,28 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
               </div>
             )}
           </section>
-          <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
+          <div className={`grid grid-cols-1 ${embedded ? 'gap-4' : 'gap-6 2xl:grid-cols-2'}`}>
             {/* PDF Viewer */}
             <div className="flex flex-col">
-              <h4 className="text-sm font-bold mb-3" style={{ color: '#111418' }}>PDF ACTUEL</h4>
+              <h4 className={`${embedded ? 'mb-2 text-xs font-semibold' : 'mb-3 text-sm font-bold'}`} style={{ color: '#111418' }}>{embedded ? 'PDF actuel' : 'PDF ACTUEL'}</h4>
               {platform.pdf_filename && platform.pdf_url ? (
+                embedded ? (
+                  <div className="flex items-center gap-2 rounded-lg border border-[#E2E8F0] bg-white p-2.5">
+                    <Icon name="picture_as_pdf" className="text-lg text-[#64748B]" />
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#334155]">{platform.pdf_filename}</span>
+                    <a
+                      href={platform.pdf_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-md bg-[#F1F5F9] px-2 py-1 text-[11px] font-medium text-[#475569]"
+                    >
+                      Ouvrir
+                    </a>
+                    <button type="button" onClick={onDelete} aria-label="Supprimer le PDF actuel" className="flex size-7 items-center justify-center rounded-md text-[#64748B] hover:bg-rose-50 hover:text-rose-600">
+                      <Icon name="delete_outline" className="text-sm" />
+                    </button>
+                  </div>
+                ) : (
                 <div className="flex flex-1 flex-col overflow-hidden rounded-lg border" style={{ borderColor: '#e2e8f0', minHeight: embedded ? '360px' : '500px' }}>
                   <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor: '#e2e8f0', backgroundColor: '#F8F7F5' }}>
                     <span className="text-sm font-medium truncate" style={{ color: '#64748b' }}>{platform.pdf_filename}</span>
@@ -4764,10 +4818,11 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                     title="PDF Viewer"
                   />
                 </div>
+                )
               ) : (
-                <div className="flex flex-1 items-center justify-center rounded-lg border-2 border-dashed" style={{ borderColor: '#e2e8f0', minHeight: embedded ? '260px' : '500px' }}>
+                <div className="flex flex-1 items-center justify-center rounded-lg border-2 border-dashed" style={{ borderColor: '#e2e8f0', minHeight: embedded ? '72px' : '500px' }}>
                   <div className="text-center">
-                    <Icon name="picture_as_pdf" className="text-6xl mb-3" style={{ color: '#cbd5e1' }} />
+                    <Icon name="picture_as_pdf" className={embedded ? 'mb-1 text-2xl' : 'mb-3 text-6xl'} style={{ color: '#cbd5e1' }} />
                     <p className="text-sm" style={{ color: '#94a3b8' }}>Aucun PDF uploadé</p>
                   </div>
                 </div>
@@ -4776,7 +4831,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
 
             {/* Upload Section */}
             <div className="flex flex-col">
-              <h4 className="text-sm font-bold mb-3" style={{ color: '#111418' }}>UPLOADER UN NOUVEAU PDF</h4>
+              <h4 className={`${embedded ? 'mb-2 text-xs font-semibold' : 'mb-3 text-sm font-bold'}`} style={{ color: '#111418' }}>{embedded ? 'Ajouter un PDF' : 'UPLOADER UN NOUVEAU PDF'}</h4>
 
               <div
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
@@ -4787,7 +4842,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                 style={{
                   borderColor: dragOver ? '#8B5CF6' : '#e2e8f0',
                   backgroundColor: dragOver ? 'rgba(139, 92, 246, 0.06)' : 'transparent',
-                  minHeight: embedded ? '280px' : '500px',
+                  minHeight: embedded ? '120px' : '500px',
                   cursor: uploading ? 'not-allowed' : 'pointer',
                   opacity: uploading ? 0.6 : 1
                 }}
@@ -4800,7 +4855,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                   onChange={handleFileSelect}
                   disabled={uploading}
                 />
-                <div className="flex flex-col items-center gap-4 text-center px-6">
+                <div className={`flex flex-col items-center text-center ${embedded ? 'gap-2 px-3' : 'gap-4 px-6'}`}>
                   {uploading ? (
                     <>
                       <div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-200 border-t-violet-500" />
@@ -4820,15 +4875,15 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                     </div>
                   ) : (
                     <>
-                      <div className="flex size-20 items-center justify-center rounded-full" style={{ backgroundColor: 'rgba(139, 92, 246, 0.10)' }}>
-                        <Icon name="cloud_upload" className="text-5xl" style={{ color: '#7c3aed' }} />
+                      <div className={`flex items-center justify-center rounded-full ${embedded ? 'size-10' : 'size-20'}`} style={{ backgroundColor: 'rgba(139, 92, 246, 0.10)' }}>
+                        <Icon name="cloud_upload" className={embedded ? 'text-2xl' : 'text-5xl'} style={{ color: '#7c3aed' }} />
                       </div>
                       <div>
-                        <h3 className="font-bold text-lg mb-2" style={{ color: '#111418' }}>
-                          Glissez votre PDF ici
+                        <h3 className={`${embedded ? 'text-xs font-semibold' : 'mb-2 text-lg font-bold'}`} style={{ color: '#111418' }}>
+                          {embedded ? 'Déposer ou choisir un PDF' : 'Glissez votre PDF ici'}
                         </h3>
-                        <p className="text-sm" style={{ color: '#64748b' }}>ou cliquez pour parcourir</p>
-                        <p className="text-xs mt-2" style={{ color: '#94a3b8' }}>Format supporté : PDF uniquement</p>
+                        {!embedded && <p className="text-sm" style={{ color: '#64748b' }}>ou cliquez pour parcourir</p>}
+                        <p className={embedded ? 'mt-1 text-[10px]' : 'mt-2 text-xs'} style={{ color: '#94a3b8' }}>PDF uniquement</p>
                       </div>
                     </>
                   )}
@@ -5181,7 +5236,7 @@ function StudentsToolContent({
   darkMode,
 }) {
   return (
-    <div className="p-5 sm:p-6">
+    <div className="p-3">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves et invitations</h3>
@@ -5450,11 +5505,11 @@ function PlatformCard({
             role="dialog"
             aria-modal="true"
             aria-labelledby={`teacher-details-${p.id}`}
-            className="relative flex max-h-[94vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:h-[90vh] sm:flex-row"
+            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:h-[86vh] sm:max-h-[760px] sm:flex-row"
             style={{ border: `1px solid ${colors.border}` }}
           >
             <aside
-              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-[38%] ${activeTool ? 'hidden sm:block' : 'min-h-[260px]'}`}
+              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2 ${activeTool ? 'hidden sm:block' : 'min-h-[260px]'}`}
               style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
             >
               <span
@@ -5732,7 +5787,7 @@ function PlatformCard({
             />
           )}
           {activeTool === 'attendance' && (
-            <div className="p-5 sm:p-6">
+            <div className="p-3">
               <AttendanceCardPanel
                 colors={colors}
                 darkMode={darkMode}
@@ -6206,7 +6261,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
         )}
 
         {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6" style={embedded ? undefined : { maxHeight: 'calc(92vh - 74px)' }}>
+        <div className={`min-h-0 flex-1 overflow-y-auto ${embedded ? 'p-3' : 'p-5 sm:p-6'}`} style={embedded ? undefined : { maxHeight: 'calc(92vh - 74px)' }}>
           {result?.success ? (
             <div className="flex flex-col items-center gap-4 py-4 text-center">
               <div className="flex items-center justify-center size-14 rounded-full" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)' }}>
