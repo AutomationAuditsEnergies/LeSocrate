@@ -1,4 +1,5 @@
 import unittest
+import inspect
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -103,6 +104,51 @@ class PipelineQueueRouteTest(unittest.TestCase):
         self.assertFalse(hasattr(formation_routes, "_tick_auto_pilot"))
         self.assertFalse(hasattr(formation_routes, "start_auto_pilot_watchdog"))
 
+    def test_monitoring_diagnostic_has_no_repairs_or_finalization(self):
+        source = inspect.getsource(formation_routes.formation_pipeline_diagnostic)
+
+        self.assertNotIn("repair_orphan_content_folders", source)
+        self.assertNotIn("_finalize_scheduled_audio_module_if_ready", source)
+        self.assertNotIn("update_job(", source)
+
+        with patch(
+            "routes.formation_routes.get_job",
+            return_value=_job(auto_pilot_enabled=True, auto_pilot_step="content"),
+        ), patch(
+            "services.formation_health_service.compute_health",
+            return_value={"ok": True, "blocking": [], "warnings": [], "checks": {}},
+        ), patch(
+            "services.formation_volume_audit_service.compute_volume_audit",
+            return_value={"folders": []},
+        ), patch(
+            "services.formation_observability_service.list_pipeline_events",
+            return_value=[],
+        ), patch(
+            "services.formation_pipeline_service.get_expected_course_folders",
+            return_value={
+                "expected_count": 0,
+                "folder_ids": [],
+                "duplicates": [],
+                "missing": [],
+            },
+        ), patch(
+            "routes.formation_routes._determine_next_ap_step",
+            return_value="content",
+        ), patch(
+            "services.formation_pipeline_service.repair_orphan_content_folders",
+        ) as repair, patch.object(
+            formation_routes,
+            "_finalize_scheduled_audio_module_if_ready",
+        ) as finalize, patch(
+            "routes.formation_routes.update_job",
+        ) as update:
+            response = self.client.get("/api/formation/42/diagnostic")
+
+        self.assertEqual(response.status_code, 200)
+        repair.assert_not_called()
+        finalize.assert_not_called()
+        update.assert_not_called()
+
     def test_stop_returns_cancelled_work_item_id_not_dataclass(self):
         cancelled = SimpleNamespace(id="work-cancelled")
         with patch(
@@ -146,10 +192,11 @@ class PipelineQueueRouteTest(unittest.TestCase):
                 status="error",
                 auto_pilot_step="content",
                 auto_pilot_error="attempts exhausted",
+                daily_programs_validated=1,
             ),
         ), patch(
             "routes.formation_routes.update_job",
-        ), patch(
+        ) as update_job, patch(
             "routes.formation_routes._determine_next_ap_step",
             return_value="content",
         ), patch(
@@ -182,6 +229,14 @@ class PipelineQueueRouteTest(unittest.TestCase):
         )
         lookup_order.assert_called_once_with(42, center_account_id=42)
         mark_order_resumed.assert_called_once_with(73, pipeline_job_id=42)
+        update_job.assert_called_once_with(
+            42,
+            auto_pilot_enabled=1,
+            auto_pilot_error=None,
+            auto_pilot_step="content",
+            status="daily_validated",
+            error_message=None,
+        )
 
     def test_historical_claude_model_names_resume_on_deepseek_profiles(self):
         self.assertEqual(_normalize_pipeline_model_choice("sonnet"), "pro")

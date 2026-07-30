@@ -10,6 +10,7 @@ const PIPELINE_STAGES = [
   { key: 'review', label: 'Contrôle de conformité', icon: 'rule' },
   { key: 'post_review_docs', label: 'Documents validés', icon: 'fact_check' },
   { key: 'slides', label: 'Supports de cours', icon: 'slideshow' },
+  { key: 'finalize_text', label: 'Finalisation', icon: 'verified' },
 ]
 
 const STEP_ALIASES = {

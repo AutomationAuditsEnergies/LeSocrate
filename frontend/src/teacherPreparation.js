@@ -7,6 +7,7 @@ const PIPELINE_PROGRESS_BY_STEP = {
   review: 78,
   post_review_docs: 88,
   slides: 96,
+  finalize_text: 99,
   audio: 98,
   done: 100,
 }

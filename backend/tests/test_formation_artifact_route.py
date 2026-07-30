@@ -104,7 +104,7 @@ class FormationArtifactRouteTest(unittest.TestCase):
         ), patch(
             "services.formation_pipeline_service.repair_orphan_content_folders",
             return_value=None,
-        ), patch(
+        ) as repair_folders, patch(
             "services.formation_pipeline_service.get_expected_course_folders",
             return_value={"expected_count": 1, "folders": folders, "duplicates": [], "missing": []},
         ), patch(
@@ -126,6 +126,7 @@ class FormationArtifactRouteTest(unittest.TestCase):
         self.assertEqual(folder["segments_completed"], 7)
         self.assertEqual(folder["slide_count"], 2)
         content_lookup.assert_called_once_with([9])
+        repair_folders.assert_not_called()
 
     def test_docx_route_uses_migrated_docx_service(self):
         with self.client.session_transaction() as sess:

@@ -256,7 +256,7 @@ class PipelineOrderTest(unittest.TestCase):
             auto_pilot_post_review_docs_done=1,
         )
 
-    def test_teacher_is_finalized_after_every_slide_deck_exists(self):
+    def test_teacher_finalization_is_scheduled_after_every_slide_deck_exists(self):
         job = _job(
             platform_id=1,
             status="tts_launched",
@@ -296,9 +296,9 @@ class PipelineOrderTest(unittest.TestCase):
         ) as update:
             next_step = fr._determine_next_ap_step(99)
 
-        self.assertIsNone(next_step)
-        finalize.assert_called_once_with(99)
-        update.assert_called_once_with(99, status="text_ready", error_message=None)
+        self.assertEqual(next_step, "finalize_text")
+        finalize.assert_not_called()
+        update.assert_not_called()
 
     def test_text_finalization_failure_is_retried_instead_of_reporting_ready(self):
         job = _job(
@@ -306,40 +306,39 @@ class PipelineOrderTest(unittest.TestCase):
             status="tts_launched",
             auto_pilot_post_review_docs_done=1,
         )
-        with patch.object(fr, "get_job", return_value=job), patch.object(
-            fps,
-            "get_expected_course_folders",
-            return_value={"folder_ids": [10]},
-        ), patch(
-            "repositories.pipeline_repository.list_content_completion_rows_for_folders",
-            return_value=[{
-                "folder_id": 10,
-                "status": "completed",
-                "total_words": 5000,
-                "completed_segments": 7,
-            }],
-        ), patch(
-            "repositories.pipeline_repository.count_segments_pending_review_for_folders",
-            return_value=0,
-        ), patch(
-            "repositories.pipeline_repository.list_completed_content_jobs_for_folders",
-            return_value=[{"folder_id": 10, "content_job_id": 20}],
-        ), patch(
-            "repositories.pipeline_repository.get_latest_script_slide_deck_row",
-            return_value={"slides_json": '[{"title": "Introduction"}]'},
-        ), patch.object(
-            cgs,
-            "_current_compliance_review_signature",
-            return_value="review-sig",
-        ), patch.object(
+        with patch.object(
             fr,
             "_finalize_text_ready_state",
             side_effect=RuntimeError("module envelope unavailable"),
         ), patch.object(fr, "update_job") as update:
             with self.assertRaisesRegex(RuntimeError, "module envelope"):
-                fr._determine_next_ap_step(99)
+                fr._execute_ap_step(99, "finalize_text", job)
 
         update.assert_not_called()
+
+    def test_finalize_text_step_marks_the_teacher_ready(self):
+        job = _job(
+            platform_id=1,
+            status="tts_launched",
+            auto_pilot_post_review_docs_done=1,
+            auto_pilot_generate_audio=0,
+        )
+        with patch.object(
+            fr,
+            "_finalize_text_ready_state",
+            return_value={"module_status": "draft"},
+        ) as finalize, patch.object(fr, "update_job") as update:
+            fr._execute_ap_step(99, "finalize_text", job)
+
+        finalize.assert_called_once_with(99)
+        update.assert_called_once_with(99, status="text_ready", error_message=None)
+
+    def test_next_step_calculation_has_no_business_writes(self):
+        source = inspect.getsource(fr._determine_next_ap_step)
+
+        self.assertNotIn("update_job(", source)
+        self.assertNotIn("_finalize_text_ready_state(", source)
+        self.assertNotIn("_finalize_audio_ready_state(", source)
 
     def test_audio_gate_requires_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=False)
@@ -449,6 +448,9 @@ class PipelineOrderTest(unittest.TestCase):
         ), patch(
             "services.formation_pipeline_service.get_expected_course_folders",
             return_value=folder_state,
+        ), patch(
+            "services.formation_pipeline_service.repair_orphan_content_folders",
+            return_value={"repaired": 0, "missing": 0, "folders": []},
         ), patch(
             "services.formation_pipeline_service.expected_course_folder_name",
             side_effect=lambda _day, fallback: f"Jour {fallback}",

@@ -19,6 +19,7 @@ _STEP_PROGRESS = {
     "review": (84, "Vérification pédagogique"),
     "post_review_docs": (90, "Finalisation des supports"),
     "slides": (97, "Création des slides"),
+    "finalize_text": (99, "Finalisation du professeur"),
     "audio": (99, "Préparation des audios"),
     "done": (100, "Professeur prêt"),
 }

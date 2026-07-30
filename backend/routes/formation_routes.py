@@ -1063,12 +1063,6 @@ def list_content(job_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    try:
-        from services.formation_pipeline_service import repair_orphan_content_folders
-        repair_orphan_content_folders(job_id)
-    except Exception as e:
-        logger.warning(f"⚠️ Réparation cours_folders job {job_id} ignorée : {e}")
-
     import json as _json
     from services.formation_pipeline_service import get_expected_course_folders
     from repositories.pipeline_repository import list_content_completion_rows_for_folders
@@ -3681,26 +3675,25 @@ def _queue_status_for_job(job_id: int) -> dict:
         return {"mode": "queue", "status": "unavailable", "error": str(exc)[:300]}
 
 
+def _pipeline_error_fallback_status(job: dict) -> str:
+    """Return the last stable product status without mutating the pipeline."""
+    if job.get("daily_programs_validated"):
+        return "daily_validated"
+    if job.get("global_program_validated"):
+        return "global_validated"
+    if job.get("global_program"):
+        return "global_ready"
+    if job.get("reac_text"):
+        return "reac_ready"
+    return "init"
+
+
 def _determine_next_ap_step(job_id: int) -> str | None:
-    """Détermine la prochaine étape à exécuter (checks idempotents). None = terminé."""
+    """Read-only calculation of the next durable step. None means completed."""
     import json as _json
     j = get_job(job_id)
     if not j:
         return None
-
-    # Reset du statut erreur avant de relancer (même logique que l'ancien auto-pilot)
-    if j["status"] in ("error", "audio_error"):
-        if j.get("daily_programs_validated"):
-            fallback = "daily_validated"
-        elif j.get("global_program_validated"):
-            fallback = "global_validated"
-        elif j.get("global_program"):
-            fallback = "global_ready"
-        elif j.get("reac_text"):
-            fallback = "reac_ready"
-        else:
-            fallback = "init"
-        update_job(job_id, status=fallback, error_message=None)
 
     # 1. REAC
     if not j.get("reac_text"):
@@ -3801,18 +3794,13 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # 10. Audio TTS optionnel. Par défaut l'auto-pilot s'arrête texte prêt :
     # les audios se génèrent ensuite à la demande, journée/semaine par journée/semaine.
-    if j.get("auto_pilot_generate_audio") and not _legacy_bulk_audio_enabled():
-        update_job(job_id, auto_pilot_generate_audio=0)
-        j["auto_pilot_generate_audio"] = False
-
-    if not j.get("auto_pilot_generate_audio"):
-        # This transition creates the reusable module envelope and exposes the
-        # platform.  It is part of fulfillment, not best-effort cleanup: a
-        # failure must retry/dead-letter instead of reporting a paid order ready.
-        _finalize_text_ready_state(job_id)
-        if j.get("status") != "text_ready":
-            update_job(job_id, status="text_ready", error_message=None)
-        return None
+    bulk_audio_enabled = bool(
+        j.get("auto_pilot_generate_audio") and _legacy_bulk_audio_enabled()
+    )
+    if not bulk_audio_enabled:
+        # Finalization is a real durable step. Merely asking for status must
+        # never expose the platform or create its module envelope.
+        return None if j.get("status") == "text_ready" else "finalize_text"
 
     # Si l'audio auto est explicitement demandé, on vérifie via dirty=0 sur tous les segments (pas le status qui
     # est positionné au début du loop audio, donc non fiable en cas de restart)
@@ -3827,6 +3815,11 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
     """Exécute UNE étape de l'auto-pilot (synchrone — bloque le tick courant)."""
     import eventlet
+
+    if job.get("status") in ("error", "audio_error"):
+        fallback = _pipeline_error_fallback_status(job)
+        update_job(job_id, status=fallback, error_message=None)
+        job = {**job, "status": fallback, "error_message": None}
 
     model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="pro")
     tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
@@ -3944,6 +3937,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             _format_day_program_text,
             expected_course_folder_name,
             get_expected_course_folders,
+            repair_orphan_content_folders,
         )
 
         daily_programs = _json.loads(job.get("daily_programs") or "[]")
@@ -3954,6 +3948,9 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             auto_pilot_post_review_docs_done=0,
             error_message=None,
         )
+        # Historical folders are repaired only while the durable worker owns
+        # the content step, never while an admin is merely viewing the page.
+        repair_orphan_content_folders(job_id)
         folder_state = get_expected_course_folders(
             job_id,
             create_missing=True,
@@ -4208,8 +4205,8 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             )
         # Les slides sont encore à produire. Garder un statut intermédiaire
         # empêche le dashboard de déclarer le professeur prêt trop tôt.
-        # `_determine_next_ap_step` finalisera `text_ready` uniquement après
-        # avoir vérifié qu'un deck non vide existe pour chaque journée.
+        # La prochaine étape durable `finalize_text` rendra le professeur prêt
+        # uniquement après avoir vérifié les slides de chaque journée.
         update_job(job_id, status="tts_launched", auto_pilot_post_review_docs_done=1)
         logger.info(
             f"🤖 ✓ Documents post-révision générés job {job_id} "
@@ -4352,6 +4349,20 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             min(slide_workers, max(1, len(pending_rows))) if pending_rows else 0,
             slide_api_model,
         )
+
+    elif step == "finalize_text":
+        # This transition creates the module envelope and exposes the platform.
+        # Keeping it inside its own work item makes failures retryable without
+        # letting a GET/status request perform business writes.
+        _finalize_text_ready_state(job_id)
+        update_kwargs = {
+            "status": "text_ready",
+            "error_message": None,
+        }
+        if job.get("auto_pilot_generate_audio") and not _legacy_bulk_audio_enabled():
+            update_kwargs["auto_pilot_generate_audio"] = 0
+        update_job(job_id, **update_kwargs)
+        logger.info("🤖 ✓ Finalisation texte durable terminée job %s", job_id)
 
     elif step == "audio":
         if not _legacy_bulk_audio_enabled():
@@ -4506,12 +4517,17 @@ def resume_auto_pilot(job_id):
     except Exception as e:
         return jsonify({"error": f"Impossible de calculer la prochaine étape : {str(e)[:300]}"}), 500
 
-    update_job(
-        job_id,
-        auto_pilot_enabled=1,
-        auto_pilot_error=None,
-        auto_pilot_step=next_step or "done",
-    )
+    resume_updates = {
+        "auto_pilot_enabled": 1,
+        "auto_pilot_error": None,
+        "auto_pilot_step": next_step or "done",
+    }
+    if job.get("status") in ("error", "audio_error"):
+        resume_updates.update(
+            status=_pipeline_error_fallback_status(job),
+            error_message=None,
+        )
+    update_job(job_id, **resume_updates)
 
     if next_step is None:
         return jsonify({
@@ -4712,12 +4728,6 @@ def formation_pipeline_diagnostic(job_id):
         return jsonify({"error": "Job introuvable"}), 404
 
     try:
-        from services.formation_pipeline_service import repair_orphan_content_folders
-        repair_orphan_content_folders(job_id)
-    except Exception as e:
-        logger.warning(f"⚠️ Diagnostic repair folders job {job_id} : {e}")
-
-    try:
         events_limit = int(request.args.get("events_limit", 80))
     except (TypeError, ValueError):
         events_limit = 80
@@ -4791,22 +4801,6 @@ def formation_pipeline_diagnostic(job_id):
     except Exception as e:
         logger.warning(f"⚠️ Diagnostic folders job {job_id} : {e}")
 
-    finalize_result = None
-    try:
-        audio_done = job.get("status") in ("audio_completed", "audio_launched")
-        audio_clean = bool(folders) and sum(int(f.get("dirty_segments") or 0) for f in folders) == 0
-        if audio_done and audio_clean:
-            voice_type = job.get("auto_pilot_tts_mode") or "gtts"
-            finalize_result = _finalize_scheduled_audio_module_if_ready(job_id, voice_type)
-            job = get_job(job_id) or job
-            try:
-                from services.formation_health_service import compute_health
-                health = compute_health(job_id)
-            except Exception as health_e:
-                logger.warning(f"⚠️ Diagnostic health recompute job {job_id} : {health_e}")
-    except Exception as e:
-        logger.warning(f"⚠️ Diagnostic finalisation audio job {job_id} : {e}")
-
     public_job = {
         key: job.get(key)
         for key in (
@@ -4841,5 +4835,7 @@ def formation_pipeline_diagnostic(job_id):
         },
         "next_auto_step": next_auto_step,
         "events": events,
-        "finalize": finalize_result,
+        # Kept for API compatibility. Finalization is performed only by a
+        # durable worker, never by this monitoring endpoint.
+        "finalize": None,
     }), 200
