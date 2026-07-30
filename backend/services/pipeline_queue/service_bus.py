@@ -20,10 +20,10 @@ def _load_azure_sdk():
     try:
         from azure.identity import DefaultAzureCredential
         from azure.servicebus import (
-            AmqpTransportType,
             AutoLockRenewer,
             ServiceBusClient,
             ServiceBusMessage,
+            TransportType,
         )
     except ImportError as exc:  # pragma: no cover - exercised without Azure extra.
         raise RuntimeError(
@@ -31,10 +31,10 @@ def _load_azure_sdk():
         ) from exc
     return {
         "DefaultAzureCredential": DefaultAzureCredential,
-        "AmqpTransportType": AmqpTransportType,
         "AutoLockRenewer": AutoLockRenewer,
         "ServiceBusClient": ServiceBusClient,
         "ServiceBusMessage": ServiceBusMessage,
+        "TransportType": TransportType,
     }
 
 
@@ -80,7 +80,7 @@ class ServiceBusTransport:
 
         kwargs = {}
         if settings.service_bus_websockets:
-            kwargs["transport_type"] = self._sdk["AmqpTransportType"].AmqpOverWebsocket
+            kwargs["transport_type"] = self._sdk["TransportType"].AmqpOverWebsocket
         client_cls = self._sdk["ServiceBusClient"]
         if settings.service_bus_connection_string:
             self.client = client_cls.from_connection_string(
@@ -108,8 +108,11 @@ class ServiceBusTransport:
                 "pipeline_job_id": int(delivery.payload.get("pipeline_job_id") or 0),
             },
         )
+        queue_name = self.settings.queue_name_for_task(
+            delivery.payload.get("task_type")
+        )
         with self.client.get_queue_sender(
-            queue_name=self.settings.service_bus_queue_name
+            queue_name=queue_name
         ) as sender:
             sender.send_messages(message)
 
@@ -139,7 +142,7 @@ class ServiceBusReceiverSession(AbstractContextManager):
 
     def __enter__(self):
         self._receiver_context = self.transport.client.get_queue_receiver(
-            queue_name=self.transport.settings.service_bus_queue_name,
+            queue_name=self.transport.settings.receiver_queue_name,
             max_wait_time=max(1, int(self.transport.settings.poll_seconds)),
             prefetch_count=0,
         )

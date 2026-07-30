@@ -303,6 +303,42 @@ jobs:
             --setting-names DB_PATH SQLITE_SAFETY_STRICT \
             >/dev/null
 
+          # Once the split workers have been cut over, preserve that topology
+          # on every later API deployment. Before the first worker deployment,
+          # keep the current single-host worker as a safe fallback.
+          existing_service_bus_namespace="$(az webapp config appsettings list \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query "[?name=='AZURE_SERVICE_BUS_NAMESPACE'].value | [0]" \
+            -o tsv)"
+          existing_pipeline_queue_backend="$(az webapp config appsettings list \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query "[?name=='PIPELINE_QUEUE_BACKEND'].value | [0]" \
+            -o tsv)"
+          pipeline_queue_backend=database
+          pipeline_dedicated_worker=1
+          pipeline_outbox_dispatcher=0
+          pipeline_settings=()
+          if [ "${existing_pipeline_queue_backend}" = "service_bus" ] \
+            && [ -n "${existing_service_bus_namespace}" ]; then
+            pipeline_queue_backend=service_bus
+            pipeline_dedicated_worker=0
+            pipeline_outbox_dispatcher=1
+            pipeline_settings+=(
+              "AZURE_SERVICE_BUS_NAMESPACE=${existing_service_bus_namespace}"
+              "PIPELINE_SERVICE_BUS_QUEUE=formation-pipeline"
+              "PIPELINE_SERVICE_BUS_AI_QUEUE=formation-ai"
+              "PIPELINE_SERVICE_BUS_AUDIO_QUEUE=formation-audio"
+            )
+          fi
+          pipeline_settings+=(
+            "PIPELINE_QUEUE_BACKEND=${pipeline_queue_backend}"
+            "PIPELINE_DEDICATED_WORKER=${pipeline_dedicated_worker}"
+            "PIPELINE_OUTBOX_DISPATCHER=${pipeline_outbox_dispatcher}"
+            "PIPELINE_OUTBOX_RENOTIFY_SECONDS=600"
+          )
+
           az webapp config appsettings set \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${APP_NAME}" \
@@ -315,9 +351,7 @@ jobs:
               PIPELINE_DATABASE_BACKEND=postgres \
               PIPELINE_POSTGRES_MIRROR=0 \
               PIPELINE_EXECUTION_MODE=queue \
-              PIPELINE_QUEUE_BACKEND=database \
               PIPELINE_EMBEDDED_WORKER=0 \
-              PIPELINE_DEDICATED_WORKER=1 \
               PIPELINE_WORK_MAX_ATTEMPTS=5 \
               PIPELINE_WORK_LEASE_SECONDS=300 \
               PIPELINE_WORK_HEARTBEAT_SECONDS=60 \
@@ -379,6 +413,7 @@ jobs:
               PLATFORM_7_FRONTEND_URL="${COPY_FRONTEND_URL}" \
               PLATFORM_8_FRONTEND_URL="${COPY_FRONTEND_URL}" \
               PLATFORM_9_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              "${pipeline_settings[@]}" \
             >/dev/null
 
           secret_settings=()

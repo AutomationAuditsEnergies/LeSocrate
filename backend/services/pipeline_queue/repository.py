@@ -29,6 +29,7 @@ from .contracts import (
     WorkStatus,
     utcnow,
 )
+from .routing import normalize_task_types
 
 
 logger = get_logger(__name__)
@@ -626,11 +627,34 @@ class WorkItemRepository:
             row = _row_dict(cur.fetchone(), cur)
             return _to_work_item(row) if row else None
 
-    def claim_next(self, *, owner: str, lease_seconds: int) -> WorkItem | None:
-        return self._claim(owner=owner, lease_seconds=lease_seconds, work_item_id=None)
+    def claim_next(
+        self,
+        *,
+        owner: str,
+        lease_seconds: int,
+        task_types: Iterable[str] | None = None,
+    ) -> WorkItem | None:
+        return self._claim(
+            owner=owner,
+            lease_seconds=lease_seconds,
+            work_item_id=None,
+            task_types=task_types,
+        )
 
-    def claim(self, work_item_id: str, *, owner: str, lease_seconds: int) -> WorkItem | None:
-        return self._claim(owner=owner, lease_seconds=lease_seconds, work_item_id=work_item_id)
+    def claim(
+        self,
+        work_item_id: str,
+        *,
+        owner: str,
+        lease_seconds: int,
+        task_types: Iterable[str] | None = None,
+    ) -> WorkItem | None:
+        return self._claim(
+            owner=owner,
+            lease_seconds=lease_seconds,
+            work_item_id=work_item_id,
+            task_types=task_types,
+        )
 
     def _claim(
         self,
@@ -638,18 +662,25 @@ class WorkItemRepository:
         owner: str,
         lease_seconds: int,
         work_item_id: str | None,
+        task_types: Iterable[str] | None,
     ) -> WorkItem | None:
         self.ensure_schema()
         now = utcnow()
         expires = now + timedelta(seconds=max(1, lease_seconds))
         token = str(uuid.uuid4())
+        normalized_task_types = normalize_task_types(task_types)
 
         if self.is_postgres:
             id_filter = "AND id = %s" if work_item_id else ""
-            params: list[Any] = [now]
+            task_filter = ""
+            if normalized_task_types:
+                task_placeholders = ", ".join(["%s"] * len(normalized_task_types))
+                task_filter = f"AND task_type IN ({task_placeholders})"
+            params: list[Any] = [now, now]
             if work_item_id:
                 params.append(work_item_id)
-            params.extend([owner, token, expires, now])
+            params.extend(normalized_task_types)
+            params.extend([owner, token, expires, now, now])
             with self._connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -663,6 +694,7 @@ class WorkItemRepository:
                                   OR (status = 'running' AND lease_expires_at < %s)
                               )
                               {id_filter}
+                              {task_filter}
                             ORDER BY priority DESC, available_at, created_at
                             FOR UPDATE SKIP LOCKED
                             LIMIT 1
@@ -680,8 +712,7 @@ class WorkItemRepository:
                         WHERE item.id = candidate.id
                         RETURNING item.*
                         """,
-                        # now is repeated for the stale lease predicate and updated_at.
-                        ([now, now] + ([work_item_id] if work_item_id else []) + [owner, token, expires, now, now]),
+                        params,
                     )
                     row = _row_dict(cur.fetchone(), cur)
                     return _to_work_item(row) if row else None
@@ -695,6 +726,11 @@ class WorkItemRepository:
             if work_item_id:
                 id_filter = "AND id = ?"
                 params.append(work_item_id)
+            task_filter = ""
+            if normalized_task_types:
+                task_placeholders = ", ".join(["?"] * len(normalized_task_types))
+                task_filter = f"AND task_type IN ({task_placeholders})"
+                params.extend(normalized_task_types)
             cur.execute(
                 f"""
                 SELECT id FROM pipeline_work_items
@@ -704,6 +740,7 @@ class WorkItemRepository:
                       OR (status = 'running' AND lease_expires_at < ?)
                   )
                   {id_filter}
+                  {task_filter}
                 ORDER BY priority DESC, available_at, created_at
                 LIMIT 1
                 """,
@@ -956,12 +993,21 @@ class WorkItemRepository:
             )
             return cur.rowcount == 1
 
-    def dead_letter_one_exhausted(self) -> WorkItem | None:
+    def dead_letter_one_exhausted(
+        self,
+        *,
+        task_types: Iterable[str] | None = None,
+    ) -> WorkItem | None:
         """Reconcile a crashed final attempt even when no broker message remains."""
         self.ensure_schema()
         now = utcnow()
         error = "Dernière tentative interrompue; lease expiré"
+        normalized_task_types = normalize_task_types(task_types)
         if self.is_postgres:
+            task_filter = ""
+            if normalized_task_types:
+                task_placeholders = ", ".join(["%s"] * len(normalized_task_types))
+                task_filter = f"AND task_type IN ({task_placeholders})"
             with self._connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -972,6 +1018,7 @@ class WorkItemRepository:
                             WHERE status = 'running'
                               AND attempt_count >= max_attempts
                               AND lease_expires_at < %s
+                              {task_filter}
                             ORDER BY lease_expires_at, created_at
                             FOR UPDATE SKIP LOCKED
                             LIMIT 1
@@ -983,8 +1030,8 @@ class WorkItemRepository:
                         FROM candidate
                         WHERE item.id = candidate.id
                         RETURNING item.*
-                        """,
-                        (now, error, now, now),
+                        """.format(task_filter=task_filter),
+                        (now, *normalized_task_types, error, now, now),
                     )
                     row = _row_dict(cur.fetchone(), cur)
                     return _to_work_item(row) if row else None
@@ -992,15 +1039,22 @@ class WorkItemRepository:
         now_s = _sqlite_time(now)
         with self._connection(immediate=True) as conn:
             cur = conn.cursor()
+            task_filter = ""
+            params: list[Any] = [now_s]
+            if normalized_task_types:
+                task_placeholders = ", ".join(["?"] * len(normalized_task_types))
+                task_filter = f"AND task_type IN ({task_placeholders})"
+                params.extend(normalized_task_types)
             cur.execute(
-                """
+                f"""
                 SELECT id FROM pipeline_work_items
                 WHERE status = 'running'
                   AND attempt_count >= max_attempts
                   AND lease_expires_at < ?
+                  {task_filter}
                 ORDER BY lease_expires_at, created_at LIMIT 1
                 """,
-                (now_s,),
+                params,
             )
             candidate = cur.fetchone()
             if not candidate:
@@ -1058,6 +1112,93 @@ class WorkItemRepository:
                 break
             deliveries.append(delivery)
         return deliveries
+
+    def reconcile_outbox_notifications(
+        self,
+        *,
+        limit: int,
+        renotify_after_seconds: int,
+    ) -> int:
+        """Create missing/stale broker notifications for due database work.
+
+        PostgreSQL remains authoritative.  This bridge is what makes
+        scale-to-zero safe when an initial Service Bus publication was lost or
+        when work was queued before the Service Bus cutover.
+        """
+        self.ensure_schema()
+        now = utcnow()
+        cutoff = now - timedelta(seconds=max(60, renotify_after_seconds))
+        batch_size = max(0, min(200, int(limit)))
+        if batch_size == 0:
+            return 0
+
+        if self.is_postgres:
+            with self._connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT item.*
+                        FROM pipeline_work_items AS item
+                        WHERE item.status IN ('queued', 'retry_scheduled')
+                          AND item.attempt_count < item.max_attempts
+                          AND item.available_at <= %s
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM pipeline_work_outbox AS active_outbox
+                              WHERE active_outbox.work_item_id = item.id
+                                AND active_outbox.status IN ('pending', 'publishing')
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM pipeline_work_outbox AS recent_outbox
+                              WHERE recent_outbox.work_item_id = item.id
+                                AND recent_outbox.updated_at >= %s
+                          )
+                        ORDER BY item.priority DESC, item.available_at, item.created_at
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                        """,
+                        (now, cutoff, batch_size),
+                    )
+                    rows = [_row_dict(row, cur) for row in cur.fetchall()]
+                for row in rows:
+                    item = _to_work_item(row)
+                    self._insert_outbox(conn, item, available_at=now)
+                return len(rows)
+
+        now_s = _sqlite_time(now)
+        cutoff_s = _sqlite_time(cutoff)
+        with self._connection(immediate=True) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT item.*
+                FROM pipeline_work_items AS item
+                WHERE item.status IN ('queued', 'retry_scheduled')
+                  AND item.attempt_count < item.max_attempts
+                  AND item.available_at <= ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM pipeline_work_outbox AS active_outbox
+                      WHERE active_outbox.work_item_id = item.id
+                        AND active_outbox.status IN ('pending', 'publishing')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM pipeline_work_outbox AS recent_outbox
+                      WHERE recent_outbox.work_item_id = item.id
+                        AND recent_outbox.updated_at >= ?
+                  )
+                ORDER BY item.priority DESC, item.available_at, item.created_at
+                LIMIT ?
+                """,
+                (now_s, cutoff_s, batch_size),
+            )
+            rows = [_row_dict(row, cur) for row in cur.fetchall()]
+            for row in rows:
+                item = _to_work_item(row)
+                self._insert_outbox(conn, item, available_at=now)
+            return len(rows)
 
     def _claim_one_outbox(self, *, owner: str, lease_seconds: int) -> OutboxDelivery | None:
         now = utcnow()

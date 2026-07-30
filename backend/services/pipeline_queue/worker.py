@@ -7,7 +7,7 @@ from datetime import timedelta
 import random
 import threading
 import traceback
-from typing import Callable, Mapping
+from typing import Callable, Iterable, Mapping
 
 from utils.logger import get_logger
 
@@ -21,6 +21,7 @@ from .contracts import (
 )
 from .outbox import OutboxDispatcher, default_worker_identity
 from .repository import WorkItemRepository
+from .routing import normalize_task_types
 from .service_bus import ServiceBusTransport
 from .settings import QueueSettings
 
@@ -157,6 +158,7 @@ class PipelineWorker:
         retry_policy: RetryPolicy | None = None,
         on_dead_letter: Callable[[WorkItem, str], None] | None = None,
         health_callback: Callable[[str, str | None], None] | None = None,
+        accepted_task_types: Iterable[str] | None = None,
     ):
         self.repository = repository
         self.handler = handler
@@ -165,6 +167,11 @@ class PipelineWorker:
         self.retry_policy = retry_policy or RetryPolicy()
         self.on_dead_letter = on_dead_letter
         self.health_callback = health_callback
+        self.accepted_task_types = (
+            normalize_task_types(accepted_task_types)
+            if accepted_task_types is not None
+            else None
+        )
 
     def _report_health(self, phase: str, work_item_id: str | None = None) -> None:
         if not self.health_callback:
@@ -178,9 +185,12 @@ class PipelineWorker:
         item = self.repository.claim_next(
             owner=self.owner,
             lease_seconds=self.settings.lease_seconds,
+            task_types=self.accepted_task_types,
         )
         if item is None:
-            exhausted = self.repository.dead_letter_one_exhausted()
+            exhausted = self.repository.dead_letter_one_exhausted(
+                task_types=self.accepted_task_types
+            )
             if exhausted is not None:
                 if self.on_dead_letter:
                     self.on_dead_letter(exhausted, exhausted.last_error or "Tentatives épuisées")
@@ -193,13 +203,21 @@ class PipelineWorker:
         return self._process_claimed(item)
 
     def process_work_item(self, work_item_id: str) -> ProcessOutcome:
+        existing = self.repository.get(work_item_id)
+        if (
+            existing is not None
+            and self.accepted_task_types is not None
+            and existing.task_type not in self.accepted_task_types
+        ):
+            return ProcessOutcome("unsupported", work_item_id)
         item = self.repository.claim(
             work_item_id,
             owner=self.owner,
             lease_seconds=self.settings.lease_seconds,
+            task_types=self.accepted_task_types,
         )
         if item is None:
-            existing = self.repository.get(work_item_id)
+            existing = existing or self.repository.get(work_item_id)
             if existing is None:
                 return ProcessOutcome("missing", work_item_id)
             if existing.terminal:

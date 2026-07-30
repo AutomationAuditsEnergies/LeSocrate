@@ -70,6 +70,24 @@ def build_child_specs(env: Mapping[str, str] | None = None) -> tuple[ChildSpec, 
             )
         )
 
+    outbox_enabled = _enabled(base_env, "PIPELINE_OUTBOX_DISPATCHER") or (
+        (base_env.get("PIPELINE_QUEUE_BACKEND") or "").strip().lower()
+        in {"service_bus", "azure", "azure_service_bus"}
+    )
+    if outbox_enabled:
+        specs.append(
+            ChildSpec(
+                "pipeline-outbox",
+                (python, "-m", "workers.pipeline_outbox_worker"),
+                {
+                    **base_env,
+                    "SOCRATE_PROCESS_ROLE": "pipeline-outbox",
+                    "PIPELINE_EMBEDDED_WORKER": "0",
+                    "COURSE_SCHEDULER_ENABLED": "0",
+                },
+            )
+        )
+
     if _enabled(base_env, "COURSE_SCHEDULER_ENABLED"):
         specs.append(
             ChildSpec(

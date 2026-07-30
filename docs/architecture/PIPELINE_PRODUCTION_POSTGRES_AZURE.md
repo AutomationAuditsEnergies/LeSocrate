@@ -74,19 +74,26 @@ PIPELINE_DATABASE_BACKEND=postgres
 PIPELINE_EXECUTION_MODE=queue
 PIPELINE_QUEUE_BACKEND=service_bus
 PIPELINE_EMBEDDED_WORKER=0
-AZURE_SERVICE_BUS_NAMESPACE=<namespace>.servicebus.windows.net
+PIPELINE_DEDICATED_WORKER=0
+PIPELINE_OUTBOX_DISPATCHER=1
+AZURE_SERVICE_BUS_NAMESPACE=<namespace>
 PIPELINE_SERVICE_BUS_QUEUE=formation-pipeline
+PIPELINE_SERVICE_BUS_AI_QUEUE=formation-ai
+PIPELINE_SERVICE_BUS_AUDIO_QUEUE=formation-audio
 ```
 
-Commande du worker :
+Commandes des deux workers isolés :
 
 ```bash
 cd backend
-python -m workers.pipeline_worker
+python -m workers.ai_worker
+python -m workers.audio_worker
 ```
 
-L'identité managée du worker doit avoir les rôles Azure Service Bus Data Sender
-et Data Receiver. Le container d'artefacts Blob doit rester privé.
+Chaque identité managée a le rôle Azure Service Bus Data Sender et le rôle Data
+Receiver limité à sa propre file. Le déploiement détaillé, le scale-to-zero et
+le coût sont documentés dans
+[WORKERS_CONTAINER_APPS.md](WORKERS_CONTAINER_APPS.md).
 
 ## Stockage des artefacts
 
