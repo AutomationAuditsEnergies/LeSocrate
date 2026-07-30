@@ -183,7 +183,12 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
         },
     )
     try:
-        routes._execute_ap_step(item.pipeline_job_id, step, job)
+        routes._execute_ap_step(
+            item.pipeline_job_id,
+            step,
+            job,
+            checkpoint=lease.checkpoint,
+        )
     except Exception as exc:
         _log_event(
             item,

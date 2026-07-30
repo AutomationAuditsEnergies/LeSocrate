@@ -20,7 +20,7 @@ from services.formation_pipeline_service import (
     download_reac_text_with_retry,
     download_rc_text,
     fetch_rome_data,
-    launch_global_program_generation,
+    generate_global_program,
     run_daily_split,
     update_job,
     get_job,
@@ -28,7 +28,7 @@ from services.formation_pipeline_service import (
     _format_slot_generation_source,
 )
 from services.knowledge_base_service import (
-    launch_kb_building,
+    build_knowledge_base,
     list_kb,
     kb_stats,
 )
@@ -2638,14 +2638,18 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # 2. KB
     kb_done = j.get("status") in (
-        "global_ready", "global_validated", "daily_ready",
+        "kb_ready", "global_ready", "global_validated", "daily_ready",
         "daily_validated", "text_ready", "tts_launched", "audio_running",
         "audio_completed", "audio_launched",
     )
     if not kb_done:
         try:
             from services.knowledge_base_service import kb_stats as _kb_stats
-            kb_done = _kb_stats(job_id).get("completed", 0) > 0
+            stats = _kb_stats(job_id)
+            kb_done = (
+                int(stats.get("total") or 0) > 0
+                and int(stats.get("completed") or 0) == int(stats.get("total") or 0)
+            )
         except Exception:
             pass
     if not kb_done:
@@ -2749,7 +2753,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
 
 
-def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
+def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> None:
     """Exécute UNE étape de l'auto-pilot (synchrone — bloque le tick courant)."""
     import eventlet
 
@@ -2769,21 +2773,6 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
     platform_id = job["platform_id"]
 
     api_model = _PIPELINE_MODEL_ALIASES[model]
-
-    def _wait_status(targets, max_wait=3600):
-        elapsed = 0
-        while elapsed < max_wait:
-            j = get_job(job_id)
-            if not j:
-                raise RuntimeError("Job introuvable")
-            s = j["status"]
-            if s in targets:
-                return j
-            if s in ("error", "audio_error"):
-                raise RuntimeError(f"Pipeline erreur : {j.get('error_message') or s}")
-            eventlet.sleep(3)
-            elapsed += 3
-        raise TimeoutError(f"Timeout {max_wait}s en attendant {targets}")
 
     if step == "reac":
         from services.formation_health_service import compute_preflight
@@ -2841,13 +2830,11 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         logger.info(f"🤖 ✓ REAC téléchargé job {job_id}")
 
     elif step == "kb":
-        launch_kb_building(job_id, model=api_model)
-        _wait_status({"kb_ready"}, max_wait=3600)
+        build_knowledge_base(job_id, model=api_model, checkpoint=checkpoint)
         logger.info(f"🤖 ✓ KB construite job {job_id}")
 
     elif step == "global":
-        launch_global_program_generation(job_id, model=api_model)
-        _wait_status({"global_ready"}, max_wait=600)
+        generate_global_program(job_id, model=api_model, checkpoint=checkpoint)
         update_job(job_id, global_program_validated=1, status="global_validated")
         logger.info(f"🤖 ✓ Programme global validé job {job_id}")
 

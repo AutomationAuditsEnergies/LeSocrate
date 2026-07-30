@@ -17,6 +17,7 @@ import json
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 from urllib.parse import quote
 
 import requests as _http
@@ -43,6 +44,7 @@ from services.dynamic_day_schedule_service import (
     build_day_audio_manifest,
     compile_day_schedule,
 )
+from services.pipeline_queue.contracts import LeaseLostError
 
 logger = get_logger(__name__)
 
@@ -1088,12 +1090,18 @@ def _deepseek_post(messages, max_tokens=16000, model=None):
 
 # ─── Génération programme global ──────────────────────────────────────────────
 
-def _generate_global_program_thread(job_id: int, model: str = None):
-    """Thread : génère le programme global et met à jour le job."""
+def generate_global_program(
+    job_id: int,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> None:
+    """Génère le programme global dans le work-item durable courant."""
     try:
+        if checkpoint:
+            checkpoint()
         job = get_job(job_id)
         if not job:
-            return
+            raise RuntimeError(f"Job {job_id} introuvable")
 
         update_job(job_id, status="global_generating")
         used_model = model or DEEPSEEK_MODEL
@@ -1135,12 +1143,16 @@ def _generate_global_program_thread(job_id: int, model: str = None):
         )
 
         for attempt in range(5):
+            if checkpoint:
+                checkpoint()
             try:
                 program = _deepseek_post(
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=16000,
                     model=used_model,
                 )
+                if checkpoint:
+                    checkpoint()
                 update_job(
                     job_id,
                     status="global_ready",
@@ -1149,6 +1161,8 @@ def _generate_global_program_thread(job_id: int, model: str = None):
                 )
                 logger.info(f"✅ Job {job_id} : programme global généré ({len(program)} chars)")
                 return
+            except LeaseLostError:
+                raise
             except DeepSeekRateLimitError as e:
                 if attempt < 4:
                     logger.warning(f"⏳ Retry {attempt+1}/5 génération global (429, sleep {e.wait_seconds:.0f}s)")
@@ -1162,20 +1176,13 @@ def _generate_global_program_thread(job_id: int, model: str = None):
                 else:
                     raise
 
+    except LeaseLostError:
+        logger.warning("PIPELINE_GLOBAL_PROGRAM_LEASE_LOST job=%s", job_id)
+        raise
     except Exception as e:
         logger.error(f"❌ Job {job_id} génération global échouée : {e}")
         update_job(job_id, status="error", error_message=str(e))
-
-
-def launch_global_program_generation(job_id: int, model: str = None):
-    """Lance la génération du programme global dans un thread."""
-    thread = threading.Thread(
-        target=_generate_global_program_thread,
-        args=(job_id, model),
-        daemon=True,
-    )
-    thread.start()
-    logger.info(f"🚀 Job {job_id} : thread génération programme global démarré")
+        raise
 
 
 # ─── Découpage en journées ────────────────────────────────────────────────────

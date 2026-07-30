@@ -64,9 +64,11 @@ class PipelineQueueHandlerTest(unittest.TestCase):
         routes_module.update_job = lambda job_id, **kwargs: updates.append((job_id, kwargs))
         routes_module._determine_next_ap_step = lambda _job_id: next(steps)
         routes_module.executed_steps = []
+        routes_module.execution_checkpoints = []
 
-        def execute(_job_id, _step, _job):
+        def execute(_job_id, _step, _job, *, checkpoint=None):
             routes_module.executed_steps.append(_step)
+            routes_module.execution_checkpoints.append(checkpoint)
             if execute_error:
                 raise execute_error
 
@@ -94,6 +96,10 @@ class PipelineQueueHandlerTest(unittest.TestCase):
 
         self.assertEqual(result.result["status"], "done")
         self.assertEqual(lease.checkpoints, 2)
+        self.assertIs(
+            routes_package.formation_routes.execution_checkpoints[0].__self__,
+            lease,
+        )
         self.assertEqual(
             [event_type for _job_id, event_type, _kwargs in events],
             ["step_started", "step_completed", "pipeline_completed"],

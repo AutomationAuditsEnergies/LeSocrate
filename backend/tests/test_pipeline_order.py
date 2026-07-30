@@ -340,6 +340,62 @@ class PipelineOrderTest(unittest.TestCase):
         self.assertNotIn("_finalize_text_ready_state(", source)
         self.assertNotIn("_finalize_audio_ready_state(", source)
 
+    def test_partial_knowledge_base_is_resumed_instead_of_skipped(self):
+        job = _job(
+            status="kb_building",
+            global_program=None,
+            daily_programs="[]",
+        )
+        with patch.object(fr, "get_job", return_value=job), patch(
+            "services.knowledge_base_service.kb_stats",
+            return_value={
+                "total": 4,
+                "completed": 1,
+                "pending": 3,
+                "error": 0,
+            },
+        ):
+            self.assertEqual(fr._determine_next_ap_step(99), "kb")
+
+    def test_kb_and_global_steps_run_inside_the_durable_work_item(self):
+        job = _job(
+            platform_id=1,
+            status="reac_ready",
+            global_program=None,
+            daily_programs="[]",
+        )
+        checkpoints = []
+
+        def checkpoint():
+            checkpoints.append("checked")
+
+        with patch.object(fr, "build_knowledge_base") as build_kb:
+            fr._execute_ap_step(99, "kb", job, checkpoint=checkpoint)
+
+        build_kb.assert_called_once_with(
+            99,
+            model="deepseek-v4-pro",
+            checkpoint=checkpoint,
+        )
+
+        with patch.object(fr, "generate_global_program") as generate_global, patch.object(
+            fr,
+            "update_job",
+        ) as update:
+            fr._execute_ap_step(99, "global", job, checkpoint=checkpoint)
+
+        generate_global.assert_called_once_with(
+            99,
+            model="deepseek-v4-pro",
+            checkpoint=checkpoint,
+        )
+        update.assert_called_once_with(
+            99,
+            global_program_validated=1,
+            status="global_validated",
+        )
+        self.assertEqual(checkpoints, [])
+
     def test_audio_gate_requires_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=False)
         try:

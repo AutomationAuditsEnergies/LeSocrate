@@ -25,6 +25,7 @@ import json
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
 from repositories.pipeline_repository import (
     clear_knowledge_base,
@@ -41,6 +42,7 @@ from utils.deepseek_client import (
     post_message as _post_deepseek_message,
 )
 from utils.logger import get_logger
+from services.pipeline_queue.contracts import LeaseLostError
 
 logger = get_logger(__name__)
 
@@ -425,7 +427,13 @@ def kb_stats(job_id: int) -> dict:
 
 # ─── Extraction compétences ───────────────────────────────────────────────────
 
-def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str = None) -> list:
+def extract_competences(
+    reac_text: str,
+    tp_name: str,
+    rncp_code: str,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> list:
     """Appelle DeepSeek pour extraire les compétences structurées du REAC."""
     prompt = (
         _EXTRACT_COMPETENCES_PROMPT
@@ -435,6 +443,8 @@ def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str
         .replace("{REAC_TEXT}", reac_text[:80000])
     )
     for attempt in range(5):
+        if checkpoint:
+            checkpoint()
         try:
             response = _deepseek_post(
                 messages=[{"role": "user", "content": prompt}],
@@ -445,8 +455,12 @@ def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str
             competences = data.get("competences", [])
             if not competences:
                 raise ValueError("Réponse DeepSeek sans compétences")
+            if checkpoint:
+                checkpoint()
             logger.info(f"✅ {len(competences)} compétences extraites du REAC")
             return competences
+        except LeaseLostError:
+            raise
         except DeepSeekRateLimitError as e:
             if attempt < 4:
                 logger.warning(f"⏳ Retry {attempt+1}/5 extraction (429, sleep {e.wait_seconds:.0f}s)")
@@ -463,7 +477,13 @@ def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str
 
 # ─── Enrichissement d'une compétence ──────────────────────────────────────────
 
-def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str = None) -> dict:
+def enrich_competence(
+    competence: dict,
+    tp_name: str,
+    rncp_code: str,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> dict:
     """Appelle DeepSeek pour enrichir une compétence avec une KB dense."""
     prompt = (
         _ENRICH_COMPETENCE_PROMPT
@@ -475,13 +495,20 @@ def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str
         .replace("{RAW_SOURCE}", competence.get("raw_source", ""))
     )
     for attempt in range(5):
+        if checkpoint:
+            checkpoint()
         try:
             response = _deepseek_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=12000,  # augmenté de 8000 : JSON enrichi peut dépasser
                 model=model,
             )
-            return _parse_json_response(response)
+            result = _parse_json_response(response)
+            if checkpoint:
+                checkpoint()
+            return result
+        except LeaseLostError:
+            raise
         except DeepSeekRateLimitError as e:
             if attempt < 4:
                 logger.warning(
@@ -532,26 +559,32 @@ def _count_words_in_enriched(enriched: dict) -> int:
 
 # ─── Orchestration ────────────────────────────────────────────────────────────
 
-def _build_kb_thread(job_id: int, model: str = None):
+def build_knowledge_base(
+    job_id: int,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> None:
     """
-    Thread : construit la KB pour un job. **Résumable** — si des compétences
-    sont déjà en DB (completed), on les garde et on n'enrichit que les
-    pending/error. Permet de reprendre après crash / redémarrage backend /
-    re-clic sur "Relancer" sans tout perdre.
+    Construit la KB dans le work-item durable courant.
+
+    Les compétences déjà terminées restent en DB et seules les entrées
+    pending/error sont rejouées après une interruption. ``checkpoint`` relie
+    les appels coûteux au lease du worker et empêche un ancien worker de
+    poursuivre ses écritures après avoir perdu la propriété du work-item.
     """
     # Import local pour éviter un import circulaire
     from services.formation_pipeline_service import get_job, update_job
 
     try:
+        if checkpoint:
+            checkpoint()
         job = get_job(job_id)
         if not job:
-            logger.error(f"❌ Job {job_id} introuvable")
-            return
+            raise RuntimeError(f"Job {job_id} introuvable")
 
         reac_text = job.get("reac_text") or ""
         if not reac_text.strip():
-            update_job(job_id, status="error", error_message="REAC vide — télécharger d'abord le REAC")
-            return
+            raise RuntimeError("REAC vide — télécharger d'abord le REAC")
 
         update_job(job_id, status="kb_building")
         logger.info(f"🔄 Job {job_id} : construction knowledge base (modèle: {model or DEEPSEEK_MODEL})...")
@@ -587,7 +620,10 @@ def _build_kb_thread(job_id: int, model: str = None):
                 tp_name=job["tp_name"],
                 rncp_code=job.get("rncp_code") or "",
                 model=model,
+                checkpoint=checkpoint,
             )
+            if checkpoint:
+                checkpoint()
             clear_kb(job_id)
             insert_pending_competences(job_id, extracted)
             competences = [
@@ -614,35 +650,51 @@ def _build_kb_thread(job_id: int, model: str = None):
                     tp_name=job["tp_name"],
                     rncp_code=job.get("rncp_code") or "",
                     model=model,
+                    checkpoint=checkpoint,
                 )
                 word_count = _count_words_in_enriched(enriched)
+                if checkpoint:
+                    checkpoint()
                 save_enriched_competence(job_id, idx, enriched, word_count)
                 logger.info(f"✅ '{title}' enrichi ({word_count} mots)")
                 return ("ok", word_count)
+            except LeaseLostError:
+                raise
             except Exception as e:
                 logger.error(f"❌ Enrichissement '{title}' : {e}")
                 mark_competence_error(job_id, idx, str(e))
                 return ("error", 0)
 
         if to_enrich:
+            active_workers = max(1, min(KB_ENRICH_CONCURRENCY, len(to_enrich)))
             logger.info(
                 f"🚀 Job {job_id} : enrichissement en parallèle "
-                f"({len(to_enrich)} à traiter, {KB_ENRICH_CONCURRENCY} workers, "
+                f"({len(to_enrich)} à traiter, {active_workers} workers, "
                 f"{skipped} réutilisées)"
             )
-            with ThreadPoolExecutor(max_workers=KB_ENRICH_CONCURRENCY) as executor:
-                futures = {executor.submit(_enrich_one, c): c for c in to_enrich}
-                for fut in as_completed(futures):
-                    status, words = fut.result()
-                    if status == "ok":
-                        total_words_kb += words
-                    else:
-                        errors += 1
+            # Ne soumettre qu'un lot borné à la fois : si le lease est perdu,
+            # aucune nouvelle compétence coûteuse n'est démarrée.
+            for offset in range(0, len(to_enrich), active_workers):
+                if checkpoint:
+                    checkpoint()
+                batch = to_enrich[offset: offset + active_workers]
+                with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                    futures = {executor.submit(_enrich_one, c): c for c in batch}
+                    for fut in as_completed(futures):
+                        status, words = fut.result()
+                        if status == "ok":
+                            total_words_kb += words
+                        else:
+                            errors += 1
+                if checkpoint:
+                    checkpoint()
 
         completed_final = len(competences) - errors
         if completed_final == 0:
             raise Exception(f"Toutes les compétences ({errors}) ont échoué à l'enrichissement")
 
+        if checkpoint:
+            checkpoint()
         update_job(job_id, status="kb_ready", kb_generated_via="api")
         logger.info(
             f"✅ Job {job_id} : KB prête — {completed_final}/{len(competences)} compétences "
@@ -651,18 +703,13 @@ def _build_kb_thread(job_id: int, model: str = None):
             f"ratio x{total_words_kb / max(len(reac_text.split()), 1):.1f} vs REAC"
         )
 
+    except LeaseLostError:
+        logger.warning("PIPELINE_KB_LEASE_LOST job=%s", job_id)
+        raise
     except Exception as e:
         logger.error(f"❌ Job {job_id} construction KB échouée : {e}")
-        # Import local pour éviter un import circulaire
-        from services.formation_pipeline_service import update_job as _uj
-        _uj(job_id, status="error", error_message=str(e))
-
-
-def launch_kb_building(job_id: int, model: str = None):
-    """Lance la construction de la KB en thread."""
-    thread = threading.Thread(target=_build_kb_thread, args=(job_id, model), daemon=True)
-    thread.start()
-    logger.info(f"🚀 Job {job_id} : construction KB lancée en background")
+        update_job(job_id, status="error", error_message=str(e))
+        raise
 
 
 # ─── Assemblage pour prompt programme global ──────────────────────────────────
