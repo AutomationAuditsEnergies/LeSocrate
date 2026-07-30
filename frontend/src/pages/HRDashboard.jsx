@@ -456,7 +456,7 @@ export default function HRDashboard() {
           setFailedTeacherOrderId(order.id || activeTeacherOrderId)
           setOrderNotice({
             tone: 'error',
-            title: 'Préparation à relancer',
+            title: 'Pipeline interrompue',
             message: 'Votre paiement est conservé. Notre système n’effectuera aucun second prélèvement.',
           })
           setActiveTeacherOrderId(null)
@@ -510,7 +510,7 @@ export default function HRDashboard() {
       setActiveTeacherOrderId(trackedOrderId)
       setOrderNotice({
         tone: 'info',
-        title: 'Préparation relancée',
+        title: 'Pipeline reprise',
         message: 'Votre commande payée est remise en file, sans nouveau prélèvement.',
       })
     } catch (error) {
@@ -1236,7 +1236,7 @@ export default function HRDashboard() {
                     style={{ backgroundColor: colors.primary }}
                   >
                     <Icon name={retryingTeacherOrderId ? 'hourglass_top' : 'refresh'} className="text-base" />
-                    {retryingTeacherOrderId ? 'Relance en cours…' : 'Relancer la préparation'}
+                    {retryingTeacherOrderId ? 'Reprise en cours…' : 'Reprendre la pipeline'}
                   </button>
                 )}
               </div>
@@ -5480,7 +5480,7 @@ function PlatformCard({
               className="w-full rounded-full border border-[#D8D4CE] py-2 text-xs font-semibold disabled:opacity-50"
               style={{ color: '#991b1b' }}
             >
-              {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la préparation'}
+              {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la pipeline'}
             </button>
           )}
 
@@ -5602,7 +5602,7 @@ function PlatformCard({
                 style={{ backgroundColor: '#8B5CF6' }}
               >
                 <Icon name={retryingPreparation ? 'hourglass_top' : 'refresh'} className="text-[16px]" aria-hidden="true" />
-                {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la préparation'}
+                {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la pipeline'}
               </button>
             )}
           </div>

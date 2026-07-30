@@ -4383,6 +4383,7 @@ def _dispatch_auto_pilot_tick(
     *,
     reason: str,
     force_new_run: bool = False,
+    chain_payload: dict | None = None,
 ) -> dict:
     """Dispatch one resumable tick to the durable queue or local dev runner."""
     if not _durable_pipeline_queue_enabled():
@@ -4416,7 +4417,11 @@ def _dispatch_auto_pilot_tick(
         scope_key="pipeline",
         run_id=run_id,
         dedupe_key=f"job:{job_id}:run:{run_id}:step:{step or 'done'}",
-        payload={"expected_step": step, "dispatch_reason": reason},
+        payload={
+            **dict(chain_payload or {}),
+            "expected_step": step,
+            "dispatch_reason": reason,
+        },
         max_attempts=max_attempts,
     )
     return {
@@ -5643,6 +5648,24 @@ def resume_auto_pilot(job_id):
     except Exception:
         pass
 
+    linked_order = None
+    center_account_id = _training_center_account_id()
+    if center_account_id is not None:
+        try:
+            from repositories.billing_repository import get_order_by_pipeline_job_id
+
+            linked_order = get_order_by_pipeline_job_id(
+                job_id,
+                center_account_id=center_account_id,
+            )
+        except Exception:
+            logger.warning(
+                "PIPELINE_RESUME_ORDER_LOOKUP_FAILED job=%s center=%s",
+                job_id,
+                center_account_id,
+                exc_info=True,
+            )
+
     if force and _durable_pipeline_queue_enabled():
         from services.pipeline_queue import cancel_latest_work_item
 
@@ -5651,7 +5674,27 @@ def resume_auto_pilot(job_id):
         job_id,
         reason="manual_resume",
         force_new_run=force,
+        chain_payload=(
+            {"teacher_order_id": int(linked_order["id"])}
+            if linked_order and linked_order.get("id")
+            else None
+        ),
     )
+    if linked_order and linked_order.get("id"):
+        try:
+            from repositories.billing_repository import mark_order_pipeline_resume_requested
+
+            mark_order_pipeline_resume_requested(
+                int(linked_order["id"]),
+                pipeline_job_id=job_id,
+            )
+        except Exception:
+            logger.warning(
+                "PIPELINE_RESUME_ORDER_STATE_FAILED job=%s order=%s",
+                job_id,
+                linked_order.get("id"),
+                exc_info=True,
+            )
     return jsonify({
         "ok": True,
         "status": "auto_pilot_resumed",

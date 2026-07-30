@@ -121,6 +121,68 @@ class PipelineQueueRouteTest(unittest.TestCase):
         self.assertTrue(payload["queue_work_item_cancelled"])
         self.assertEqual(payload["queue_work_item_id"], "work-cancelled")
 
+    def test_resume_preserves_paid_teacher_order_until_terminal_completion(self):
+        dead_lettered = SimpleNamespace(
+            id="work-dead",
+            run_id="run-dead",
+            status="dead_lettered",
+            terminal=True,
+        )
+        resumed = SimpleNamespace(
+            id="work-resumed",
+            run_id="run-resumed",
+            status="queued",
+            terminal=False,
+        )
+        linked_order = {
+            "id": 73,
+            "public_id": "order-public-id",
+            "payment_status": "paid",
+            "fulfillment_status": "failed",
+        }
+        with patch.dict(os.environ, {"PIPELINE_EXECUTION_MODE": "queue"}), patch(
+            "routes.formation_routes.get_job",
+            return_value=_job(
+                status="error",
+                auto_pilot_step="content",
+                auto_pilot_error="attempts exhausted",
+            ),
+        ), patch(
+            "routes.formation_routes.update_job",
+        ), patch(
+            "routes.formation_routes._determine_next_ap_step",
+            return_value="content",
+        ), patch(
+            "services.pipeline_queue.get_latest_work_item",
+            return_value=dead_lettered,
+        ), patch(
+            "services.pipeline_queue.enqueue_work_item",
+            return_value=resumed,
+        ) as enqueue, patch(
+            "repositories.billing_repository.get_order_by_pipeline_job_id",
+            return_value=linked_order,
+        ) as lookup_order, patch(
+            "repositories.billing_repository.mark_order_pipeline_resume_requested",
+        ) as mark_order_resumed, patch(
+            "services.formation_observability_service.log_pipeline_event",
+        ):
+            response = self.client.post(
+                "/api/formation/42/run-auto/resume",
+                json={"force": False},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            enqueue.call_args.kwargs["payload"]["teacher_order_id"],
+            73,
+        )
+        self.assertEqual(
+            enqueue.call_args.kwargs["payload"]["expected_step"],
+            "content",
+        )
+        lookup_order.assert_called_once_with(42, center_account_id=42)
+        mark_order_resumed.assert_called_once_with(73, pipeline_job_id=42)
+
     def test_historical_claude_model_names_resume_on_deepseek_profiles(self):
         self.assertEqual(_normalize_pipeline_model_choice("sonnet"), "pro")
         self.assertEqual(

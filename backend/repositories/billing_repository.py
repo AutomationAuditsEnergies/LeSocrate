@@ -316,6 +316,59 @@ def get_order(public_id: str, *, center_account_id: int | None = None) -> dict[s
             return cur.fetchone()
 
 
+def get_order_by_pipeline_job_id(
+    pipeline_job_id: int,
+    *,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    """Return the paid teacher order bound to one centre-owned pipeline."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_teacher_orders
+                WHERE pipeline_job_id = %s
+                  AND center_account_id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (int(pipeline_job_id), int(center_account_id)),
+            )
+            return cur.fetchone()
+
+
+def mark_order_pipeline_resume_requested(
+    order_id: int,
+    *,
+    pipeline_job_id: int,
+) -> dict[str, Any] | None:
+    """Reflect a successful durable resume without downgrading a winner."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET status = 'fulfilling', fulfillment_status = 'running',
+                    last_error = NULL, updated_at = NOW()
+                WHERE id = %s
+                  AND pipeline_job_id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                  AND fulfillment_status = 'failed'
+                RETURNING *
+                """,
+                (int(order_id), int(pipeline_job_id)),
+            )
+            if cur.rowcount:
+                return cur.fetchone()
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE id = %s",
+                (int(order_id),),
+            )
+            return cur.fetchone()
+
+
 def attach_checkout_session(
     order_id: int,
     *,
