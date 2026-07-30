@@ -2,7 +2,7 @@
 # Backend API pur pour frontend React
 import os
 import time
-from flask import Flask, request, session
+from flask import Flask, g, request, session
 from flask_socketio import SocketIO
 
 # Configuration et logging
@@ -180,7 +180,87 @@ def readiness_probe():
 # + injecter platform_id depuis le header X-Platform-Id
 import state as _state
 from utils.auth_tokens import verify_auth_token
+from utils.supabase_auth import extract_bearer_token, verify_supabase_access_token
+from services.center_auth_service import resolve_training_center_identity
 from flask import jsonify as _jsonify
+
+_ADMIN_AUTH_PREFIXES = (
+    "/api/admin",
+    "/api/hr",
+    "/api/formation",
+    "/api/slides",
+)
+_PUBLIC_ADMIN_AUTH_PATHS = {
+    "/api/admin/login",
+    "/api/admin/register",
+    "/api/admin/forgot-password",
+    "/api/hr/enabled",
+}
+
+
+def _admin_auth_required_for_request():
+    return (
+        request.path.startswith(_ADMIN_AUTH_PREFIXES)
+        and request.path not in _PUBLIC_ADMIN_AUTH_PATHS
+    )
+
+
+def _clear_admin_session():
+    for key in (
+        "is_admin",
+        "admin_account_id",
+        "admin_account_type",
+        "center_name",
+    ):
+        session.pop(key, None)
+
+
+def _populate_training_center_session_from_supabase():
+    bearer_token = extract_bearer_token(request.headers.get("Authorization"))
+    if not bearer_token:
+        return False, None
+
+    claims = verify_supabase_access_token(bearer_token)
+    if not claims:
+        _clear_admin_session()
+        if _admin_auth_required_for_request():
+            return True, (
+                _jsonify({
+                    "authenticated": False,
+                    "error": "Session Supabase invalide ou expirée",
+                    "code": "SUPABASE_SESSION_INVALID",
+                }),
+                401,
+            )
+        return True, None
+
+    account = resolve_training_center_identity(
+        claims.get("sub"),
+        claims.get("email"),
+    )
+    if not account or not account.get("is_active"):
+        _clear_admin_session()
+        if _admin_auth_required_for_request():
+            return True, (
+                _jsonify({
+                    "authenticated": False,
+                    "error": "Compte centre introuvable ou désactivé",
+                    "code": "TRAINING_CENTER_ACCOUNT_UNAVAILABLE",
+                }),
+                403,
+            )
+        return True, None
+
+    session["is_admin"] = True
+    session["admin_account_id"] = account["id"]
+    session["admin_account_type"] = "training_center"
+    session["center_name"] = account["center_name"]
+    session.permanent = True
+    g.supabase_auth_claims = claims
+    g.training_center_account = account
+    return True, None
+
+
 @app.before_request
 def populate_session_from_token():
     # Mode maintenance DB : tout est bloqué en 503 sauf les endpoints admin
@@ -195,6 +275,16 @@ def populate_session_from_token():
             "reason": db_safety.db_health.get("maintenance_reason"),
         }), 503
 
+    had_training_center_cookie = (
+        session.get("admin_account_type") == "training_center"
+    )
+
+    has_supabase_bearer, supabase_error = (
+        _populate_training_center_session_from_supabase()
+    )
+    if supabase_error is not None:
+        return supabase_error
+
     token = request.headers.get("X-Auth-Token")
     if (
         not token
@@ -203,7 +293,7 @@ def populate_session_from_token():
         and "/audio-stream/" in request.path
     ):
         token = request.args.get("auth_token")
-    if not session.get("is_admin") and token:
+    if not has_supabase_bearer and not session.get("is_admin") and token:
         admin_tokens = getattr(_state, "admin_tokens", {})
         admin_user = admin_tokens.get(token) or verify_auth_token("admin", token)
         if admin_user:
@@ -214,6 +304,21 @@ def populate_session_from_token():
             if admin_user.get("center_name"):
                 session["center_name"] = admin_user["center_name"]
             session.permanent = True
+
+    if (
+        not has_supabase_bearer
+        and not token
+        and had_training_center_cookie
+    ):
+        # A cookie Flask seul ne doit jamais prolonger une session centre
+        # contrôlée par Supabase Auth.
+        _clear_admin_session()
+        if _admin_auth_required_for_request():
+            return _jsonify({
+                "authenticated": False,
+                "error": "Session Supabase requise",
+                "code": "SUPABASE_SESSION_REQUIRED",
+            }), 401
 
     if "nom" not in session:
         user = None

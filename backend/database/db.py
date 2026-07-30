@@ -544,6 +544,13 @@ def init_database(_recovered_from_corruption: bool = False):
         if "onboarding_completed_at" not in center_columns:
             cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN onboarding_completed_at TEXT")
             logger.info("✅ Colonne onboarding_completed_at ajoutée à training_center_accounts")
+        if "auth_user_id" not in center_columns:
+            cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN auth_user_id TEXT")
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_training_center_accounts_auth_user_id "
+                "ON training_center_accounts(auth_user_id)"
+            )
+            logger.info("✅ Liaison Supabase Auth ajoutée à training_center_accounts")
         pipeline_permission_was_missing = (
             "pipeline_access_enabled" not in center_columns
         )

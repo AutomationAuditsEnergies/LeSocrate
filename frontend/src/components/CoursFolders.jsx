@@ -77,7 +77,7 @@ const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function CoursFoldersModal({ platformId, platformName, onClose, onAudiosPublished }) {
+export default function CoursFoldersModal({ platformId, platformName, onClose, onAudiosPublished, embedded = false }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
   const [folders, setFolders] = useState([])
   const [documents, setDocuments] = useState([])
@@ -1769,18 +1769,18 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4"
-      style={{ backgroundColor: 'rgba(15, 23, 42, 0.62)' }}
-      onClick={onClose}
+      className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4'}
+      style={embedded ? undefined : { backgroundColor: 'rgba(15, 23, 42, 0.62)' }}
+      onClick={embedded ? undefined : onClose}
     >
       <div
-        className="w-full overflow-hidden rounded-xl"
+        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden' : 'w-full overflow-hidden rounded-xl'}
         style={{
-          maxWidth: audioEditorFile ? '1120px' : '960px',
-          maxHeight: '92vh',
+          maxWidth: embedded ? 'none' : (audioEditorFile ? '1120px' : '960px'),
+          maxHeight: embedded ? 'none' : '92vh',
           backgroundColor: colors.cardBg,
-          border: `1px solid ${colors.border}`,
-          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
+          border: embedded ? 'none' : `1px solid ${colors.border}`,
+          boxShadow: embedded ? 'none' : '0 8px 24px rgba(15, 23, 42, 0.18)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1792,18 +1792,23 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
               {audioEditorFile ? audioEditorFile : view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
             </h3>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 transition-colors"
-            style={{ color: colors.textMuted }}
-            title="Fermer"
-          >
-            <Icon name="close" style={{ fontSize: '20px' }} />
-          </button>
+          {!embedded && (
+            <button
+              onClick={onClose}
+              className="rounded-md p-1.5 transition-colors"
+              style={{ color: colors.textMuted }}
+              title="Fermer"
+            >
+              <Icon name="close" style={{ fontSize: '20px' }} />
+            </button>
+          )}
         </div>
 
         {/* Modal Body */}
-        <div className={audioEditorFile ? 'overflow-hidden p-0' : 'overflow-y-auto p-5'} style={{ maxHeight: 'calc(92vh - 58px)', backgroundColor: darkMode ? colors.bg : '#ffffff' }}>
+        <div
+          className={`${audioEditorFile ? 'overflow-hidden p-0' : 'overflow-y-auto p-5'} min-h-0 flex-1`}
+          style={{ maxHeight: embedded ? 'none' : 'calc(92vh - 58px)', backgroundColor: darkMode ? colors.bg : '#ffffff' }}
+        >
           {audioEditorFile && selectedFolder ? (
             <AudioEditor
               folderId={selectedFolder.id}

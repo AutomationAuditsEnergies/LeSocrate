@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { hasAdminAccess } from '../adminAccess'
+import { clearSupabaseSession } from '../supabaseClient'
 import AppLoader from './AppLoader.jsx'
 
 const NO_REQUIRED_PERMISSIONS = []
@@ -40,6 +41,8 @@ export default function ProtectedAdminRoute({
           }
         } else if (response.status === 403 || response.status === 401) {
           // Non authentifié
+          localStorage.removeItem('admin_auth_token')
+          await clearSupabaseSession().catch(() => {})
           if (isMounted) {
             setIsAuthenticated(false)
           }

@@ -6,6 +6,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS training_center_accounts (
     id BIGSERIAL PRIMARY KEY,
+    auth_user_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE SET NULL,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     password_debug_plaintext TEXT,
@@ -25,6 +26,8 @@ CREATE TABLE IF NOT EXISTS training_center_accounts (
 );
 
 ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS auth_user_id UUID;
+ALTER TABLE training_center_accounts
     ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
 ALTER TABLE training_center_accounts
     ADD COLUMN IF NOT EXISTS billing_mode TEXT NOT NULL DEFAULT 'stripe_required';
@@ -38,6 +41,34 @@ ALTER TABLE training_center_accounts
     ADD COLUMN IF NOT EXISTS onboarding_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE training_center_accounts
     ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'training_center_accounts_auth_user_id_fkey'
+          AND conrelid = 'training_center_accounts'::regclass
+    ) THEN
+        ALTER TABLE training_center_accounts
+            ADD CONSTRAINT training_center_accounts_auth_user_id_fkey
+            FOREIGN KEY (auth_user_id)
+            REFERENCES auth.users(id)
+            ON DELETE SET NULL;
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_center_accounts_auth_user_id
+    ON training_center_accounts(auth_user_id)
+    WHERE auth_user_id IS NOT NULL;
+
+UPDATE training_center_accounts AS center
+SET auth_user_id = auth_user.id,
+    updated_at = NOW()
+FROM auth.users AS auth_user
+WHERE center.auth_user_id IS NULL
+  AND auth_user.email IS NOT NULL
+  AND LOWER(auth_user.email) = LOWER(center.username);
 
 CREATE TABLE IF NOT EXISTS platform_config (
     id BIGSERIAL PRIMARY KEY,

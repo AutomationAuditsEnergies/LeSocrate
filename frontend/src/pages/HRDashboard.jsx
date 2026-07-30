@@ -18,6 +18,7 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { apiFetch } from '../api'
+import { clearSupabaseSession } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
 import DayScheduleTemplates from './DayScheduleTemplates.jsx'
@@ -81,15 +82,9 @@ export default function HRDashboard() {
   const [studentEmailsSaving, setStudentEmailsSaving] = useState(null)
   const [studentEmailDrafts, setStudentEmailDrafts] = useState({})
   const [expandedStudentsPlatform, setExpandedStudentsPlatform] = useState(null)
-  const [playingAudio, setPlayingAudio] = useState(null)
   const [pdfUploading, setPdfUploading] = useState(null)
   const [audiosLoading, setAudiosLoading] = useState(null)
   const [darkMode, setDarkMode] = useState(false)
-  const [showAudiosModal, setShowAudiosModal] = useState(false)
-  const [selectedPlatformId, setSelectedPlatformId] = useState(null)
-  const [showPdfModal, setShowPdfModal] = useState(false)
-  const [selectedPlatform, setSelectedPlatform] = useState(null)
-  const [showCourseTimeModal, setShowCourseTimeModal] = useState(false)
   const [currentCourseTime, setCurrentCourseTime] = useState(null)
   const [courseTimePlatformId, setCourseTimePlatformId] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -128,9 +123,6 @@ export default function HRDashboard() {
   const [initialScheduleV2, setInitialScheduleV2] = useState(null)
   const creatingRef = useRef(false)
   const creationRequestRef = useRef({ fingerprint: '', id: '' })
-  const audioRef = useRef(null)
-  const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
-  const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
   const [cardPage, setCardPage] = useState(0)
   const [teacherRosterFilter, setTeacherRosterFilter] = useState('all')
   const [workspaceSection, setWorkspaceSection] = useState(() => {
@@ -146,7 +138,6 @@ export default function HRDashboard() {
   const [attendanceData, setAttendanceData] = useState(null)
   const [attendanceLoading, setAttendanceLoading] = useState(false)
   const [attendanceError, setAttendanceError] = useState('')
-  const [attendanceSavingStudentId, setAttendanceSavingStudentId] = useState(null)
   const [loggingOut, setLoggingOut] = useState(false)
   const [billing, setBilling] = useState(null)
   const [billingLoading, setBillingLoading] = useState(true)
@@ -157,7 +148,6 @@ export default function HRDashboard() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingStep, setOnboardingStep] = useState(0)
   const [onboardingSaving, setOnboardingSaving] = useState(false)
-  const [archivingPlatformId, setArchivingPlatformId] = useState(null)
   const CARDS_PER_PAGE = 10
 
   const handleLogout = async () => {
@@ -168,6 +158,9 @@ export default function HRDashboard() {
     } catch (error) {
       console.warn('Déconnexion serveur indisponible, nettoyage local appliqué.', error)
     } finally {
+      await clearSupabaseSession().catch((error) => {
+        console.warn('Déconnexion Supabase locale indisponible.', error)
+      })
       localStorage.removeItem('admin_auth_token')
       localStorage.removeItem('auth_token')
       localStorage.removeItem('center_account_email')
@@ -177,7 +170,7 @@ export default function HRDashboard() {
   }
 
   // ─── Fetch data ──────────────────────────────────────────────────────
-  const fetchPlatforms = async (refreshSelectedId = null) => {
+  const fetchPlatforms = async () => {
     const controller = new AbortController()
     const timeoutId = window.setTimeout(() => controller.abort(), PLATFORM_LOAD_TIMEOUT_MS)
     try {
@@ -189,18 +182,6 @@ export default function HRDashboard() {
       const data = await resp.json()
       if (data.success) {
         setPlatforms(data.platforms)
-        if (refreshSelectedId !== null) {
-          const updated = data.platforms.find(p => p.id === refreshSelectedId)
-          if (updated) setSelectedPlatform(updated)
-        }
-        // Sync selectedCoursPlatform si la modale Cours est ouverte sur la
-        // plateforme rafraîchie (sinon le slide-to-confirm restait sur l'ancien
-        // upload_locked après lock/unlock).
-        setSelectedCoursPlatform((prev) => {
-          if (!prev) return prev
-          const fresh = data.platforms.find(p => p.id === prev.id)
-          return fresh || prev
-        })
       } else {
         setPlatformsErrorTone('error')
         setPlatformsError(data.error || 'Impossible de charger les plateformes.')
@@ -562,13 +543,8 @@ export default function HRDashboard() {
   // ─── Actions ─────────────────────────────────────────────────────────
   const handleExpandPlatform = (platformId) => {
     closeCardPanels()
-    setSelectedPlatformId(platformId)
-    setShowAudiosModal(true)
+    setExpandedPlatform(platformId)
     if (!platformAudios[platformId]) fetchAudios(platformId)
-  }
-
-  const handleDeleteAudio = (platformId, filename) => {
-    setDeleteConfirm({ type: 'audio', platformId, filename })
   }
 
   const confirmDelete = async () => {
@@ -620,7 +596,6 @@ export default function HRDashboard() {
           fetchModules()  // les modules "fait main" associés ont aussi été supprimés
           setDeleteConfirm(null)
           setDeleteConfirmTypedName('')
-          if (selectedPlatform?.id === deleteConfirm.platformId) setSelectedPlatform(null)
           if (expandedPlatform === deleteConfirm.platformId) setExpandedPlatform(null)
         } else {
           alert(data.error || 'Erreur lors de la suppression de la plateforme')
@@ -650,52 +625,6 @@ export default function HRDashboard() {
     })
   }
 
-  const handleDeletePlatform = (platformId) => {
-    const platform = platforms.find((p) => p.id === platformId)
-    if (!platform) return
-    setDeleteConfirmTypedName('')
-    setDeleteConfirm({
-      type: 'platform',
-      platformId,
-      platformName: platform.name,
-    })
-  }
-
-  const handleArchivePlatform = async (platformId) => {
-    if (archivingPlatformId) return
-    setArchivingPlatformId(platformId)
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/lifecycle`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lifecycle_status: 'archived' }),
-      })
-      const data = await resp.json().catch(() => ({}))
-      if (!resp.ok || !data.success) throw new Error(data.error || 'Archivage impossible')
-      setPlatforms((current) => current.map((platform) => (
-        platform.id === platformId
-          ? { ...platform, ...(data.platform || {}), lifecycle_status: 'archived' }
-          : platform
-      )))
-      setExpandedPlatform((current) => (current === platformId ? null : current))
-      setOrderNotice({
-        tone: 'success',
-        title: 'Professeur archivé',
-        message: 'Il quitte l’espace actif, mais son identité, ses cours et ses audios restent disponibles pour une réutilisation future.',
-      })
-      await fetchModules()
-    } catch (error) {
-      console.error('Archivage professeur impossible:', error)
-      setOrderNotice({
-        tone: 'error',
-        title: 'Archivage impossible',
-        message: error.message || 'Le professeur n’a pas été modifié.',
-      })
-    } finally {
-      setArchivingPlatformId(null)
-    }
-  }
-
   const completeOnboarding = async () => {
     if (onboardingSaving) return
     setOnboardingSaving(true)
@@ -719,14 +648,6 @@ export default function HRDashboard() {
       setShowOnboarding(false)
     } finally {
       setOnboardingSaving(false)
-    }
-  }
-
-  const handlePlayAudio = (audio) => {
-    if (playingAudio?.name === audio.name) {
-      setPlayingAudio(null)
-    } else {
-      setPlayingAudio(audio)
     }
   }
 
@@ -840,8 +761,7 @@ export default function HRDashboard() {
 
   const handleOpenCoursFolders = (platform) => {
     closeCardPanels()
-    setSelectedCoursPlatform(platform)
-    setShowCoursFoldersModal(true)
+    return platform
   }
 
   const fetchAttendance = async (platformId = attendancePlatformId, courseDate = attendanceDate) => {
@@ -861,50 +781,6 @@ export default function HRDashboard() {
       setAttendanceError('Impossible de charger les présences')
     } finally {
       setAttendanceLoading(false)
-    }
-  }
-
-  const updateAttendanceDraft = (studentId, updater) => {
-    setAttendanceData((current) => {
-      if (!current) return current
-      return {
-        ...current,
-        students: current.students.map((student) => {
-          if (student.id !== studentId) return student
-          const nextAttendance = typeof updater === 'function'
-            ? updater(student.attendance)
-            : { ...student.attendance, ...updater }
-          return { ...student, attendance: nextAttendance }
-        }),
-      }
-    })
-  }
-
-  const handleSaveAttendance = async (student, platformId = attendancePlatformId, courseDate = attendanceDate) => {
-    setAttendanceSavingStudentId(student.id)
-    setAttendanceError('')
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance/${student.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_date: courseDate,
-          slots: student.attendance?.slots || [],
-          status: student.attendance?.status || '',
-          notes: student.attendance?.notes || '',
-        }),
-      })
-      const data = await resp.json()
-      if (resp.ok && data.success) {
-        updateAttendanceDraft(student.id, { ...data.record, source: 'saved' })
-      } else {
-        setAttendanceError(data.error || 'Impossible d’enregistrer la présence')
-      }
-    } catch (e) {
-      console.error('Erreur sauvegarde présence:', e)
-      setAttendanceError('Impossible d’enregistrer la présence')
-    } finally {
-      setAttendanceSavingStudentId(null)
     }
   }
 
@@ -1489,9 +1365,7 @@ export default function HRDashboard() {
               expandedPlatform={expandedPlatform}
               platformAudios={platformAudios}
               audiosLoading={audiosLoading}
-              playingAudio={playingAudio}
               pdfUploading={pdfUploading}
-              audioRef={audioRef}
               colors={colors}
               darkMode={darkMode}
               studentEmailsByPlatform={studentEmailsByPlatform}
@@ -1504,8 +1378,8 @@ export default function HRDashboard() {
               attendanceData={attendanceData}
               attendanceLoading={attendanceLoading}
               attendanceError={attendanceError}
-              attendanceSavingStudentId={attendanceSavingStudentId}
               onExpand={handleExpandPlatform}
+              onRefreshAudios={fetchAudios}
               onToggleStudentEmails={handleToggleStudentEmails}
               onToggleAttendance={handleToggleAttendance}
               onStudentEmailDraftChange={handleStudentEmailDraftChange}
@@ -1513,13 +1387,10 @@ export default function HRDashboard() {
               onDeleteStudentEmail={handleDeleteStudentEmail}
               onAttendanceDateChange={setAttendanceDate}
               onRefreshAttendance={(platformId) => fetchAttendance(platformId, attendanceDate)}
-              onUpdateAttendanceDraft={updateAttendanceDraft}
-              onSaveAttendance={(student, platformId) => handleSaveAttendance(student, platformId, attendanceDate)}
               onExportAttendance={(week, platformId) => handleExportAttendance(week, platformId)}
               onOpenPdfModal={(platform) => {
                 closeCardPanels()
-                setSelectedPlatform(platform)
-                setShowPdfModal(true)
+                return platform
               }}
               onOpenCourseTimeModal={async (platform) => {
                 closeCardPanels()
@@ -1530,17 +1401,17 @@ export default function HRDashboard() {
                   if (data.success) setCurrentCourseTime(data)
                   else setCurrentCourseTime(null)
                 } catch { setCurrentCourseTime(null) }
-                setShowCourseTimeModal(true)
               }}
-              onDeleteAudio={handleDeleteAudio}
               onOpenCoursFolders={handleOpenCoursFolders}
-              onPlayAudio={handlePlayAudio}
               onPdfUpload={handlePdfUpload}
               onDeletePdf={handleDeletePdf}
-              onDeletePlatform={handleDeletePlatform}
-              onArchivePlatform={handleArchivePlatform}
               onCloseCardPanels={closeCardPanels}
-              archivingPlatformId={archivingPlatformId}
+              currentCourseTime={currentCourseTime}
+              onSetCourseTime={handleSetCourseTime}
+              onRetrySessionAudio={handleRetrySessionAudio}
+              onPreviewSessionPostponement={handlePreviewSessionPostponement}
+              onPostponeSession={handlePostponeSession}
+              onAudiosPublished={handleAudiosPublished}
               newlyCreatedPlatformId={newlyCreatedPlatformId}
               retryingPlatformId={retryingPlatformId}
               onRetryPreparation={handleRetryTeacherPreparation}
@@ -1549,52 +1420,6 @@ export default function HRDashboard() {
           </div>
         </main>
       </div>
-
-      {/* Modal Audios */}
-      {showAudiosModal && selectedPlatformId && (
-        <AudiosModal
-          platformId={selectedPlatformId}
-          audios={platformAudios[selectedPlatformId] || []}
-          loading={audiosLoading === selectedPlatformId}
-          onClose={() => setShowAudiosModal(false)}
-          onRefreshAudios={() => fetchAudios(selectedPlatformId)}
-        />
-      )}
-
-      {/* Modal PDF */}
-      {showPdfModal && selectedPlatform && (
-        <PDFModal
-          platform={selectedPlatform}
-          onClose={() => setShowPdfModal(false)}
-          onUpload={(file) => handlePdfUpload(selectedPlatform.id, file)}
-          onDelete={() => handleDeletePdf(selectedPlatform.id)}
-          darkMode={darkMode}
-          uploading={pdfUploading === selectedPlatform.id}
-        />
-      )}
-
-      {/* Modal Heure du cours */}
-      {showCourseTimeModal && (
-        <CourseTimeModal
-          onClose={() => setShowCourseTimeModal(false)}
-          onSubmit={handleSetCourseTime}
-          initialDate={currentCourseTime?.date_cours}
-          schedule={currentCourseTime?.schedule}
-          onRetryAudio={handleRetrySessionAudio}
-          onPreviewPostponement={handlePreviewSessionPostponement}
-          onPostponeSession={handlePostponeSession}
-        />
-      )}
-
-      {/* Modal Cours Folders */}
-      {showCoursFoldersModal && selectedCoursPlatform && (
-        <CoursFoldersModal
-          platformId={selectedCoursPlatform.id}
-          platformName={selectedCoursPlatform.name}
-          onClose={() => setShowCoursFoldersModal(false)}
-          onAudiosPublished={handleAudiosPublished}
-        />
-      )}
 
       {/* Modal confirmation suppression — branche par type :
           - audio/pdf : confirmation simple (atomique, peu d'impact)
@@ -2029,7 +1854,6 @@ function CenterWorkspaceSidebar({
   const accountName = localStorage.getItem('center_account_name') || 'Centre de formation'
   const isSignedIn = Boolean(
     localStorage.getItem('admin_auth_token')
-    || localStorage.getItem('auth_token')
     || localStorage.getItem('center_account_email'),
   )
   const initials = accountName
@@ -2752,9 +2576,9 @@ const CENTER_ONBOARDING_STEPS = [
   {
     icon: 'event_available',
     eyebrow: 'Exploitation',
-    title: 'Planifiez, générez à J-1, puis archivez',
-    description: 'Le planning pilote les séances et la génération audio à J-1. À la fin d’une promotion, archivez le professeur : il quitte l’espace actif sans perdre son module réutilisable.',
-    detail: 'L’archivage n’efface ni l’historique PostgreSQL, ni les ressources Azure.',
+    title: 'Planifiez et générez les supports à J-1',
+    description: 'Le planning pilote les séances et la génération audio à J-1. À la fin d’une promotion, le professeur, ses cours et ses audios restent disponibles dans votre bibliothèque.',
+    detail: 'Les ressources durables restent conservées pour les prochaines promotions.',
   },
 ]
 
@@ -2890,9 +2714,7 @@ function PlatformCardsView({
   expandedPlatform,
   platformAudios,
   audiosLoading,
-  playingAudio,
   pdfUploading,
-  audioRef,
   colors,
   darkMode,
   studentEmailsByPlatform,
@@ -2905,8 +2727,8 @@ function PlatformCardsView({
   attendanceData,
   attendanceLoading,
   attendanceError,
-  attendanceSavingStudentId,
   onExpand,
+  onRefreshAudios,
   onToggleStudentEmails,
   onToggleAttendance,
   onStudentEmailDraftChange,
@@ -2914,20 +2736,19 @@ function PlatformCardsView({
   onDeleteStudentEmail,
   onAttendanceDateChange,
   onRefreshAttendance,
-  onUpdateAttendanceDraft,
-  onSaveAttendance,
   onExportAttendance,
   onOpenPdfModal,
   onOpenCourseTimeModal,
-  onDeleteAudio,
   onOpenCoursFolders,
-  onPlayAudio,
   onPdfUpload,
   onDeletePdf,
-  onDeletePlatform,
-  onArchivePlatform,
   onCloseCardPanels,
-  archivingPlatformId,
+  currentCourseTime,
+  onSetCourseTime,
+  onRetrySessionAudio,
+  onPreviewSessionPostponement,
+  onPostponeSession,
+  onAudiosPublished,
   newlyCreatedPlatformId,
   retryingPlatformId,
   onRetryPreparation,
@@ -3088,9 +2909,7 @@ function PlatformCardsView({
             expanded={expandedPlatform === p.id}
             audios={platformAudios[p.id] || []}
             audiosLoading={audiosLoading === p.id}
-            playingAudio={playingAudio}
             pdfUploading={pdfUploading === p.id}
-            audioRef={audioRef}
             colors={colors}
             darkMode={darkMode}
             studentEmails={studentEmailsByPlatform[p.id] || []}
@@ -3100,11 +2919,11 @@ function PlatformCardsView({
             attendanceData={expandedAttendancePlatform === p.id ? attendanceData : null}
             attendanceLoading={attendanceLoading && expandedAttendancePlatform === p.id}
             attendanceError={expandedAttendancePlatform === p.id ? attendanceError : ''}
-            attendanceSavingStudentId={attendanceSavingStudentId}
             studentEmailsLoading={studentEmailsLoading === p.id}
             studentEmailsSaving={studentEmailsSaving === p.id}
             studentEmailDraft={studentEmailDrafts[p.id] || ''}
             onExpand={() => onExpand(p.id)}
+            onRefreshAudios={() => onRefreshAudios(p.id)}
             onToggleStudentEmails={() => onToggleStudentEmails(p.id)}
             onToggleAttendance={() => onToggleAttendance(p.id)}
             onStudentEmailDraftChange={(value) => onStudentEmailDraftChange(p.id, value)}
@@ -3112,20 +2931,19 @@ function PlatformCardsView({
             onDeleteStudentEmail={(recipientId) => onDeleteStudentEmail(p.id, recipientId)}
             onAttendanceDateChange={onAttendanceDateChange}
             onRefreshAttendance={() => onRefreshAttendance(p.id)}
-            onUpdateAttendanceDraft={onUpdateAttendanceDraft}
-            onSaveAttendance={(student) => onSaveAttendance(student, p.id)}
             onExportAttendance={(week) => onExportAttendance(week, p.id)}
             onOpenPdfModal={() => onOpenPdfModal(p)}
             onOpenCourseTimeModal={() => onOpenCourseTimeModal(p)}
-            onDeleteAudio={(fn) => onDeleteAudio(p.id, fn)}
             onOpenCoursFolders={() => onOpenCoursFolders(p)}
-            onPlayAudio={onPlayAudio}
             onPdfUpload={(file) => onPdfUpload(p.id, file)}
             onDeletePdf={() => onDeletePdf(p.id)}
-            onDeletePlatform={() => onDeletePlatform(p.id)}
-            onArchivePlatform={() => onArchivePlatform(p.id)}
             onBeforeFlip={onCloseCardPanels}
-            archiving={archivingPlatformId === p.id}
+            currentCourseTime={currentCourseTime}
+            onSetCourseTime={onSetCourseTime}
+            onRetrySessionAudio={onRetrySessionAudio}
+            onPreviewSessionPostponement={onPreviewSessionPostponement}
+            onPostponeSession={onPostponeSession}
+            onAudiosPublished={() => onAudiosPublished(p.id)}
             newlyCreated={newlyCreatedPlatformId === p.id}
             retryingPreparation={retryingPlatformId === p.id}
             onRetryPreparation={() => onRetryPreparation(p)}
@@ -3671,89 +3489,50 @@ function AttendanceCardPanel({
   )
 }
 
-function CardToolModal({
-  dialogId,
+function TeacherToolPanel({
   title,
   subtitle,
   icon,
-  onClose,
+  onBack,
   colors,
   darkMode,
-  widthClass = 'max-w-3xl',
   children,
 }) {
-  const onCloseRef = useRef(onClose)
-
-  useEffect(() => {
-    onCloseRef.current = onClose
-  }, [onClose])
-
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    const previousActiveElement = document.activeElement
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onCloseRef.current()
-    }
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.body.style.overflow = previousOverflow
-      window.removeEventListener('keydown', handleKeyDown)
-      previousActiveElement?.focus?.()
-    }
-  }, [])
-
-  return createPortal(
-    <div
-      className="postpone-dialog-backdrop fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-5"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
+  return (
+    <section
+      className="flex h-full min-h-0 flex-col"
+      aria-label={title}
+      style={{ backgroundColor: colors.cardBg }}
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={`${dialogId}-title`}
-        className={`postpone-dialog-sheet flex max-h-[92vh] w-full ${widthClass} flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl`}
-        style={{
-          backgroundColor: colors.cardBg,
-          border: `1px solid ${colors.border}`,
-          boxShadow: darkMode ? '0 20px 60px rgba(0, 0, 0, 0.45)' : '0 20px 60px rgba(15, 23, 42, 0.18)',
-        }}
-      >
-        <header className="flex items-start justify-between gap-4 border-b px-5 py-4 sm:px-6" style={{ borderColor: colors.border }}>
-          <div className="flex min-w-0 items-start gap-3">
-            <span
-              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl"
-              style={{ backgroundColor: colors.innerBg, color: darkMode ? '#c4b5fd' : '#7c3aed' }}
-              aria-hidden="true"
-            >
-              <Icon name={icon} className="text-xl" />
-            </span>
-            <div className="min-w-0">
-              <h2 id={`${dialogId}-title`} className="text-lg font-semibold tracking-tight" style={{ color: colors.text }}>
-                {title}
-              </h2>
-              <p className="mt-1 truncate text-xs" style={{ color: colors.textMuted }}>{subtitle}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            autoFocus
-            aria-label={`Fermer ${title}`}
-            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
-            style={{ color: colors.textMuted }}
-          >
-            <Icon name="close" className="text-xl" />
-          </button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
-          {children}
+      <header className="flex flex-shrink-0 items-center gap-3 border-b px-4 py-3 pr-12 sm:px-5 sm:pr-12" style={{ borderColor: colors.border }}>
+        <button
+          type="button"
+          onClick={onBack}
+          autoFocus
+          aria-label="Revenir aux outils du professeur"
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+          style={{ color: colors.textMuted }}
+        >
+          <Icon name="arrow_back" className="text-xl" />
+        </button>
+        <span
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl"
+          style={{ backgroundColor: colors.innerBg, color: darkMode ? '#c4b5fd' : '#7c3aed' }}
+          aria-hidden="true"
+        >
+          <Icon name={icon} className="text-xl" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-semibold tracking-tight" style={{ color: colors.text }}>
+            {title}
+          </h2>
+          <p className="mt-0.5 truncate text-xs" style={{ color: colors.textMuted }}>{subtitle}</p>
         </div>
-      </section>
-    </div>,
-    document.body,
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {children}
+      </div>
+    </section>
   )
 }
 
@@ -4553,6 +4332,7 @@ function AudiosModal({
   loading,
   onClose,
   onRefreshAudios,
+  embedded = false,
 }) {
   const audioGroups = classifyFormationAudios(audios)
   const audioCount = Object.values(audioGroups).reduce((total, group) => total + group.length, 0)
@@ -4613,16 +4393,16 @@ function AudiosModal({
   }
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
+      className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-4'}
+      style={embedded ? undefined : { backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
+      onClick={embedded ? undefined : onClose}
+      role={embedded ? 'region' : 'dialog'}
+      aria-modal={embedded ? undefined : 'true'}
       aria-labelledby="formation-audios-title"
     >
       <div
-        className="w-full overflow-hidden rounded-2xl bg-white shadow-2xl"
-        style={{ maxWidth: '1400px', maxHeight: '90vh' }}
+        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-white' : 'w-full overflow-hidden rounded-2xl bg-white shadow-2xl'}
+        style={embedded ? undefined : { maxWidth: '1400px', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
@@ -4632,7 +4412,9 @@ function AudiosModal({
               <Icon name="audiotrack" className="text-xl" />
             </div>
             <div>
-              <h3 id="formation-audios-title" className="text-lg font-semibold text-[#18181B]">Audios de la formation</h3>
+              <h3 id="formation-audios-title" className="text-base font-semibold text-[#18181B]">
+                {embedded ? 'Playlist de la formation' : 'Audios de la formation'}
+              </h3>
               <p className="text-sm text-[#71717A]">
                 {audioCount} fichier{audioCount > 1 ? 's' : ''} dans la playlist
               </p>
@@ -4648,14 +4430,16 @@ function AudiosModal({
               <span className="hidden sm:inline">Remplir avec les audios</span>
               <span className="sm:hidden">Remplir</span>
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Fermer"
-              className="flex h-11 w-11 items-center justify-center rounded-lg text-[#71717A] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 active:scale-[0.98]"
-            >
-              <Icon name="close" className="text-xl" />
-            </button>
+            {!embedded && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Fermer"
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-[#71717A] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 active:scale-[0.98]"
+              >
+                <Icon name="close" className="text-xl" />
+              </button>
+            )}
           </div>
 
           {/* Modal sélection dossier */}
@@ -4741,7 +4525,7 @@ function AudiosModal({
         </div>
 
         {/* Modal Body */}
-        <div className="overflow-y-auto p-4 sm:p-6" style={{ maxHeight: 'calc(90vh - 80px)' }}>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5" style={embedded ? undefined : { maxHeight: 'calc(90vh - 80px)' }}>
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#D4D4D8] border-t-[#18181B]" />
@@ -4792,7 +4576,7 @@ function AudiosModal({
 }
 
 // ─── PDF Modal ───────────────────────────────────────────────────────────────
-function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }) {
+function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded = false }) {
   const [dragOver, setDragOver] = useState(false)
   const [justUploaded, setJustUploaded] = useState(false)
   const [iframeKey, setIframeKey] = useState(0)
@@ -4855,31 +4639,34 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
-      onClick={onClose}
+      className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-4'}
+      style={embedded ? undefined : { backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
+      onClick={embedded ? undefined : onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl w-full overflow-hidden"
-        style={{ maxWidth: '1200px', maxHeight: '90vh' }}
+        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-white' : 'w-full overflow-hidden rounded-2xl bg-white shadow-2xl'}
+        style={embedded ? undefined : { maxWidth: '1200px', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#e2e8f0', backgroundColor: '#137fec' }}>
-          <div className="flex items-center gap-3 text-white">
+        {!embedded && (
+        <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
+          <div className="flex items-center gap-3" style={{ color: '#0f172a' }}>
             <Icon name="picture_as_pdf" className="text-2xl" />
-            <h3 className="text-lg font-bold">GESTION DU PDF</h3>
+            <h3 className="text-lg font-semibold">Gestion du PDF</h3>
           </div>
           <button
             onClick={onClose}
-            className="text-white hover:bg-white/20 rounded-full p-1 transition-colors"
+            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100"
+            aria-label="Fermer la gestion du PDF"
           >
             <Icon name="close" className="text-2xl" />
           </button>
         </div>
+        )}
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 80px)' }}>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6" style={embedded ? undefined : { maxHeight: 'calc(90vh - 80px)' }}>
           <section className="mb-6 rounded-xl border p-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#F8F7F5' }}>
             <div className="mb-3 flex items-start justify-between gap-4">
               <div>
@@ -4939,36 +4726,46 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
               </div>
             )}
           </section>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
             {/* PDF Viewer */}
             <div className="flex flex-col">
               <h4 className="text-sm font-bold mb-3" style={{ color: '#111418' }}>PDF ACTUEL</h4>
               {platform.pdf_filename && platform.pdf_url ? (
-                <div className="flex-1 flex flex-col border rounded-lg overflow-hidden" style={{ borderColor: '#e2e8f0', minHeight: '500px' }}>
+                <div className="flex flex-1 flex-col overflow-hidden rounded-lg border" style={{ borderColor: '#e2e8f0', minHeight: embedded ? '360px' : '500px' }}>
                   <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor: '#e2e8f0', backgroundColor: '#F8F7F5' }}>
                     <span className="text-sm font-medium truncate" style={{ color: '#64748b' }}>{platform.pdf_filename}</span>
-                    <button
-                      onClick={() => setIframeKey(k => k + 1)}
-                      className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors ml-2 flex-shrink-0"
-                      style={{ color: '#64748b', backgroundColor: '#f1f5f9' }}
-                      onMouseEnter={e => e.currentTarget.style.backgroundColor = '#e2e8f0'}
-                      onMouseLeave={e => e.currentTarget.style.backgroundColor = '#f1f5f9'}
-                      title="Recharger le PDF"
-                    >
-                      <Icon name="refresh" className="text-sm" />
-                      <span>Recharger</span>
-                    </button>
+                    <div className="ml-2 flex flex-shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setIframeKey(k => k + 1)}
+                        className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs transition-colors hover:bg-slate-200"
+                        style={{ color: '#64748b', backgroundColor: '#f1f5f9' }}
+                        title="Recharger le PDF"
+                      >
+                        <Icon name="refresh" className="text-sm" />
+                        <span>Recharger</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onDelete}
+                        className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+                        style={{ color: '#64748b' }}
+                        aria-label="Supprimer le PDF actuel"
+                      >
+                        <Icon name="delete_outline" className="text-sm" />
+                      </button>
+                    </div>
                   </div>
                   <iframe
                     key={iframeKey}
                     src={`https://docs.google.com/viewer?url=${encodeURIComponent(platform.pdf_url)}&embedded=true`}
                     className="flex-1 w-full"
-                    style={{ minHeight: '450px' }}
+                    style={{ minHeight: embedded ? '310px' : '450px' }}
                     title="PDF Viewer"
                   />
                 </div>
               ) : (
-                <div className="flex-1 flex items-center justify-center border-2 border-dashed rounded-lg" style={{ borderColor: '#e2e8f0', minHeight: '500px' }}>
+                <div className="flex flex-1 items-center justify-center rounded-lg border-2 border-dashed" style={{ borderColor: '#e2e8f0', minHeight: embedded ? '260px' : '500px' }}>
                   <div className="text-center">
                     <Icon name="picture_as_pdf" className="text-6xl mb-3" style={{ color: '#cbd5e1' }} />
                     <p className="text-sm" style={{ color: '#94a3b8' }}>Aucun PDF uploadé</p>
@@ -4988,9 +4785,9 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
                 onClick={() => !uploading && fileInputRef.current?.click()}
                 className="flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-lg cursor-pointer transition-all"
                 style={{
-                  borderColor: dragOver ? '#137fec' : '#e2e8f0',
-                  backgroundColor: dragOver ? 'rgba(19, 127, 236, 0.05)' : 'transparent',
-                  minHeight: '500px',
+                  borderColor: dragOver ? '#8B5CF6' : '#e2e8f0',
+                  backgroundColor: dragOver ? 'rgba(139, 92, 246, 0.06)' : 'transparent',
+                  minHeight: embedded ? '280px' : '500px',
                   cursor: uploading ? 'not-allowed' : 'pointer',
                   opacity: uploading ? 0.6 : 1
                 }}
@@ -5006,7 +4803,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
                 <div className="flex flex-col items-center gap-4 text-center px-6">
                   {uploading ? (
                     <>
-                      <div className="h-16 w-16 animate-spin rounded-full border-4 border-gray-200 border-t-blue-500" />
+                      <div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-200 border-t-violet-500" />
                       <p className="text-sm font-medium" style={{ color: '#64748b' }}>Upload en cours...</p>
                     </>
                   ) : justUploaded ? (
@@ -5017,14 +4814,14 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
                         className="w-24 h-20 flex-shrink-0 object-contain"
                         style={{ transform: 'scaleX(-1)' }}
                       />
-                      <p className="text-base font-semibold leading-snug text-left" style={{ color: '#1d4ed8' }}>
+                      <p className="text-left text-base font-semibold leading-snug" style={{ color: '#6d28d9' }}>
                         Le chatbot a bien été alimenté à partir du contenu du cours de cette semaine !
                       </p>
                     </div>
                   ) : (
                     <>
-                      <div className="flex items-center justify-center size-20 rounded-full" style={{ backgroundColor: 'rgba(19, 127, 236, 0.1)' }}>
-                        <Icon name="cloud_upload" className="text-5xl" style={{ color: '#137fec' }} />
+                      <div className="flex size-20 items-center justify-center rounded-full" style={{ backgroundColor: 'rgba(139, 92, 246, 0.10)' }}>
+                        <Icon name="cloud_upload" className="text-5xl" style={{ color: '#7c3aed' }} />
                       </div>
                       <div>
                         <h3 className="font-bold text-lg mb-2" style={{ color: '#111418' }}>
@@ -5371,22 +5168,130 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
   )
 }
 
+function StudentsToolContent({
+  platformId,
+  studentEmails,
+  studentEmailsLoading,
+  studentEmailsSaving,
+  studentEmailDraft,
+  onStudentEmailDraftChange,
+  onAddStudentEmails,
+  onDeleteStudentEmail,
+  colors,
+  darkMode,
+}) {
+  return (
+    <div className="p-5 sm:p-6">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves et invitations</h3>
+          <p className="mt-1 max-w-[62ch] text-xs leading-5" style={{ color: colors.textMuted }}>
+            Ajoutez uniquement les adresses qui recevront le lien d’accès et les rappels.
+          </p>
+        </div>
+        <span
+          className="flex-shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums"
+          style={{ backgroundColor: colors.cardBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+        >
+          {studentEmails.length}
+        </span>
+      </div>
+
+      <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
+        Adresses e-mail
+        <textarea
+          value={studentEmailDraft}
+          onChange={(event) => onStudentEmailDraftChange(event.target.value)}
+          rows={3}
+          placeholder="prenom@exemple.com, autre@exemple.com"
+          className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30"
+          style={{
+            backgroundColor: colors.cardBg,
+            border: `1px solid ${colors.border}`,
+            color: colors.text,
+          }}
+        />
+      </label>
+      <div className="mb-5 mt-2 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-[11px] leading-4" style={{ color: colors.textMuted }}>
+          1 000 adresses maximum par ajout.
+        </p>
+        <button
+          type="button"
+          onClick={onAddStudentEmails}
+          disabled={!studentEmailDraft.trim() || studentEmailsSaving}
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ backgroundColor: '#8B5CF6', color: 'white' }}
+        >
+          {studentEmailsSaving ? (
+            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+          ) : (
+            <Icon name="person_add" className="text-sm" />
+          )}
+          Ajouter les adresses
+        </button>
+      </div>
+
+      {studentEmailsLoading ? (
+        <div className="flex items-center justify-center py-5">
+          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
+        </div>
+      ) : studentEmails.length === 0 ? (
+        <div className="rounded-xl border border-dashed px-4 py-7 text-center" style={{ borderColor: colors.border }}>
+          <Icon name="group_off" className="text-2xl" style={{ color: colors.textMuted }} />
+          <p className="mt-2 text-xs" style={{ color: colors.textMuted }}>Aucune adresse ajoutée pour le moment.</p>
+        </div>
+      ) : (
+        <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
+          {studentEmails.map((recipient) => (
+            <div
+              key={recipient.id}
+              className="flex items-center gap-2 rounded-lg px-2.5 py-2"
+              style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+            >
+              <Icon name="mail" className="text-sm" style={{ color: colors.textMuted }} />
+              <span className="min-w-0 flex-1 truncate text-xs" style={{ color: colors.textSecondary }} title={recipient.email}>
+                {recipient.email}
+              </span>
+              <button
+                type="button"
+                onClick={() => onDeleteStudentEmail(recipient.id)}
+                className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md transition-colors hover:bg-rose-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+                style={{ color: colors.textMuted }}
+                aria-label={`Retirer ${recipient.email}`}
+              >
+                <Icon name="close" className="text-sm" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <ReminderRulesPanel
+        platformId={platformId}
+        recipients={studentEmails}
+        colors={colors}
+        darkMode={darkMode}
+      />
+    </div>
+  )
+}
+
 function PlatformCard({
-  platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading,
-  audioRef, colors, darkMode, studentEmails = [], studentsExpanded = false, studentEmailsLoading = false,
-  studentEmailsSaving = false, studentEmailDraft = '', attendanceExpanded = false,
+  platform: p, audios, audiosLoading, pdfUploading,
+  colors, darkMode, studentEmails = [], studentEmailsLoading = false,
+  studentEmailsSaving = false, studentEmailDraft = '',
   attendanceDate, attendanceData, attendanceLoading = false, attendanceError = '',
-  attendanceSavingStudentId = null, onExpand, onToggleStudentEmails, onToggleAttendance,
+  onExpand, onRefreshAudios, onToggleStudentEmails, onToggleAttendance,
   onStudentEmailDraftChange, onAddStudentEmails, onDeleteStudentEmail,
-  onAttendanceDateChange, onRefreshAttendance, onUpdateAttendanceDraft, onSaveAttendance,
+  onAttendanceDateChange, onRefreshAttendance,
   onExportAttendance, onOpenPdfModal, onOpenCourseTimeModal,
-  onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
-  onArchivePlatform, archiving = false, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
+  onPdfUpload, onDeletePdf, onOpenCoursFolders,
+  currentCourseTime, onSetCourseTime, onRetrySessionAudio, onPreviewSessionPostponement,
+  onPostponeSession, onAudiosPublished, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
   onBeforeFlip,
 }) {
-  const pdfInputId = `pdf-input-${p.id}`
-  const [deleteHover, setDeleteHover] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [activeTool, setActiveTool] = useState(null)
   const creationProgress = getHiddenPipelineProgress(p)
   const preparation = getTeacherPreparation(p)
   const isPreparing = preparation.status === 'preparing'
@@ -5408,21 +5313,37 @@ function PlatformCard({
     boxShadow: '0 1px 3px rgba(0,0,0,.08), 0 1px 2px -1px rgba(0,0,0,.08)',
   }
   const actionItems = [
-    { key: 'pdf', label: 'PDF', icon: 'picture_as_pdf', onClick: onOpenPdfModal },
+    { key: 'pdf', label: 'PDF', icon: 'picture_as_pdf', onOpen: onOpenPdfModal },
     ...(p.active ? [
-      { key: 'planning', label: 'Planning', icon: 'schedule', onClick: onOpenCourseTimeModal },
-      { key: 'audios', label: 'Audios', icon: 'audiotrack', onClick: onExpand, active: expanded },
-      { key: 'courses', label: 'Cours', icon: 'folder_special', onClick: onOpenCoursFolders },
-      { key: 'students', label: 'Élèves', icon: 'group', onClick: onToggleStudentEmails, active: studentsExpanded, opensDialog: true },
-      { key: 'attendance', label: 'Présence', icon: 'fact_check', onClick: onToggleAttendance, active: attendanceExpanded, opensDialog: true },
+      { key: 'planning', label: 'Planning', icon: 'schedule', onOpen: onOpenCourseTimeModal },
+      { key: 'audios', label: 'Audios', icon: 'audiotrack', onOpen: onExpand },
+      { key: 'courses', label: 'Cours', icon: 'folder_special', onOpen: onOpenCoursFolders },
+      { key: 'students', label: 'Élèves', icon: 'group', onOpen: onToggleStudentEmails },
+      { key: 'attendance', label: 'Présence', icon: 'fact_check', onOpen: onToggleAttendance },
     ] : []),
   ]
+  const activeToolMeta = actionItems.find((item) => item.key === activeTool)
+
+  const openTool = async (action) => {
+    await action.onOpen?.()
+    setActiveTool(action.key)
+  }
+
+  const closeTool = () => {
+    onBeforeFlip?.()
+    setActiveTool(null)
+  }
+  const closeDetails = useCallback(() => {
+    onBeforeFlip?.()
+    setActiveTool(null)
+    setDetailsOpen(false)
+  }, [onBeforeFlip])
 
   useEffect(() => {
     if (!detailsOpen) return undefined
     const previousOverflow = document.body.style.overflow
     const handleEscape = (event) => {
-      if (event.key === 'Escape') setDetailsOpen(false)
+      if (event.key === 'Escape') closeDetails()
     }
     document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', handleEscape)
@@ -5430,7 +5351,7 @@ function PlatformCard({
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', handleEscape)
     }
-  }, [detailsOpen])
+  }, [detailsOpen, closeDetails])
 
   return (
     <>
@@ -5522,18 +5443,18 @@ function PlatformCard({
         <div
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[3px]"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setDetailsOpen(false)
+            if (event.target === event.currentTarget) closeDetails()
           }}
         >
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby={`teacher-details-${p.id}`}
-            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:h-[86vh] sm:max-h-[760px] sm:flex-row"
+            className="relative flex max-h-[94vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:h-[90vh] sm:flex-row"
             style={{ border: `1px solid ${colors.border}` }}
           >
             <aside
-              className="relative min-h-[300px] shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2"
+              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-[38%] ${activeTool ? 'hidden sm:block' : 'min-h-[260px]'}`}
               style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
             >
               <span
@@ -5556,10 +5477,10 @@ function PlatformCard({
               </div>
             </aside>
 
-            <div className="relative min-h-0 flex-1 overflow-y-auto" style={{ backgroundColor: colors.cardBg }}>
+            <div className="relative min-h-0 flex-1 overflow-hidden" style={{ backgroundColor: colors.cardBg }}>
               <button
                 type="button"
-                onClick={() => setDetailsOpen(false)}
+                onClick={closeDetails}
                 aria-label="Fermer la fiche du professeur"
                 className="absolute right-2 top-2 z-40 flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
                 style={{ color: colors.textMuted }}
@@ -5567,53 +5488,7 @@ function PlatformCard({
                 <Icon name="close" className="text-base" />
               </button>
 
-              <div className="relative overflow-hidden">
-      {/* L’archivage retire la promo de l’espace actif sans effacer le module
-          durable ni ses ressources Azure. La suppression définitive reste un
-          outil superadmin de dernier recours. */}
-      {onArchivePlatform ? (
-        <button
-          type="button"
-          aria-label={`Archiver le professeur ${p.teacher_name || p.name}`}
-          title="Archiver sans supprimer les cours ni les audios"
-          onClick={(e) => {
-            e.stopPropagation()
-            onArchivePlatform()
-          }}
-          disabled={archiving}
-          className="absolute right-12 top-3 z-30 flex h-9 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 disabled:cursor-wait disabled:opacity-60"
-          style={{
-            backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.7)' : 'rgba(255, 255, 255, 0.9)',
-            color: colors.textSecondary,
-            border: `1px solid ${colors.border}`,
-            backdropFilter: 'blur(4px)',
-          }}
-        >
-          <Icon name={archiving ? 'hourglass_top' : 'archive'} className="text-base" />
-          <span>{archiving ? 'Archivage…' : 'Archiver'}</span>
-        </button>
-      ) : onDeletePlatform ? (
-        <button
-          type="button"
-          aria-label={`Supprimer la plateforme ${p.name}`}
-          title="Supprimer la plateforme"
-          onClick={(e) => {
-            e.stopPropagation()
-            onDeletePlatform()
-          }}
-          onMouseEnter={() => setDeleteHover(true)}
-          onMouseLeave={() => setDeleteHover(false)}
-          className="absolute right-12 top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
-          style={{
-            backgroundColor: deleteHover ? (darkMode ? 'rgba(220, 38, 38, 0.18)' : '#fee2e2') : (darkMode ? 'rgba(15, 23, 42, 0.55)' : 'rgba(255, 255, 255, 0.85)'),
-            color: deleteHover ? '#dc2626' : colors.textMuted,
-            border: `1px solid ${deleteHover ? 'rgba(220, 38, 38, 0.3)' : (darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(15, 23, 42, 0.06)')}`,
-            backdropFilter: 'blur(4px)',
-          }}
-        >
-          <Icon name="delete_outline" className="text-base" />
-        </button>
-      ) : null}
+              <div className="relative h-full overflow-hidden">
 
       {/* Inactive overlay */}
       {!p.active && (
@@ -5679,7 +5554,8 @@ function PlatformCard({
         </div>
       )}
 
-      <div className="p-6">
+      {!activeTool ? (
+      <div className="h-full overflow-y-auto p-6">
         {/* Header — SKU chip + name + status pill, optional meta line below */}
         <div className="mb-5 space-y-2">
           <div className="flex min-w-0 items-center gap-2">
@@ -5738,237 +5614,34 @@ function PlatformCard({
           style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}
         >
           {actionItems.map((action, index) => {
-            const isActive = Boolean(action.active)
             return (
               <button
                 key={action.key}
                 type="button"
-                onClick={action.onClick}
-                aria-haspopup={action.opensDialog ? 'dialog' : undefined}
+                onClick={() => openTool(action)}
                 className="flex min-h-12 items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors hover:bg-black/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/50 dark:hover:bg-white/5"
                 style={{
-                  backgroundColor: isActive ? 'rgba(139, 92, 246, 0.10)' : 'transparent',
+                  backgroundColor: 'transparent',
                   borderTop: index >= 2 ? `1px solid ${colors.border}` : 'none',
                   borderLeft: index % 2 === 1 ? `1px solid ${colors.border}` : 'none',
-                  color: isActive ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textSecondary,
+                  color: colors.textSecondary,
                 }}
               >
                 <Icon
                   name={action.icon}
                   className="text-lg"
-                  style={{ color: isActive ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
+                  style={{ color: colors.textMuted }}
                 />
                 <span className="min-w-0 flex-1 truncate">{action.label}</span>
-                {action.opensDialog && (
-                  <Icon
-                    name="chevron_right"
-                    className="text-base"
-                    style={{ color: colors.textMuted }}
-                  />
-                )}
+                <Icon
+                  name="chevron_right"
+                  className="text-base"
+                  style={{ color: colors.textMuted }}
+                />
               </button>
             )
           })}
         </div>
-
-        {/* Audio list — dépliée pleine largeur sous la grille quand la tuile Audios est active */}
-        {expanded && p.active && (
-          <div className="mb-3 max-h-80 space-y-2 overflow-y-auto pr-1">
-            {audiosLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-700 border-t-purple-500" />
-              </div>
-            ) : audios.length === 0 ? (
-              <p className="py-6 text-center text-xs" style={{ color: colors.textMuted }}>Aucun audio</p>
-            ) : (
-              audios.map((audio) => (
-                <div key={audio.name} className="space-y-2">
-                  <div
-                    className="flex items-center gap-2.5 rounded-lg px-3 py-2 transition-colors"
-                    style={{ backgroundColor: colors.innerBg }}
-                  >
-                    <button
-                      onClick={() => onPlayAudio(audio)}
-                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-colors"
-                      style={{ backgroundColor: '#8B5CF6', color: 'white' }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = '#7c3aed'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = '#8B5CF6'
-                      }}
-                    >
-                      <Icon name={playingAudio?.name === audio.name ? 'pause' : 'play_arrow'} className="text-sm" />
-                    </button>
-                    <span className="min-w-0 flex-1 truncate text-xs" style={{ color: colors.textSecondary }} title={audio.name}>
-                      {audio.name}
-                    </span>
-                    <span className="flex-shrink-0 text-[10px]" style={{ color: colors.textMuted }}>
-                      {formatSize(audio.size)}
-                    </span>
-                    <button
-                      onClick={() => onDeleteAudio(audio.name)}
-                      className="flex-shrink-0 rounded-md p-1 transition-colors"
-                      style={{ color: colors.textMuted }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = darkMode ? '#450a0a' : '#fee2e2'
-                        e.currentTarget.style.color = '#f87171'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = 'transparent'
-                        e.currentTarget.style.color = colors.textMuted
-                      }}
-                      title="Supprimer"
-                    >
-                      <Icon name="delete" className="text-sm" />
-                    </button>
-                  </div>
-                  {playingAudio?.name === audio.name && (
-                    <audio
-                      ref={audioRef}
-                      src={audio.url}
-                      controls
-                      autoPlay
-                      className="w-full h-8 rounded"
-                      style={{ colorScheme: 'dark' }}
-                      onEnded={() => onPlayAudio(audio)}
-                    />
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {/* Emails élèves — liste de destinataires des rappels de cours */}
-        {studentsExpanded && p.active && (
-          <CardToolModal
-            dialogId={`students-modal-${p.id}`}
-            title="Élèves et rappels"
-            subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
-            icon="group"
-            onClose={onToggleStudentEmails}
-            colors={colors}
-            darkMode={darkMode}
-          >
-          <div className="p-1 sm:p-2">
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves et invitations</h4>
-                <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
-                  Ajoutez uniquement les adresses qui recevront le lien d’accès et les rappels.
-                </p>
-              </div>
-              <span
-                className="flex-shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums"
-                style={{ backgroundColor: colors.cardBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-              >
-                {studentEmails.length}
-              </span>
-            </div>
-
-            <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
-              Adresses e-mail
-              <textarea
-                value={studentEmailDraft}
-                onChange={(e) => onStudentEmailDraftChange(e.target.value)}
-                rows={2}
-                placeholder="prenom@exemple.com, autre@exemple.com"
-                className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30"
-                style={{
-                  backgroundColor: colors.cardBg,
-                  border: `1px solid ${colors.border}`,
-                  color: colors.text,
-                }}
-              />
-            </label>
-            <div className="mb-4 mt-2 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[11px] leading-4" style={{ color: colors.textMuted }}>
-                1 000 adresses maximum par ajout.
-              </p>
-              <button
-                type="button"
-                onClick={onAddStudentEmails}
-                disabled={!studentEmailDraft.trim() || studentEmailsSaving}
-                className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ backgroundColor: '#8B5CF6', color: 'white' }}
-              >
-                {studentEmailsSaving ? (
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                ) : (
-                  <Icon name="person_add" className="text-sm" />
-                )}
-                Ajouter les adresses
-              </button>
-            </div>
-
-            {studentEmailsLoading ? (
-              <div className="flex items-center justify-center py-4">
-                <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
-              </div>
-            ) : studentEmails.length === 0 ? (
-              <p className="py-2 text-xs" style={{ color: colors.textMuted }}>
-                Aucune adresse ajoutée pour le moment.
-              </p>
-            ) : (
-              <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
-                {studentEmails.map((recipient) => (
-                  <div
-                    key={recipient.id}
-                    className="flex items-center gap-2 rounded-lg px-2 py-1.5"
-                    style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-                  >
-                    <Icon name="mail" className="text-sm" style={{ color: colors.textMuted }} />
-                    <span className="min-w-0 flex-1 truncate text-xs" style={{ color: colors.textSecondary }} title={recipient.email}>
-                      {recipient.email}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteStudentEmail(recipient.id)}
-                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md transition-colors hover:bg-rose-50"
-                      style={{ color: colors.textMuted }}
-                      title="Supprimer l'email"
-                    >
-                      <Icon name="close" className="text-sm" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <ReminderRulesPanel
-              platformId={p.id}
-              recipients={studentEmails}
-              colors={colors}
-              darkMode={darkMode}
-            />
-          </div>
-          </CardToolModal>
-        )}
-
-        {attendanceExpanded && p.active && (
-          <CardToolModal
-            dialogId={`attendance-modal-${p.id}`}
-            title="Présence et relevés"
-            subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
-            icon="fact_check"
-            onClose={onToggleAttendance}
-            colors={colors}
-            darkMode={darkMode}
-            widthClass="max-w-4xl"
-          >
-            <AttendanceCardPanel
-              colors={colors}
-              darkMode={darkMode}
-              courseDate={attendanceDate}
-              data={attendanceData}
-              loading={attendanceLoading}
-              error={attendanceError}
-              onCourseDateChange={onAttendanceDateChange}
-              onRefresh={onRefreshAttendance}
-              onExport={onExportAttendance}
-            />
-          </CardToolModal>
-        )}
 
         {/* === Divider entre groupes A (boxed) et B (linky externes) === */}
         {p.active && (
@@ -5997,8 +5670,84 @@ function PlatformCard({
             <Icon name="open_in_new" className="text-base" style={{ color: colors.textMuted }} />
           </a>
         )}
-
-              </div>
+      </div>
+      ) : (
+        <TeacherToolPanel
+          title={activeToolMeta?.label || 'Outil'}
+          subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
+          icon={activeToolMeta?.icon || 'tune'}
+          onBack={closeTool}
+          colors={colors}
+          darkMode={darkMode}
+        >
+          {activeTool === 'pdf' && (
+            <PDFModal
+              embedded
+              platform={p}
+              onUpload={onPdfUpload}
+              onDelete={onDeletePdf}
+              uploading={pdfUploading}
+            />
+          )}
+          {activeTool === 'planning' && (
+            <CourseTimeModal
+              embedded
+              onSubmit={onSetCourseTime}
+              initialDate={currentCourseTime?.date_cours}
+              schedule={currentCourseTime?.schedule}
+              onRetryAudio={onRetrySessionAudio}
+              onPreviewPostponement={onPreviewSessionPostponement}
+              onPostponeSession={onPostponeSession}
+            />
+          )}
+          {activeTool === 'audios' && (
+            <AudiosModal
+              embedded
+              platformId={p.id}
+              audios={audios}
+              loading={audiosLoading}
+              onRefreshAudios={onRefreshAudios}
+            />
+          )}
+          {activeTool === 'courses' && (
+            <CoursFoldersModal
+              embedded
+              platformId={p.id}
+              platformName={p.name}
+              onAudiosPublished={onAudiosPublished}
+            />
+          )}
+          {activeTool === 'students' && (
+            <StudentsToolContent
+              platformId={p.id}
+              studentEmails={studentEmails}
+              studentEmailsLoading={studentEmailsLoading}
+              studentEmailsSaving={studentEmailsSaving}
+              studentEmailDraft={studentEmailDraft}
+              onStudentEmailDraftChange={onStudentEmailDraftChange}
+              onAddStudentEmails={onAddStudentEmails}
+              onDeleteStudentEmail={onDeleteStudentEmail}
+              colors={colors}
+              darkMode={darkMode}
+            />
+          )}
+          {activeTool === 'attendance' && (
+            <div className="p-5 sm:p-6">
+              <AttendanceCardPanel
+                colors={colors}
+                darkMode={darkMode}
+                courseDate={attendanceDate}
+                data={attendanceData}
+                loading={attendanceLoading}
+                error={attendanceError}
+                onCourseDateChange={onAttendanceDateChange}
+                onRefresh={onRefreshAttendance}
+                onExport={onExportAttendance}
+              />
+            </div>
+          )}
+        </TeacherToolPanel>
+      )}
             </div>
             </div>
           </section>
@@ -6007,19 +5756,6 @@ function PlatformCard({
       )}
     </>
   )
-}
-
-function formatSize(bytes) {
-  if (!bytes) return '—'
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function formatDateShort(dateStr) {
-  if (!dateStr) return '—'
-  const parts = dateStr.split(' ')[0].split('-')
-  if (parts.length === 3) return `${parts[2]}/${parts[1]}`
-  return dateStr
 }
 
 // Format Europe/Paris dates ('YYYY-MM-DD HH:MM' or ISO) en relatif court ("il y a 2 j", "il y a 14 min").
@@ -6381,7 +6117,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
 }
 
 // ─── Course Time Modal ───────────────────────────────────────────────────────
-function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudio, onPreviewPostponement, onPostponeSession }) {
+function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudio, onPreviewPostponement, onPostponeSession, embedded = false }) {
   const today = new Date().toISOString().split('T')[0]
   const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
@@ -6434,19 +6170,20 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
-      onClick={onClose}
+      className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-4'}
+      style={embedded ? undefined : { backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
+      onClick={embedded ? undefined : onClose}
     >
       <div
-        role="dialog"
-        aria-modal="true"
+        role={embedded ? 'region' : 'dialog'}
+        aria-modal={embedded ? undefined : 'true'}
         aria-labelledby="course-planning-title"
-        className="overflow-hidden rounded-2xl bg-white"
-        style={{ width: '100%', maxWidth: '760px', maxHeight: '92vh', boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)' }}
+        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-white' : 'overflow-hidden rounded-2xl bg-white'}
+        style={embedded ? undefined : { width: '100%', maxWidth: '760px', maxHeight: '92vh', boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
+        {!embedded && (
         <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
           <div className="flex items-center gap-3">
             <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: '#ede9fe', color: '#7c3aed' }}>
@@ -6466,9 +6203,10 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
             <Icon name="close" className="text-2xl" />
           </button>
         </div>
+        )}
 
         {/* Body */}
-        <div className="overflow-y-auto p-6" style={{ maxHeight: 'calc(92vh - 74px)' }}>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6" style={embedded ? undefined : { maxHeight: 'calc(92vh - 74px)' }}>
           {result?.success ? (
             <div className="flex flex-col items-center gap-4 py-4 text-center">
               <div className="flex items-center justify-center size-14 rounded-full" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)' }}>
@@ -6476,11 +6214,11 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
               </div>
               <p className="text-sm font-medium" style={{ color: '#0f172a' }}>{result.message}</p>
               <button
-                onClick={onClose}
+                onClick={embedded ? () => setResult(null) : onClose}
                 className="mt-2 rounded-lg px-5 py-2 text-sm font-semibold text-white transition-colors"
-                style={{ backgroundColor: '#137fec' }}
+                style={{ backgroundColor: '#8B5CF6' }}
               >
-                Fermer
+                {embedded ? 'Voir le planning' : 'Fermer'}
               </button>
             </div>
           ) : (

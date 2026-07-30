@@ -25,6 +25,7 @@ POSTGRES_BACKENDS = {"postgres", "postgresql", "postgres_core", "hybrid", "supab
 PIPELINE_REQUIRED_SCHEMA = {
     "training_center_accounts": {
         "id",
+        "auth_user_id",
         "username",
         "billing_mode",
         "stripe_customer_id",

@@ -1,10 +1,11 @@
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
 import { BrowserRouter, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
-import { apiUrl } from './api'
+import { apiUrl } from './runtimeConfig'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
 import AppLoader from './components/AppLoader.jsx'
 import AppErrorState from './components/AppErrorState.jsx'
+import { clearSupabaseSession, getSupabaseClient } from './supabaseClient'
 
 // Code splitting : les grosses pages restent chargées à la demande, mais les
 // routes du flux apprenant sont préchargées depuis la page d'accueil pour éviter
@@ -19,6 +20,7 @@ const INTERNAL_ADMIN_TYPES = ['legacy_admin']
 const CENTER_DASHBOARD_TYPES = ['legacy_admin', 'training_center']
 const PIPELINE_ACCOUNT_TYPES = ['training_center']
 const PIPELINE_PERMISSIONS = ['formation_pipeline']
+const CENTER_PROTECTED_PATHS = ['/dashboard-centre', '/formation-pipeline']
 
 const Attente = lazy(loadAttentePage)
 const DebugCours = lazy(() => import('./pages/DebugCours.jsx'))
@@ -167,6 +169,52 @@ function AuthRecoveryRedirect() {
   return null
 }
 
+function CenterSessionGuard() {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    let isMounted = true
+    let isRedirecting = false
+    let authSubscription = null
+
+    const isCenterProtectedPage = () => (
+      CENTER_PROTECTED_PATHS.some(path => window.location.pathname.startsWith(path))
+    )
+
+    const returnToLogin = async () => {
+      if (isRedirecting || !isCenterProtectedPage()) return
+      isRedirecting = true
+      localStorage.removeItem('admin_auth_token')
+      localStorage.removeItem('admin_email')
+      localStorage.removeItem('admin_center_name')
+      await clearSupabaseSession().catch(() => {})
+      if (isMounted) navigate('/connexion-centre', { replace: true })
+    }
+
+    const onSessionExpired = () => {
+      void returnToLogin()
+    }
+
+    window.addEventListener('socrate:center-session-expired', onSessionExpired)
+
+    void getSupabaseClient().then((client) => {
+      if (!isMounted || !client) return
+      const { data } = client.auth.onAuthStateChange((event) => {
+        if (event === 'SIGNED_OUT') onSessionExpired()
+      })
+      authSubscription = data.subscription
+    })
+
+    return () => {
+      isMounted = false
+      window.removeEventListener('socrate:center-session-expired', onSessionExpired)
+      authSubscription?.unsubscribe()
+    }
+  }, [navigate])
+
+  return null
+}
+
 function PublicRoot() {
   const [searchParams] = useSearchParams()
 
@@ -203,6 +251,7 @@ export default function App() {
     <AppErrorBoundary>
       <BrowserRouter>
         <AuthRecoveryRedirect />
+        <CenterSessionGuard />
         <Suspense fallback={<RouteFallback />}>
           <Routes>
           <Route

@@ -13,6 +13,7 @@ from services.pipeline_queue.contracts import (
 )
 from services.pipeline_queue.outbox import OutboxDispatcher
 from services.pipeline_queue.repository import WorkItemRepository
+from services.pipeline_queue.routing import AUDIO_TASK_TYPES, AI_TASK_TYPES
 from services.pipeline_queue.service import cancel_latest_work_item, get_latest_work_item
 from services.pipeline_queue.settings import QueueSettings
 from services.pipeline_queue.worker import PipelineWorker, RetryPolicy
@@ -231,6 +232,66 @@ class PipelineWorkQueueTest(unittest.TestCase):
         self.assertEqual(calls, [1, 2])
         self.assertEqual(self.repo.get(item.id).attempt_count, 2)
 
+    def test_ai_and_audio_workers_only_claim_their_own_task_types(self):
+        ai_item = self._enqueue(
+            task_type="auto_pilot_tick",
+            dedupe_key="run-1:ai",
+            scope_key="pipeline",
+        )
+        audio_item = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                task_type="hr_playlist_item",
+                scope_key="hr_audio",
+                run_id="run-audio",
+                dedupe_key="run-audio:item",
+            )
+        )
+        processed = []
+
+        ai_worker = PipelineWorker(
+            self.repo,
+            lambda work, _lease: processed.append(work.task_type) or {"ok": True},
+            settings=_settings(),
+            owner="ai-worker",
+            accepted_task_types=AI_TASK_TYPES,
+        )
+        audio_worker = PipelineWorker(
+            self.repo,
+            lambda work, _lease: processed.append(work.task_type) or {"ok": True},
+            settings=_settings(),
+            owner="audio-worker",
+            accepted_task_types=AUDIO_TASK_TYPES,
+        )
+
+        self.assertEqual(ai_worker.process_next().work_item_id, ai_item.id)
+        self.assertEqual(ai_worker.process_next().status, "idle")
+        self.assertEqual(audio_worker.process_next().work_item_id, audio_item.id)
+        self.assertEqual(processed, ["auto_pilot_tick", "hr_playlist_item"])
+
+    def test_targeted_worker_rejects_a_broker_message_for_another_kind(self):
+        audio_item = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                task_type="hr_playlist_generate",
+                scope_key="hr_audio",
+                run_id="audio-run",
+                dedupe_key="audio-run:generate",
+            )
+        )
+        worker = PipelineWorker(
+            self.repo,
+            lambda _work, _lease: self.fail("handler must not run"),
+            settings=_settings(),
+            owner="ai-worker",
+            accepted_task_types=AI_TASK_TYPES,
+        )
+
+        outcome = worker.process_work_item(audio_item.id)
+
+        self.assertEqual(outcome.status, "unsupported")
+        self.assertEqual(self.repo.get(audio_item.id).status, WorkStatus.QUEUED.value)
+
     def test_permanent_error_is_dead_lettered_immediately(self):
         item = self._enqueue(max_attempts=10)
 
@@ -382,6 +443,27 @@ class PipelineWorkQueueTest(unittest.TestCase):
         self.assertEqual(row[0], "pending")
         self.assertEqual(row[1], 1)
         self.assertIn("indisponible", row[2])
+
+    def test_outbox_reconciliation_backfills_work_queued_before_cutover(self):
+        item = self._enqueue()
+
+        created = self.repo.reconcile_outbox_notifications(
+            limit=20,
+            renotify_after_seconds=600,
+        )
+        created_again = self.repo.reconcile_outbox_notifications(
+            limit=20,
+            renotify_after_seconds=600,
+        )
+
+        self.assertEqual(created, 1)
+        self.assertEqual(created_again, 0)
+        deliveries = self.repo.claim_due_outbox(
+            owner="dispatcher",
+            lease_seconds=60,
+            limit=20,
+        )
+        self.assertEqual([delivery.work_item_id for delivery in deliveries], [item.id])
 
 
 if __name__ == "__main__":

@@ -134,7 +134,7 @@ def get_training_center_by_username(username):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, username, password_hash, center_name, slug, is_active,
+                    SELECT id, auth_user_id, username, password_hash, center_name, slug, is_active,
                            pipeline_access_enabled,
                            NULL::text AS password_debug_plaintext
                     FROM training_center_accounts
@@ -150,7 +150,7 @@ def get_training_center_by_username(username):
         return _rest_get_first(
             "training_center_accounts",
             {
-                "select": "id,username,password_hash,center_name,slug,is_active,pipeline_access_enabled",
+                "select": "id,auth_user_id,username,password_hash,center_name,slug,is_active,pipeline_access_enabled",
                 "username": f"eq.{username}",
             },
         )
@@ -164,7 +164,7 @@ def get_training_center_by_id(center_id):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, username, center_name, slug, is_active,
+                    SELECT id, auth_user_id, username, center_name, slug, is_active,
                            pipeline_access_enabled
                     FROM training_center_accounts
                     WHERE id = %s
@@ -179,13 +179,98 @@ def get_training_center_by_id(center_id):
         return _rest_get_first(
             "training_center_accounts",
             {
-                "select": "id,username,center_name,slug,is_active,pipeline_access_enabled",
+                "select": "id,auth_user_id,username,center_name,slug,is_active,pipeline_access_enabled",
                 "id": f"eq.{center_id}",
             },
         )
 
 
-def create_training_center(username, password_hash, center_name, slug_base, now=None, password_debug_plaintext=None):
+def get_training_center_by_auth_user_id(auth_user_id):
+    if not postgres_enabled() or not auth_user_id:
+        return None
+    try:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, auth_user_id, username, center_name, slug, is_active,
+                           pipeline_access_enabled
+                    FROM training_center_accounts
+                    WHERE auth_user_id = %s
+                    """,
+                    (auth_user_id,),
+                )
+                return cur.fetchone()
+    except Exception as exc:
+        if not _supabase_rest_enabled():
+            raise
+        _log_pg_fallback("get_training_center_by_auth_user_id", exc)
+        return _rest_get_first(
+            "training_center_accounts",
+            {
+                "select": "id,auth_user_id,username,center_name,slug,is_active,pipeline_access_enabled",
+                "auth_user_id": f"eq.{auth_user_id}",
+            },
+        )
+
+
+def bind_training_center_auth_user(auth_user_id, email):
+    """Bind an authenticated Supabase identity once, never reassign it."""
+    if not postgres_enabled() or not auth_user_id or not email:
+        return None
+    try:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE training_center_accounts
+                    SET auth_user_id = %s,
+                        updated_at = NOW()
+                    WHERE LOWER(username) = LOWER(%s)
+                      AND (auth_user_id IS NULL OR auth_user_id = %s)
+                    RETURNING id, auth_user_id, username, center_name, slug,
+                              is_active, pipeline_access_enabled
+                    """,
+                    (auth_user_id, email, auth_user_id),
+                )
+                return cur.fetchone()
+    except Exception as exc:
+        if not _supabase_rest_enabled():
+            raise
+        _log_pg_fallback("bind_training_center_auth_user", exc)
+        existing = get_training_center_by_username(email)
+        if not existing:
+            return None
+        existing_auth_user_id = existing.get("auth_user_id")
+        if existing_auth_user_id and str(existing_auth_user_id) != str(auth_user_id):
+            return None
+        response = requests.patch(
+            _rest_table_url("training_center_accounts"),
+            headers=_rest_headers("return=representation"),
+            params={
+                "id": f"eq.{existing['id']}",
+                "or": f"(auth_user_id.is.null,auth_user_id.eq.{auth_user_id})",
+            },
+            json={
+                "auth_user_id": auth_user_id,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            timeout=12,
+        )
+        response.raise_for_status()
+        rows = response.json()
+        return rows[0] if rows else None
+
+
+def create_training_center(
+    username,
+    password_hash,
+    center_name,
+    slug_base,
+    now=None,
+    password_debug_plaintext=None,
+    auth_user_id=None,
+):
     """Create a center without persisting the compatibility plaintext arg."""
     now = now or datetime.utcnow()
     try:
@@ -205,14 +290,15 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
                 cur.execute(
                     """
                     INSERT INTO training_center_accounts
-                        (username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                        (auth_user_id, username, password_hash, password_debug_plaintext,
+                         center_name, slug, is_active, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s)
                     ON CONFLICT (username) DO NOTHING
-                    RETURNING id, username, password_hash, center_name, slug,
+                    RETURNING id, auth_user_id, username, password_hash, center_name, slug,
                               is_active, pipeline_access_enabled,
                               password_debug_plaintext
                     """,
-                    (username, password_hash, None, center_name, slug, now, now),
+                    (auth_user_id, username, password_hash, None, center_name, slug, now, now),
                 )
                 row = cur.fetchone()
                 if row is None:
@@ -228,6 +314,7 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
         row = _rest_post_returning(
             "training_center_accounts",
             {
+                "auth_user_id": auth_user_id,
                 "username": username,
                 "password_hash": password_hash,
                 "center_name": center_name,

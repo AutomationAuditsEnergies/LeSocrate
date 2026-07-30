@@ -62,16 +62,18 @@ export default function LoginCentre({ preloadDashboardRoute }) {
       return undefined
     }
 
-    const storedToken = localStorage.getItem('admin_auth_token')
-    if (!storedToken) {
-      setCheckingExistingSession(false)
-      return undefined
-    }
-
     let cancelled = false
 
     const resumeExistingSession = async () => {
       try {
+        const supabaseClient = await getSupabaseClient()
+        const { data: sessionData } = supabaseClient
+          ? await supabaseClient.auth.getSession()
+          : { data: { session: null } }
+        const hasSupabaseSession = Boolean(sessionData.session?.access_token)
+        const hasLegacyAdminSession = Boolean(localStorage.getItem('admin_auth_token'))
+        if (!hasSupabaseSession && !hasLegacyAdminSession) return
+
         const response = await apiFetch('/api/admin/session', {
           method: 'GET',
           timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
@@ -86,6 +88,9 @@ export default function LoginCentre({ preloadDashboardRoute }) {
 
         if (!cancelled && (response.status === 401 || response.status === 403)) {
           localStorage.removeItem('admin_auth_token')
+          if (hasSupabaseSession) {
+            await supabaseClient.auth.signOut({ scope: 'local' })
+          }
         }
       } catch (sessionError) {
         console.warn('Reprise de session centre indisponible:', sessionError)
@@ -178,30 +183,77 @@ export default function LoginCentre({ preloadDashboardRoute }) {
       }
 
       localStorage.removeItem('admin_auth_token')
-      const response = await apiFetch(authMode === 'signup' ? '/api/admin/register' : '/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
-        body: JSON.stringify({
-          center_name: centerName.trim(),
-          username: username.trim(),
-          password: password.trim(),
-        }),
-      })
-      const data = await response.json().catch(() => ({}))
+      const email = username.trim().toLowerCase()
 
-      if (response.ok && data.success) {
-        if (data.token) localStorage.setItem('admin_auth_token', data.token)
-        if (data.account) {
-          localStorage.setItem('center_account_email', data.account.username || '')
-          localStorage.setItem('center_account_name', data.account.center_name || '')
+      // Le compte interne historique reste isolé du parcours Supabase des centres.
+      if (authMode === 'login' && email === 'admin') {
+        const response = await apiFetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
+          body: JSON.stringify({ username: email, password: password.trim() }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !data.success) {
+          setError(data.error || `Erreur serveur (${response.status})`)
+          return
         }
+        if (data.token) localStorage.setItem('admin_auth_token', data.token)
         preloadDashboardRoute?.().catch(() => {})
         navigate('/dashboard-centre')
         return
       }
 
-      setError(data.error || `Erreur serveur (${response.status})`)
+      const supabaseClient = await getSupabaseClient()
+      if (!supabaseClient) {
+        setError("Supabase Auth n'est pas configuré sur ce frontend.")
+        return
+      }
+
+      if (authMode === 'signup') {
+        await supabaseClient.auth.signOut({ scope: 'local' })
+        const registrationResponse = await apiFetch('/api/admin/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
+          body: JSON.stringify({
+            center_name: centerName.trim(),
+            username: email,
+            password: password.trim(),
+          }),
+        })
+        const registrationData = await registrationResponse.json().catch(() => ({}))
+        if (!registrationResponse.ok || !registrationData.success) {
+          setError(registrationData.error || `Erreur serveur (${registrationResponse.status})`)
+          return
+        }
+      }
+
+      const { error: signInError } = await supabaseClient.auth.signInWithPassword({
+        email,
+        password: password.trim(),
+      })
+      if (signInError) {
+        setError(getSupabaseErrorMessage(signInError, 'Impossible de vous connecter.'))
+        return
+      }
+
+      const sessionResponse = await apiFetch('/api/admin/session', {
+        method: 'GET',
+        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
+      })
+      const sessionData = await sessionResponse.json().catch(() => ({}))
+      if (!sessionResponse.ok || !sessionData.authenticated) {
+        await supabaseClient.auth.signOut({ scope: 'local' })
+        setError(sessionData.error || "Ce compte Supabase n'est pas associé à un centre actif.")
+        return
+      }
+
+      const account = sessionData.account || {}
+      localStorage.setItem('center_account_email', account.username || email)
+      localStorage.setItem('center_account_name', account.center_name || centerName.trim())
+      preloadDashboardRoute?.().catch(() => {})
+      navigate('/dashboard-centre')
     } catch (err) {
       console.error('Erreur login centre:', err)
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {

@@ -25,7 +25,7 @@ class AdminSecretSafetyTest(unittest.TestCase):
             )
             self.assertFalse(admin_routes._internal_admin_password_valid("wrong"))
 
-    def test_unknown_center_never_falls_back_to_sqlite_in_pure_postgres(self):
+    def test_legacy_center_login_is_rejected_before_any_database_lookup(self):
         app = Flask(__name__)
         app.secret_key = "test-secret"
         app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
@@ -45,7 +45,7 @@ class AdminSecretSafetyTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "Identifiants incorrects")
+        self.assertEqual(response.get_json()["error"], "Utilisez la connexion Supabase Auth.")
 
     def test_registration_never_opens_sqlite_in_pure_postgres(self):
         app = Flask(__name__)
@@ -62,6 +62,10 @@ class AdminSecretSafetyTest(unittest.TestCase):
 
         with app.test_client() as client, patch.object(
             admin_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            admin_routes,
+            "_create_training_center_supabase_user",
+            return_value=({"id": "auth-user-42"}, None, 201),
         ), patch.object(
             admin_routes, "sqlite_runtime_enabled", return_value=False
         ), patch.object(
@@ -83,7 +87,12 @@ class AdminSecretSafetyTest(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.get_json())
         self.assertTrue(response.get_json()["success"])
         self.assertEqual(response.get_json()["account"]["id"], 42)
+        self.assertNotIn("token", response.get_json())
         create_center.assert_called_once()
+        self.assertEqual(
+            create_center.call_args.kwargs["auth_user_id"],
+            "auth-user-42",
+        )
 
     def test_unknown_password_reset_never_opens_sqlite_in_pure_postgres(self):
         app = Flask(__name__)
@@ -125,6 +134,10 @@ class AdminSecretSafetyTest(unittest.TestCase):
 
         with app.test_client() as client, patch.object(
             admin_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            admin_routes,
+            "_create_training_center_supabase_user",
+            return_value=({"id": "auth-user-43"}, None, 201),
         ), patch.object(
             admin_routes, "sqlite_runtime_enabled", return_value=True
         ), patch.object(

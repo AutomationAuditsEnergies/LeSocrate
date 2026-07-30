@@ -14,7 +14,6 @@ from config import (
     DATABASE_BACKEND,
     FRANCE_TZ,
     DB_PATH,
-    SUPABASE_ANON_KEY,
     SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_URL,
     sqlite_runtime_enabled,
@@ -28,7 +27,6 @@ from repositories.core_repository import (
     create_training_center,
     get_training_center_by_username,
     list_ai_teacher_orders,
-    update_training_center_password,
     upsert_student_profile_with_id,
 )
 from repositories.pipeline_repository import (
@@ -97,14 +95,6 @@ def _supabase_admin_headers():
     }
 
 
-def _supabase_public_headers():
-    return {
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-        "Content-Type": "application/json",
-    }
-
-
 def _is_supabase_duplicate_user(response):
     text = response.text.lower()
     return response.status_code in (400, 409, 422) and (
@@ -129,9 +119,9 @@ def _ensure_training_center_supabase_user(email, password=None, center_name=None
                 "password": auth_password,
                 "email_confirm": True,
                 "user_metadata": {
-                    "role": "training_center",
                     "center_name": center_name or "",
                 },
+                "app_metadata": {"account_type": "training_center"},
             },
             timeout=15,
         )
@@ -147,43 +137,52 @@ def _ensure_training_center_supabase_user(email, password=None, center_name=None
         return False, str(exc)
 
 
-def _authenticate_training_center_with_supabase(email, password):
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY or not email or "@" not in email or not password:
-        return False
-
+def _create_training_center_supabase_user(email, password, center_name):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return None, "Supabase Admin non configuré", 503
     try:
         response = http_requests.post(
-            f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
-            headers=_supabase_public_headers(),
-            json={"email": email, "password": password},
+            f"{SUPABASE_URL}/auth/v1/admin/users",
+            headers=_supabase_admin_headers(),
+            json={
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {"center_name": center_name or ""},
+                "app_metadata": {"account_type": "training_center"},
+            },
             timeout=15,
         )
-        if response.status_code != 200:
-            return False
-        data = response.json()
-        return bool(data.get("access_token") or data.get("session", {}).get("access_token"))
+        if response.status_code in (200, 201):
+            user = response.json()
+            if user.get("id"):
+                return user, None, 201
+            return None, "Réponse Supabase incomplète", 503
+        if _is_supabase_duplicate_user(response):
+            return None, "Cette adresse email existe déjà", 409
+        logger.warning("❌ Création Supabase centre refusée: %s", response.text[:500])
+        return None, "Création Supabase refusée", 503
+    except Exception as exc:
+        logger.warning("❌ Création Supabase centre impossible", exc_info=True)
+        return None, str(exc), 503
+
+
+def _delete_training_center_supabase_user(auth_user_id):
+    if not auth_user_id or not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return
+    try:
+        response = http_requests.delete(
+            f"{SUPABASE_URL}/auth/v1/admin/users/{auth_user_id}",
+            headers=_supabase_admin_headers(),
+            timeout=15,
+        )
+        if response.status_code not in (200, 204, 404):
+            logger.warning(
+                "SUPABASE_CENTER_COMPENSATION_DELETE_FAILED status=%s",
+                response.status_code,
+            )
     except Exception:
-        logger.warning("⚠️ Auth Supabase centre indisponible", exc_info=True)
-        return False
-
-
-def _update_training_center_password_sqlite(cursor, username, password_hash, password_debug_plaintext):
-    cursor.execute(
-        """
-        UPDATE training_center_accounts
-        SET password_hash = ?,
-            password_debug_plaintext = ?,
-            updated_at = ?
-        WHERE username = ?
-        """,
-        (
-            password_hash,
-            None,
-            datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-            username,
-        ),
-    )
-    return cursor.rowcount > 0
+        logger.warning("SUPABASE_CENTER_COMPENSATION_DELETE_FAILED", exc_info=True)
 
 
 def _parse_platform_id(raw):
@@ -294,6 +293,7 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, p
             """
             UPDATE training_center_accounts
             SET username = ?,
+                auth_user_id = ?,
                 password_hash = ?,
                 password_debug_plaintext = ?,
                 center_name = ?,
@@ -304,6 +304,7 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, p
             """,
             (
                 account["username"],
+                account.get("auth_user_id"),
                 password_hash,
                 None,
                 account["center_name"],
@@ -318,11 +319,13 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, p
     cursor.execute(
         """
         INSERT INTO training_center_accounts
-            (id, username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, auth_user_id, username, password_hash, password_debug_plaintext,
+             center_name, slug, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             account["id"],
+            account.get("auth_user_id"),
             account["username"],
             password_hash,
             None,
@@ -364,36 +367,6 @@ def _mirror_training_center_to_sqlite_if_enabled(account, password_hash, now_str
         logger.warning(
             "TRAINING_CENTER_SQLITE_MIRROR_FAILED center_id=%s",
             account.get("id"),
-            exc_info=True,
-        )
-        return False
-    finally:
-        if mirror_conn is not None:
-            mirror_conn.close()
-
-
-def _mirror_training_center_password_to_sqlite_if_enabled(username, password_hash):
-    """Mirror a password only in explicit compatibility runtimes."""
-    if not sqlite_runtime_enabled():
-        return False
-
-    mirror_conn = None
-    try:
-        mirror_conn = get_db_connection()
-        updated = _update_training_center_password_sqlite(
-            mirror_conn.cursor(),
-            username,
-            password_hash,
-            None,
-        )
-        mirror_conn.commit()
-        return bool(updated)
-    except Exception:
-        if mirror_conn is not None:
-            mirror_conn.rollback()
-        logger.warning(
-            "TRAINING_CENTER_PASSWORD_SQLITE_MIRROR_FAILED username=%s",
-            username,
             exc_info=True,
         )
         return False
@@ -456,11 +429,13 @@ def create_admin_blueprint(socketio):
 
         account_type = session.get("admin_account_type")
         account_id = session.get("admin_account_id")
+        current_account = getattr(g, "training_center_account", None) or {}
         return jsonify({
             "authenticated": True,
             "account": {
                 "type": account_type,
                 "id": account_id,
+                "username": current_account.get("username"),
                 "center_name": session.get("center_name"),
                 "permissions": get_admin_permissions(account_type, account_id),
             },
@@ -1085,133 +1060,14 @@ def create_admin_blueprint(socketio):
                     },
                 }), 200
 
-            if postgres_enabled():
-                account = get_training_center_by_username(username)
-                if account:
-                    if not account["is_active"]:
-                        logger.warning("⚠️ Compte centre Postgres désactivé: %s", username)
-                        return jsonify({"success": False, "error": "Compte désactivé"}), 403
-
-                    password_ok = bool(password and check_password_hash(account["password_hash"], password))
-                    if not password_ok and _authenticate_training_center_with_supabase(username, password):
-                        password_ok = True
-                        new_hash = generate_password_hash(password)
-                        update_training_center_password(username, new_hash, password)
-                        _mirror_training_center_password_to_sqlite_if_enabled(
-                            username,
-                            new_hash,
-                        )
-
-                    if not password_ok:
-                        logger.warning("❌ Échec connexion centre Postgres - identifiants incorrects")
-                        return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
-
-                    session["is_admin"] = True
-                    session["admin_account_id"] = account["id"]
-                    session["admin_account_type"] = "training_center"
-                    session["center_name"] = account["center_name"]
-                    session.permanent = True
-                    token = _create_admin_token("training_center", account["id"], account["center_name"])
-                    logger.info("✅ Connexion centre Postgres réussie: %s", username)
-                    return (
-                        jsonify(
-                            {
-                                "success": True,
-                                "message": "Connexion réussie",
-                                "token": token,
-                                "account": {
-                                    "type": "training_center",
-                                    "id": account["id"],
-                                    "username": account["username"],
-                                    "center_name": account["center_name"],
-                                    "slug": account["slug"],
-                                    "permissions": permissions_from_account(
-                                        "training_center",
-                                        account,
-                                    ),
-                                },
-                            }
-                        ),
-                        200,
-                    )
-
-                if DATABASE_BACKEND in _POSTGRES_ONLY_BACKENDS:
-                    logger.warning("❌ Compte centre Postgres inconnu: %s", username)
-                    return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, username, password_hash, center_name, is_active, slug,
-                       pipeline_access_enabled
-                FROM training_center_accounts
-                WHERE username = ?
-                """,
-                (username,),
+            logger.warning(
+                "LEGACY_CENTER_LOGIN_REJECTED username=%s",
+                username,
             )
-            account = cursor.fetchone() if username else None
-
-            if not account:
-                logger.warning("❌ Échec connexion admin - identifiants incorrects")
-                return (
-                    jsonify({"success": False, "error": "Identifiants incorrects"}),
-                    401,
-                )
-
-            if not account[4]:
-                logger.warning("⚠️ Compte centre désactivé: %s", username)
-                return jsonify({"success": False, "error": "Compte désactivé"}), 403
-
-            password_ok = bool(password and check_password_hash(account[2], password))
-            if not password_ok and _authenticate_training_center_with_supabase(username, password):
-                password_ok = True
-                _update_training_center_password_sqlite(
-                    cursor,
-                    username,
-                    generate_password_hash(password),
-                    password,
-                )
-                conn.commit()
-
-            if not password_ok:
-                logger.warning("❌ Échec connexion admin - identifiants incorrects")
-                return (
-                    jsonify({"success": False, "error": "Identifiants incorrects"}),
-                    401,
-                )
-
-            session["is_admin"] = True
-            session["admin_account_id"] = account[0]
-            session["admin_account_type"] = "training_center"
-            session["center_name"] = account[3]
-            session.permanent = True
-            token = _create_admin_token("training_center", account[0], account[3])
-            logger.info("✅ Connexion centre réussie: %s", username)
-            return (
-                jsonify(
-                    {
-                        "success": True,
-                        "message": "Connexion réussie",
-                        "token": token,
-                        "account": {
-                            "type": "training_center",
-                            "id": account[0],
-                            "username": account[1],
-                            "center_name": account[3],
-                            "slug": account[5],
-                            "permissions": permissions_from_account(
-                                "training_center",
-                                {
-                                    "is_active": account[4],
-                                    "pipeline_access_enabled": account[6],
-                                },
-                            ),
-                        },
-                    }
-                ),
-                200,
-            )
+            return jsonify({
+                "success": False,
+                "error": "Utilisez la connexion Supabase Auth.",
+            }), 401
 
         except Exception as e:
             logger.error(f"❌ Erreur login admin: {e}")
@@ -1303,6 +1159,8 @@ def create_admin_blueprint(socketio):
     def register_admin():
         """Inscription centre de formation"""
         conn = None
+        auth_user_id = None
+        account_persisted = False
         try:
             data = request.get_json(silent=True) or {}
             username = data.get("username", "").strip().lower()
@@ -1329,9 +1187,25 @@ def create_admin_blueprint(socketio):
                     ),
                     400,
                 )
+            if "@" not in username:
+                return jsonify({
+                    "success": False,
+                    "error": "Une adresse email valide est requise",
+                }), 400
 
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-            password_hash = generate_password_hash(password)
+            auth_user, auth_error, auth_status = _create_training_center_supabase_user(
+                username,
+                password,
+                center_name,
+            )
+            if not auth_user:
+                return jsonify({"success": False, "error": auth_error}), auth_status
+            auth_user_id = auth_user["id"]
+
+            # La colonne historique reste compatible avec SQLite mais ne
+            # contient jamais le mot de passe réel Supabase.
+            password_hash = generate_password_hash(_generate_temporary_password(32))
 
             if postgres_enabled():
                 try:
@@ -1342,9 +1216,13 @@ def create_admin_blueprint(socketio):
                         center_name=center_name,
                         slug_base=center_name or username,
                         now=now_str,
+                        auth_user_id=auth_user_id,
                     )
                 except DuplicateTrainingCenterUsername:
+                    _delete_training_center_supabase_user(auth_user_id)
+                    auth_user_id = None
                     return jsonify({"success": False, "error": "Cet identifiant existe déjà"}), 409
+                account_persisted = True
 
                 _mirror_training_center_to_sqlite_if_enabled(
                     account,
@@ -1352,29 +1230,12 @@ def create_admin_blueprint(socketio):
                     now_str,
                 )
 
-                if "@" in username:
-                    ensured, ensure_error = _ensure_training_center_supabase_user(
-                        username,
-                        password,
-                        center_name,
-                    )
-                    if not ensured:
-                        logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
-
-                session["is_admin"] = True
-                session["admin_account_id"] = account["id"]
-                session["admin_account_type"] = "training_center"
-                session["center_name"] = account["center_name"]
-                session.permanent = True
-                token = _create_admin_token("training_center", account["id"], account["center_name"])
-
                 logger.info("✅ Inscription centre Postgres réussie: %s", username)
                 return (
                     jsonify(
                         {
                             "success": True,
                             "message": "Compte créé",
-                            "token": token,
                             "account": {
                                 "type": "training_center",
                                 "id": account["id"],
@@ -1401,10 +1262,12 @@ def create_admin_blueprint(socketio):
             cursor.execute(
                 """
                 INSERT INTO training_center_accounts
-                    (username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    (auth_user_id, username, password_hash, password_debug_plaintext,
+                     center_name, slug, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
+                    auth_user_id,
                     username,
                     password_hash,
                     None,
@@ -1416,31 +1279,15 @@ def create_admin_blueprint(socketio):
             )
             account_id = cursor.lastrowid
             conn.commit()
-
-            if "@" in username:
-                ensured, ensure_error = _ensure_training_center_supabase_user(
-                    username,
-                    password,
-                    center_name,
-                )
-                if not ensured:
-                    logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
-
-            session["is_admin"] = True
-            session["admin_account_id"] = account_id
-            session["admin_account_type"] = "training_center"
-            session["center_name"] = center_name
-            session.permanent = True
-            token = _create_admin_token("training_center", account_id, center_name)
+            account_persisted = True
 
             logger.info("✅ Inscription centre réussie: %s", username)
             return (
                 jsonify(
-                    {
-                        "success": True,
-                        "message": "Compte créé",
-                        "token": token,
-                        "account": {
+                        {
+                            "success": True,
+                            "message": "Compte créé",
+                            "account": {
                             "type": "training_center",
                             "id": account_id,
                             "username": username,
@@ -1461,11 +1308,15 @@ def create_admin_blueprint(socketio):
         except sqlite3.IntegrityError:
             if conn:
                 conn.rollback()
+            if auth_user_id and not account_persisted:
+                _delete_training_center_supabase_user(auth_user_id)
             logger.warning("❌ Inscription centre refusée, identifiant déjà utilisé")
             return jsonify({"success": False, "error": "Cet identifiant existe déjà"}), 409
         except Exception as e:
             if conn:
                 conn.rollback()
+            if auth_user_id and not account_persisted:
+                _delete_training_center_supabase_user(auth_user_id)
             logger.error(f"❌ Erreur inscription centre: {e}")
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
         finally:

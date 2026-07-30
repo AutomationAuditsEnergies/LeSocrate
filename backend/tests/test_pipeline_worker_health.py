@@ -49,6 +49,12 @@ class PipelineWorkerHealthTest(unittest.TestCase):
         worker._report_health("polling")
 
         self.assertEqual(outcome.status, "idle")
+        repository.claim_next.assert_called_once_with(
+            owner=worker.owner,
+            lease_seconds=worker.settings.lease_seconds,
+            task_types=None,
+        )
+        repository.dead_letter_one_exhausted.assert_called_once_with(task_types=None)
         callback.assert_called_with("polling", None)
 
 

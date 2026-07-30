@@ -1,10 +1,13 @@
-// En local (dev) : VITE_API_URL n'est pas défini → les appels passent par le proxy Vite ("/api/...")
-// En prod : VITE_API_URL = "https://socrate1-xxx.azurewebsites.net" → appels directs
-const API_BASE = import.meta.env.VITE_API_URL || ''
+import { apiUrl } from './runtimeConfig'
+import { getSupabaseAccessToken } from './supabaseClient'
 
-export function apiUrl(path) {
-  return `${API_BASE}${path}`
-}
+export { apiUrl }
+
+const CENTER_SESSION_ERROR_CODES = new Set([
+  'SUPABASE_SESSION_INVALID',
+  'SUPABASE_SESSION_REQUIRED',
+  'TRAINING_CENTER_ACCOUNT_UNAVAILABLE',
+])
 
 export function getPlatformId() {
   return localStorage.getItem('platform_id') || '1'
@@ -30,18 +33,24 @@ export function setStudentLoginPath(path) {
   localStorage.setItem('student_login_path', path || '/')
 }
 
-export function apiRequestHeaders(path = '', headers = {}) {
-  const adminToken = localStorage.getItem('admin_auth_token')
+export async function apiRequestHeaders(path = '', headers = {}) {
+  const legacyAdminToken = localStorage.getItem('admin_auth_token')
   const userToken = localStorage.getItem('auth_token')
   const prefersAdminToken = path.startsWith('/api/admin')
     || path.startsWith('/api/hr')
     || path.startsWith('/api/formation')
     || path.startsWith('/api/slides')
-  const token = prefersAdminToken ? (adminToken || userToken) : (userToken || adminToken)
+  const supabaseAccessToken = prefersAdminToken
+    ? await getSupabaseAccessToken()
+    : null
+  const legacyToken = prefersAdminToken
+    ? (legacyAdminToken || userToken)
+    : (userToken || legacyAdminToken)
   const platformId = getPlatformId()
   return {
     ...headers,
-    ...(token ? { 'X-Auth-Token': token } : {}),
+    ...(supabaseAccessToken ? { Authorization: `Bearer ${supabaseAccessToken}` } : {}),
+    ...(!supabaseAccessToken && legacyToken ? { 'X-Auth-Token': legacyToken } : {}),
     'X-Platform-Id': platformId,
   }
 }
@@ -72,12 +81,21 @@ export async function apiFetch(path, options = {}) {
     : null
 
   try {
-    return await fetch(apiUrl(path), {
+    const response = await fetch(apiUrl(path), {
       ...fetchOptions,
-      headers: apiRequestHeaders(path, fetchOptions.headers || {}),
+      headers: await apiRequestHeaders(path, fetchOptions.headers || {}),
       credentials: 'include',
       ...(controller ? { signal: controller.signal } : (callerSignal ? { signal: callerSignal } : {})),
     })
+
+    if (response.status === 401 || response.status === 403) {
+      const payload = await response.clone().json().catch(() => ({}))
+      if (CENTER_SESSION_ERROR_CODES.has(payload.code)) {
+        window.dispatchEvent(new CustomEvent('socrate:center-session-expired'))
+      }
+    }
+
+    return response
   } finally {
     if (timeoutId !== null) window.clearTimeout(timeoutId)
     callerSignal?.removeEventListener?.('abort', abortFromCaller)
