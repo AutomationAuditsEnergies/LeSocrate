@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { apiFetch, apiUrl, getPlatformName, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
+import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
 import './Auth.css'
 
@@ -12,7 +12,6 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   const [submitting, setSubmitting] = useState(false)
   const [formMessage, setFormMessage] = useState(null)
   const [showPassword, setShowPassword] = useState(false)
-  const [platformLabel, setPlatformLabel] = useState(() => getPlatformName())
 
   useEffect(() => {
     const pParam = searchParams.get('p')
@@ -24,7 +23,6 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
         .then(data => {
           if (data.name) {
             setPlatformName(data.name)
-            setPlatformLabel(data.name)
           }
         })
         .catch(() => {})
@@ -125,26 +123,19 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     <main className="cadrenza-auth">
       <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
       <div className="auth-layout">
-        <aside className="auth-visual" aria-label="Accès apprenant Cadrenza">
+        <aside className="auth-visual auth-visual--learner-login" aria-label="Accès apprenant Cadrenza">
           <Link to="/" className="auth-home-link" aria-label="Cadrenza, retour à l'accueil">
             <CadrenzaLogo />
           </Link>
 
           <div className="auth-visual__content">
-            <p className="auth-eyebrow">Espace apprenant</p>
-            <h1>Votre cours commence ici.</h1>
-            <p className="auth-visual__lead">
-              Rejoignez votre promotion et suivez la séance au rythme défini par votre formateur.
-            </p>
-            <div className="auth-robot-stage auth-robot-stage--single" aria-hidden="true">
-              <img src="/robot-violet.png" alt="" draggable={false} />
+            <div className="auth-study-visual">
+              <img
+                src="/student-learning-login-unsplash-yen-vu.jpg"
+                alt="Un bureau d’étude avec des livres, des cahiers et un ordinateur"
+                draggable={false}
+              />
             </div>
-          </div>
-
-          <div className="auth-visual__meta" aria-label="Fonctions de l'espace apprenant">
-            <span>Cours synchronisé</span>
-            <span>Progression lisible</span>
-            <span>Accès sécurisé</span>
           </div>
         </aside>
 
@@ -155,13 +146,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
             </Link>
 
             <header className="auth-heading">
-              <p className="auth-heading__kicker">{platformLabel}</p>
               <h2>Rejoindre le cours</h2>
-              <p>
-                {invitationToken
-                  ? 'Votre invitation est reconnue. Renseignez votre identité pour rejoindre la classe.'
-                  : 'Renseignez votre identité et le code secret transmis par votre centre de formation.'}
-              </p>
             </header>
 
             {formMessage && (
@@ -177,17 +162,6 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
             <form className="auth-form" onSubmit={handleFormSubmit}>
               <div className="auth-form__row">
                 <div className="auth-field">
-                  <label htmlFor="prenom">Prénom</label>
-                  <input
-                    id="prenom"
-                    name="prenom"
-                    type="text"
-                    autoComplete="given-name"
-                    placeholder="Votre prénom"
-                    required
-                  />
-                </div>
-                <div className="auth-field">
                   <label htmlFor="nom">Nom</label>
                   <input
                     id="nom"
@@ -195,6 +169,17 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                     type="text"
                     autoComplete="family-name"
                     placeholder="Votre nom"
+                    required
+                  />
+                </div>
+                <div className="auth-field">
+                  <label htmlFor="prenom">Prénom</label>
+                  <input
+                    id="prenom"
+                    name="prenom"
+                    type="text"
+                    autoComplete="given-name"
+                    placeholder="Votre prénom"
                     required
                   />
                 </div>
@@ -226,7 +211,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
               )}
 
               <button type="submit" disabled={submitting} className="auth-submit">
-                {submitting ? 'Connexion…' : 'Entrer dans la classe'}
+                {submitting ? 'Connexion…' : 'Rejoindre le cours'}
               </button>
             </form>
 
