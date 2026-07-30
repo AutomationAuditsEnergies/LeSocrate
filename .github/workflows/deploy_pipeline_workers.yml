@@ -220,11 +220,15 @@ jobs:
         if: ${{ inputs.cutover }}
         shell: bash
         run: |
+          az webapp config appsettings delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --setting-names PIPELINE_EXECUTION_MODE \
+            --output none
           az webapp config appsettings set \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${APP_NAME}" \
             --settings \
-              PIPELINE_EXECUTION_MODE=queue \
               PIPELINE_QUEUE_BACKEND=service_bus \
               PIPELINE_EMBEDDED_WORKER=0 \
               PIPELINE_DEDICATED_WORKER=0 \

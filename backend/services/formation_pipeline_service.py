@@ -27,7 +27,6 @@ from repositories.pipeline_repository import (
     create_pipeline_job,
     create_course_folder_for_job,
     find_orphan_course_folder,
-    get_auto_pilot_pipeline_jobs_to_resume,
     get_pipeline_job,
     list_expected_course_folder_matches,
     list_pipeline_jobs,
@@ -2086,11 +2085,6 @@ def update_job(job_id: int, **kwargs):
 def get_job(job_id: int) -> dict | None:
     """Retourne le job ou None."""
     return get_pipeline_job(job_id)
-
-
-def get_auto_pilot_jobs_to_resume() -> list:
-    """Retourne les job_ids auto-pilot interrompus : activés, pas terminés, lock absent ou périmé."""
-    return get_auto_pilot_pipeline_jobs_to_resume()
 
 
 def list_jobs(platform_id: int = None) -> list:

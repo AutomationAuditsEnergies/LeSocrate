@@ -300,7 +300,7 @@ jobs:
           az webapp config appsettings delete \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${APP_NAME}" \
-            --setting-names DB_PATH SQLITE_SAFETY_STRICT \
+            --setting-names DB_PATH SQLITE_SAFETY_STRICT PIPELINE_EXECUTION_MODE \
             >/dev/null
 
           # Once the split workers have been cut over, preserve that topology
@@ -350,7 +350,6 @@ jobs:
               DATABASE_BACKEND=postgres \
               PIPELINE_DATABASE_BACKEND=postgres \
               PIPELINE_POSTGRES_MIRROR=0 \
-              PIPELINE_EXECUTION_MODE=queue \
               PIPELINE_EMBEDDED_WORKER=0 \
               PIPELINE_WORK_MAX_ATTEMPTS=5 \
               PIPELINE_WORK_LEASE_SECONDS=300 \

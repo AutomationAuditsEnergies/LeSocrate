@@ -7,6 +7,7 @@ the temporary hybrid mirror only exists for legacy HR/schedule routes.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from datetime import datetime
@@ -1962,6 +1963,295 @@ def save_completed_content_segments(segments: list[dict[str, Any]]) -> None:
         conn.close()
 
 
+def save_structured_content_plan_checkpoint(
+    *,
+    job_id: int,
+    plan_input_signature: str,
+    structured_plan: dict[str, Any],
+) -> None:
+    """Persist the exact plan used by course checkpoints."""
+    payload_json = json.dumps(
+        structured_plan or {},
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE content_generation_jobs
+                    SET structured_plan_input_signature = %s,
+                        structured_plan_json = %s::jsonb,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (plan_input_signature, payload_json, job_id),
+                )
+        return
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE content_generation_jobs
+            SET structured_plan_input_signature = ?,
+                structured_plan_json = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (plan_input_signature, payload_json, job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_structured_content_plan_checkpoint(job_id: int) -> dict[str, Any] | None:
+    """Load the database-authoritative structured plan checkpoint."""
+    ph = _placeholder()
+    query = f"""
+        SELECT structured_plan_input_signature, structured_plan_json
+        FROM content_generation_jobs
+        WHERE id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                row = cur.fetchone()
+                row = dict(row) if row else None
+    else:
+        conn = _as_sqlite_row_connection()
+        try:
+            raw_row = conn.execute(query, (job_id,)).fetchone()
+            row = dict(raw_row) if raw_row else None
+        finally:
+            conn.close()
+    if not row:
+        return None
+    raw_plan = row.get("structured_plan_json")
+    if isinstance(raw_plan, dict):
+        plan = raw_plan
+    else:
+        try:
+            plan = json.loads(raw_plan or "{}")
+        except (TypeError, ValueError):
+            plan = {}
+    if not isinstance(plan, dict):
+        plan = {}
+    return {
+        "plan_input_signature": row.get("structured_plan_input_signature"),
+        "structured_course_plan": plan,
+    }
+
+
+def save_structured_content_checkpoint(
+    *,
+    job_id: int,
+    sub_part_index: int,
+    sub_part_name: str,
+    passe: int,
+    checkpoint_signature: str,
+    checkpoint_phase: str,
+    checkpoint_payload: dict[str, Any],
+    text_content: str = "",
+    word_count: int = 0,
+) -> None:
+    """Atomically upsert one durable structured-generation checkpoint.
+
+    Intermediate checkpoints deliberately remain outside the ``completed``
+    status consumed by downstream review/audio stages. A final checkpoint
+    publishes the segment and its resume payload in the same transaction.
+    """
+    if checkpoint_phase not in {
+        "body_generated",
+        "body_completed",
+        "final_completed",
+    }:
+        raise ValueError(f"Phase checkpoint structurée invalide: {checkpoint_phase}")
+
+    is_final = checkpoint_phase == "final_completed"
+    status = "completed" if is_final else f"structured_{checkpoint_phase}"
+    payload_json = json.dumps(
+        {
+            **(checkpoint_payload or {}),
+            "phase": checkpoint_phase,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO content_generation_segments
+                        (job_id, sub_part_index, sub_part_name, passe, status,
+                         text_content, word_count, dirty,
+                         humanized, humanization_error, humanization_signature,
+                         reviewed, review_error, review_signature,
+                         structured_checkpoint_signature, structured_checkpoint_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
+                            FALSE, NULL, NULL, FALSE, NULL, NULL, %s, %s::jsonb)
+                    ON CONFLICT (job_id, sub_part_index, passe) DO UPDATE SET
+                         sub_part_name = EXCLUDED.sub_part_name,
+                         status = EXCLUDED.status,
+                         text_content = EXCLUDED.text_content,
+                         word_count = EXCLUDED.word_count,
+                         dirty = EXCLUDED.dirty,
+                         humanized = FALSE,
+                         humanization_error = NULL,
+                         humanization_signature = NULL,
+                         reviewed = FALSE,
+                         review_error = NULL,
+                         review_signature = NULL,
+                         structured_checkpoint_signature = EXCLUDED.structured_checkpoint_signature,
+                         structured_checkpoint_json = EXCLUDED.structured_checkpoint_json
+                    """,
+                    (
+                        job_id,
+                        sub_part_index,
+                        sub_part_name,
+                        passe,
+                        status,
+                        text_content if is_final else "",
+                        int(word_count or 0) if is_final else 0,
+                        is_final,
+                        checkpoint_signature,
+                        payload_json,
+                    ),
+                )
+        return
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO content_generation_segments
+                (job_id, sub_part_index, sub_part_name, passe, status,
+                 text_content, word_count, dirty,
+                 humanized, humanization_error, humanization_signature,
+                 reviewed, review_error, review_signature,
+                 structured_checkpoint_signature, structured_checkpoint_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 0, NULL, NULL, ?, ?)
+            ON CONFLICT(job_id, sub_part_index, passe) DO UPDATE SET
+                sub_part_name = excluded.sub_part_name,
+                status = excluded.status,
+                text_content = excluded.text_content,
+                word_count = excluded.word_count,
+                dirty = excluded.dirty,
+                humanized = 0,
+                humanization_error = NULL,
+                humanization_signature = NULL,
+                reviewed = 0,
+                review_error = NULL,
+                review_signature = NULL,
+                structured_checkpoint_signature = excluded.structured_checkpoint_signature,
+                structured_checkpoint_json = excluded.structured_checkpoint_json
+            """,
+            (
+                job_id,
+                sub_part_index,
+                sub_part_name,
+                passe,
+                status,
+                text_content if is_final else "",
+                int(word_count or 0) if is_final else 0,
+                1 if is_final else 0,
+                checkpoint_signature,
+                payload_json,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_structured_content_checkpoint_rows(job_id: int) -> list[dict[str, Any]]:
+    """Return structured checkpoints, including non-final intermediate rows."""
+    ph = _placeholder()
+    query = f"""
+        SELECT id, sub_part_index, sub_part_name, passe, status,
+               text_content, word_count, structured_checkpoint_signature,
+               structured_checkpoint_json
+        FROM content_generation_segments
+        WHERE job_id = {ph}
+          AND structured_checkpoint_signature IS NOT NULL
+        ORDER BY sub_part_index ASC, passe ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                rows = [dict(row) for row in cur.fetchall()]
+    else:
+        conn = _as_sqlite_row_connection()
+        try:
+            rows = [dict(row) for row in conn.execute(query, (job_id,)).fetchall()]
+        finally:
+            conn.close()
+
+    for row in rows:
+        raw_payload = row.pop("structured_checkpoint_json", None)
+        if isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            try:
+                payload = json.loads(raw_payload or "{}")
+            except (TypeError, ValueError):
+                payload = {}
+        row["checkpoint_payload"] = payload if isinstance(payload, dict) else {}
+    return rows
+
+
+def delete_stale_structured_content_checkpoints(
+    *,
+    job_id: int,
+    checkpoint_signature: str,
+    valid_sub_part_indexes: list[int],
+) -> int:
+    """Delete only rows that cannot belong to the current structured run."""
+    ph = _placeholder()
+    valid_indexes = sorted({int(index) for index in valid_sub_part_indexes})
+    params: list[Any] = [job_id, checkpoint_signature]
+    invalid_index_clause = ""
+    if valid_indexes:
+        index_placeholders = ", ".join(ph for _ in valid_indexes)
+        invalid_index_clause = (
+            f" OR sub_part_index NOT IN ({index_placeholders})"
+        )
+        params.extend(valid_indexes)
+    else:
+        invalid_index_clause = " OR 1 = 1"
+    query = f"""
+        DELETE FROM content_generation_segments
+        WHERE job_id = {ph}
+          AND (
+              structured_checkpoint_signature IS NULL
+              OR structured_checkpoint_signature <> {ph}
+              OR passe <> 1
+              {invalid_index_clause}
+          )
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return int(cur.rowcount or 0)
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute(query, params)
+        conn.commit()
+        return int(cursor.rowcount or 0)
+    finally:
+        conn.close()
+
+
 def mark_content_segment_modified(job_id: int, sub_part_index: int, passe: int) -> None:
     ph = _placeholder()
     query = f"""
@@ -3217,118 +3507,6 @@ def delete_script_slide_decks_for_content_job(folder_id: int, content_job_id: in
         deleted = int(cursor.rowcount or 0)
         conn.commit()
         return deleted
-    finally:
-        conn.close()
-
-
-def reset_folder_downstream_state(
-    *,
-    formation_job_id: int,
-    folder_id: int,
-) -> dict[str, Any]:
-    """Restore pre-review text and clear every downstream persisted artifact."""
-    ph = _placeholder()
-    identity_query = f"""
-        SELECT cf.id AS folder_id, cf.name AS folder_name, cf.position,
-               cj.id AS content_job_id, cj.platform_id
-        FROM cours_folders cf
-        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-        WHERE cf.id = {ph} AND cf.formation_job_id = {ph} AND cj.status = 'completed'
-    """
-    segments_query = f"""
-        SELECT id, COALESCE(text_content, '') AS text_content, text_content_pre_review
-        FROM content_generation_segments
-        WHERE job_id = {ph} AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """
-
-    def _run(cursor, *, postgres: bool) -> dict[str, Any]:
-        cursor.execute(identity_query, (folder_id, formation_job_id))
-        raw_identity = cursor.fetchone()
-        if not raw_identity:
-            raise ValueError("Journée introuvable ou texte non généré")
-        identity = dict(raw_identity)
-        cursor.execute(segments_query, (identity["content_job_id"],))
-        segments = [dict(row) for row in cursor.fetchall()]
-        if not segments:
-            raise ValueError("Aucun segment texte complété pour cette journée")
-
-        update_segment_query = (
-            """
-            UPDATE content_generation_segments
-            SET text_content = %s, word_count = %s, dirty = TRUE,
-                humanized = FALSE, humanization_error = NULL, humanization_signature = NULL,
-                reviewed = FALSE, review_error = NULL, review_signature = NULL
-            WHERE id = %s
-            """
-            if postgres
-            else
-            """
-            UPDATE content_generation_segments
-            SET text_content = ?, word_count = ?, dirty = 1,
-                humanized = 0, humanization_error = NULL, humanization_signature = NULL,
-                reviewed = 0, review_error = NULL, review_signature = NULL
-            WHERE id = ?
-            """
-        )
-        restored = 0
-        total_words = 0
-        for segment in segments:
-            current_text = segment.get("text_content") or ""
-            original_text = segment.get("text_content_pre_review")
-            base_text = original_text if original_text is not None else current_text
-            word_count = len((base_text or "").split())
-            total_words += word_count
-            if original_text is not None and original_text != current_text:
-                restored += 1
-            cursor.execute(update_segment_query, (base_text or "", word_count, segment["id"]))
-
-        now_sql = "NOW()" if postgres else "CURRENT_TIMESTAMP"
-        cursor.execute(
-            f"""
-            UPDATE content_generation_jobs
-            SET total_words = {ph}, status = 'completed', error_message = NULL,
-                updated_at = {now_sql}
-            WHERE id = {ph}
-            """,
-            (total_words, identity["content_job_id"]),
-        )
-        cursor.execute(
-            f"DELETE FROM content_review_reports WHERE job_id = {ph} AND folder_id = {ph}",
-            (formation_job_id, folder_id),
-        )
-        deleted_reports = int(cursor.rowcount or 0)
-        cursor.execute(
-            f"DELETE FROM script_slide_decks WHERE folder_id = {ph} AND content_job_id = {ph}",
-            (folder_id, identity["content_job_id"]),
-        )
-        deleted_decks = int(cursor.rowcount or 0)
-        return {
-            **identity,
-            "segments": len(segments),
-            "segments_restored": restored,
-            "total_words": total_words,
-            "deleted_review_reports": deleted_reports,
-            "deleted_slide_decks": deleted_decks,
-        }
-
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                return _run(cur, postgres=True)
-
-    conn = _as_sqlite_row_connection()
-    try:
-        try:
-            result = _run(conn.cursor(), postgres=False)
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc).lower():
-                raise
-            ensure_pipeline_observability_tables()
-            ensure_script_slide_decks_table()
-            result = _run(conn.cursor(), postgres=False)
-        conn.commit()
-        return result
     finally:
         conn.close()
 
@@ -5228,123 +5406,6 @@ def update_pipeline_job(job_id: int, **kwargs) -> None:
     _mirror_sqlite_job_to_postgres(job_id)
 
 
-def acquire_auto_pilot_lock(job_id: int, *, owner: str, ttl_seconds: int) -> bool:
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE formation_pipeline_jobs
-                    SET auto_pilot_locked_at = NOW(),
-                        auto_pilot_lock_owner = %s
-                    WHERE id = %s
-                      AND auto_pilot_enabled = TRUE
-                      AND (
-                            auto_pilot_locked_at IS NULL
-                            OR auto_pilot_locked_at < NOW() - (%s * INTERVAL '1 second')
-                          )
-                    """,
-                    (owner, job_id, ttl_seconds),
-                )
-                return cur.rowcount == 1
-
-    stale_cutoff = int(time.time()) - ttl_seconds
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            UPDATE formation_pipeline_jobs
-            SET auto_pilot_locked_at = CURRENT_TIMESTAMP,
-                auto_pilot_lock_owner = ?
-            WHERE id = ?
-              AND auto_pilot_enabled = 1
-              AND (auto_pilot_locked_at IS NULL
-                   OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
-            """,
-            (owner, job_id, stale_cutoff),
-        )
-        acquired = cursor.rowcount == 1
-        conn.commit()
-        return acquired
-    finally:
-        conn.close()
-
-
-def release_auto_pilot_lock(job_id: int, *, owner: str | None = None) -> bool:
-    """Release a runner lock without letting a stale worker unlock its successor.
-
-    ``owner`` is optional only for backwards-compatible maintenance calls. The
-    production runner always supplies its unique fencing token.
-    """
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                owner_clause = " AND auto_pilot_lock_owner = %s" if owner is not None else ""
-                params = (job_id, owner) if owner is not None else (job_id,)
-                cur.execute(
-                    f"""
-                    UPDATE formation_pipeline_jobs
-                    SET auto_pilot_locked_at = NULL,
-                        auto_pilot_lock_owner = NULL
-                    WHERE id = %s{owner_clause}
-                    """,
-                    params,
-                )
-                return cur.rowcount == 1
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        owner_clause = " AND auto_pilot_lock_owner = ?" if owner is not None else ""
-        params = (job_id, owner) if owner is not None else (job_id,)
-        cursor.execute(
-            f"""
-            UPDATE formation_pipeline_jobs
-            SET auto_pilot_locked_at = NULL, auto_pilot_lock_owner = NULL
-            WHERE id = ?{owner_clause}
-            """,
-            params,
-        )
-        released = cursor.rowcount == 1
-        conn.commit()
-        return released
-    finally:
-        conn.close()
-
-
-def refresh_auto_pilot_lock(job_id: int, *, owner: str) -> bool:
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE formation_pipeline_jobs
-                    SET auto_pilot_locked_at = NOW()
-                    WHERE id = %s AND auto_pilot_lock_owner = %s
-                    """,
-                    (job_id, owner),
-                )
-                return cur.rowcount == 1
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            UPDATE formation_pipeline_jobs
-            SET auto_pilot_locked_at = CURRENT_TIMESTAMP
-            WHERE id = ? AND auto_pilot_lock_owner = ?
-            """,
-            (job_id, owner),
-        )
-        refreshed = cursor.rowcount == 1
-        conn.commit()
-        return refreshed
-    finally:
-        conn.close()
-
-
 def get_pipeline_job(job_id: int) -> dict[str, Any] | None:
     columns = ", ".join(f"j.{column}" for column in PIPELINE_JOB_COLUMNS)
     if _pipeline_primary_backend() == "postgres":
@@ -5598,43 +5659,3 @@ def list_pipeline_jobs(
             }
         )
     return result
-
-
-def get_auto_pilot_pipeline_jobs_to_resume() -> list[int]:
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id
-                    FROM formation_pipeline_jobs
-                    WHERE auto_pilot_enabled = TRUE
-                      AND (auto_pilot_step IS NULL OR auto_pilot_step != 'done')
-                      AND auto_pilot_error IS NULL
-                      AND (
-                            auto_pilot_locked_at IS NULL
-                            OR auto_pilot_locked_at < NOW() - INTERVAL '5 minutes'
-                          )
-                    """
-                )
-                return [int(row["id"]) for row in cur.fetchall()]
-
-    stale_cutoff = int(time.time()) - 300
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            SELECT id FROM formation_pipeline_jobs
-            WHERE auto_pilot_enabled = 1
-              AND (auto_pilot_step IS NULL OR auto_pilot_step != 'done')
-              AND auto_pilot_error IS NULL
-              AND (auto_pilot_locked_at IS NULL
-                   OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
-            """,
-            (stale_cutoff,),
-        )
-        rows = cursor.fetchall()
-        return [int(row[0]) for row in rows]
-    finally:
-        conn.close()

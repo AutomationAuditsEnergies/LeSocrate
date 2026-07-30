@@ -18,7 +18,6 @@ GET  /api/formation/list                  Liste les jobs de la plateforme
 
 import json
 import os
-import socket
 import threading
 import time
 import uuid
@@ -1516,37 +1515,6 @@ def _review_chunk_ids_for_position(position: int) -> list[str]:
             f"day_{day}_review",
         ]
     )
-
-
-def _humanization_chunk_ids_for_position(position: int) -> list[str]:
-    from services.content_generation_service import _HUMANIZATION_REVIEW_RULE_GROUPS
-
-    day = int(position or 0) + 1
-    return [f"day_{day}_review_{g['id']}" for g in _HUMANIZATION_REVIEW_RULE_GROUPS]
-
-
-def _delete_active_review_artifacts(job_id: int, position: int) -> int:
-    """Supprime les rapports actifs de cette journée avant une relance aval.
-
-    Les archives `_done` sont conservées, mais la route de lecture les filtre
-    ensuite par date de relance pour ne pas afficher un rapport ancien.
-    """
-    import os
-    import shutil
-    from services.formation_review_artifact_service import review_artifact_dir
-
-    deleted = 0
-    for step_key, chunk_ids in (
-        ("review", _review_chunk_ids_for_position(position)),
-        ("humanization_review", _humanization_chunk_ids_for_position(position)),
-    ):
-        base_dir = review_artifact_dir(job_id, step_key)
-        for chunk_id in chunk_ids:
-            path = os.path.join(base_dir, chunk_id)
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-                deleted += 1
-    return deleted
 
 
 def _parse_report_timestamp(value):
@@ -3519,29 +3487,6 @@ def launch_audio(job_id):
     })
 
 
-def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> dict:
-    """Conserve le texte initial et remet à zéro volume/review/slides/audio."""
-    from repositories.pipeline_repository import reset_folder_downstream_state
-
-    result = reset_folder_downstream_state(
-        formation_job_id=job_id,
-        folder_id=folder_id,
-    )
-    deleted_review_artifacts = _delete_active_review_artifacts(job_id, result["position"])
-
-    update_job(
-        job_id,
-        status="tts_launched",
-        auto_pilot_volume_done=0,
-        auto_pilot_post_review_docs_done=0,
-        auto_pilot_error=None,
-    )
-    return {
-        **result,
-        "deleted_review_artifacts": deleted_review_artifacts,
-    }
-
-
 def _completed_text_folder_candidates(job_id: int) -> list[dict]:
     """Liste les dossiers rattachés au job qui ont vraiment un texte complet."""
     from repositories.pipeline_repository import list_text_folder_states_for_folders
@@ -3658,37 +3603,6 @@ def _resolve_continue_after_text_folder(job_id: int, requested_folder_id: int) -
     )
 
 
-def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
-    from services.formation_pipeline_service import get_expected_course_folders
-
-    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
-    try:
-        idx = folder_ids.index(folder_id)
-    except ValueError:
-        return None
-    return folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
-
-
-def _get_folder_info_for_resume(job_id: int, folder_id: int) -> dict:
-    """Lit platform_id / content_job_id sans modifier l'état."""
-    from repositories.pipeline_repository import get_text_folder_state
-
-    row = get_text_folder_state(folder_id)
-    if (
-        not row
-        or int(row.get("formation_job_id") or 0) != int(job_id)
-        or row.get("content_status") != "completed"
-    ):
-        raise ValueError("Journée introuvable ou texte non généré")
-    return {
-        "folder_id": folder_id,
-        "folder_name": row["folder_name"],
-        "position": row["position"],
-        "content_job_id": row["content_job_id"],
-        "platform_id": row["platform_id"],
-    }
-
-
 def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
     """Supprime le deck slides existant pour forcer la régénération à l'étape suivante."""
     from repositories.pipeline_repository import delete_script_slide_decks_for_content_job
@@ -3701,638 +3615,16 @@ def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
     methods=["POST"],
 )
 def continue_after_text(job_id, folder_id):
-    """Relance les étapes aval d'une journée sans régénérer le texte initial.
-
-    Flux complet : reset aval → conformité locale API → Word 2 → slides → Edge TTS sync.
-    Paramètre from_step : 'review' (défaut), 'slides', 'tts' — saute les étapes en amont.
-    Compatibilité : l'ancien from_step='volume' est mappé vers 'review'.
-    """
+    """Ancienne relance partielle, remplacée par la reprise durable globale."""
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    data = request.get_json(silent=True) or {}
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-    max_slides = int(data.get("max_slides") or 60)
-    pace = data.get("pace") or "normal"
-    requested_folder_id = int(folder_id)
-    _STEP_ORDER = ["review", "slides", "tts"]
-    raw_from_step = data.get("from_step", "review")
-    fast_iteration = bool(
-        data.get("iteration_mode") == "fast"
-        or data.get("fast_iteration")
-        or data.get("skip_audio")
-    )
-    skip_audio = bool(data.get("skip_audio") or fast_iteration)
-    skip_post_content_review = bool(data.get("skip_post_content_review") or fast_iteration)
-    fast_tts_pipeline = bool(raw_from_step == "tts_fast" or data.get("fast_tts_pipeline"))
-    restart_from_content = (raw_from_step == "content")
-    from_step = "tts" if raw_from_step == "tts_fast" else raw_from_step
-    if from_step == "volume":
-        from_step = "review"
-    from_step = from_step if from_step in _STEP_ORDER else "review"
-    if restart_from_content and skip_post_content_review:
-        from_step = "slides"
-    if from_step != "tts":
-        fast_tts_pipeline = False
-    from_step_idx = _STEP_ORDER.index(from_step)
-
-    logger.info(
-        "PIPELINE_RESUME_REQUEST formation_job_id=%s requested_folder_id=%s from_step=%s "
-        "raw_from_step=%s model=%s max_slides=%s pace=%s fast_tts_pipeline=%s "
-        "fast_iteration=%s skip_audio=%s skip_post_content_review=%s prev_status=%s",
-        job_id, requested_folder_id, from_step, raw_from_step, model, max_slides, pace,
-        fast_tts_pipeline, fast_iteration, skip_audio, skip_post_content_review, job.get("status"),
-    )
-
-    # Persiste le choix de modèle utilisé pour cette relance, pour que les
-    # futurs `continue_after_text` ou redémarrages auto-pilot retrouvent le
-    # bon provider sans qu'il faille le repasser dans le payload.
-    if model and model != job.get("auto_pilot_model"):
-        try:
-            update_job(job_id, auto_pilot_model=model)
-            job["auto_pilot_model"] = model
-            logger.info("PIPELINE_RESUME_MODEL_PERSISTED formation_job_id=%s model=%s", job_id, model)
-        except Exception as e:
-            logger.warning(f"⚠️ Persistance auto_pilot_model={model} échouée pour job {job_id}: {e}")
-
-    try:
-        folder_id, folder_resolution = _resolve_continue_after_text_folder(job_id, requested_folder_id)
-    except ValueError as e:
-        logger.warning(
-            "PIPELINE_RESUME_FOLDER_INVALID formation_job_id=%s requested_folder_id=%s error=%s",
-            job_id, requested_folder_id, str(e)[:500],
-        )
-        return jsonify({
-            "error": str(e),
-            "requested_folder_id": requested_folder_id,
-        }), 400
-
-    if folder_id != requested_folder_id:
-        logger.warning(
-            "PIPELINE_RESUME_FOLDER_RESOLVED formation_job_id=%s requested_folder_id=%s "
-            "resolved_folder_id=%s reason=%s",
-            job_id, requested_folder_id, folder_id,
-            (folder_resolution or {}).get("reason"),
-        )
-
-    state_key = (job_id, f"continue_after_text_{folder_id}")
-    prev_state = PIPELINE_EXECUTION_STATE.get(state_key, {})
-    if prev_state.get("status") == "running":
-        # Stale lock : si l'état mémoire dit "running" mais que rien ne tourne
-        # vraiment (typique après un crash + redémarrage gunicorn), on libère.
-        # Heuristique : on accepte de re-prendre la main si pas de heartbeat
-        # récent (le greenlet aurait mis à jour PIPELINE_EXECUTION_STATE en cas
-        # de vraie activité). En l'absence de timestamp dans cet état mémoire,
-        # on log et on libère systématiquement — l'utilisateur a explicitement
-        # demandé une nouvelle relance, c'est un signal fort.
-        logger.warning(
-            "PIPELINE_RESUME_STALE_LOCK_RELEASED formation_job_id=%s folder_id=%s "
-            "prev_state=%s — l'utilisateur force une nouvelle relance",
-            job_id, folder_id, {k: prev_state.get(k) for k in ("status", "model", "error")},
-        )
-        PIPELINE_EXECUTION_STATE.pop(state_key, None)
-
-    update_job(
-        job_id,
-        auto_pilot_enabled=0,
-        auto_pilot_step="manual_continue_after_text",
-        auto_pilot_error=None,
-        auto_pilot_locked_at=None,
-        auto_pilot_lock_owner=None,
-    )
-    if _durable_pipeline_queue_enabled():
-        try:
-            from services.pipeline_queue import cancel_latest_work_item
-
-            cancel_latest_work_item(job_id)
-        except Exception:
-            logger.warning("PIPELINE_QUEUE_CANCEL_FAILED job=%s", job_id, exc_info=True)
-
-    # Reset agressif du status job : si on était en `audio_running` /
-    # `audio_error` d'un run précédent (qui peut avoir crashé), on le repose
-    # à `tts_launched` pour signaler "TTS à refaire". Le _run le repassera à
-    # `audio_running` au moment d'appeler generate_audio_from_script.
-    prev_status = job.get("status")
-    if prev_status in ("audio_running", "audio_error", "audio_completed"):
-        update_job(job_id, status="tts_launched", error_message=None)
-        logger.info(
-            "PIPELINE_RESUME_STATUS_RESET formation_job_id=%s folder_id=%s "
-            "prev_status=%s new_status=tts_launched",
-            job_id, folder_id, prev_status,
-        )
-
-    try:
-        from services.formation_observability_service import clear_pipeline_events
-        cleared_events_count = clear_pipeline_events(job_id)
-        logger.info(
-            "PIPELINE_RESUME_EVENTS_CLEARED formation_job_id=%s folder_id=%s cleared=%s",
-            job_id, folder_id, cleared_events_count,
-        )
-    except Exception as e:
-        logger.error(f"❌ Nettoyage événements relance aval impossible job={job_id}: {e}")
-        return jsonify({
-            "error": "Impossible de nettoyer le journal de pipeline avant relance",
-            "details": str(e)[:500],
-        }), 500
-
-    PIPELINE_EXECUTION_STATE[state_key] = {
-        "status": "running",
-        "model": str(model),
-        "folder_id": folder_id,
-    }
-    logger.info(
-        "PIPELINE_RESUME_SPAWN formation_job_id=%s folder_id=%s from_step=%s model=%s fast_tts_pipeline=%s",
-        job_id, folder_id, from_step, model, fast_tts_pipeline,
-    )
-
-    import eventlet
-
-    def _run():
-        started_at = time.time()
-        try:
-            from services.content_generation_service import (
-                _assemble_and_upload,
-                _update_job_db,
-                assert_course_day_word_budget,
-                generate_audio_from_script,
-                run_content_generation,
-                run_content_review,
-            )
-            from services.formation_observability_service import log_pipeline_event
-
-            logger.info(
-                "PIPELINE_RESUME_RUN_START formation_job_id=%s folder_id=%s from_step=%s "
-                "from_step_idx=%s model=%s fast_tts_pipeline=%s greenlet_id=%s",
-                job_id, folder_id, from_step, from_step_idx, model, fast_tts_pipeline, id(eventlet.getcurrent()),
-            )
-
-            log_pipeline_event(
-                job_id,
-                "continue_after_text_started",
-                step="post_text_retry",
-                status="running",
-                folder_id=folder_id,
-                model=str(model) if model else None,
-                message=(
-                    "Relance aval depuis l'étape 'tts' "
-                    "(pipeline presque instantanée)"
-                    if fast_tts_pipeline
-                    else f"Relance aval depuis l'étape '{from_step}'"
-                ),
-                data={
-                    "voice_type": "gtts",
-                    "tts_engine": "edge-tts",
-                    "sync_slides": True,
-                    "max_slides": max_slides,
-                    "pace": pace,
-                    "cleared_previous_events": cleared_events_count,
-                    "requested_folder_id": requested_folder_id,
-                    "resolved_folder_id": folder_id,
-                    "folder_resolution": folder_resolution,
-                    "from_step": from_step,
-                    "raw_from_step": raw_from_step,
-                    "fast_tts_pipeline": fast_tts_pipeline,
-                    "fast_iteration": fast_iteration,
-                    "skip_audio": skip_audio,
-                    "skip_post_content_review": skip_post_content_review,
-                },
-            )
-
-            # ── Étape 0 : GÉNÉRATION TEXTE (si restart_from_content) ────────
-            if restart_from_content:
-                step_started = time.time()
-                logger.info(
-                    "PIPELINE_RESUME_STEP_CONTENT_START formation_job_id=%s folder_id=%s",
-                    job_id, folder_id,
-                )
-                from repositories.pipeline_repository import (
-                    delete_content_segments_for_job,
-                    get_content_generation_job_by_folder,
-                    update_content_generation_job,
-                )
-                content_job = get_content_generation_job_by_folder(folder_id)
-                if content_job:
-                    content_job_id = int(content_job["id"])
-                    delete_content_segments_for_job(content_job_id)
-                    update_content_generation_job(
-                        content_job_id,
-                        status="pending",
-                        total_words=0,
-                        current_sub_part=0,
-                        current_passe=1,
-                    )
-                run_content_generation(folder_id, model=model)
-                logger.info(
-                    "PIPELINE_RESUME_STEP_CONTENT_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
-                    job_id, folder_id, int((time.time() - step_started) * 1000),
-                )
-
-            # ── Étape 1 : RESET avant reprise complète des reviews ─────────
-            if from_step_idx == 0:
-                step_started = time.time()
-                logger.info(
-                    "PIPELINE_RESUME_STEP_RESET_START formation_job_id=%s folder_id=%s",
-                    job_id, folder_id,
-                )
-                reset_info = _reset_folder_downstream_to_generated_text(job_id, folder_id)
-                logger.info(
-                    "PIPELINE_RESUME_STEP_RESET_DONE formation_job_id=%s folder_id=%s "
-                    "content_job_id=%s platform_id=%s segments_restored=%s "
-                    "deleted_review_artifacts=%s deleted_slide_decks=%s duration_ms=%s",
-                    job_id, folder_id,
-                    reset_info.get("content_job_id"),
-                    reset_info.get("platform_id"),
-                    reset_info.get("segments_restored"),
-                    reset_info.get("deleted_review_artifacts"),
-                    reset_info.get("deleted_slide_decks"),
-                    int((time.time() - step_started) * 1000),
-                )
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_reset",
-                    step="post_text_retry",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    message="Étapes aval remises à zéro",
-                    data=reset_info,
-                )
-            else:
-                logger.info(
-                    "PIPELINE_RESUME_STEP_RESET_SKIP formation_job_id=%s folder_id=%s "
-                    "from_step=%s — pas de reset (l'utilisateur saute les reviews)",
-                    job_id, folder_id, from_step,
-                )
-                reset_info = _get_folder_info_for_resume(job_id, folder_id)
-                logger.info(
-                    "PIPELINE_RESUME_FOLDER_INFO formation_job_id=%s folder_id=%s "
-                    "content_job_id=%s platform_id=%s",
-                    job_id, folder_id,
-                    reset_info.get("content_job_id"),
-                    reset_info.get("platform_id"),
-                )
-
-            # Sécurité volume append-only supprimée : le volume se corrige
-            # uniquement dans le calibrage budget texte de la génération structurée.
-
-            # ── Étape 3 : CONFORMITÉ LOCALE + Word 2
-            # L'adhérence au plan est corrigée pendant la génération structurée,
-            # juste après les sections et avant le calibrage budget.
-            if from_step_idx <= 0:
-                step_started = time.time()
-                logger.info(
-                    "PIPELINE_RESUME_STEP_REVIEW_START formation_job_id=%s folder_id=%s model=%s",
-                    job_id, folder_id, model,
-                )
-                review_result = run_content_review(folder_id, model=model)
-                logger.info(
-                    "PIPELINE_RESUME_STEP_REVIEW_API_DONE formation_job_id=%s folder_id=%s "
-                    "segments_reviewed=%s segments_failed=%s patches_applied=%s "
-                    "patches_proposed=%s patches_rejected=%s",
-                    job_id, folder_id,
-                    review_result.get("segments_reviewed", 0),
-                    review_result.get("segments_failed", 0),
-                    review_result.get("patches_applied", 0),
-                    review_result.get("patches_proposed", 0),
-                    review_result.get("patches_rejected", 0),
-                )
-                _write_api_review_report(job_id, folder_id, review_result, model)
-                if review_result.get("segments_failed", 0) > 0:
-                    raise RuntimeError(
-                        f"Révision conformité échouée sur {review_result['segments_failed']} segment(s)"
-                    )
-                logger.info(
-                    "PIPELINE_RESUME_STEP_REVIEW_REPORT_WRITTEN formation_job_id=%s folder_id=%s",
-                    job_id, folder_id,
-                )
-
-                budget_audit = assert_course_day_word_budget(
-                    folder_id,
-                    context="continue_after_text_before_word2",
-                )
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_word_budget_verified",
-                    step="word_budget_review",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    message="Budget mots journée vérifié avant Word 2",
-                    data={
-                        "spoken_words": budget_audit.get("spoken_words"),
-                        "raw_words": budget_audit.get("raw_words"),
-                        "deficit": budget_audit.get("deficit"),
-                        "overflow": budget_audit.get("overflow"),
-                        "budget": {
-                            "target_words": budget_audit.get("budget", {}).get("target_words"),
-                            "min_words": budget_audit.get("budget", {}).get("min_words"),
-                            "max_words": budget_audit.get("budget", {}).get("max_words"),
-                            "words_per_minute": budget_audit.get("budget", {}).get("words_per_minute"),
-                            "course_seconds": budget_audit.get("budget", {}).get("course_seconds"),
-                            "speakable_seconds": budget_audit.get("budget", {}).get("speakable_seconds"),
-                        },
-                    },
-                )
-
-                final_words, filename = _assemble_and_upload(
-                    folder_id,
-                    reset_info["platform_id"],
-                    reset_info["content_job_id"],
-                )
-                logger.info(
-                    "PIPELINE_RESUME_STEP_REVIEW_WORD2_BUILT formation_job_id=%s folder_id=%s "
-                    "content_job_id=%s total_words=%s filename=%s duration_ms=%s",
-                    job_id, folder_id,
-                    reset_info["content_job_id"], final_words, filename,
-                    int((time.time() - step_started) * 1000),
-                )
-                _update_job_db(reset_info["content_job_id"], total_words=final_words)
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_review_completed",
-                    step="review",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    message="Conformité locale et Word 2 générés",
-                    data={
-                        "segments_reviewed": review_result.get("segments_reviewed", 0),
-                        "segments_failed": review_result.get("segments_failed", 0),
-                        "segments_already_current": review_result.get("segments_already_current", 0),
-                        "patches_proposed": review_result.get("patches_proposed", 0),
-                        "patches_applied": review_result.get("patches_applied", 0),
-                        "patches_rejected": review_result.get("patches_rejected", 0),
-                        "review_signature": review_result.get("review_signature"),
-                        "doc_filename": filename,
-                        "total_words": final_words,
-                    },
-                )
-            else:
-                logger.info(
-                    "PIPELINE_RESUME_STEP_REVIEW_SKIP formation_job_id=%s folder_id=%s from_step=%s",
-                    job_id, folder_id, from_step,
-                )
-
-            # ── Étape 4 : SLIDES (force régénération si from_step <= slides) ─
-            # Slides et TTS sont jointes par la persistance du deck en DB.
-            # Si on vient de "slides" ou avant, on supprime le deck pour forcer
-            # une régénération propre. Si on vient de "tts", on conserve les
-            # slides existantes et on relance uniquement le TTS sync dessus.
-            if from_step_idx <= 1:
-                deleted_decks = _delete_slide_deck_for_resume(folder_id, reset_info["content_job_id"])
-                logger.info(
-                    "PIPELINE_RESUME_STEP_SLIDES_RESET formation_job_id=%s folder_id=%s "
-                    "content_job_id=%s deleted_decks=%s — slides seront régénérées avant TTS",
-                    job_id, folder_id, reset_info["content_job_id"], deleted_decks,
-                )
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_slides_reset",
-                    step="slides",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    message="Deck slides supprimé — régénération automatique avant TTS",
-                    data={"deleted_decks": deleted_decks},
-                )
-            else:
-                logger.info(
-                    "PIPELINE_RESUME_STEP_SLIDES_SKIP formation_job_id=%s folder_id=%s "
-                    "from_step=%s — slides existantes conservées",
-                    job_id, folder_id, from_step,
-                )
-
-            if skip_audio:
-                from services.script_slide_generation_service import generate_slides_from_script
-
-                slide_result = None
-                if from_step_idx <= 1:
-                    slides_started = time.time()
-                    logger.info(
-                        "PIPELINE_RESUME_STEP_SLIDES_GENERATE_START formation_job_id=%s folder_id=%s "
-                        "content_job_id=%s max_slides=%s pace=%s fast_iteration=%s",
-                        job_id, folder_id, reset_info["content_job_id"], max_slides, pace, fast_iteration,
-                    )
-                    log_pipeline_event(
-                        job_id,
-                        "slides_folder_started",
-                        step="slides",
-                        status="running",
-                        folder_id=folder_id,
-                        model=str(model) if model else None,
-                        message="Génération slides anchor-first démarrée",
-                        data={
-                            "content_job_id": reset_info["content_job_id"],
-                            "max_slides": max_slides,
-                            "pace": pace,
-                            "fast_iteration": fast_iteration,
-                            "skip_audio": True,
-                        },
-                    )
-                    slide_result = generate_slides_from_script(
-                        folder_id=folder_id,
-                        job_id=job_id,
-                        platform_id=reset_info["platform_id"],
-                        max_slides=max_slides,
-                        pace=pace,
-                        model=model,
-                    )
-                    logger.info(
-                        "PIPELINE_RESUME_STEP_SLIDES_GENERATE_DONE formation_job_id=%s folder_id=%s "
-                        "duration_ms=%s slides=%s source_alignment=%s",
-                        job_id,
-                        folder_id,
-                        int((time.time() - slides_started) * 1000),
-                        (slide_result.get("stats") or {}).get("slides_generated"),
-                        (slide_result.get("stats") or {}).get("source_alignment"),
-                    )
-                    log_pipeline_event(
-                        job_id,
-                        "slides_folder_completed",
-                        step="slides",
-                        status="completed",
-                        folder_id=folder_id,
-                        model=str(model) if model else None,
-                        duration_ms=int((time.time() - slides_started) * 1000),
-                        message="Génération slides anchor-first terminée",
-                        data={
-                            "content_job_id": reset_info["content_job_id"],
-                            "deck_id": (slide_result.get("stats") or {}).get("deck_id"),
-                            "slides_generated": (slide_result.get("stats") or {}).get("slides_generated"),
-                            "slide_anchors_found": (slide_result.get("stats") or {}).get("slide_anchors_found"),
-                            "source_alignment": (slide_result.get("stats") or {}).get("source_alignment"),
-                            "beat_aligned_segments": (slide_result.get("stats") or {}).get("beat_aligned_segments"),
-                            "beat_aligned_anchors": (slide_result.get("stats") or {}).get("beat_aligned_anchors"),
-                            "fast_iteration": fast_iteration,
-                            "skip_audio": True,
-                        },
-                    )
-
-                _finalize_text_ready_state(job_id)
-                update_job(job_id, status="text_ready", error_message=None)
-                logger.info(
-                    "PIPELINE_RESUME_RUN_DONE_NO_AUDIO formation_job_id=%s folder_id=%s from_step=%s "
-                    "total_duration_ms=%s fast_iteration=%s",
-                    job_id, folder_id, from_step, int((time.time() - started_at) * 1000), fast_iteration,
-                )
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_completed",
-                    step="slides",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    duration_ms=int((time.time() - started_at) * 1000),
-                    message=(
-                        "Itération rapide terminée : texte beat-first et slides régénérés, audio non lancé"
-                        if fast_iteration
-                        else "Relance terminée sans audio"
-                    ),
-                    data={
-                        "skip_audio": True,
-                        "fast_iteration": fast_iteration,
-                        "from_step": from_step,
-                        "raw_from_step": raw_from_step,
-                        "slides": (slide_result or {}).get("stats") or {},
-                    },
-                )
-                PIPELINE_EXECUTION_STATE[state_key] = {
-                    "status": "done",
-                    "model": str(model),
-                    "folder_id": folder_id,
-                    "result": {
-                        "skip_audio": True,
-                        "fast_iteration": fast_iteration,
-                        "slides": (slide_result or {}).get("stats") or {},
-                    },
-                }
-                return
-
-            # ── Étape 5 : TTS (toujours exécutée) ───────────────────────────
-            tts_started = time.time()
-            next_folder_id = _next_folder_in_formation(job_id, folder_id)
-            logger.info(
-                "PIPELINE_RESUME_STEP_TTS_START formation_job_id=%s folder_id=%s "
-                "next_folder_id=%s is_last_folder=%s max_slides=%s pace=%s fast_tts_pipeline=%s",
-                job_id, folder_id, next_folder_id, next_folder_id is None, max_slides, pace, fast_tts_pipeline,
-            )
-            update_job(job_id, status="audio_running", error_message=None)
-            audio_result = generate_audio_from_script(
-                folder_id,
-                on_progress=_make_audio_progress_logger(job_id, folder_id, "gtts"),
-                force_all=True,
-                mock=False,
-                basic_tts=True,
-                next_folder_id=next_folder_id,
-                is_last_folder=next_folder_id is None,
-                sync_slides=True,
-                auto_generate_slides=True,
-                slide_max_slides=max_slides,
-                slide_pace=pace,
-                slide_model=model,
-                llm_model=model,
-                fast_tts_pipeline=fast_tts_pipeline,
-            )
-            logger.info(
-                "PIPELINE_RESUME_STEP_TTS_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
-                job_id, folder_id, int((time.time() - tts_started) * 1000),
-            )
-            # This is a single-folder maintenance path, not proof that every
-            # scheduled occurrence has a ready asset. Never validate the
-            # durable teacher from this shortcut.
-            finalize_result = {
-                "finalized": False,
-                "reason": "scheduled_audio_completion_required",
-            }
-            update_job(job_id, status="text_ready", error_message=None)
-            logger.info(
-                "PIPELINE_RESUME_RUN_DONE formation_job_id=%s folder_id=%s from_step=%s "
-                "total_duration_ms=%s",
-                job_id, folder_id, from_step, int((time.time() - started_at) * 1000),
-            )
-            log_pipeline_event(
-                job_id,
-                "continue_after_text_completed",
-                step="audio",
-                status="completed",
-                folder_id=folder_id,
-                model=str(model) if model else None,
-                duration_ms=int((time.time() - started_at) * 1000),
-                message=(
-                    "Relance aval terminée avec Edge TTS rapide test et slides synchronisées"
-                    if fast_tts_pipeline
-                    else "Relance aval terminée avec Edge TTS et slides synchronisées"
-                ),
-                data={
-                    **(audio_result or {}),
-                    "finalize": finalize_result,
-                    "tts_engine": "edge-tts",
-                    "fast_tts_pipeline": fast_tts_pipeline,
-                },
-            )
-            PIPELINE_EXECUTION_STATE[state_key] = {
-                "status": "done",
-                "model": str(model),
-                "folder_id": folder_id,
-                "result": {
-                    **(audio_result or {}),
-                    "finalize": finalize_result,
-                    "tts_engine": "edge-tts",
-                    "fast_tts_pipeline": fast_tts_pipeline,
-                },
-            }
-        except Exception as e:
-            err = str(e)[:500]
-            logger.exception(
-                "PIPELINE_RESUME_RUN_FAILED formation_job_id=%s folder_id=%s from_step=%s "
-                "duration_ms=%s error=%s",
-                job_id, folder_id, from_step,
-                int((time.time() - started_at) * 1000), err,
-            )
-            try:
-                update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {err}")
-            except Exception:
-                pass
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_failed",
-                    step="post_text_retry",
-                    status="error",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    duration_ms=int((time.time() - started_at) * 1000),
-                    message="Relance aval échouée",
-                    error=err,
-                )
-            except Exception:
-                pass
-            PIPELINE_EXECUTION_STATE[state_key] = {
-                "status": "error",
-                "model": str(model),
-                "folder_id": folder_id,
-                "error": err,
-            }
-
-    eventlet.spawn(_run)
     return jsonify({
-        "ok": True,
-        "status": "running",
-        "folder_id": folder_id,
-        "requested_folder_id": requested_folder_id,
-        "folder_resolution": folder_resolution,
-        "model": str(model),
-        "tts_mode": "gtts",
-        "tts_engine": "edge-tts",
-        "sync_slides": True,
-        "auto_generate_slides": True,
-        "fast_tts_pipeline": fast_tts_pipeline,
-    }), 202
+        "error": (
+            "Cette relance partielle a été retirée. "
+            "Utilisez la reprise globale de la pipeline."
+        ),
+        "code": "durable_pipeline_resume_required",
+    }), 410
 
 
 # ─── Liste des jobs ───────────────────────────────────────────────────────────
@@ -4352,30 +3644,11 @@ def list_formations():
     return jsonify({"jobs": jobs})
 
 
-# ─── Auto-pilot pipeline — state machine persistée en DB ─────────────────────
+# ─── Pipeline automatique — orchestration durable unique ─────────────────────
 #
-# Architecture : chaque tick exécute UNE seule étape, écrit l'état en DB,
-# puis se respawn pour la suivante. Résiste aux restarts Azure App Service.
-#
-# DB columns : auto_pilot_enabled, auto_pilot_step, auto_pilot_model,
-#              auto_pilot_tts_mode, auto_pilot_use_cc, auto_pilot_skip_vs,
-#              auto_pilot_generate_audio,
-#              auto_pilot_volume_done, auto_pilot_post_review_docs_done,
-#              auto_pilot_error,
-#              auto_pilot_locked_at, auto_pilot_lock_owner
-#
-# Lock TTL = 5 min. Au boot, _resume_interrupted_auto_pilots() reprend les
-# jobs dont le lock est absent ou périmé.
-
-_AP_LOCK_TTL = 300  # secondes — lock périmé si > 5 min sans mise à jour
-_AP_WATCHDOG_INTERVAL = int(os.getenv("AUTO_PILOT_WATCHDOG_INTERVAL_SEC", "60"))
-_AP_WATCHDOG_STARTED = False
-
-
-def _durable_pipeline_queue_enabled() -> bool:
-    return os.getenv("PIPELINE_EXECUTION_MODE", "inline").strip().lower() in {
-        "queue", "queued", "durable",
-    }
+# Chaque work-item exécute une seule étape, sauvegarde l'état en PostgreSQL,
+# puis crée atomiquement le work-item suivant. Les leases de la file durable
+# assurent à eux seuls heartbeat, fencing, reprise après crash et retries.
 
 
 def _dispatch_auto_pilot_tick(
@@ -4385,13 +3658,7 @@ def _dispatch_auto_pilot_tick(
     force_new_run: bool = False,
     chain_payload: dict | None = None,
 ) -> dict:
-    """Dispatch one resumable tick to the durable queue or local dev runner."""
-    if not _durable_pipeline_queue_enabled():
-        import eventlet
-
-        eventlet.spawn(_tick_auto_pilot, job_id)
-        return {"mode": "inline", "work_item_id": None, "run_id": None}
-
+    """Place one resumable pipeline step in the durable queue."""
     from services.pipeline_queue import enqueue_work_item, get_latest_work_item
 
     latest = get_latest_work_item(job_id)
@@ -4434,8 +3701,6 @@ def _dispatch_auto_pilot_tick(
 
 
 def _queue_status_for_job(job_id: int) -> dict:
-    if not _durable_pipeline_queue_enabled():
-        return {"mode": "inline"}
     try:
         from services.pipeline_queue import get_latest_work_item
 
@@ -4454,50 +3719,6 @@ def _queue_status_for_job(job_id: int) -> dict:
     except Exception as exc:
         logger.warning("PIPELINE_QUEUE_STATUS_FAILED job=%s", job_id, exc_info=True)
         return {"mode": "queue", "status": "unavailable", "error": str(exc)[:300]}
-
-
-def _new_ap_lock_owner() -> str:
-    """Unique fencing token, including the instance for useful diagnostics."""
-    instance = os.getenv("WEBSITE_INSTANCE_ID") or socket.gethostname()
-    return f"{instance}:{os.getpid()}:{uuid.uuid4().hex}"
-
-
-def _acquire_ap_lock(job_id: int, owner: str) -> bool:
-    """Pose un lock optimiste sur l'auto-pilot. Retourne True si acquis."""
-    from repositories.pipeline_repository import acquire_auto_pilot_lock
-    return acquire_auto_pilot_lock(job_id, owner=owner, ttl_seconds=_AP_LOCK_TTL)
-
-
-def _release_ap_lock(job_id: int, owner: str) -> None:
-    from repositories.pipeline_repository import release_auto_pilot_lock
-    release_auto_pilot_lock(job_id, owner=owner)
-
-
-class _AutoPilotLockLost(RuntimeError):
-    """Raised in the runner as soon as its database fencing token is lost."""
-
-
-def _refresh_ap_lock(job_id: int, owner: str) -> bool:
-    """Rafraîchit le timestamp du lock pour éviter l'expiration pendant une étape longue."""
-    from repositories.pipeline_repository import refresh_auto_pilot_lock
-    return refresh_auto_pilot_lock(job_id, owner=owner)
-
-
-def _ap_lock_age_seconds(job: dict | None) -> float | None:
-    if not job or not job.get("auto_pilot_locked_at"):
-        return None
-    try:
-        import datetime
-        locked_at = job.get("auto_pilot_locked_at")
-        if isinstance(locked_at, str):
-            dt = datetime.datetime.fromisoformat(locked_at)
-        else:
-            dt = locked_at
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=datetime.timezone.utc)
-        return (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds()
-    except Exception:
-        return None
 
 
 def _determine_next_ap_step(job_id: int) -> str | None:
@@ -5276,302 +4497,18 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         logger.info(f"🤖 ✓ Audio TTS terminé job {job_id}")
 
 
-def _tick_auto_pilot(job_id: int) -> None:
-    """Runner auto-pilot : 1 tick = 1 étape. Se respawn pour la suivante.
-
-    Persisté en DB — résiste aux restarts Azure App Service.
-    Lock optimiste + heartbeat toutes les 60 s pour les étapes longues (content/audio).
-    """
-    import eventlet
-
-    lock_owner = _new_ap_lock_owner()
-    if not _acquire_ap_lock(job_id, lock_owner):
-        logger.info(f"🤖 Auto-pilot job {job_id} : lock tenu par un autre worker, skip")
-        return
-
-    # Heartbeat : rafraîchit le lock toutes les 60 s pour les étapes qui durent
-    # plus que le TTL (content = 2-4h, audio = 30-60 min).
-    _hb_stop = [False]
-    current_step = "?"
-    runner_greenlet = eventlet.getcurrent()
-
-    def _heartbeat():
-        while not _hb_stop[0]:
-            eventlet.sleep(60)
-            if not _hb_stop[0]:
-                try:
-                    refreshed = _refresh_ap_lock(job_id, lock_owner)
-                except Exception as exc:
-                    refreshed = False
-                    reason = f"échec heartbeat: {exc}"
-                else:
-                    reason = "fencing token remplacé ou supprimé"
-                if not refreshed:
-                    _hb_stop[0] = True
-                    lost = _AutoPilotLockLost(
-                        f"Lock auto-pilot perdu pour le job {job_id}: {reason}"
-                    )
-                    logger.error(
-                        "PIPELINE_AUTOPILOT_LOCK_LOST job=%s step=%s owner=%s reason=%s",
-                        job_id,
-                        current_step,
-                        lock_owner,
-                        reason,
-                    )
-                    # Raising only inside this child greenlet would leave the
-                    # stale runner alive. Inject the fencing error into the
-                    # runner so it cannot publish a completed step or respawn.
-                    eventlet.greenthread.kill(runner_greenlet, lost)
-                    return
-                logger.info(
-                    "PIPELINE_AUTOPILOT_HEARTBEAT job=%s step=%s lock_refreshed=1",
-                    job_id,
-                    current_step,
-                )
-    hb = eventlet.spawn(_heartbeat)
-
-    should_respawn = False
-    started_at = None
-    j = None
-    try:
-        j = get_job(job_id)
-        if not j or not j.get("auto_pilot_enabled"):
-            return
-
-        step = _determine_next_ap_step(job_id)
-        if step is None:
-            update_job(job_id, auto_pilot_step="done", auto_pilot_error=None)
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "pipeline_completed",
-                    step="done",
-                    status="completed",
-                    model=j.get("auto_pilot_model"),
-	                    message=(
-	                        "Auto-pilot texte et slides terminé"
-	                        if not j.get("auto_pilot_generate_audio")
-	                        else "Auto-pilot terminé"
-	                    ),
-                    data={"generate_audio": bool(j.get("auto_pilot_generate_audio"))},
-                )
-            except Exception:
-                pass
-            logger.info(f"🤖 ✅ Auto-pilot TERMINÉ job {job_id}")
-            return
-
-        current_step = step
-        update_job(job_id, auto_pilot_step=step, auto_pilot_error=None)
-        logger.info(f"🤖 Auto-pilot job {job_id} → step={step}")
-        started_at = time.time()
-        try:
-            from services.formation_observability_service import log_pipeline_event
-            log_pipeline_event(
-                job_id,
-                "step_started",
-                step=step,
-                status="running",
-                model=j.get("auto_pilot_model"),
-                message=f"Étape auto-pilot démarrée : {step}",
-                data={
-                    "tts_mode": j.get("auto_pilot_tts_mode"),
-                    "generate_audio": bool(j.get("auto_pilot_generate_audio")),
-                },
-            )
-        except Exception:
-            pass
-
-        _execute_ap_step(job_id, step, j)
-        try:
-            from services.formation_observability_service import log_pipeline_event
-            log_pipeline_event(
-                job_id,
-                "step_completed",
-                step=step,
-                status="completed",
-                model=j.get("auto_pilot_model"),
-                duration_ms=int((time.time() - started_at) * 1000) if started_at else None,
-                message=f"Étape auto-pilot terminée : {step}",
-            )
-        except Exception:
-            pass
-        should_respawn = True
-
-    except Exception as e:
-        err = str(e)[:500]
-        logger.error(f"❌ Auto-pilot job {job_id} step={current_step} : {err}")
-        # Once fencing is lost, this worker is stale: even writing an error on
-        # the shared job could overwrite the successor's state. The current
-        # owner (or watchdog) is solely responsible for subsequent mutations.
-        if not isinstance(e, _AutoPilotLockLost):
-            update_job(job_id, auto_pilot_error=err)
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "step_failed",
-                    step=current_step,
-                    status="error",
-                    duration_ms=int((time.time() - started_at) * 1000) if started_at else None,
-                    message=f"Étape auto-pilot échouée : {current_step}",
-                    error=err,
-                    model=_resolve_pipeline_api_model(j),
-                )
-            except Exception:
-                pass
-
-    finally:
-        _hb_stop[0] = True
-        hb.kill()
-        _release_ap_lock(job_id, lock_owner)
-
-    if should_respawn:
-        _dispatch_auto_pilot_tick(job_id, reason="inline_step_completed")
-
-
-def resume_interrupted_auto_pilots() -> None:
-    """Appelé au boot : reprend les auto-pilots interrompus par un restart Azure."""
-    import eventlet
-    from services.formation_pipeline_service import get_auto_pilot_jobs_to_resume
-    eventlet.sleep(5)  # laisse le temps à l'app de démarrer
-    try:
-        job_ids = get_auto_pilot_jobs_to_resume()
-        if job_ids:
-            logger.info(f"🤖 Boot recovery : {len(job_ids)} auto-pilot(s) à reprendre : {job_ids}")
-            for jid in job_ids:
-                _dispatch_auto_pilot_tick(jid, reason="boot_recovery")
-        else:
-            logger.info("🤖 Boot recovery : aucun auto-pilot interrompu")
-    except Exception as e:
-        logger.warning(f"⚠️ Boot recovery auto-pilot : {e}")
-
-
-def _auto_pilot_watchdog_loop(interval_sec: int) -> None:
-    """Surveille périodiquement les locks auto-pilot absents ou périmés."""
-    import eventlet
-    from services.formation_pipeline_service import get_auto_pilot_jobs_to_resume
-
-    eventlet.sleep(5)  # laisse le temps à l'app de démarrer
-    while True:
-        try:
-            job_ids = get_auto_pilot_jobs_to_resume()
-            if job_ids:
-                logger.warning(
-                    f"🤖 Watchdog auto-pilot : reprise de {len(job_ids)} job(s) : {job_ids}"
-                )
-                for jid in job_ids:
-                    _dispatch_auto_pilot_tick(jid, reason="watchdog_recovery")
-            else:
-                logger.debug("🤖 Watchdog auto-pilot : aucun job à reprendre")
-        except Exception as e:
-            logger.warning(f"⚠️ Watchdog auto-pilot : {e}")
-        eventlet.sleep(interval_sec)
-
-
-def start_auto_pilot_watchdog() -> None:
-    """Démarre un watchdog par process pour reprendre les locks zombies."""
-    global _AP_WATCHDOG_STARTED
-    if _AP_WATCHDOG_STARTED:
-        return
-    _AP_WATCHDOG_STARTED = True
-
-    import eventlet
-    logger.info(
-        f"🤖 Watchdog auto-pilot démarré (intervalle {_AP_WATCHDOG_INTERVAL}s)"
-    )
-    eventlet.spawn(_auto_pilot_watchdog_loop, _AP_WATCHDOG_INTERVAL)
-
-
 @formation_bp.route("/api/formation/<int:job_id>/run-auto", methods=["POST"])
 def run_auto_pilot(job_id):
-    """Lance l'auto-pilot : REAC → KB → global → daily → content
-    (génération sections → adhérence plan → budget → micro-éthique)
-    → conformité locale par morceau → Word 2 → slides → audio optionnel.
-
-    Body (optionnel) :
-      - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')
-      - model : 'flash' | 'pro' (défaut 'pro')
-      - generate_audio : bool (défaut false) — legacy, enchaîne aussi l'audio
-
-    Retourne 202 immédiatement. Suivre via GET /run-auto/status.
-    """
+    """Ancien démarrage manuel, remplacé par la commande professeur IA."""
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
-
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-    if _durable_pipeline_queue_enabled():
-        from services.pipeline_queue import get_latest_work_item
-
-        active_item = get_latest_work_item(job_id)
-        if active_item and not active_item.terminal:
-            return jsonify({
-                "error": "Auto-pilot déjà en file ou en cours pour ce job",
-                "work_item_id": active_item.id,
-                "queue_status": active_item.status,
-                "run_id": active_item.run_id,
-            }), 409
-
-    payload = request.get_json(silent=True) or {}
-    tts_mode = (payload.get("tts_mode") or "gtts").lower()
-    if tts_mode not in ("fish_audio", "gtts", "mock"):
-        return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
-    model = _normalize_pipeline_model_choice(payload.get("model"), default=job.get("auto_pilot_model") or "pro")
-    if model not in _PIPELINE_MODEL_CHOICES:
-        return jsonify({"error": "model invalide (flash | pro)"}), 400
-    generate_audio = bool(payload.get("generate_audio") or payload.get("include_audio"))
-    if generate_audio and not _legacy_bulk_audio_enabled():
-        return jsonify({
-            "error": (
-                "generate_audio n'est plus accepté dans l'auto-pilot. "
-                "Les audios sont synthétisés séance par séance à J-1."
-            ),
-            "code": "scheduled_audio_required",
-        }), 400
-
-    # Vérifie qu'un tick n'est pas déjà en cours (lock actif non-périmé).
-    # Psycopg renvoie un datetime, SQLite une chaîne : le helper gère les deux.
-    if job.get("auto_pilot_step") and job.get("auto_pilot_step") != "done":
-        lock_age = _ap_lock_age_seconds(job)
-        if lock_age is not None and lock_age < _AP_LOCK_TTL:
-            return jsonify({
-                "error": "Auto-pilot déjà en cours pour ce job",
-                "lock_age_seconds": lock_age,
-            }), 409
-
-    update_job(job_id,
-               auto_pilot_enabled=1,
-               auto_pilot_model=model,
-               auto_pilot_tts_mode=tts_mode,
-               auto_pilot_use_cc=0,
-               auto_pilot_skip_vs=0,
-               auto_pilot_generate_audio=int(generate_audio),
-               auto_pilot_volume_done=0,
-               auto_pilot_post_review_docs_done=0,
-               auto_pilot_error=None)
-    try:
-        from services.formation_observability_service import log_pipeline_event
-        log_pipeline_event(
-            job_id,
-            "pipeline_started",
-            step="start",
-            status="running",
-            model=model,
-            message="Auto-pilot lancé",
-            data={"tts_mode": tts_mode, "generate_audio": generate_audio},
-        )
-    except Exception:
-        pass
-
-    dispatch = _dispatch_auto_pilot_tick(job_id, reason="run_auto")
     return jsonify({
-        "ok": True, "status": "auto_pilot_started",
-        "tts_mode": tts_mode, "model": model,
-        "generate_audio": generate_audio,
-        "dispatch": dispatch,
-    }), 202
+        "error": (
+            "Le démarrage manuel a été retiré. "
+            "La pipeline démarre automatiquement après la commande d'un professeur IA."
+        ),
+        "code": "teacher_order_required",
+    }), 410
 
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/resume", methods=["POST"])
@@ -5584,33 +4521,25 @@ def resume_auto_pilot(job_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    lock_age = _ap_lock_age_seconds(job)
-    lock_active = lock_age is not None and lock_age < _AP_LOCK_TTL
     force = bool((request.get_json(silent=True) or {}).get("force"))
-    if lock_active and not force:
-        return jsonify({
-            "error": "Auto-pilot déjà en cours pour ce job",
-            "lock_age_seconds": lock_age,
-        }), 409
-    if _durable_pipeline_queue_enabled():
-        from services.pipeline_queue import get_latest_work_item
+    from services.pipeline_queue import get_latest_work_item
 
-        active_item = get_latest_work_item(job_id)
-        if active_item and not active_item.terminal:
-            if force and active_item.status != "running":
-                active_item = None
-            else:
-                message = (
-                    "Une étape est réellement en cours; arrêt coopératif requis avant reprise"
-                    if force and active_item.status == "running"
-                    else "Auto-pilot déjà en file ou en cours pour ce job"
-                )
-                return jsonify({
-                    "error": message,
-                    "work_item_id": active_item.id,
-                    "queue_status": active_item.status,
-                    "run_id": active_item.run_id,
-                }), 409
+    active_item = get_latest_work_item(job_id)
+    if active_item and not active_item.terminal:
+        if force and active_item.status != "running":
+            active_item = None
+        else:
+            message = (
+                "Une étape est réellement en cours; arrêt coopératif requis avant reprise"
+                if force and active_item.status == "running"
+                else "Auto-pilot déjà en file ou en cours pour ce job"
+            )
+            return jsonify({
+                "error": message,
+                "work_item_id": active_item.id,
+                "queue_status": active_item.status,
+                "run_id": active_item.run_id,
+            }), 409
 
     try:
         next_step = _determine_next_ap_step(job_id)
@@ -5621,8 +4550,6 @@ def resume_auto_pilot(job_id):
         job_id,
         auto_pilot_enabled=1,
         auto_pilot_error=None,
-        auto_pilot_locked_at=None,
-        auto_pilot_lock_owner=None,
         auto_pilot_step=next_step or "done",
     )
 
@@ -5643,7 +4570,7 @@ def resume_auto_pilot(job_id):
             status="running",
             model=job.get("auto_pilot_model"),
             message=f"Reprise auto-pilot demandée : {next_step}",
-            data={"previous_step": job.get("auto_pilot_step"), "lock_age_seconds": lock_age},
+            data={"previous_step": job.get("auto_pilot_step")},
         )
     except Exception:
         pass
@@ -5666,7 +4593,7 @@ def resume_auto_pilot(job_id):
                 exc_info=True,
             )
 
-    if force and _durable_pipeline_queue_enabled():
+    if force:
         from services.pipeline_queue import cancel_latest_work_item
 
         cancel_latest_work_item(job_id)
@@ -5709,11 +4636,7 @@ def resume_auto_pilot(job_id):
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/stop", methods=["POST"])
 def stop_auto_pilot(job_id):
-    """Stoppe l'auto-pilot persistant pour un job.
-
-    Arrêt coopératif : désactive la reprise/watchdog et libère le lock. Une
-    étape déjà en cours peut finir son appel courant, mais ne respawnera pas.
-    """
+    """Annule le work-item durable courant pour une intervention support."""
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
 
@@ -5726,18 +4649,15 @@ def stop_auto_pilot(job_id):
         auto_pilot_enabled=0,
         auto_pilot_step="stopped",
         auto_pilot_error=None,
-        auto_pilot_locked_at=None,
-        auto_pilot_lock_owner=None,
     )
     cancelled_work_item_id = None
-    if _durable_pipeline_queue_enabled():
-        try:
-            from services.pipeline_queue import cancel_latest_work_item
+    try:
+        from services.pipeline_queue import cancel_latest_work_item
 
-            cancelled_item = cancel_latest_work_item(job_id)
-            cancelled_work_item_id = cancelled_item.id if cancelled_item else None
-        except Exception:
-            logger.warning("PIPELINE_QUEUE_CANCEL_FAILED job=%s", job_id, exc_info=True)
+        cancelled_item = cancel_latest_work_item(job_id)
+        cancelled_work_item_id = cancelled_item.id if cancelled_item else None
+    except Exception:
+        logger.warning("PIPELINE_QUEUE_CANCEL_FAILED job=%s", job_id, exc_info=True)
     try:
         from services.formation_observability_service import log_pipeline_event
         log_pipeline_event(
@@ -5789,8 +4709,6 @@ def auto_pilot_status(job_id):
     model = job.get("auto_pilot_model")
     tts_mode = job.get("auto_pilot_tts_mode")
     generate_audio = bool(job.get("auto_pilot_generate_audio"))
-    lock_age = _ap_lock_age_seconds(job)
-    lock_stale = lock_age is not None and lock_age >= _AP_LOCK_TTL
     try:
         next_step = _determine_next_ap_step(job_id)
     except Exception:
@@ -5798,9 +4716,9 @@ def auto_pilot_status(job_id):
     if step == "done":
         return jsonify({"status": "done", "step": "done", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
     if error:
-        return jsonify({"status": "error", "step": step, "next_step": next_step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age, "queue": queue_state}), 200
+        return jsonify({"status": "error", "step": step, "next_step": next_step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
     if step:
-        return jsonify({"status": "running", "step": step, "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age, "queue": queue_state}), 200
+        return jsonify({"status": "running", "step": step, "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
     return jsonify({"status": "starting", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
 
 

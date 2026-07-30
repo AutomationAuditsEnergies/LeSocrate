@@ -119,10 +119,6 @@ var commonEnv = [
     value: '0'
   }
   {
-    name: 'PIPELINE_EXECUTION_MODE'
-    value: 'queue'
-  }
-  {
     name: 'PIPELINE_QUEUE_BACKEND'
     value: 'service_bus'
   }

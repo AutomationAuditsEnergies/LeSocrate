@@ -87,7 +87,12 @@ JSON_COLUMNS = {
     "day_schedule_template_blocks": {"metadata_json"},
     "formation_module_days": {"blocks_snapshot_json"},
     "formation_module_assets": {"generation_params_json"},
-    "content_generation_jobs": {"sub_parts", "module_contents"},
+    "content_generation_jobs": {
+        "sub_parts",
+        "module_contents",
+        "structured_plan_json",
+    },
+    "content_generation_segments": {"structured_checkpoint_json"},
     "content_review_reports": {"summary_json", "report_json"},
     "formation_pipeline_events": {"data_json"},
     "script_slide_decks": {
@@ -109,6 +114,8 @@ JSONB_COLUMNS = {
     "day_schedule_template_blocks": {"metadata_json"},
     "formation_module_days": {"blocks_snapshot_json"},
     "formation_module_assets": {"generation_params_json"},
+    "content_generation_jobs": {"structured_plan_json"},
+    "content_generation_segments": {"structured_checkpoint_json"},
 }
 
 TIMESTAMP_COLUMNS = {

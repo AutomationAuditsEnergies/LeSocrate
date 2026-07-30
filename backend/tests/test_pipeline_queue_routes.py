@@ -1,4 +1,3 @@
-import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,6 +8,7 @@ from routes.formation_routes import (
     _normalize_pipeline_model_choice,
     formation_bp,
 )
+from routes import formation_routes
 
 
 def _job(**overrides):
@@ -45,6 +45,10 @@ class PipelineQueueRouteTest(unittest.TestCase):
                 "repositories.pipeline_repository.pipeline_job_belongs_to_center",
                 return_value=True,
             ),
+            patch(
+                "repositories.pipeline_repository.course_folder_belongs_to_job",
+                return_value=True,
+            ),
         ]
         for route_patch in self.route_patches:
             route_patch.start()
@@ -53,59 +57,31 @@ class PipelineQueueRouteTest(unittest.TestCase):
         for route_patch in reversed(self.route_patches):
             route_patch.stop()
 
-    def test_run_auto_enqueues_durable_work_item(self):
-        item = SimpleNamespace(
-            id="work-1",
-            run_id="run-1",
-            status="queued",
-            terminal=False,
+    def test_manual_start_requires_a_teacher_order(self):
+        response = self.client.post("/api/formation/42/run-auto", json={})
+
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.get_json()["code"], "teacher_order_required")
+
+    def test_legacy_partial_resume_is_retired(self):
+        response = self.client.post(
+            "/api/formation/42/content/301/continue-after-text",
+            json={"from_step": "slides"},
         )
-        with patch.dict(os.environ, {"PIPELINE_EXECUTION_MODE": "queue"}), patch(
-            "routes.formation_routes.get_job", return_value=_job()
-        ), patch(
-            "routes.formation_routes.update_job"
-        ), patch(
-            "routes.formation_routes._determine_next_ap_step", return_value="reac"
-        ), patch(
-            "services.pipeline_queue.get_latest_work_item", return_value=None
-        ), patch(
-            "services.pipeline_queue.enqueue_work_item", return_value=item
-        ) as enqueue, patch(
-            "services.formation_observability_service.log_pipeline_event"
-        ):
-            response = self.client.post(
-                "/api/formation/42/run-auto",
-                json={"model": "pro", "tts_mode": "gtts"},
-            )
 
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.get_json()["dispatch"]["work_item_id"], "work-1")
-        self.assertEqual(enqueue.call_args.kwargs["pipeline_job_id"], 42)
-        self.assertEqual(enqueue.call_args.kwargs["payload"]["expected_step"], "reac")
-
-    def test_run_auto_does_not_reset_an_active_queue_item(self):
-        active = SimpleNamespace(
-            id="work-active",
-            run_id="run-active",
-            status="running",
-            terminal=False,
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(
+            response.get_json()["code"],
+            "durable_pipeline_resume_required",
         )
-        with patch.dict(os.environ, {"PIPELINE_EXECUTION_MODE": "queue"}), patch(
-            "routes.formation_routes.get_job", return_value=_job(auto_pilot_step="content")
-        ), patch(
-            "routes.formation_routes.update_job"
-        ) as update, patch(
-            "services.pipeline_queue.get_latest_work_item", return_value=active
-        ):
-            response = self.client.post("/api/formation/42/run-auto", json={})
 
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.get_json()["work_item_id"], "work-active")
-        update.assert_not_called()
+    def test_inline_runner_and_watchdog_are_removed(self):
+        self.assertFalse(hasattr(formation_routes, "_tick_auto_pilot"))
+        self.assertFalse(hasattr(formation_routes, "start_auto_pilot_watchdog"))
 
     def test_stop_returns_cancelled_work_item_id_not_dataclass(self):
         cancelled = SimpleNamespace(id="work-cancelled")
-        with patch.dict(os.environ, {"PIPELINE_EXECUTION_MODE": "queue"}), patch(
+        with patch(
             "routes.formation_routes.get_job", return_value=_job(auto_pilot_step="review")
         ), patch(
             "routes.formation_routes.update_job"
@@ -140,7 +116,7 @@ class PipelineQueueRouteTest(unittest.TestCase):
             "payment_status": "paid",
             "fulfillment_status": "failed",
         }
-        with patch.dict(os.environ, {"PIPELINE_EXECUTION_MODE": "queue"}), patch(
+        with patch(
             "routes.formation_routes.get_job",
             return_value=_job(
                 status="error",

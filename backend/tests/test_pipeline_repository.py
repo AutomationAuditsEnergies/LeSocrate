@@ -143,6 +143,8 @@ def _make_pipeline_db():
             carryover_in_source_folder_id INTEGER,
             carryover_out_text TEXT DEFAULT '',
             carryover_out_target_folder_id INTEGER,
+            structured_plan_input_signature TEXT,
+            structured_plan_json TEXT NOT NULL DEFAULT '{}',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -164,6 +166,8 @@ def _make_pipeline_db():
             review_error TEXT,
             review_signature TEXT,
             text_content_pre_review TEXT,
+            structured_checkpoint_signature TEXT,
+            structured_checkpoint_json TEXT NOT NULL DEFAULT '{}',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(job_id, sub_part_index, passe)
         );
@@ -394,30 +398,90 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(sum(int(row["word_count"]) for row in rows), 5)
 
-    def test_auto_pilot_resume_query_keeps_sqlite_lock_semantics(self):
-        job_id = repo.create_pipeline_job(
+    def test_structured_checkpoints_publish_only_final_courses_and_resume_atomically(self):
+        folder = repo.create_course_folder_for_job(
             platform_id=7,
-            tp_name="TP Test",
-            rncp_code="RNCP123",
-            total_hours=7,
-            nb_days=1,
+            folder_name="Jour checkpoint",
+            formation_job_id=1,
         )
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            UPDATE formation_pipeline_jobs
-            SET auto_pilot_enabled = 1,
-                auto_pilot_step = 'audio',
-                auto_pilot_error = NULL,
-                auto_pilot_locked_at = datetime('now', '-10 minutes')
-            WHERE id = ?
-            """,
-            (job_id,),
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=folder["id"],
+            platform_id=7,
+            program_text="Programme",
+            program_title="Titre",
+            sub_parts_json='["Cours 1"]',
+            from_scratch=True,
+            module_contents_json='{}',
         )
-        conn.commit()
-        conn.close()
+        content_job = repo.get_content_generation_job_by_folder(folder["id"])
+        plan = {"version": "v1", "courses": [{"course_number": 1}]}
+        repo.save_structured_content_plan_checkpoint(
+            job_id=content_job["id"],
+            plan_input_signature="plan-sig",
+            structured_plan=plan,
+        )
+        self.assertEqual(
+            repo.load_structured_content_plan_checkpoint(content_job["id"]),
+            {
+                "plan_input_signature": "plan-sig",
+                "structured_course_plan": plan,
+            },
+        )
 
-        self.assertEqual(repo.get_auto_pilot_pipeline_jobs_to_resume(), [job_id])
+        repo.save_structured_content_checkpoint(
+            job_id=content_job["id"],
+            sub_part_index=0,
+            sub_part_name="Cours 1",
+            passe=1,
+            checkpoint_signature="generation-sig",
+            checkpoint_phase="body_generated",
+            checkpoint_payload={
+                "course_plan_signature": "course-sig",
+                "body_result": {"course_number": 1},
+            },
+        )
+        self.assertEqual(
+            repo.list_completed_content_segment_rows(content_job["id"]),
+            [],
+        )
+        checkpoint = repo.list_structured_content_checkpoint_rows(
+            content_job["id"]
+        )[0]
+        self.assertEqual(checkpoint["checkpoint_payload"]["phase"], "body_generated")
+
+        repo.save_structured_content_checkpoint(
+            job_id=content_job["id"],
+            sub_part_index=0,
+            sub_part_name="Cours 1",
+            passe=1,
+            checkpoint_signature="generation-sig",
+            checkpoint_phase="final_completed",
+            checkpoint_payload={
+                "course_plan_signature": "course-sig",
+                "body_result": {"course_number": 1},
+                "course_summary": "Résumé",
+                "final_result": {
+                    "course_number": 1,
+                    "course_text": "Texte final",
+                },
+            },
+            text_content="<<<BLOC_AUDIO_1>>>\n\nTexte final",
+            word_count=3,
+        )
+        completed = repo.list_completed_content_segment_rows(content_job["id"])
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["text_content"], "<<<BLOC_AUDIO_1>>>\n\nTexte final")
+
+        deleted = repo.delete_stale_structured_content_checkpoints(
+            job_id=content_job["id"],
+            checkpoint_signature="another-generation",
+            valid_sub_part_indexes=[0],
+        )
+        self.assertEqual(deleted, 1)
+        self.assertEqual(
+            repo.list_structured_content_checkpoint_rows(content_job["id"]),
+            [],
+        )
 
     def test_postgres_update_pipeline_job_coerces_auto_pilot_booleans(self):
         class FakeCursor:
@@ -516,56 +580,6 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(rows, expected)
         self.assertIn("cf.id IN (%s)", connection.cursor_instance.query)
         self.assertEqual(connection.cursor_instance.params, [101])
-
-    def test_auto_pilot_lock_helpers_keep_sqlite_lock_semantics(self):
-        job_id = repo.create_pipeline_job(
-            platform_id=7,
-            tp_name="TP Test",
-            rncp_code="RNCP123",
-            total_hours=7,
-            nb_days=1,
-        )
-        repo.update_pipeline_job(job_id, auto_pilot_enabled=1)
-
-        self.assertTrue(repo.acquire_auto_pilot_lock(job_id, owner="worker-a", ttl_seconds=300))
-        self.assertFalse(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
-
-        self.assertTrue(repo.refresh_auto_pilot_lock(job_id, owner="worker-a"))
-        self.assertFalse(repo.refresh_auto_pilot_lock(job_id, owner="worker-b"))
-        self.assertFalse(repo.release_auto_pilot_lock(job_id, owner="worker-b"))
-        self.assertFalse(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
-        self.assertTrue(repo.release_auto_pilot_lock(job_id, owner="worker-a"))
-
-        self.assertTrue(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
-
-    def test_postgres_lock_refresh_reports_lost_owner_from_rowcount(self):
-        class FakeCursor:
-            rowcount = 0
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def execute(self, _query, _params=None):
-                return None
-
-        class FakeConnection:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def cursor(self):
-                return FakeCursor()
-
-        with (
-            patch.object(repo, "_pipeline_primary_backend", lambda: "postgres"),
-            patch.object(repo, "get_postgres_connection", lambda: FakeConnection()),
-        ):
-            self.assertFalse(repo.refresh_auto_pilot_lock(42, owner="stale-worker"))
 
     def test_due_audio_generation_sessions_use_repository_storage(self):
         old_job_id = repo.create_pipeline_job(

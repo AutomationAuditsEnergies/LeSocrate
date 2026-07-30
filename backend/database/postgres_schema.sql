@@ -922,9 +922,16 @@ CREATE TABLE IF NOT EXISTS content_generation_jobs (
     carryover_in_source_folder_id BIGINT REFERENCES cours_folders(id) ON DELETE SET NULL,
     carryover_out_text TEXT NOT NULL DEFAULT '',
     carryover_out_target_folder_id BIGINT REFERENCES cours_folders(id) ON DELETE SET NULL,
+    structured_plan_input_signature TEXT,
+    structured_plan_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE content_generation_jobs
+    ADD COLUMN IF NOT EXISTS structured_plan_input_signature TEXT;
+ALTER TABLE content_generation_jobs
+    ADD COLUMN IF NOT EXISTS structured_plan_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS content_generation_segments (
     id BIGSERIAL PRIMARY KEY,
@@ -944,9 +951,16 @@ CREATE TABLE IF NOT EXISTS content_generation_segments (
     humanized BOOLEAN NOT NULL DEFAULT FALSE,
     humanization_error TEXT,
     humanization_signature TEXT,
+    structured_checkpoint_signature TEXT,
+    structured_checkpoint_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(job_id, sub_part_index, passe)
 );
+
+ALTER TABLE content_generation_segments
+    ADD COLUMN IF NOT EXISTS structured_checkpoint_signature TEXT;
+ALTER TABLE content_generation_segments
+    ADD COLUMN IF NOT EXISTS structured_checkpoint_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS content_script_annotations (
     id BIGSERIAL PRIMARY KEY,

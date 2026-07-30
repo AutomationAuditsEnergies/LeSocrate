@@ -28,7 +28,7 @@ from config import PIPELINE_DATABASE_BACKEND
 from repositories.pipeline_repository import (
     clear_cross_day_carryover,
     completed_content_segment_keys,
-    delete_content_segments_for_job,
+    delete_stale_structured_content_checkpoints,
     ensure_content_generation_carryover_columns,
     ensure_content_review_state_columns,
     find_next_course_folder_id,
@@ -37,6 +37,8 @@ from repositories.pipeline_repository import (
     get_content_segment_text,
     list_completed_content_segment_rows,
     list_content_segment_status_rows,
+    list_structured_content_checkpoint_rows,
+    load_structured_content_plan_checkpoint,
     list_final_script_document_rows,
     mark_content_segment_modified,
     mark_content_segment_review_clean,
@@ -47,6 +49,8 @@ from repositories.pipeline_repository import (
     reset_and_upsert_content_generation_job,
     reset_content_segments_review_state,
     save_completed_content_segment,
+    save_structured_content_checkpoint,
+    save_structured_content_plan_checkpoint,
     select_content_segments_for_review,
     snapshot_content_segments_pre_review,
     store_cross_day_carryover,
@@ -147,6 +151,7 @@ def _log_content_pipeline_event(
 
 DEEPSEEK_MODEL = default_model()
 NUM_SUB_PARTS = 7
+_STRUCTURED_CHECKPOINT_VERSION = "2026-07-30-structured-course-v1"
 _COURSE_START_SILENCE_SECONDS = 17
 # Fish Audio S2-Pro mesuré sur 72,2 min / 11 959 mots à speed=0.90.
 _DEFAULT_TTS_WORDS_PER_MINUTE = 165.7
@@ -11085,19 +11090,272 @@ def _run_plan_adherence_on_generated_drafts(
     return sorted_results
 
 
-def _clear_content_segments_for_structured(job_id: int) -> None:
-    delete_content_segments_for_job(job_id)
+def _stable_structured_signature(payload: dict) -> str:
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
-def _save_structured_course_segment(job_id: int, course_plan: dict, text: str) -> None:
+def _structured_plan_input_signature(
+    *,
+    job: dict,
+    playlist_items: list,
+    sub_parts: list,
+    module_contents: dict,
+    model=None,
+) -> str:
+    return _stable_structured_signature({
+        "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+        "content_job_id": int(job.get("id") or 0),
+        "program_title": job.get("program_title") or "",
+        "program_text": job.get("program_text") or "",
+        "folder_position": job.get("folder_position"),
+        "nb_days": job.get("nb_days"),
+        "total_hours": job.get("total_hours"),
+        "playlist_items": playlist_items or [],
+        "sub_parts": sub_parts or [],
+        "module_contents": module_contents or {},
+        "model": model or DEEPSEEK_MODEL,
+        "two_stage_plan": _structured_plan_two_stage_enabled(),
+    })
+
+
+def _structured_generation_signature(
+    *,
+    plan: dict,
+    plan_input_signature: str,
+    model=None,
+) -> str:
+    return _stable_structured_signature({
+        "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+        "plan_input_signature": plan_input_signature,
+        "structured_course_plan": plan,
+        "model": model or DEEPSEEK_MODEL,
+        "beat_first": _structured_beat_first_enabled(),
+        "plan_adherence_version": _PLAN_ADHERENCE_REVIEW_VERSION,
+        "ethical_micro_version": _ETHICAL_MICRO_RULESET_VERSION,
+        "calibration_strict": str(
+            os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")
+        ).strip().lower(),
+        "allow_residual_too_short": _structured_allow_residual_too_short(),
+    })
+
+
+def _load_reusable_structured_plan(
+    *,
+    job: dict,
+    platform_id: int,
+    folder_id: int,
+    plan_input_signature: str,
+) -> dict | None:
+    database_checkpoint = load_structured_content_plan_checkpoint(
+        int(job.get("id") or 0)
+    ) or {}
+    database_plan = database_checkpoint.get("structured_course_plan")
+    if (
+        database_checkpoint.get("plan_input_signature") == plan_input_signature
+        and isinstance(database_plan, dict)
+        and isinstance(database_plan.get("courses"), list)
+    ):
+        return database_plan
+
+    artifact = _load_content_artifact(platform_id, folder_id, _CONTENT_PLAN_BLOB) or {}
+    if int(artifact.get("content_job_id") or 0) != int(job.get("id") or 0):
+        return None
+    if artifact.get("plan_input_signature") != plan_input_signature:
+        return None
+    plan = artifact.get("structured_course_plan")
+    if not isinstance(plan, dict) or not isinstance(plan.get("courses"), list):
+        return None
+    return plan
+
+
+def _structured_course_plan_signature(course_plan: dict) -> str:
+    return _stable_structured_signature({"course_plan": course_plan})
+
+
+def _structured_calibration_checkpoint_summary(calibration: dict) -> dict:
+    keys = (
+        "status",
+        "mode",
+        "changed",
+        "words",
+        "before_words",
+        "after_words",
+        "target_words",
+        "min_words",
+        "max_words",
+        "accepted_residual_shortfall",
+        "accepted_residual_shortfall_words",
+        "source_sections_drifted_from_course_text",
+    )
+    return {
+        key: calibration.get(key)
+        for key in keys
+        if calibration.get(key) is not None
+    }
+
+
+def _structured_micro_records_for_checkpoint(records: list[dict]) -> list[dict]:
+    compact_records = []
+    for record in records or []:
+        section = record.get("section") or {}
+        compact_records.append({
+            **{
+                key: value
+                for key, value in record.items()
+                if key not in {"section", "original_text", "final_text"}
+            },
+            "section": {
+                key: value
+                for key, value in section.items()
+                if key not in {"text", "beat_texts", "slide_display_map"}
+            },
+        })
+    return compact_records
+
+
+def _structured_final_result_for_checkpoint(result: dict) -> dict:
+    """Keep only data needed to finish the day without duplicating drafts."""
+    return {
+        "course_number": int(result.get("course_number") or 0),
+        "course_text": result.get("course_text") or "",
+        "words": int(result.get("words") or 0),
+        "calibrated_words": int(result.get("calibrated_words") or 0),
+        "calibration": _structured_calibration_checkpoint_summary(
+            result.get("calibration") or {}
+        ),
+        "plan_adherence": _compact_plan_adherence_result(
+            result.get("plan_adherence")
+        ),
+        "micro_changed": bool(result.get("micro_changed")),
+        "post_micro_budget_status": result.get("post_micro_budget_status"),
+        "sections": result.get("sections") or [],
+        "resumed_from_checkpoint": True,
+    }
+
+
+def _load_reusable_structured_course_checkpoints(
+    *,
+    job_id: int,
+    course_plans: list[dict],
+    generation_signature: str,
+) -> dict[int, dict]:
+    plans_by_number = {
+        int(course_plan.get("course_number") or 0): course_plan
+        for course_plan in course_plans
+    }
+    reusable: dict[int, dict] = {}
+    for row in list_structured_content_checkpoint_rows(job_id):
+        if row.get("structured_checkpoint_signature") != generation_signature:
+            continue
+        if int(row.get("passe") or 0) != 1:
+            continue
+        course_number = int(row.get("sub_part_index") or 0) + 1
+        course_plan = plans_by_number.get(course_number)
+        payload = row.get("checkpoint_payload") or {}
+        phase = payload.get("phase")
+        if not course_plan or phase not in {
+            "body_generated",
+            "body_completed",
+            "final_completed",
+        }:
+            continue
+        if payload.get("course_plan_signature") != _structured_course_plan_signature(course_plan):
+            continue
+        body_result = payload.get("body_result")
+        if phase != "final_completed":
+            if not isinstance(body_result, dict):
+                continue
+            if int(body_result.get("course_number") or 0) != course_number:
+                continue
+        if phase in {"body_completed", "final_completed"} and not isinstance(
+            payload.get("course_summary"), str
+        ):
+            continue
+        final_result = None
+        if phase == "final_completed":
+            final_result = payload.get("final_result")
+            if row.get("status") != "completed" or not isinstance(final_result, dict):
+                continue
+            final_result = {
+                **final_result,
+                "course_plan": course_plan,
+            }
+            course_text = final_result.get("course_text") or ""
+            expected_stored_text = f"<<<BLOC_AUDIO_{course_number}>>>\n\n{course_text}".strip()
+            if (row.get("text_content") or "").strip() != expected_stored_text:
+                continue
+        reusable[course_number] = {
+            "phase": phase,
+            "body_result": body_result,
+            "course_summary": payload.get("course_summary"),
+            "final_result": final_result,
+            "micro_records": payload.get("micro_records") or [],
+        }
+    return reusable
+
+
+def _save_structured_body_checkpoint(
+    *,
+    job_id: int,
+    course_plan: dict,
+    generation_signature: str,
+    body_result: dict,
+    course_summary: str | None = None,
+) -> None:
+    course_number = int(course_plan.get("course_number") or 0)
+    save_structured_content_checkpoint(
+        job_id=job_id,
+        sub_part_index=course_number - 1,
+        sub_part_name=course_plan.get("course_title") or f"Cours {course_number}",
+        passe=1,
+        checkpoint_signature=generation_signature,
+        checkpoint_phase=(
+            "body_completed" if course_summary is not None else "body_generated"
+        ),
+        checkpoint_payload={
+            "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+            "course_plan_signature": _structured_course_plan_signature(course_plan),
+            "body_result": body_result,
+            **({"course_summary": course_summary} if course_summary is not None else {}),
+        },
+    )
+
+
+def _save_structured_course_segment(
+    *,
+    job_id: int,
+    course_plan: dict,
+    text: str,
+    generation_signature: str,
+    course_summary: str,
+    final_result: dict,
+    micro_records: list[dict],
+) -> None:
     course_number = int(course_plan.get("course_number") or 0)
     stored_text = f"<<<BLOC_AUDIO_{course_number}>>>\n\n{text}".strip()
-    _save_segment_db(
-        job_id,
-        course_number - 1,
-        course_plan.get("course_title") or f"Cours {course_number}",
-        1,
-        stored_text,
+    save_structured_content_checkpoint(
+        job_id=job_id,
+        sub_part_index=course_number - 1,
+        sub_part_name=course_plan.get("course_title") or f"Cours {course_number}",
+        passe=1,
+        text_content=stored_text,
+        word_count=len(stored_text.split()),
+        checkpoint_signature=generation_signature,
+        checkpoint_phase="final_completed",
+        checkpoint_payload={
+            "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+            "course_plan_signature": _structured_course_plan_signature(course_plan),
+            "course_summary": course_summary,
+            "final_result": _structured_final_result_for_checkpoint(final_result),
+            "micro_records": _structured_micro_records_for_checkpoint(micro_records),
+        },
     )
 
 
@@ -11152,7 +11410,17 @@ def _run_structured_parallel(items: list, worker, *, workers: int) -> list:
     import eventlet
     pool = eventlet.GreenPool(size=workers)
     greenlets = [pool.spawn(worker, item) for item in items]
-    return [greenlet.wait() for greenlet in greenlets]
+    results = []
+    first_error = None
+    for greenlet in greenlets:
+        try:
+            results.append(greenlet.wait())
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
+    return results
 
 
 def _generate_structured_course_body(
@@ -11456,6 +11724,13 @@ def _run_structured_content_generation(
         },
     )
 
+    plan_input_signature = _structured_plan_input_signature(
+        job=job,
+        playlist_items=playlist_items,
+        sub_parts=sub_parts,
+        module_contents=module_contents,
+        model=model,
+    )
     plan_phase = _phase_start(
         "plan_json",
         "Plan JSON verrouillé — génération du plan structuré",
@@ -11464,7 +11739,26 @@ def _run_structured_content_generation(
             "sub_parts": len(sub_parts or []),
         },
     )
-    plan = _generate_structured_course_plan(job, playlist_items, sub_parts, module_contents, model=model)
+    plan = _load_reusable_structured_plan(
+        job=job,
+        platform_id=platform_id,
+        folder_id=folder_id,
+        plan_input_signature=plan_input_signature,
+    )
+    plan_source = "checkpoint" if plan is not None else "generated"
+    if plan is None:
+        plan = _generate_structured_course_plan(
+            job,
+            playlist_items,
+            sub_parts,
+            module_contents,
+            model=model,
+        )
+    save_structured_content_plan_checkpoint(
+        job_id=job["id"],
+        plan_input_signature=plan_input_signature,
+        structured_plan=plan,
+    )
     expected_courses = sum(1 for item in playlist_items if item[2] == "cours")
     plan_validation = _validate_structured_course_plan(
         plan,
@@ -11480,6 +11774,8 @@ def _run_structured_content_generation(
             {
                 "structured_course_plan": plan,
                 "validation": plan_validation,
+                "plan_input_signature": plan_input_signature,
+                "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
             },
         ),
     )
@@ -11500,20 +11796,8 @@ def _run_structured_content_generation(
             "validation_ok": bool(plan_validation.get("ok")),
             "validation_errors": len(plan_validation.get("errors") or []),
             "validation_warnings": len(plan_validation.get("warnings") or []),
+            "source": plan_source,
         },
-    )
-    logger.info(
-        "PIPELINE_STRUCTURED_SEGMENTS_CLEAR_START formation_job_id=%s content_job_id=%s folder_id=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        folder_id,
-    )
-    _clear_content_segments_for_structured(job["id"])
-    logger.info(
-        "PIPELINE_STRUCTURED_SEGMENTS_CLEAR_DONE formation_job_id=%s content_job_id=%s folder_id=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        folder_id,
     )
 
     generated_blocks = []
@@ -11524,6 +11808,40 @@ def _run_structured_content_generation(
         key=lambda course: int(course.get("course_number") or 0),
     )
     total_courses = len(course_plans)
+    generation_signature = _structured_generation_signature(
+        plan=plan,
+        plan_input_signature=plan_input_signature,
+        model=model,
+    )
+    stale_checkpoints_deleted = delete_stale_structured_content_checkpoints(
+        job_id=job["id"],
+        checkpoint_signature=generation_signature,
+        valid_sub_part_indexes=[
+            int(course_plan.get("course_number") or 0) - 1
+            for course_plan in course_plans
+        ],
+    )
+    reusable_checkpoints = _load_reusable_structured_course_checkpoints(
+        job_id=job["id"],
+        course_plans=course_plans,
+        generation_signature=generation_signature,
+    )
+    reusable_final_results = {
+        course_number: checkpoint["final_result"]
+        for course_number, checkpoint in reusable_checkpoints.items()
+        if checkpoint.get("phase") == "final_completed"
+    }
+    total_words = sum(
+        int(result.get("words") or 0)
+        for result in reusable_final_results.values()
+    )
+    if reusable_final_results:
+        _update_job_db(job["id"], total_words=total_words)
+    for checkpoint in reusable_checkpoints.values():
+        if checkpoint.get("phase") == "final_completed":
+            job["_ethical_micro_review_records"].extend(
+                checkpoint.get("micro_records") or []
+            )
     workers = _structured_course_parallel_workers()
     generation_strategy = (
         "parallel_body_then_late_opening_beat_first"
@@ -11539,32 +11857,95 @@ def _run_structured_content_generation(
         total_courses,
         generation_strategy,
     )
+    logger.info(
+        "PIPELINE_STRUCTURED_RESUME_STATE formation_job_id=%s content_job_id=%s folder_id=%s "
+        "checkpoints=%s final_courses=%s pending_courses=%s signature=%s",
+        job.get("formation_job_id"),
+        job["id"],
+        folder_id,
+        len(reusable_checkpoints),
+        len(reusable_final_results),
+        max(0, total_courses - len(reusable_final_results)),
+        generation_signature[:12],
+    )
+    if stale_checkpoints_deleted:
+        logger.info(
+            "PIPELINE_STRUCTURED_STALE_CHECKPOINTS_DELETED "
+            "formation_job_id=%s content_job_id=%s folder_id=%s deleted=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            stale_checkpoints_deleted,
+        )
 
     if on_progress:
-        on_progress(0, total_courses, 1, total_words, f"Génération parallèle des contenus principaux ({workers} cours à la fois)")
+        on_progress(
+            len(reusable_final_results),
+            total_courses,
+            1,
+            total_words,
+            f"Génération parallèle des contenus principaux ({workers} cours à la fois)",
+        )
     body_phase = _phase_start(
         "body_sections",
         "Génération des sections principales",
-        {"workers": workers, "courses": total_courses},
+        {
+            "workers": workers,
+            "courses": total_courses,
+            "resumed": len(reusable_checkpoints),
+        },
     )
-    body_results = _run_structured_parallel(
-        course_plans,
-        lambda course_plan: _generate_structured_course_body(
+
+    def _generate_and_checkpoint_body(course_plan: dict) -> dict:
+        body_result = _generate_structured_course_body(
             job=job,
             course_plan=course_plan,
             sub_parts=sub_parts,
             module_contents=module_contents,
             model=model,
-        ),
+        )
+        _save_structured_body_checkpoint(
+            job_id=job["id"],
+            course_plan=course_plan,
+            generation_signature=generation_signature,
+            body_result=body_result,
+        )
+        return body_result
+
+    body_results_by_course = {
+        course_number: checkpoint["body_result"]
+        for course_number, checkpoint in reusable_checkpoints.items()
+        if isinstance(checkpoint.get("body_result"), dict)
+    }
+    course_plans_without_body = [
+        course_plan
+        for course_plan in course_plans
+        if (
+            int(course_plan.get("course_number") or 0)
+            not in body_results_by_course
+            and int(course_plan.get("course_number") or 0)
+            not in reusable_final_results
+        )
+    ]
+    generated_body_results = _run_structured_parallel(
+        course_plans_without_body,
+        _generate_and_checkpoint_body,
         workers=workers,
     )
-    body_results = sorted(body_results, key=lambda item: int(item.get("course_number") or 0))
+    for body_result in generated_body_results:
+        body_results_by_course[int(body_result.get("course_number") or 0)] = body_result
+    body_results = sorted(
+        body_results_by_course.values(),
+        key=lambda item: int(item.get("course_number") or 0),
+    )
     _phase_done(
         "body_sections",
         body_phase,
         "Sections principales générées",
         {
             "courses": len(body_results),
+            "generated": len(generated_body_results),
+            "resumed": len(body_results) - len(generated_body_results),
             "body_words": sum(count_tts_spoken_words(result.get("body_text") or "") for result in body_results),
         },
     )
@@ -11576,12 +11957,40 @@ def _run_structured_content_generation(
         "Résumés courts pour les transitions",
         {"courses": len(body_results), "workers": workers},
     )
+    course_summaries = {
+        course_number: checkpoint["course_summary"]
+        for course_number, checkpoint in reusable_checkpoints.items()
+        if isinstance(checkpoint.get("course_summary"), str)
+    }
+
+    def _summarize_and_checkpoint_body(body_result: dict) -> tuple[int, str]:
+        course_number, summary = _summarize_structured_course_body(
+            body_result,
+            model=model,
+        )
+        _save_structured_body_checkpoint(
+            job_id=job["id"],
+            course_plan=body_result["course_plan"],
+            generation_signature=generation_signature,
+            body_result=body_result,
+            course_summary=summary,
+        )
+        return int(course_number), summary
+
+    bodies_without_summary = [
+        body_result
+        for body_result in body_results
+        if int(body_result.get("course_number") or 0) not in course_summaries
+    ]
     summary_pairs = _run_structured_parallel(
-        body_results,
-        lambda body_result: _summarize_structured_course_body(body_result, model=model),
+        bodies_without_summary,
+        _summarize_and_checkpoint_body,
         workers=workers,
     )
-    course_summaries = {int(course_number): summary for course_number, summary in summary_pairs}
+    course_summaries.update({
+        int(course_number): summary
+        for course_number, summary in summary_pairs
+    })
     day_summary_context = "\n".join(
         f"Cours {course_number}: {course_summaries.get(course_number) or ''}"
         for course_number in sorted(course_summaries)
@@ -11592,9 +12001,17 @@ def _run_structured_content_generation(
         "Résumés courts terminés",
         {
             "summaries": len(course_summaries),
+            "generated": len(summary_pairs),
+            "resumed": len(course_summaries) - len(summary_pairs),
             "summary_chars": sum(len(summary or "") for summary in course_summaries.values()),
         },
     )
+
+    body_results = [
+        body_result
+        for body_result in body_results
+        if int(body_result.get("course_number") or 0) not in reusable_final_results
+    ]
 
     if on_progress:
         on_progress(0, total_courses, 1, total_words, "Génération tardive des introductions et raccords")
@@ -11661,6 +12078,20 @@ def _run_structured_content_generation(
         {"courses": len(body_results)},
     )
     draft_courses = []
+    existing_draft_artifact = (
+        _load_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_DRAFT_SECTIONS_BLOB,
+        )
+        or {}
+    )
+    existing_drafts_by_course = {}
+    if existing_draft_artifact.get("generation_signature") == generation_signature:
+        existing_drafts_by_course = {
+            int(record.get("course_number") or 0): record
+            for record in existing_draft_artifact.get("courses") or []
+        }
     for body_result in body_results:
         course_number = int(body_result.get("course_number") or 0)
         draft = _assemble_structured_course_draft(
@@ -11678,6 +12109,25 @@ def _run_structured_content_generation(
             "generation_strategy": generation_strategy,
         })
         body_result["draft"] = draft
+    for course_number, result in reusable_final_results.items():
+        existing_draft = existing_drafts_by_course.get(course_number)
+        if existing_draft:
+            draft_courses.append({
+                **existing_draft,
+                "resumed_from_checkpoint": True,
+            })
+            continue
+        course_plan = result.get("course_plan") or {}
+        draft_courses.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "target_words": int(course_plan.get("target_words") or 0),
+            "draft_word_count": int(result.get("words") or 0),
+            "sections": result.get("sections") or [],
+            "generation_strategy": generation_strategy,
+            "resumed_from_checkpoint": True,
+        })
+    draft_courses.sort(key=lambda item: int(item.get("course_number") or 0))
 
     _save_content_artifact(
         platform_id,
@@ -11689,6 +12139,7 @@ def _run_structured_content_generation(
             {
                 "structured_course_plan_version": plan.get("version"),
                 "generation_strategy": generation_strategy,
+                "generation_signature": generation_signature,
                 "parallel_workers": workers,
                 "course_summaries": course_summaries,
                 "courses": draft_courses,
@@ -11712,18 +12163,19 @@ def _run_structured_content_generation(
         "Review adhérence au plan",
         {"courses": len(body_results), "workers": workers},
     )
-    body_results = _run_plan_adherence_on_generated_drafts(
-        job=job,
-        platform_id=platform_id,
-        folder_id=folder_id,
-        plan=plan,
-        body_results=body_results,
-        course_summaries=course_summaries,
-        workers=workers,
-        total_words=total_words,
-        on_progress=on_progress,
-        model=model,
-    )
+    if body_results:
+        body_results = _run_plan_adherence_on_generated_drafts(
+            job=job,
+            platform_id=platform_id,
+            folder_id=folder_id,
+            plan=plan,
+            body_results=body_results,
+            course_summaries=course_summaries,
+            workers=workers,
+            total_words=total_words,
+            on_progress=on_progress,
+            model=model,
+        )
     _phase_done(
         "plan_adherence",
         adherence_phase,
@@ -11892,8 +12344,7 @@ def _run_structured_content_generation(
         },
     )
 
-    budget_calibration_records = []
-    for result in calibrated_results:
+    def _budget_calibration_record(result: dict, *, resumed: bool = False) -> dict:
         course_number = int(result.get("course_number") or 0)
         course_plan = result["course_plan"]
         calibrated_text = result.get("calibrated_text") or result.get("course_text") or ""
@@ -11902,7 +12353,7 @@ def _run_structured_content_generation(
         draft = result.get("draft") or {}
         before_text = draft.get("course_text") or ""
         before_words = int(draft.get("draft_word_count") or count_tts_spoken_words(before_text))
-        budget_calibration_records.append({
+        return {
             "course_number": course_number,
             "course_title": course_plan.get("course_title") or f"Cours {course_number}",
             "filename": course_plan.get("filename"),
@@ -11919,7 +12370,41 @@ def _run_structured_content_generation(
             "after_text": calibrated_text,
             "sections": result.get("sections") or draft.get("sections") or [],
             "structured_plan": course_plan,
-        })
+            "resumed_from_checkpoint": resumed,
+        }
+
+    budget_calibration_records = [
+        _budget_calibration_record(result)
+        for result in calibrated_results
+    ]
+    existing_budget_artifact = (
+        _load_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_BUDGET_CALIBRATION_BLOB,
+        )
+        or {}
+    )
+    existing_budget_by_course = {}
+    if existing_budget_artifact.get("generation_signature") == generation_signature:
+        existing_budget_by_course = {
+            int(record.get("course_number") or 0): record
+            for record in existing_budget_artifact.get("courses") or []
+        }
+    for course_number, result in reusable_final_results.items():
+        existing_budget = existing_budget_by_course.get(course_number)
+        if existing_budget:
+            budget_calibration_records.append({
+                **existing_budget,
+                "resumed_from_checkpoint": True,
+            })
+        else:
+            budget_calibration_records.append(
+                _budget_calibration_record(result, resumed=True)
+            )
+    budget_calibration_records.sort(
+        key=lambda item: int(item.get("course_number") or 0)
+    )
 
     _save_content_artifact(
         platform_id,
@@ -11931,6 +12416,7 @@ def _run_structured_content_generation(
             {
                 "structured_course_plan_version": plan.get("version"),
                 "generation_strategy": generation_strategy,
+                "generation_signature": generation_signature,
                 "parallel_workers": workers,
                 "summary": {
                     "courses": len(budget_calibration_records),
@@ -12082,7 +12568,7 @@ def _run_structured_content_generation(
                 }
                 for section in sections
             ]
-        return {
+        final_result = {
             **result,
             "course_text": final_text,
             "words": count_tts_spoken_words(final_text),
@@ -12091,6 +12577,32 @@ def _run_structured_content_generation(
             "post_micro_budget_status": post_micro_budget_status,
             "post_micro_budget_repair": post_micro_budget_repair,
         }
+        course_number = int(course_plan.get("course_number") or 0)
+        course_micro_records = [
+            record
+            for record in job.get("_ethical_micro_review_records") or []
+            if int(record.get("course_number") or 0) == course_number
+        ]
+        _save_structured_course_segment(
+            job_id=job["id"],
+            course_plan=course_plan,
+            text=final_text,
+            generation_signature=generation_signature,
+            course_summary=course_summaries.get(course_number, ""),
+            final_result=final_result,
+            micro_records=course_micro_records,
+        )
+        logger.info(
+            "PIPELINE_STRUCTURED_COURSE_CHECKPOINTED formation_job_id=%s "
+            "content_job_id=%s folder_id=%s course=%s words=%s signature=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            final_result["words"],
+            generation_signature[:12],
+        )
+        return final_result
 
     micro_phase = _phase_start(
         "ethical_micro_review",
@@ -12102,13 +12614,33 @@ def _run_structured_content_generation(
         _micro_review_calibrated_course,
         workers=workers,
     )
-    final_course_results = sorted(final_course_results, key=lambda item: int(item.get("course_number") or 0))
+    final_course_results.extend(reusable_final_results.values())
+    final_course_results = sorted(
+        final_course_results,
+        key=lambda item: int(item.get("course_number") or 0),
+    )
+    final_course_numbers = {
+        int(result.get("course_number") or 0)
+        for result in final_course_results
+    }
+    expected_course_numbers = {
+        int(course_plan.get("course_number") or 0)
+        for course_plan in course_plans
+    }
+    if final_course_numbers != expected_course_numbers:
+        missing = sorted(expected_course_numbers - final_course_numbers)
+        raise RuntimeError(
+            "Checkpoints cours incomplets après génération structurée: "
+            f"cours manquants={missing}"
+        )
     _phase_done(
         "ethical_micro_review",
         micro_phase,
         "Micro-conformité éthique terminée",
         {
             "courses": len(final_course_results),
+            "generated": len(final_course_results) - len(reusable_final_results),
+            "resumed": len(reusable_final_results),
             "words": sum(int(result.get("words") or 0) for result in final_course_results),
             "changed": sum(1 for result in final_course_results if result.get("micro_changed")),
         },
@@ -12128,6 +12660,7 @@ def _run_structured_content_generation(
                 "rules_scope": "ethics_compliance",
                 "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
                 "version": _ETHICAL_MICRO_RULESET_VERSION,
+                "generation_signature": generation_signature,
                 "structured_course_plan_version": plan.get("version"),
                 "review_timing": "after_budget_calibration",
                 "summary": _ethical_micro_review_summary(micro_records),
@@ -12137,10 +12670,11 @@ def _run_structured_content_generation(
     )
 
     persist_phase = _phase_start(
-        "persist_courses",
-        "Sauvegarde des cours générés en Postgres",
+        "materialize_courses",
+        "Consolidation des checkpoints cours",
         {"courses": len(final_course_results)},
     )
+    total_words = 0
     for result in final_course_results:
         course_number = int(result.get("course_number") or 0)
         course_plan = result["course_plan"]
@@ -12149,7 +12683,7 @@ def _run_structured_content_generation(
         calibration = result.get("calibration") or {}
         segment_started_at = time.time()
         logger.info(
-            "PIPELINE_STRUCTURED_SEGMENT_SAVE_START formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s",
+            "PIPELINE_STRUCTURED_COURSE_MATERIALIZE_START formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s",
             job.get("formation_job_id"),
             job["id"],
             folder_id,
@@ -12157,9 +12691,8 @@ def _run_structured_content_generation(
             total_courses,
             words,
         )
-        _save_structured_course_segment(job["id"], course_plan, course_text)
         logger.info(
-            "PIPELINE_STRUCTURED_SEGMENT_SAVE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s duration_ms=%s",
+            "PIPELINE_STRUCTURED_SEGMENT_CHECKPOINT_READY formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s duration_ms=%s",
             job.get("formation_job_id"),
             job["id"],
             folder_id,
@@ -12229,9 +12762,9 @@ def _run_structured_content_generation(
             course_plan.get("target_words"),
         )
     _phase_done(
-        "persist_courses",
+        "materialize_courses",
         persist_phase,
-        "Cours générés sauvegardés en Postgres",
+        "Checkpoints cours consolidés",
         {"courses": len(final_course_results), "total_words": total_words},
     )
 
@@ -12250,6 +12783,7 @@ def _run_structured_content_generation(
             {
                 "structured_course_plan_version": plan.get("version"),
                 "generation_strategy": generation_strategy,
+                "generation_signature": generation_signature,
                 "parallel_workers": workers,
                 "course_summaries": course_summaries,
                 "courses": course_scripts,
@@ -12273,6 +12807,7 @@ def _run_structured_content_generation(
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "mode": "structured_content_generation",
         "generation_strategy": generation_strategy,
+        "generation_signature": generation_signature,
         "parallel_workers": workers,
         "structured_course_plan": plan,
         "planned_course_blocs": generated_blocks,

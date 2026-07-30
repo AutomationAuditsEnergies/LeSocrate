@@ -1,4 +1,3 @@
-import os
 import sqlite3
 import tempfile
 import unittest
@@ -109,20 +108,20 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
         dispatch.assert_not_called()
         observe.assert_not_called()
 
-    def test_center_a_can_run_and_stop_its_job(self):
+    def test_center_a_sees_manual_start_retired_and_can_stop_its_job(self):
         self._login(account_id=10)
-        with patch.dict(os.environ, {"PIPELINE_EXECUTION_MODE": "inline"}), patch(
+        with patch(
             "repositories.pipeline_repository.pipeline_job_belongs_to_center",
             return_value=True,
         ), patch(
             "routes.formation_routes.get_job",
-            side_effect=[_job(), _job(auto_pilot_step="content")],
+            return_value=_job(auto_pilot_step="content"),
         ), patch(
             "routes.formation_routes.update_job",
         ) as update_job, patch(
-            "routes.formation_routes._dispatch_auto_pilot_tick",
-            return_value={"mode": "inline"},
-        ) as dispatch, patch(
+            "services.pipeline_queue.cancel_latest_work_item",
+            return_value=None,
+        ), patch(
             "services.formation_observability_service.log_pipeline_event",
         ):
             run_response = self.client.post(
@@ -131,10 +130,10 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             )
             stop_response = self.client.post("/api/formation/42/run-auto/stop")
 
-        self.assertEqual(run_response.status_code, 202)
+        self.assertEqual(run_response.status_code, 410)
+        self.assertEqual(run_response.get_json()["code"], "teacher_order_required")
         self.assertEqual(stop_response.status_code, 200)
-        dispatch.assert_called_once_with(42, reason="run_auto")
-        self.assertEqual(update_job.call_count, 2)
+        self.assertEqual(update_job.call_count, 1)
 
     def test_training_center_without_account_id_is_fail_closed(self):
         self._login(account_id=None)

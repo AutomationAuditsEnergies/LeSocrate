@@ -22,7 +22,7 @@ rester utilisé sans que les données métier y soient stockées.
 ## Flux d'exécution
 
 ```text
-API /run-auto
+Commande professeur IA validée
   -> work-item + outbox dans PostgreSQL (transaction)
   -> worker claim avec lease + jeton de fencing
   -> une étape idempotente de la machine d'état
@@ -35,6 +35,23 @@ Azure Service Bus est optionnel et ne contient que des identifiants. PostgreSQL
 reste la source de vérité, ce qui rend une notification perdue ou dupliquée
 inoffensive. Sans Service Bus, le worker poll la même file PostgreSQL.
 
+### Reprise de la génération des cours
+
+La génération structurée ne vide plus tous les textes au démarrage. Le plan
+exact est d'abord enregistré dans `content_generation_jobs`, puis chaque cours
+avance par checkpoints dans `content_generation_segments` :
+
+1. corps généré ;
+2. résumé de transition généré ;
+3. cours calibré et contrôlé, alors seulement publié avec le statut
+   `completed`.
+
+Chaque checkpoint porte une signature du plan et du contrat de génération. Une
+reprise réutilise uniquement les checkpoints qui correspondent exactement au
+plan courant ; les lignes anciennes ou incompatibles sont supprimées. Ainsi,
+une erreur tardive sur un cours ne déclenche plus la régénération des cours déjà
+valides.
+
 ## Modes supportés
 
 ### Développement local
@@ -42,8 +59,8 @@ inoffensive. Sans Service Bus, le worker poll la même file PostgreSQL.
 ```dotenv
 DATABASE_BACKEND=sqlite
 PIPELINE_DATABASE_BACKEND=sqlite
-PIPELINE_EXECUTION_MODE=inline
 PIPELINE_QUEUE_BACKEND=database
+PIPELINE_EMBEDDED_WORKER=1
 ```
 
 ### Staging immédiatement exploitable
@@ -58,7 +75,6 @@ autoritaires dans PostgreSQL dans ce mode et ne retombent jamais sur SQLite.
 ```dotenv
 DATABASE_BACKEND=hybrid
 PIPELINE_DATABASE_BACKEND=postgres
-PIPELINE_EXECUTION_MODE=queue
 PIPELINE_QUEUE_BACKEND=database
 PIPELINE_EMBEDDED_WORKER=1
 ```
@@ -71,7 +87,6 @@ worker sont alors déployés séparément, sans dépendance SQLite :
 ```dotenv
 DATABASE_BACKEND=postgres
 PIPELINE_DATABASE_BACKEND=postgres
-PIPELINE_EXECUTION_MODE=queue
 PIPELINE_QUEUE_BACKEND=service_bus
 PIPELINE_EMBEDDED_WORKER=0
 PIPELINE_DEDICATED_WORKER=0

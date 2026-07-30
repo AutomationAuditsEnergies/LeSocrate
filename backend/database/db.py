@@ -880,6 +880,8 @@ def init_database(_recovered_from_corruption: bool = False):
             current_passe INTEGER DEFAULT 1,
             total_words INTEGER DEFAULT 0,
             error_message TEXT,
+            structured_plan_input_signature TEXT,
+            structured_plan_json TEXT NOT NULL DEFAULT '{}',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (folder_id) REFERENCES cours_folders(id)
@@ -959,6 +961,19 @@ def init_database(_recovered_from_corruption: bool = False):
         try:
             cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT")
             logger.info("✅ Colonne humanization_signature ajoutée à content_generation_segments")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN structured_checkpoint_signature TEXT")
+            logger.info("✅ Colonne structured_checkpoint_signature ajoutée à content_generation_segments")
+        except Exception:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE content_generation_segments "
+                "ADD COLUMN structured_checkpoint_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            logger.info("✅ Colonne structured_checkpoint_json ajoutée à content_generation_segments")
         except Exception:
             pass
 
@@ -1047,6 +1062,18 @@ def init_database(_recovered_from_corruption: bool = False):
         if "module_contents" not in cg_columns:
             cursor.execute("ALTER TABLE content_generation_jobs ADD COLUMN module_contents TEXT DEFAULT '{}'")
             logger.info("✅ Colonne module_contents ajoutée à content_generation_jobs")
+        if "structured_plan_input_signature" not in cg_columns:
+            cursor.execute(
+                "ALTER TABLE content_generation_jobs "
+                "ADD COLUMN structured_plan_input_signature TEXT"
+            )
+            logger.info("✅ Colonne structured_plan_input_signature ajoutée à content_generation_jobs")
+        if "structured_plan_json" not in cg_columns:
+            cursor.execute(
+                "ALTER TABLE content_generation_jobs "
+                "ADD COLUMN structured_plan_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            logger.info("✅ Colonne structured_plan_json ajoutée à content_generation_jobs")
         _carryover_cols = {
             "carryover_in_text": "TEXT DEFAULT ''",
             "carryover_in_source_folder_id": "INTEGER",

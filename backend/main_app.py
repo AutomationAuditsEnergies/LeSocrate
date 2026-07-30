@@ -33,7 +33,7 @@ from routes.debug_routes import debug_bp
 from routes.slides_routes import slides_bp
 from routes.chat_routes import chat_bp
 from routes.hr_routes import create_hr_blueprint
-from routes.formation_routes import formation_bp, start_auto_pilot_watchdog
+from routes.formation_routes import formation_bp
 from routes.billing_routes import billing_bp
 
 # SocketIO handlers
@@ -51,12 +51,8 @@ _COURSE_SCHEDULER_STATE = {
     "last_success_monotonic": None,
     "last_error": None,
 }
-_PIPELINE_EXECUTION_QUEUED = os.getenv("PIPELINE_EXECUTION_MODE", "inline").strip().lower() in {
-    "queue", "queued", "durable",
-}
 _EMBEDDED_PIPELINE_WORKER_ENABLED = (
-    _PIPELINE_EXECUTION_QUEUED
-    and os.getenv("PIPELINE_EMBEDDED_WORKER", "0").strip().lower()
+    os.getenv("PIPELINE_EMBEDDED_WORKER", "0").strip().lower()
     in {"1", "true", "yes", "on"}
 )
 _worker_heartbeat_seconds = max(
@@ -472,15 +468,11 @@ if sqlite_runtime_enabled():
     socketio.start_background_task(db_safety.periodic_backup_loop, socketio.sleep)
     logger.info("✅ Backup DB SQLite périodique programmé (toutes les 6h)")
 
-# Watchdog après init DB : reprend les auto-pilots interrompus ou locks zombies
-start_auto_pilot_watchdog()
-
-
 def _embedded_pipeline_worker_loop():
-    """Compatibility worker until a dedicated Azure worker is provisioned.
+    """Durable local worker when a dedicated process is not provisioned.
 
-    Work remains durable in the DB; moving this loop to a Continuous WebJob or
-    a separate App Service only changes deployment, not orchestration semantics.
+    Work remains durable in the DB; moving this loop to a separate process only
+    changes deployment topology, never orchestration semantics.
     """
     from services.pipeline_queue.handlers import (
         handle_pipeline_work_item,
