@@ -1,7 +1,6 @@
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
-import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
 import './Auth.css'
 
 export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloadVideoRoute }) {
@@ -123,28 +122,17 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     <main className="cadrenza-auth">
       <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
       <div className="auth-layout">
-        <aside className="auth-visual auth-visual--learner-login" aria-label="Accès apprenant Cadrenza">
-          <Link to="/" className="auth-home-link" aria-label="Cadrenza, retour à l'accueil">
-            <CadrenzaLogo />
-          </Link>
-
-          <div className="auth-visual__content">
-            <div className="auth-study-visual">
-              <img
-                src="/student-learning-login-unsplash-yen-vu.jpg"
-                alt="Un bureau d’étude avec des livres, des cahiers et un ordinateur"
-                draggable={false}
-              />
-            </div>
-          </div>
+        <aside className="auth-visual auth-visual--learner-login" aria-label="Bureau d’étude">
+          <img
+            className="auth-study-image"
+            src="/student-learning-login-unsplash-yen-vu.jpg"
+            alt="Un bureau d’étude avec des livres, des cahiers et un ordinateur"
+            draggable={false}
+          />
         </aside>
 
         <section className="auth-panel" id="auth-main">
           <div className="auth-panel__inner">
-            <Link to="/" className="auth-mobile-logo" aria-label="Cadrenza, retour à l'accueil">
-              <CadrenzaLogo />
-            </Link>
-
             <header className="auth-heading">
               <h2>Rejoindre le cours</h2>
             </header>

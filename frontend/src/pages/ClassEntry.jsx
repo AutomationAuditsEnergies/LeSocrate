@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom'
 import { apiUrl, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import { getClassAccessFailure } from '../classAccessState.js'
 import Index from './Index.jsx'
-import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
 import AppLoader from '../components/AppLoader.jsx'
 import './Auth.css'
 import './ClassEntry.css'
@@ -11,14 +10,6 @@ import './ClassEntry.css'
 function ClassEntryFallback({ failure }) {
   return (
     <main className="class-entry-error">
-      <a
-        className="class-entry-error__home"
-        href="/"
-        aria-label="Retour à l’accueil Cadrenza"
-      >
-        <CadrenzaLogo />
-      </a>
-
       <section className="class-entry-error__content" role="alert">
         <h1>{failure.title}</h1>
         <p className="class-entry-error__message">{failure.message}</p>
