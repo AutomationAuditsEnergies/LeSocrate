@@ -2036,62 +2036,22 @@ def volume_safety_status(job_id, folder_id):
     return jsonify(state), 200
 
 
-# ─── Reprise de la génération texte (après crash / restart backend) ──────────
+# ─── Ancienne reprise partielle de la génération texte ───────────────────────
 
 @formation_bp.route("/api/formation/<int:job_id>/resume-content", methods=["POST"])
 def resume_content(job_id):
-    """
-    Relance la génération texte sur tous les dossiers du job qui ne sont pas
-    encore 'completed'. Utilise le checkpointing de run_content_generation :
-    les segments déjà persistés en DB sont skippés automatiquement. Aucun
-    dossier n'est recréé, aucun segment n'est effacé.
-    """
+    """Ancienne reprise directe, remplacée par la reprise globale durable."""
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
 
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job introuvable"}), 404
-
-    from repositories.pipeline_repository import list_content_completion_rows_for_folders
-    from services.formation_pipeline_service import get_expected_course_folders
-    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
-    if not folder_ids:
-        return jsonify({"error": "Aucun cours_folder attendu pour ce job"}), 400
-    rows_by_folder = {
-        int(row["folder_id"]): row
-        for row in list_content_completion_rows_for_folders(folder_ids)
-    }
-    to_resume = [
-        int(folder_id)
-        for folder_id in folder_ids
-        if (rows_by_folder.get(int(folder_id)) or {}).get("status") != "completed"
-    ]
-    if not to_resume:
-        return jsonify({"message": "Tous les dossiers sont déjà complets", "resumed": []})
-
-    data = request.get_json(silent=True) or {}
-    model = _resolve_pipeline_api_model(job, data.get("model"))
-
-    import eventlet
-    from services.content_generation_service import run_content_generation
-
-    def _resume_one(folder_id):
-        try:
-            logger.info(f"♻️ Job {job_id} folder {folder_id} : reprise génération texte")
-            run_content_generation(folder_id, mode="normal", model=model)
-            logger.info(f"✅ Job {job_id} folder {folder_id} : reprise terminée")
-        except Exception as e:
-            logger.error(f"❌ Job {job_id} folder {folder_id} : reprise échouée : {e}")
-
-    for fid in to_resume:
-        eventlet.spawn(_resume_one, fid)
-
-    logger.info(f"♻️ Job {job_id} : reprise texte pour {len(to_resume)} dossier(s)")
     return jsonify({
-        "message": f"Reprise lancée pour {len(to_resume)} dossier(s)",
-        "resumed": to_resume,
-    })
+        "error": (
+            "La reprise partielle du texte a été retirée. "
+            "Utilise « Reprendre la pipeline » pour reprendre depuis le dernier checkpoint durable."
+        ),
+        "code": "durable_pipeline_resume_required",
+        "resume_endpoint": f"/api/formation/{job_id}/run-auto/resume",
+    }), 410
 
 
 # ─── Étape 6bis : Révision conformité via reviewer API DeepSeek ──────────────

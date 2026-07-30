@@ -75,6 +75,30 @@ class PipelineQueueRouteTest(unittest.TestCase):
             "durable_pipeline_resume_required",
         )
 
+    def test_legacy_resume_content_cannot_bypass_the_durable_queue(self):
+        with patch(
+            "services.content_generation_service.run_content_generation",
+        ) as run_content, patch(
+            "routes.formation_routes.get_job",
+        ) as get_job:
+            response = self.client.post(
+                "/api/formation/42/resume-content",
+                json={"model": "pro"},
+            )
+
+        self.assertEqual(response.status_code, 410)
+        payload = response.get_json()
+        self.assertEqual(
+            payload["code"],
+            "durable_pipeline_resume_required",
+        )
+        self.assertEqual(
+            payload["resume_endpoint"],
+            "/api/formation/42/run-auto/resume",
+        )
+        run_content.assert_not_called()
+        get_job.assert_not_called()
+
     def test_inline_runner_and_watchdog_are_removed(self):
         self.assertFalse(hasattr(formation_routes, "_tick_auto_pilot"))
         self.assertFalse(hasattr(formation_routes, "start_auto_pilot_watchdog"))
