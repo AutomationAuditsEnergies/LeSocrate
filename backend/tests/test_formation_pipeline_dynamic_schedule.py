@@ -490,58 +490,6 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         ]
         self.assertEqual(partial_sizes, [0, 1, 2])
 
-    def test_launch_tts_passes_exactly_x_v2_courses_and_their_budgets(self):
-        generated_day = _raw_generated_day(
-            1,
-            5,
-            title="Journée dynamique",
-        )
-        job = _v2_job(
-            [self.day_five],
-            nb_days=1,
-            daily_programs=json.dumps([generated_day]),
-        )
-        folder_name = "Jour 1 — Journée dynamique"
-
-        with (
-            patch.object(fps, "get_job", return_value=job),
-            patch.object(
-                fps,
-                "get_expected_course_folders",
-                return_value={
-                    "folder_ids": [501],
-                    "folders": [
-                        {
-                            "folder_id": 501,
-                            "expected_name": folder_name,
-                        }
-                    ],
-                },
-            ),
-            patch(
-                "services.content_generation_service.get_job_from_db",
-                return_value=None,
-            ),
-            patch(
-                "services.content_generation_service.start_generation_job",
-            ) as start,
-            patch.object(fps, "update_job") as update,
-        ):
-            folder_ids = fps.launch_tts_for_all_days(91, 12)
-
-        self.assertEqual(folder_ids, [501])
-        kwargs = start.call_args.kwargs
-        self.assertEqual(len(kwargs["sub_parts_override"]), 5)
-        self.assertEqual(len(kwargs["module_contents"]), 5)
-        self.assertIn("Cours 1 sur 5", kwargs["program_text"])
-        self.assertIn("50 minutes", kwargs["program_text"])
-        self.assertIn("cible 8202 mots", kwargs["program_text"])
-        self.assertIn(
-            "dernier cours de la journée",
-            kwargs["module_contents"][kwargs["sub_parts_override"][-1]],
-        )
-        update.assert_called_with(91, status="tts_launched")
-
     def test_invalid_v2_job_without_snapshot_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "schedule_snapshot_json"):
             fps._v2_schedule_days(

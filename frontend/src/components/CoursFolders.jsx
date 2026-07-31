@@ -86,7 +86,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [ttsStatus, setTtsStatus] = useState(null)
-  const [generatingAll, setGeneratingAll] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
   const [showCreateFolderForm, setShowCreateFolderForm] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -106,10 +105,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [deletingAudioFile, setDeletingAudioFile] = useState('')
   const [dragFolderIdx, setDragFolderIdx] = useState(null)
   const [dragOverFolderIdx, setDragOverFolderIdx] = useState(null)
-  // ── Génération de contenu ──
-  const [contentJob, setContentJob] = useState(null)
-  const [programText, setProgramText] = useState('')
-  const [extracting, setExtracting] = useState(false)
+  // ── Consultation et correction du contenu généré ──
   const [showPromptPreview, setShowPromptPreview] = useState(false)
   const [promptPreview, setPromptPreview] = useState(null)
   const [contentScriptModal, setContentScriptModal] = useState(null)
@@ -127,10 +123,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [savingRules, setSavingRules] = useState(false)
   const [reviewingRules, setReviewingRules] = useState(false)
   const [rulesReviewSummary, setRulesReviewSummary] = useState(null)
-  const [reviewingText, setReviewingText] = useState(false)
-  const [textReviewSummary, setTextReviewSummary] = useState(null)
-  const [textReviewProgress, setTextReviewProgress] = useState(null)
-  const textReviewPollRef = useRef(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
   const [contentScriptView, setContentScriptView] = useState('courses')
@@ -146,7 +138,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [audioTypeFilter, setAudioTypeFilter] = useState('cours')
   const [mockUploading, setMockUploading] = useState(false)
   const [mockUploadQueue, setMockUploadQueue] = useState([]) // [{name, status, error}]
-  const contentPollingRef = useRef(null)
   const fileInputRef = useRef(null)
   const mockAudioInputRef = useRef(null)
   const createFolderInputRef = useRef(null)
@@ -346,94 +337,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     }
   }
 
-  // ─── Génération de contenu TTS-direct ─────────────────────────────────
-  const fetchContentJob = async (folderId) => {
-    try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/content-job`)
-      const data = await resp.json()
-      if (data.success) setContentJob(data.job)
-    } catch (e) { console.error('Erreur fetchContentJob:', e) }
-  }
-
-  const startContentPolling = (folderId) => {
-    if (contentPollingRef.current) return
-    contentPollingRef.current = setInterval(async () => {
-      try {
-        const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/content-job`)
-        const data = await resp.json()
-        if (data.success) {
-          setContentJob(data.job)
-          if (data.job?.status !== 'running') {
-            clearInterval(contentPollingRef.current)
-            contentPollingRef.current = null
-            if (data.job?.status === 'completed') fetchDocuments(folderId)
-          }
-        }
-      } catch (e) { console.error('Erreur polling contenu:', e) }
-    }, 3000)
-  }
-
-  const stopContentPolling = () => {
-    if (contentPollingRef.current) {
-      clearInterval(contentPollingRef.current)
-      contentPollingRef.current = null
-    }
-  }
-
-  const handleExtractSubParts = async () => {
-    if (!programText.trim() || !selectedFolder) return
-    setExtracting(true)
-    try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ program_text: programText }),
-      })
-      const data = await resp.json()
-      if (data.success) {
-        await fetchContentJob(selectedFolder.id)
-      } else {
-        alert(data.error || "Erreur lors de l'extraction")
-      }
-    } catch (e) {
-      console.error('Erreur extraction:', e)
-      alert('Erreur réseau lors de l\'extraction')
-    } finally {
-      setExtracting(false)
-    }
-  }
-
-  const handleStartContentGeneration = async (mode = 'normal') => {
-    if (!selectedFolder) return
-    try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
-      })
-      const data = await resp.json()
-      if (data.success) {
-        setContentJob(prev => ({ ...prev, status: 'running' }))
-        startContentPolling(selectedFolder.id)
-      } else {
-        alert(data.error || 'Erreur lors du lancement')
-      }
-    } catch (e) {
-      console.error('Erreur start generation:', e)
-    }
-  }
-
-  const handleCancelContentGeneration = async () => {
-    if (!selectedFolder) return
-    stopContentPolling()
-    try {
-      await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/cancel`, {
-        method: 'POST',
-      })
-      await fetchContentJob(selectedFolder.id)
-    } catch (e) { console.error('Erreur cancel:', e) }
-  }
-
   const handlePreviewPrompt = async () => {
     if (!selectedFolder) return
     try {
@@ -467,9 +370,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
         setRulesPanelOpen(false)
         setRulesError('')
         loadScriptRules()
-        // Reprend l'affichage d'une éventuelle revérif texte en cours pour
-        // ce folder (utile si on a fermé la modale pendant le run).
-        resumeActiveTextReview()
       } else {
         alert(data.error || 'Script non disponible')
       }
@@ -490,12 +390,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setEditBreakDraft({ intro: '', outro: '' })
     resetScriptAnnotationDraft()
     setScriptAnnotations([])
-    // Arrête le polling local mais la tâche backend continue.
-    // À la prochaine ouverture, resumeActiveTextReview() reprendra le suivi.
-    if (textReviewPollRef.current) {
-      clearInterval(textReviewPollRef.current)
-      textReviewPollRef.current = null
-    }
   }
 
   const captureScriptSelection = (event, context) => {
@@ -616,31 +510,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     }
   }
 
-  const resumeActiveTextReview = async () => {
-    if (!selectedFolder) return
-    try {
-      const resp = await apiFetch(
-        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/active`,
-      )
-      const data = await resp.json()
-      if (!data.success || !data.task) return
-      const task = data.task
-      setTextReviewProgress(task)
-      if (task.status === 'running') {
-        // Tâche encore en cours côté backend → on reprend le polling.
-        setReviewingText(true)
-        setRulesPanelOpen(true)
-        pollTextReviewStatus(task.task_id)
-      } else if (task.status === 'completed' && task.result) {
-        // Tâche terminée pendant qu'on avait fermé la modale → on affiche le résumé.
-        setTextReviewSummary(task.result)
-        setRulesPanelOpen(true)
-      }
-    } catch (e) {
-      console.error('Erreur reprise revérif texte:', e)
-    }
-  }
-
   const extractScriptRules = async () => {
     if (!selectedFolder || extractingRules) return
     setExtractingRules(true)
@@ -756,74 +625,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       setRulesError('Erreur réseau pendant la revérif.')
     } finally {
       setReviewingRules(false)
-    }
-  }
-
-  const pollTextReviewStatus = (taskId) => {
-    if (!selectedFolder || !taskId) return
-    const tick = async () => {
-      try {
-        const resp = await apiFetch(
-          `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/status/${taskId}`,
-        )
-        const data = await resp.json()
-        if (!data.success) {
-          setRulesError(data.error || 'Statut introuvable.')
-          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-          setReviewingText(false)
-          return
-        }
-        setTextReviewProgress(data)
-        if (data.status === 'completed') {
-          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-          setTextReviewSummary(data.result || null)
-          setReviewingText(false)
-        } else if (data.status === 'failed') {
-          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-          setRulesError(data.error || 'Revérif texte échouée.')
-          setReviewingText(false)
-        }
-      } catch (e) {
-        console.error('Erreur poll review text status:', e)
-      }
-    }
-    tick()
-    textReviewPollRef.current = setInterval(tick, 2000)
-  }
-
-  const runTextReview = async (dryRun) => {
-    if (!selectedFolder || reviewingText) return
-    if (!dryRun) {
-      const ok = window.confirm(
-        'Cette action va modifier le texte des segments en base de données et les marquer dirty=1. Les MP3 actuels ne changent pas, mais à la prochaine régénération TTS, ils seront refaits à partir du nouveau texte. Continuer ?'
-      )
-      if (!ok) return
-    }
-    setReviewingText(true)
-    setRulesError('')
-    setTextReviewSummary(null)
-    setTextReviewProgress(null)
-    if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-    try {
-      const resp = await apiFetch(
-        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dry_run: !!dryRun }),
-        }
-      )
-      const data = await resp.json()
-      if (data.success && data.task_id) {
-        pollTextReviewStatus(data.task_id)
-      } else {
-        setRulesError(data.error || 'Revérif texte impossible.')
-        setReviewingText(false)
-      }
-    } catch (e) {
-      console.error('Erreur review text:', e)
-      setRulesError('Erreur réseau pendant la revérif texte.')
-      setReviewingText(false)
     }
   }
 
@@ -1070,11 +871,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setWordAnalysis(null)
     setGeneratedAudios([])
     setAudioPlaylistItems([])
-    setContentJob(null)
-    setProgramText('')
-    stopContentPolling()
     fetchGeneratedAudios(folder.id)
-    fetchContentJob(folder.id)
     fetchDirtyBlocs(folder.id)
   }
 
@@ -1084,7 +881,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setDocuments([])
     setTtsStatus(null)
     setAudioPlaylistItems([])
-    stopContentPolling()
     if (pollingRef.current) {
       clearInterval(pollingRef.current)
       pollingRef.current = null
@@ -1218,43 +1014,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     } catch (e) {
       console.error('Erreur téléchargement audio:', e)
       alert(e.message)
-    }
-  }
-
-  const handleGenerateAudio = async (documentId) => {
-    try {
-      const resp = await apiFetch(`/api/hr/cours-documents/${documentId}/generate-audio`, {
-        method: 'POST',
-      })
-      const data = await resp.json()
-      if (data.success) {
-        fetchDocuments(selectedFolder.id)
-        if (!pollingRef.current) {
-          pollingRef.current = setInterval(() => fetchTtsStatus(selectedFolder.id), 3000)
-        }
-      }
-    } catch (e) {
-      console.error('Erreur génération audio:', e)
-    }
-  }
-
-  const handleGenerateAll = async () => {
-    setGeneratingAll(true)
-    try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-all-audio`, {
-        method: 'POST',
-      })
-      const data = await resp.json()
-      if (data.success) {
-        fetchDocuments(selectedFolder.id)
-        if (!pollingRef.current) {
-          pollingRef.current = setInterval(() => fetchTtsStatus(selectedFolder.id), 3000)
-        }
-      }
-    } catch (e) {
-      console.error('Erreur génération tous:', e)
-    } finally {
-      setGeneratingAll(false)
     }
   }
 
@@ -2414,30 +2173,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                       <>
                         <button
                           type="button"
-                          onClick={() => runTextReview(true)}
-                          disabled={reviewingText || reviewingRules}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                          title="Simule la revérif au niveau texte (sans toucher aux segments ni aux MP3). Ne nécessite pas de script_slide_deck."
-                        >
-                          <Icon name="article" style={{ fontSize: '14px' }} />
-                          {reviewingText ? 'Analyse…' : 'Simuler cours'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runTextReview(false)}
-                          disabled={reviewingText || reviewingRules}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: '#2563eb' }}
-                          title="Modifie le texte des segments en DB + dirty=1. Les MP3 actuels ne changent pas — ils seront refaits à la prochaine relance TTS."
-                        >
-                          <Icon name="edit_note" style={{ fontSize: '14px' }} />
-                          {reviewingText ? 'Application…' : 'Appliquer cours'}
-                        </button>
-                        <button
-                          type="button"
                           onClick={() => runRulesReview(true)}
-                          disabled={reviewingRules || reviewingText}
+                          disabled={reviewingRules}
                           className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
                           title="Simule la revérif niveau chunk audio. Nécessite script_slide_deck (sinon utilise les boutons texte ci-dessus)."
@@ -2448,7 +2185,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                         <button
                           type="button"
                           onClick={() => runRulesReview(false)}
-                          disabled={reviewingRules || reviewingText}
+                          disabled={reviewingRules}
                           className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ backgroundColor: '#16a34a' }}
                           title="Patche les MP3 non conformes en place via splice ms-précis. Nécessite script_slide_deck."
@@ -2460,172 +2197,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                     )}
                   </div>
                 </div>
-
-                {textReviewProgress && textReviewProgress.status === 'running' && (
-                  <div
-                    className="mb-2 rounded-md p-3 text-xs"
-                    style={{ backgroundColor: 'rgba(37,99,235,0.08)', color: colors.text, border: '1px solid rgba(37,99,235,0.35)' }}
-                  >
-                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#2563eb' }}>
-                      ⏳ Revérif texte en cours
-                      {textReviewProgress.dry_run ? ' (simulation)' : ''}
-                      {' · '}
-                      <span style={{ color: colors.textMuted, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
-                        démarrée à {textReviewProgress.started_at}
-                      </span>
-                    </p>
-                    <div className="mb-2 flex items-center gap-2">
-                      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(37,99,235,0.15)' }}>
-                        <div
-                          style={{
-                            height: '100%',
-                            width: textReviewProgress.segments_total > 0
-                              ? `${Math.min(100, Math.round((textReviewProgress.segments_done / textReviewProgress.segments_total) * 100))}%`
-                              : '0%',
-                            background: 'linear-gradient(90deg, #2563eb, #3b82f6)',
-                            transition: 'width 0.4s ease',
-                          }}
-                        />
-                      </div>
-                      <span className="text-[11px]" style={{ color: '#2563eb', fontWeight: 600 }}>
-                        {textReviewProgress.segments_done}/{textReviewProgress.segments_total}
-                      </span>
-                    </div>
-                    <p className="text-[11px]" style={{ color: colors.text }}>
-                      {textReviewProgress.current_segment ? <>📄 <strong>{textReviewProgress.current_segment}</strong></> : 'Initialisation…'}
-                      {textReviewProgress.current_step && (
-                        <span style={{ color: colors.textMuted }}> · {textReviewProgress.current_step}</span>
-                      )}
-                    </p>
-                    <ul className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0 sm:grid-cols-4 text-[11px]">
-                      <li style={{ color: '#2563eb' }}>{textReviewProgress.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewProgress.segments_modified}</strong></li>
-                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewProgress.segments_conforme}</strong></li>
-                      <li style={{ color: colors.textMuted }}>Skipped : <strong>{textReviewProgress.segments_skipped}</strong></li>
-                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewProgress.segments_failed}</strong></li>
-                    </ul>
-                    {Array.isArray(textReviewProgress.log_lines) && textReviewProgress.log_lines.length > 0 && (
-                      <pre
-                        className="mt-2 max-h-32 overflow-auto rounded p-2 text-[10px] leading-snug"
-                        style={{ backgroundColor: colors.innerBg, color: colors.textMuted, whiteSpace: 'pre-wrap' }}
-                      >
-                        {textReviewProgress.log_lines.slice(-12).join('\n')}
-                      </pre>
-                    )}
-                  </div>
-                )}
-
-                {textReviewSummary && (
-                  <div
-                    className="mb-2 rounded-md p-3 text-xs"
-                    style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                  >
-                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#2563eb' }}>
-                      Résumé revérif cours{textReviewSummary.dry_run ? ' (simulation)' : ''}
-                    </p>
-                    <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-                      <li>Cours examinés : <strong>{textReviewSummary.blocs_examined ?? textReviewSummary.segments_examined}</strong></li>
-                      <li style={{ color: '#2563eb' }}>{textReviewSummary.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewSummary.blocs_modified ?? textReviewSummary.segments_modified}</strong></li>
-                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewSummary.blocs_conforme ?? textReviewSummary.segments_conforme}</strong></li>
-                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewSummary.blocs_failed ?? textReviewSummary.segments_failed}</strong></li>
-                    </ul>
-                    {!textReviewSummary.dry_run && textReviewSummary.segments_modified > 0 && (
-                      <p className="mt-2 text-[11px] italic" style={{ color: '#facc15' }}>
-                        ⚠️ Segments marqués dirty=1. Les MP3 actuels ne reflètent pas encore ces changements — relance Edge TTS / Fish TTS pour les regénérer.
-                      </p>
-                    )}
-                    <div className="mt-2 max-h-[60vh] overflow-y-auto pr-1 space-y-2">
-                      {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').map((d, i) => {
-                        const isModified = d.status === 'modified' || d.status === 'would_modify'
-                        return (
-                          <div
-                            key={i}
-                            className="rounded p-2 text-[11px]"
-                            style={{ backgroundColor: 'rgba(37,99,235,0.08)', border: `1px solid ${colors.border}` }}
-                          >
-                            <p className="font-semibold mb-1">
-                              {d.bloc_number ? (
-                                <>Cours {d.bloc_number}{expectedCourseCount ? `/${expectedCourseCount}` : ''}{d.filename ? <span style={{ color: colors.textMuted, fontWeight: 400 }}> · {d.filename}</span> : null}</>
-                              ) : (
-                                <>{d.sub_part_name}{d.passe ? ` · passe ${d.passe}` : ''}</>
-                              )}
-                              {' · '}
-                              <span style={{ color: isModified ? '#16a34a' : '#dc2626' }}>{d.status}</span>
-                              {typeof d.patches_applied === 'number' && d.patches?.length > 0 && (
-                                <span style={{ color: colors.textMuted, fontWeight: 400 }}>
-                                  {' '}· {d.patches_applied}/{d.patches.length} patch(s) appliqué(s)
-                                </span>
-                              )}
-                              {Array.isArray(d.segments_touched) && d.segments_touched.length > 0 && (
-                                <span style={{ color: colors.textMuted, fontWeight: 400 }}>
-                                  {' '}· {d.segments_touched.length} segment(s) DB touché(s)
-                                </span>
-                              )}
-                            </p>
-                            {d.violations?.length > 0 && (
-                              <p className="mb-1" style={{ color: colors.textMuted }}>
-                                <strong>Règles violées :</strong> {d.violations.join(' · ')}
-                              </p>
-                            )}
-                            {d.words_before !== undefined && d.words_after !== undefined && (
-                              <p className="mb-2" style={{ color: colors.textMuted }}>
-                                {d.words_before} → {d.words_after} mots
-                              </p>
-                            )}
-                            {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
-                            {Array.isArray(d.patches) && d.patches.length > 0 && (
-                              <div className="space-y-2 mt-2">
-                                {d.patches.map((p, j) => (
-                                  <div
-                                    key={j}
-                                    className="rounded p-2"
-                                    style={{
-                                      backgroundColor: colors.innerBg,
-                                      border: `1px solid ${p.applied ? 'rgba(22,163,74,0.35)' : 'rgba(220,38,38,0.35)'}`,
-                                    }}
-                                  >
-                                    <p className="text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: p.applied ? '#16a34a' : '#dc2626' }}>
-                                      Patch {j + 1} · {p.applied ? 'appliqué' : 'ignoré (find ambigu/introuvable)'}
-                                    </p>
-                                    {p.reason && (
-                                      <p className="mb-1 italic" style={{ color: colors.textMuted }}>
-                                        → {p.reason}
-                                      </p>
-                                    )}
-                                    <div
-                                      className="rounded p-1.5 mb-1 whitespace-pre-wrap"
-                                      style={{ backgroundColor: 'rgba(220,38,38,0.10)', color: '#7f1d1d' }}
-                                    >
-                                      <span style={{ color: '#dc2626', fontWeight: 700 }}>−</span> {p.find}
-                                    </div>
-                                    <div
-                                      className="rounded p-1.5 whitespace-pre-wrap"
-                                      style={{ backgroundColor: 'rgba(22,163,74,0.10)', color: '#14532d' }}
-                                    >
-                                      <span style={{ color: '#16a34a', fontWeight: 700 }}>+</span> {p.replace}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            {Array.isArray(d.patch_errors) && d.patch_errors.length > 0 && (
-                              <div className="mt-2 p-2 rounded text-[10px]" style={{ backgroundColor: 'rgba(220,38,38,0.08)', color: '#7f1d1d' }}>
-                                <strong>Erreurs patches :</strong>
-                                <ul className="list-disc ml-4 mt-1">
-                                  {d.patch_errors.map((err, k) => <li key={k}>{err}</li>)}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                      {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').length === 0 && (
-                        <p className="text-[11px] italic" style={{ color: colors.textMuted }}>
-                          Aucun segment non-conforme à afficher.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
 
                 {rulesReviewSummary && (
                   <div

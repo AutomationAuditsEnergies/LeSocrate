@@ -15,7 +15,6 @@ import re
 import math
 import json
 import time
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 from urllib.parse import quote
@@ -1903,25 +1902,6 @@ def run_daily_split(
         raise
 
 
-def _split_daily_programs_thread(job_id: int, model: str = None):
-    """Thread manuel : découpe le programme global sans propager l'exception au serveur."""
-    try:
-        run_daily_split(job_id, model=model)
-    except Exception:
-        pass
-
-
-def launch_daily_split(job_id: int, model: str = None):
-    """Lance le découpage en journées dans un thread."""
-    thread = threading.Thread(
-        target=_split_daily_programs_thread,
-        args=(job_id, model),
-        daemon=True,
-    )
-    thread.start()
-    logger.info(f"🚀 Job {job_id} : thread découpage journées démarré")
-
-
 # ─── Affinage IA (refine) ─────────────────────────────────────────────────────
 
 _REFINE_PROMPT = """Tu es un expert en ingénierie pédagogique spécialisé dans les titres professionnels.
@@ -2076,98 +2056,6 @@ def is_expected_course_folder(job_id: int, folder_id: int) -> bool:
         return True
     expected_ids = set(state.get("folder_ids") or [])
     return not expected_ids or folder_id in expected_ids
-
-
-def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
-    """
-    Crée un dossier cours par journée et lance la génération TTS (from scratch).
-    Appelle content_generation_service en mode from_scratch.
-    """
-    from services.content_generation_service import (
-        get_job_from_db,
-        run_content_generation,
-        start_generation_job,
-    )
-
-    job = get_job(job_id)
-    if not job:
-        raise ValueError(f"Job {job_id} introuvable")
-
-    daily_programs = json.loads(job["daily_programs"] or "[]")
-    if not daily_programs:
-        raise ValueError("Aucun programme journée disponible")
-    schedule_days = _v2_schedule_days(job)
-    if schedule_days and len(daily_programs) != len(schedule_days):
-        raise ValueError(
-            "Le nombre de programmes journée ne correspond pas au snapshot V2"
-        )
-
-    folder_state = get_expected_course_folders(
-        job_id,
-        create_missing=True,
-        platform_id=platform_id,
-    )
-    folder_ids = folder_state["folder_ids"]
-    folders_by_name = {
-        f["expected_name"]: f
-        for f in folder_state["folders"]
-    }
-
-    # Lancer génération TTS pour chaque journée
-    for i, day_data in enumerate(daily_programs):
-        schedule_day = _schedule_day(schedule_days, i + 1)
-        day_data = _normalize_day_audio_slots(
-            day_data,
-            schedule_day=schedule_day,
-        )
-        folder_name = expected_course_folder_name(day_data, i + 1)
-        folder_info = folders_by_name.get(folder_name)
-        if not folder_info:
-            raise RuntimeError(f"Folder attendu introuvable : {folder_name}")
-        folder_id = folder_info["folder_id"]
-        day_program_text = _format_day_program_text(
-            day_data,
-            job["tp_name"],
-            schedule_day=schedule_day,
-        )
-        sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
-        module_contents = {}
-        for sp in day_data.get("sub_parts", []):
-            module_contents[sp["name"]] = _format_slot_generation_source(sp)
-
-        existing_job = get_job_from_db(folder_id)
-        if existing_job:
-            status = existing_job.get("status")
-            if status == "completed":
-                logger.info(f"⏭ Texte déjà complet pour dossier {folder_id} (Jour {i+1})")
-                continue
-            if status == "running":
-                logger.info(f"⏭ Texte déjà en cours pour dossier {folder_id} (Jour {i+1})")
-                continue
-
-            def _resume_existing(fid=folder_id):
-                try:
-                    run_content_generation(fid, mode="normal", model=model)
-                except Exception as e:
-                    logger.error(f"❌ Reprise génération dossier {fid} : {e}")
-
-            threading.Thread(target=_resume_existing, daemon=True).start()
-            logger.info(f"♻️ Reprise génération pour dossier {folder_id} (Jour {i+1})")
-        else:
-            start_generation_job(
-                folder_id=folder_id,
-                platform_id=platform_id,
-                program_text=day_program_text,
-                program_title=job["tp_name"],
-                sub_parts_override=sub_parts,
-                module_contents=module_contents,
-                from_scratch=True,
-                model=model,
-            )
-            logger.info(f"🚀 TTS lancé pour dossier {folder_id} (Jour {i+1})")
-
-    update_job(job_id, status="tts_launched")
-    return folder_ids
 
 
 def repair_orphan_content_folders(job_id: int) -> dict:

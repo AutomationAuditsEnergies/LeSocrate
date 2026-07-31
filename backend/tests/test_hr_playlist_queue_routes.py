@@ -173,6 +173,28 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
         self.assertEqual(data["attempt"], 2)
         latest.assert_called_once_with(118, scope_key="hr_audio:118")
 
+    def test_local_generation_and_memory_task_routes_are_retired(self):
+        routes = (
+            ("post", "/api/hr/cours-documents/33/generate-audio"),
+            ("post", "/api/hr/cours-folders/118/generate-all-audio"),
+            ("post", "/api/hr/cours-folders/118/content-job"),
+            ("post", "/api/hr/cours-folders/118/content-job/start"),
+            ("post", "/api/hr/cours-folders/118/content-job/cancel"),
+            ("post", "/api/hr/cours-folders/118/content-job/rules/review-text"),
+            ("get", "/api/hr/cours-folders/118/content-job/rules/review-text/status/task-1"),
+            ("get", "/api/hr/cours-folders/118/content-job/rules/review-text/active"),
+        )
+
+        with patch("routes.hr_routes.HR_ENABLED", True):
+            for method, path in routes:
+                with self.subTest(path=path):
+                    response = getattr(self.client, method)(path, json={})
+                    self.assertEqual(response.status_code, 410, response.get_json())
+                    self.assertEqual(
+                        response.get_json()["code"],
+                        "local_generation_retired",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

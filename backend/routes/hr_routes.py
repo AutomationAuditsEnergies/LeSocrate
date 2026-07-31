@@ -91,11 +91,23 @@ from services.recruitment_conversation_service import interpret_recruitment_answ
 from services.teacher_asset_service import resolve_folder_blob_path
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
-from utils.concurrency import start_background_thread
 from utils.slug import slugify, unique_slug
 import state
 
 logger = get_logger(__name__)
+
+
+def _retired_local_generation_response():
+    """Bloque les anciennes générations lancées dans le processus web."""
+    return jsonify({
+        "success": False,
+        "status": "retired",
+        "code": "local_generation_retired",
+        "error": (
+            "Cette génération locale a été retirée. "
+            "La création et la reprise passent désormais par la pipeline durable."
+        ),
+    }), 410
 
 PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", "pdfs")
 
@@ -4183,79 +4195,19 @@ def create_hr_blueprint():
     # ─── Routes Pipeline TTS ────────────────────────────────────────────────
     @hr_bp.route("/api/hr/cours-documents/<int:document_id>/generate-audio", methods=["POST"])
     def generate_document_audio(document_id):
-        """Lance la génération audio pour un document"""
+        """Ancienne génération directe, remplacée par la file durable."""
         denied = _require_admin()
         if denied:
             return denied
-
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            # Mettre à jour le statut
-            cursor.execute("UPDATE cours_documents SET status = 'processing' WHERE id = ?", (document_id,))
-            conn.commit()
-            conn.close()
-
-            start_background_thread(
-                _process_document_background,
-                document_id,
-                name=f"document-audio-{document_id}",
-            )
-
-            return jsonify({"success": True, "status": "processing"}), 200
-        except Exception as e:
-            logger.error(f"❌ Erreur generate_document_audio: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-all-audio", methods=["POST"])
     def generate_folder_audio(folder_id):
-        """Lance la génération audio pour tous les documents d'un dossier"""
+        """Ancienne génération directe, remplacée par la file durable."""
         denied = _require_admin()
         if denied:
             return denied
-
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            # Récupérer les documents sans audio
-            cursor.execute(f"""
-                SELECT id FROM cours_documents
-                WHERE folder_id = ? AND audio_filename IS NULL
-                  AND (
-                    NOT EXISTS (
-                        SELECT 1
-                        FROM cours_documents cd
-                        WHERE cd.folder_id = cours_documents.folder_id
-                          AND {_FINAL_SCRIPT_DOC_WHERE}
-                    )
-                    OR id = (
-                        SELECT cd.id
-                        FROM cours_documents cd
-                        WHERE cd.folder_id = cours_documents.folder_id
-                          AND {_FINAL_SCRIPT_DOC_WHERE}
-                        ORDER BY cd.created_at DESC, cd.id DESC
-                        LIMIT 1
-                    )
-                  )
-            """, (folder_id,))
-            docs = [{"id": row[0]} for row in cursor.fetchall()]
-            conn.close()
-
-            if not docs:
-                return jsonify({"success": True, "message": "Tous les documents ont déjà un audio"}), 200
-
-            start_background_thread(
-                _process_folder_background,
-                folder_id,
-                name=f"folder-audio-{folder_id}",
-            )
-
-            return jsonify({"success": True, "processing": len(docs)}), 200
-        except Exception as e:
-            logger.error(f"❌ Erreur generate_folder_audio: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/tts-status", methods=["GET"])
     def get_folder_tts_status(folder_id):
@@ -4303,144 +4255,23 @@ def create_hr_blueprint():
             logger.error(f"❌ Erreur get_folder_tts_status: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    # ─── Génération de contenu TTS-direct ────────────────────────────────
-
-    # État en mémoire pour le suivi temps-réel (par folder_id)
-    _content_jobs = {}
+    # ─── Consultation et correction du contenu généré ───────────────────
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job", methods=["POST"])
     def create_content_job(folder_id):
-        """
-        Crée ou réinitialise un job de génération de contenu.
-        Extrait les sous-parties synchroniquement depuis le programme fourni.
-        Body: { program_text: str }
-        """
+        """Ancienne création manuelle, remplacée par la pipeline durable."""
         denied = _require_admin()
         if denied:
             return denied
-
-        data = request.get_json()
-        program_text = (data.get("program_text") or "").strip()
-        if not program_text or len(program_text) < 50:
-            return jsonify({"success": False, "error": "Programme trop court ou vide"}), 400
-
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            conn.close()
-            if not row:
-                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
-            platform_id = row[0]
-
-            # Extraction des cours selon le manifeste exact du dossier.
-            from services.content_generation_service import (
-                extract_sub_parts,
-                resolve_folder_content_course_count,
-            )
-
-            course_count = resolve_folder_content_course_count(folder_id)
-            extracted = extract_sub_parts(
-                program_text,
-                course_count=course_count,
-            )
-            program_title = extracted["title"]
-            sub_parts = extracted["sub_parts"]
-
-            import json as _json
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            # Supprimer les anciens segments si on réinitialise
-            cursor.execute("""
-                DELETE FROM content_generation_segments WHERE job_id IN (
-                    SELECT id FROM content_generation_jobs WHERE folder_id = ?
-                )
-            """, (folder_id,))
-            cursor.execute("""
-                INSERT OR REPLACE INTO content_generation_jobs
-                    (folder_id, platform_id, program_text, program_title, sub_parts,
-                     status, current_sub_part, current_passe, total_words, error_message)
-                VALUES (?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
-            """, (folder_id, platform_id, program_text, program_title, _json.dumps(sub_parts)))
-            conn.commit()
-            conn.close()
-
-            # Réinitialiser l'état en mémoire
-            _content_jobs[folder_id] = {
-                "status": "idle",
-                "current_sub_part": 0,
-                "current_passe": 1,
-                "total_words": 0,
-                "message": "Sous-parties extraites, prêt à lancer.",
-            }
-
-            return jsonify({
-                "success": True,
-                "program_title": program_title,
-                "sub_parts": sub_parts,
-            }), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur create_content_job: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/start", methods=["POST"])
     def start_content_job(folder_id):
-        """Lance ou reprend la génération de contenu en background."""
+        """Ancien lancement manuel, remplacé par la pipeline durable."""
         denied = _require_admin()
         if denied:
             return denied
-
-        # Vérifier qu'un job n'est pas déjà en cours
-        if _content_jobs.get(folder_id, {}).get("status") == "running":
-            return jsonify({"success": False, "error": "Génération déjà en cours"}), 409
-
-        from services.content_generation_service import get_job_from_db
-        job = get_job_from_db(folder_id)
-        if not job:
-            return jsonify({"success": False, "error": "Aucun job configuré pour ce dossier"}), 404
-        if job["status"] == "completed":
-            return jsonify({"success": False, "error": "Job déjà terminé"}), 409
-
-        _content_jobs[folder_id] = {
-            "status": "running",
-            "current_sub_part": job["current_sub_part"],
-            "current_passe": job["current_passe"],
-            "total_words": job["total_words"],
-            "message": "Démarrage de la génération...",
-        }
-
-        def _on_progress(sub_idx, total_sub, passe, total_words, message):
-            _content_jobs[folder_id].update({
-                "current_sub_part": sub_idx,
-                "current_passe": passe,
-                "total_words": total_words,
-                "message": message,
-            })
-
-        body = request.get_json(silent=True) or {}
-        mode = body.get("mode", "normal")  # "normal" | "mock" | "mini"
-        if mode not in ("normal", "mock", "mini"):
-            mode = "normal"
-
-        if mode != "normal":
-            _content_jobs[folder_id]["message"] = f"[MODE {mode.upper()}] Démarrage..."
-
-        def _run():
-            try:
-                from services.content_generation_service import run_content_generation
-                run_content_generation(folder_id, on_progress=_on_progress, mode=mode)
-                _content_jobs[folder_id]["status"] = "completed"
-            except Exception as e:
-                _content_jobs[folder_id].update({"status": "error", "message": str(e)})
-
-        start_background_thread(
-            _run,
-            name=f"content-generation-{folder_id}",
-        )
-
-        return jsonify({"success": True, "message": "Génération lancée"}), 202
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job", methods=["GET"])
     def get_content_job(folder_id):
@@ -4454,26 +4285,18 @@ def create_hr_blueprint():
         if not job:
             return jsonify({"success": True, "job": None}), 200
 
-        # Fusionner l'état DB avec l'état en mémoire (plus frais)
-        mem = _content_jobs.get(folder_id, {})
-        status = mem.get("status") or job["status"]
-        total_words = mem.get("total_words") or job["total_words"]
-        current_sub_part = mem.get("current_sub_part", job["current_sub_part"])
-        current_passe = mem.get("current_passe", job["current_passe"])
-        message = mem.get("message", "")
-
         segments = get_segments_status(job["id"]) if job["id"] else []
 
         return jsonify({
             "success": True,
             "job": {
-                "status": status,
+                "status": job["status"],
                 "program_title": job["program_title"],
                 "sub_parts": job["sub_parts"],
-                "current_sub_part": current_sub_part,
-                "current_passe": current_passe,
-                "total_words": total_words,
-                "message": message,
+                "current_sub_part": job["current_sub_part"],
+                "current_passe": job["current_passe"],
+                "total_words": job["total_words"],
+                "message": "",
                 "error_message": job["error_message"],
                 "segments": segments,
                 "num_sub_parts": len(job["sub_parts"]),
@@ -4482,28 +4305,11 @@ def create_hr_blueprint():
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/cancel", methods=["POST"])
     def cancel_content_job(folder_id):
-        """Annule un job en cours (marque cancelled en DB, stoppe le polling)."""
+        """Ancienne annulation locale, remplacée par la pipeline durable."""
         denied = _require_admin()
         if denied:
             return denied
-
-        from services.content_generation_service import get_job_from_db
-        job = get_job_from_db(folder_id)
-        if job:
-            from database.db import get_db_connection as _gdb
-            conn = _gdb()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE content_generation_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE folder_id = ?",
-                (folder_id,)
-            )
-            conn.commit()
-            conn.close()
-
-        if folder_id in _content_jobs:
-            _content_jobs[folder_id]["status"] = "cancelled"
-
-        return jsonify({"success": True}), 200
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/preview", methods=["GET"])
     def preview_content_prompt(folder_id):
@@ -4786,71 +4592,27 @@ def create_hr_blueprint():
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text", methods=["POST"])
     def review_text_with_rules(folder_id):
-        """Phase 3b' : applique les règles au TEXTE des segments (pas aux MP3).
-
-        Async : démarre un thread local et retourne immédiatement un
-        task_id. Le frontend poll ensuite GET .../rules/review-text/status/<id>
-        pour suivre la progression (utile parce que la revérif prend 10-15 min
-        et dépasserait le timeout HTTP Azure App Service ~230s).
-        """
+        """Ancienne correction asynchrone locale, désormais retirée."""
         denied = _require_admin()
         if denied:
             return denied
-        try:
-            from services.script_rules_service import start_text_review_async
-            payload = request.get_json() or {}
-            dry_run = bool(payload.get("dry_run") or False)
-            sub_part_indices = payload.get("sub_part_indices")
-            if sub_part_indices and not isinstance(sub_part_indices, list):
-                sub_part_indices = None
-            task_id = start_text_review_async(
-                folder_id,
-                dry_run=dry_run,
-                sub_part_indices=sub_part_indices,
-            )
-            return jsonify({"success": True, "task_id": task_id, "dry_run": dry_run}), 202
-        except ValueError as e:
-            return jsonify({"success": False, "error": str(e)}), 400
-        except Exception as e:
-            logger.error(f"❌ Erreur review text: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text/status/<task_id>", methods=["GET"])
     def review_text_status(folder_id, task_id):
-        """Renvoie la progression d'une revérif texte async."""
+        """Ancien suivi en mémoire, désormais retiré."""
         denied = _require_admin()
         if denied:
             return denied
-        try:
-            from services.script_rules_service import get_text_review_task
-            task = get_text_review_task(task_id)
-            if not task:
-                return jsonify({"success": False, "error": "Tâche introuvable (worker redémarré ?)"}), 404
-            return jsonify({"success": True, **task}), 200
-        except Exception as e:
-            logger.error(f"❌ Erreur status review text: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text/active", methods=["GET"])
     def review_text_active(folder_id):
-        """Renvoie la dernière tâche de revérif texte connue pour ce dossier.
-
-        Permet au frontend de reprendre l'affichage de progression à
-        l'ouverture de la modale Script TTS (et donc de ne pas perdre le
-        suivi si on l'a fermée pendant le run).
-        """
+        """Ancien suivi en mémoire, désormais retiré."""
         denied = _require_admin()
         if denied:
             return denied
-        try:
-            from services.script_rules_service import get_active_text_review_for_folder
-            task = get_active_text_review_for_folder(folder_id)
-            if not task:
-                return jsonify({"success": True, "task": None}), 200
-            return jsonify({"success": True, "task": task}), 200
-        except Exception as e:
-            logger.error(f"❌ Erreur active review text: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-post-tts", methods=["POST"])
     def review_post_tts_with_rules(folder_id):
@@ -6405,117 +6167,6 @@ def create_hr_blueprint():
         except Exception as e:
             logger.error(f"❌ Erreur fill_from_folder: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
-
-    # ─── Fonctions helpers background ───────────────────────────────────────
-    def _process_document_background(document_id):
-        """Traite un document en background: Azure PDF → TTS → Azure MP3"""
-        try:
-            from services.tts_service import process_document_to_audio
-            from services.azure_blob_service import (
-                download_blob, upload_blob, build_blob_path,
-                CONTAINER_DOCUMENTS, CONTAINER_AUDIOS
-            )
-            from database.db import get_db_connection
-            import uuid as uuid_mod
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            # Récupérer le document et son dossier
-            cursor.execute("""
-                SELECT cd.folder_id, cd.filename, cf.platform_id
-                FROM cours_documents cd
-                JOIN cours_folders cf ON cd.folder_id = cf.id
-                WHERE cd.id = ?
-            """, (document_id,))
-            row = cursor.fetchone()
-            if not row:
-                cursor.execute("UPDATE cours_documents SET status = 'error' WHERE id = ?", (document_id,))
-                conn.commit()
-                conn.close()
-                return
-
-            folder_id, blob_path, platform_id = row
-
-            # 1. Télécharger le PDF depuis Azure (en mémoire)
-            pdf_bytes = download_blob(CONTAINER_DOCUMENTS, blob_path)
-
-            # 2. Pipeline TTS: PDF bytes → MP3 bytes
-            voice_id = os.getenv("FISH_AUDIO_VOICE_ID", "90a39a3f3c0a45c38502fa1d99dabf96")
-            audio_bytes = process_document_to_audio(pdf_bytes, voice_id=voice_id)
-
-            # 3. Upload l'audio vers Azure audiostts
-            audio_name = f"{uuid_mod.uuid4()}.mp3"
-            audio_blob_path = build_blob_path(platform_id, folder_id, audio_name)
-            upload_blob(CONTAINER_AUDIOS, audio_blob_path, audio_bytes)
-
-            # 4. Mettre à jour la DB
-            cursor.execute(
-                "UPDATE cours_documents SET status = 'done', audio_filename = ? WHERE id = ?",
-                (audio_blob_path, document_id)
-            )
-            conn.commit()
-            conn.close()
-
-            logger.info(f"✅ Audio généré pour document {document_id}: {audio_blob_path}")
-
-        except Exception as e:
-            logger.error(f"❌ Erreur traitement document {document_id}: {e}")
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("UPDATE cours_documents SET status = 'error' WHERE id = ?", (document_id,))
-                conn.commit()
-                conn.close()
-            except:
-                pass
-
-    def _process_folder_background(folder_id):
-        """Traite tous les documents d'un dossier en background (séquentiel)"""
-        try:
-            from database.db import get_db_connection
-
-            while True:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-
-                cursor.execute(f"""
-                    SELECT id FROM cours_documents
-                    WHERE folder_id = ? AND audio_filename IS NULL AND status != 'processing'
-                      AND (
-                        NOT EXISTS (
-                            SELECT 1
-                            FROM cours_documents cd
-                            WHERE cd.folder_id = cours_documents.folder_id
-                              AND {_FINAL_SCRIPT_DOC_WHERE}
-                        )
-                        OR id = (
-                            SELECT cd.id
-                            FROM cours_documents cd
-                            WHERE cd.folder_id = cours_documents.folder_id
-                              AND {_FINAL_SCRIPT_DOC_WHERE}
-                            ORDER BY cd.created_at DESC, cd.id DESC
-                            LIMIT 1
-                        )
-                      )
-                    LIMIT 1
-                """, (folder_id,))
-                row = cursor.fetchone()
-                if not row:
-                    conn.close()
-                    break
-
-                document_id = row[0]
-                cursor.execute("UPDATE cours_documents SET status = 'processing' WHERE id = ?", (document_id,))
-                conn.commit()
-                conn.close()
-
-                _process_document_background(document_id)
-
-                time.sleep(1)
-
-        except Exception as e:
-            logger.error(f"❌ Erreur traitement dossier {folder_id}: {e}")
 
     # ─── Routes Config Planning Été/Hiver ──────────────────────────────────
     @hr_bp.route("/api/hr/schedule-config", methods=["GET"])

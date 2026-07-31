@@ -1,7 +1,4 @@
 import json
-from pathlib import Path
-import sqlite3
-import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -168,122 +165,31 @@ class FolderCourseCountWiringTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "entre 4 et 10"):
                 cgs.resolve_folder_content_course_count(42)
 
-    def test_start_job_passes_manifest_count_to_extractor(self):
-        extracted = {
-            "title": "TP dynamique",
-            "sub_parts": [f"Thème {index}" for index in range(1, 6)],
-        }
-        with patch.object(
-            cgs,
-            "resolve_folder_content_course_count",
-            return_value=5,
+class HrContentJobDynamicCountTest(unittest.TestCase):
+    def test_manual_content_creation_route_is_retired(self):
+        app = Flask(__name__)
+        app.secret_key = "retired-content-job"
+        app.register_blueprint(create_hr_blueprint())
+        client = app.test_client()
+        with client.session_transaction() as session:
+            session["is_admin"] = True
+            session["admin_account_type"] = "legacy_admin"
+
+        with patch(
+            "routes.hr_routes.HR_ENABLED",
+            True,
         ), patch.object(
             cgs,
             "extract_sub_parts",
-            return_value=extracted,
-        ) as extract, patch.object(
-            cgs,
-            "reset_and_upsert_content_generation_job",
-        ) as upsert, patch(
-            "threading.Thread",
-        ) as thread:
-            cgs.start_generation_job(
-                folder_id=9,
-                platform_id=12,
-                program_text="Programme source",
-                program_title="Titre fourni",
+        ) as extract:
+            response = client.post(
+                "/api/hr/cours-folders/9/content-job",
+                json={"program_text": "Programme " * 10},
             )
 
-        extract.assert_called_once_with(
-            "Programme source",
-            course_count=5,
-        )
-        saved_parts = json.loads(
-            upsert.call_args.kwargs["sub_parts_json"]
-        )
-        self.assertEqual(saved_parts, extracted["sub_parts"])
-        thread.return_value.start.assert_called_once_with()
-
-
-class HrContentJobDynamicCountTest(unittest.TestCase):
-    def test_route_extracts_the_manifest_course_count(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp, "hr.sqlite"))
-            conn = sqlite3.connect(db_path)
-            conn.executescript(
-                """
-                CREATE TABLE cours_folders (
-                    id INTEGER PRIMARY KEY,
-                    platform_id INTEGER NOT NULL
-                );
-                CREATE TABLE content_generation_jobs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    folder_id INTEGER UNIQUE,
-                    platform_id INTEGER,
-                    program_text TEXT,
-                    program_title TEXT,
-                    sub_parts TEXT,
-                    status TEXT,
-                    current_sub_part INTEGER,
-                    current_passe INTEGER,
-                    total_words INTEGER,
-                    error_message TEXT
-                );
-                CREATE TABLE content_generation_segments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id INTEGER
-                );
-                INSERT INTO cours_folders (id, platform_id) VALUES (9, 12);
-                """
-            )
-            conn.commit()
-            conn.close()
-
-            app = Flask(__name__)
-            app.secret_key = "dynamic-content-count"
-            app.register_blueprint(create_hr_blueprint())
-            client = app.test_client()
-            with client.session_transaction() as session:
-                session["is_admin"] = True
-                session["admin_account_type"] = "legacy_admin"
-
-            extracted = {
-                "title": "TP dynamique",
-                "sub_parts": [f"Thème {index}" for index in range(1, 7)],
-            }
-            with patch(
-                "routes.hr_routes.HR_ENABLED",
-                True,
-            ), patch(
-                "routes.hr_routes.get_db_connection",
-                side_effect=lambda: sqlite3.connect(db_path),
-            ), patch.object(
-                cgs,
-                "resolve_folder_content_course_count",
-                return_value=6,
-            ) as resolve_count, patch.object(
-                cgs,
-                "extract_sub_parts",
-                return_value=extracted,
-            ) as extract:
-                response = client.post(
-                    "/api/hr/cours-folders/9/content-job",
-                    json={"program_text": "Programme " * 10},
-                )
-
-            self.assertEqual(response.status_code, 200, response.get_json())
-            resolve_count.assert_called_once_with(9)
-            extract.assert_called_once_with(
-                ("Programme " * 10).strip(),
-                course_count=6,
-            )
-
-            conn = sqlite3.connect(db_path)
-            saved = conn.execute(
-                "SELECT sub_parts FROM content_generation_jobs WHERE folder_id = 9"
-            ).fetchone()
-            conn.close()
-            self.assertEqual(json.loads(saved[0]), extracted["sub_parts"])
+        self.assertEqual(response.status_code, 410, response.get_json())
+        self.assertEqual(response.get_json()["code"], "local_generation_retired")
+        extract.assert_not_called()
 
 
 class DynamicCourseProgressAndContextTest(unittest.TestCase):

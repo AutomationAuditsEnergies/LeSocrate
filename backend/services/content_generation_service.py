@@ -7343,67 +7343,6 @@ def resolve_folder_content_course_count(folder_id: int) -> int:
     return course_count
 
 
-def start_generation_job(folder_id: int, platform_id: int, program_text: str,
-                         program_title: str, sub_parts_override: list = None,
-                         module_contents: dict = None, from_scratch: bool = False,
-                         model: str = None):
-    """
-    Crée le job DB et lance la génération en background thread.
-    Utilisé par le pipeline formation automatisé.
-
-    sub_parts_override : liste de noms de sous-parties (sans extraction DeepSeek)
-    module_contents    : dict {sub_part_name: contenu_module} pour le mode from_scratch
-    from_scratch       : True = passes indépendantes depuis module_content (nouveau paradigme)
-    """
-    import threading
-    if module_contents:
-        normalized_module_contents = {}
-        for key, value in (module_contents or {}).items():
-            normalized_module_contents[key] = value
-            normalized_module_contents[_strip_internal_schedule_from_label(key)] = value
-        module_contents = normalized_module_contents
-
-    expected_sub_parts = resolve_folder_content_course_count(folder_id)
-
-    # Extraction des sous-parties si pas fournie
-    if sub_parts_override:
-        sub_parts = [
-            _strip_internal_schedule_from_label(item)
-            for item in sub_parts_override[:expected_sub_parts]
-        ]
-        while len(sub_parts) < expected_sub_parts:
-            sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
-        title = program_title
-    else:
-        extracted = extract_sub_parts(
-            program_text,
-            course_count=expected_sub_parts,
-        )
-        sub_parts = extracted["sub_parts"]
-        title = extracted.get("title", program_title) or program_title
-
-    reset_and_upsert_content_generation_job(
-        folder_id=folder_id,
-        platform_id=platform_id,
-        program_text=program_text,
-        program_title=title,
-        sub_parts_json=json.dumps(sub_parts, ensure_ascii=False),
-        from_scratch=from_scratch,
-        module_contents_json=json.dumps(module_contents or {}, ensure_ascii=False),
-    )
-
-    # Lancer génération en background
-    def _run():
-        try:
-            run_content_generation(folder_id, mode="normal", model=model)
-        except Exception as e:
-            logger.error(f"❌ Génération background dossier {folder_id} : {e}")
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    logger.info(f"🚀 Génération lancée en background pour dossier {folder_id} (from_scratch={from_scratch})")
-
-
 def get_job_from_db(folder_id):
     """Retourne le job DB pour un dossier, ou None."""
     row = get_content_generation_job_by_folder(folder_id)
