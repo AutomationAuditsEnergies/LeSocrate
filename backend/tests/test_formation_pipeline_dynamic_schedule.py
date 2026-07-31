@@ -191,6 +191,40 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertNotIn("journées de 7h", prompt)
         self.assertNotIn("{TOTAL_HOURS}", prompt)
 
+    def test_global_prompt_requires_lecture_only_programming(self):
+        prompt = fps._build_global_program_prompt(
+            {
+                "tp_name": "TP cours pur",
+                "total_hours": 14,
+                "nb_days": 2,
+            },
+            "SOURCE",
+        )
+
+        self.assertIn("100% du volume pédagogique est du cours magistral audio", prompt)
+        self.assertIn("Exemples professionnels commentés à intégrer au cours", prompt)
+        self.assertNotIn("Cas pratiques suggérés", prompt)
+
+    def test_activity_detector_keeps_professional_context_but_rejects_exercises(self):
+        legitimate = (
+            "Les conditions d'exercice du métier et les modalités d’exercice "
+            "de la profession sont expliquées par le professeur. "
+            "La clôture de l'exercice comptable est ensuite détaillée."
+        )
+        self.assertEqual(fps._learner_activity_violations(legitimate), [])
+
+        for forbidden in (
+            "Séance d'exercices",
+            "Cas pratique guidé",
+            "Étude de cas en groupe",
+            "Atelier d'application",
+            "Mise en situation",
+            "Jeu de rôle",
+            "QCM final",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertTrue(fps._learner_activity_violations(forbidden))
+
     def test_v1_global_prompt_remains_byte_for_byte_legacy(self):
         job = {
             "tp_name": "TP historique",
@@ -251,28 +285,63 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertIn("Journée 2 : 5 cours vocaux", captured["prompt"])
         self.assertIn("50 min", captured["prompt"])
         self.assertNotIn("EXACTEMENT 7", captured["prompt"])
+        self.assertIn("exclusivement un cours magistral", captured["prompt"])
 
-    def test_v2_fallback_uses_the_requested_day_course_count(self):
-        schedule_day = fps._v2_schedule_days(
-            _v2_job([self.day_five])
-        )[0]
+    def test_daily_split_regenerates_a_learner_activity(self):
+        schedule_days = fps._v2_schedule_days(
+            _v2_job([self.day_four])
+        )
+        invalid_day = _raw_generated_day(1, 4)
+        invalid_day["sub_parts"][0]["name"] = "Cours 1 — Cas pratique guidé"
+        valid_day = _raw_generated_day(1, 4)
 
-        day = fps._fallback_day_program(
-            "TP dynamique",
-            1,
-            "Programme global",
-            1,
-            "réponse invalide",
-            schedule_day=schedule_day,
+        with patch.object(
+            fps,
+            "DAILY_SPLIT_ATTEMPTS",
+            2,
+        ), patch.object(
+            fps,
+            "_deepseek_post",
+            side_effect=[
+                json.dumps({"days": [invalid_day]}),
+                json.dumps({"days": [valid_day]}),
+            ],
+        ) as deepseek, patch.object(fps.time, "sleep"):
+            days = fps._split_batch(
+                tp_name="TP dynamique",
+                nb_days=1,
+                global_program="Programme",
+                day_start=1,
+                day_end=1,
+                model="test-model",
+                schedule_days=schedule_days,
+            )
+
+        self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(days[0]["sub_parts"][0]["name"], "Cours 1 — Thème 1")
+
+    def test_run_daily_split_never_persists_a_fallback_after_failure(self):
+        job = _v2_job([self.day_five])
+        failure = fps.DailySplitGenerationError(
+            "Journée 1 impossible à générer correctement"
         )
 
-        self.assertEqual(len(day["sub_parts"]), 5)
-        self.assertEqual(
-            [part["duration_min"] for part in day["sub_parts"]],
-            [50, 50, 50, 50, 50],
+        with (
+            patch.object(fps, "get_job", return_value=job),
+            patch.object(fps, "update_job") as update,
+            patch.object(fps, "_split_batch", side_effect=failure),
+        ):
+            with self.assertRaises(fps.DailySplitGenerationError):
+                fps.run_daily_split(91, model="test-model")
+
+        updates = [item.kwargs for item in update.call_args_list]
+        self.assertEqual(updates[0]["status"], "daily_splitting")
+        self.assertEqual(updates[-1]["status"], "error")
+        self.assertIn(str(failure), updates[-1]["error_message"])
+        self.assertFalse(any("daily_programs" in fields for fields in updates))
+        self.assertFalse(
+            any(fields.get("status") == "daily_ready" for fields in updates)
         )
-        self.assertTrue(day["sub_parts"][-1]["is_last_course"])
-        self.assertIn("Synthèse", day["sub_parts"][-1]["name"])
 
     def test_run_daily_split_uses_snapshot_length_not_legacy_nb_days(self):
         job = _v2_job([self.day_four, self.day_five])

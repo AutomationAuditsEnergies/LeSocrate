@@ -171,7 +171,7 @@ Ta mission : produire une base de connaissances pédagogique dense et exploitabl
 ═══════════════════════════════════════════════════
 RÈGLES ÉDITORIALES NON NÉGOCIABLES
 ═══════════════════════════════════════════════════
-Le contenu que tu produis (études de cas, pièges, vocabulaire, contexte
+Le contenu que tu produis (illustrations professionnelles commentées, pièges, vocabulaire, contexte
 terrain, définition) sera injecté comme source primaire dans la génération
 du cours audio final. TOUTES les règles éditoriales qui s'appliquent au
 cours audio s'appliquent donc AUSSI à ta sortie JSON, sans exception :
@@ -179,10 +179,14 @@ cours audio s'appliquent donc AUSSI à ta sortie JSON, sans exception :
 {EDITORIAL_RULES}
 
 Points d'attention spécifiques à l'enrichissement :
-- Les **études de cas** sont souvent des cas fictifs — tu dois les annoncer
-  comme tels dans la clé `situation` (ex: "Cas fictif pédagogique : une
-  entreprise du secteur X...") et JAMAIS inventer un nom d'entreprise ou
-  des chiffres précis non vérifiables.
+- La clé technique `etudes_de_cas` contient uniquement des **illustrations
+  professionnelles racontées et commentées par le formateur**. Elles ne sont
+  jamais des exercices, ateliers, mises en situation ou consignes destinées
+  aux apprenants.
+- Ces illustrations sont souvent fictives — tu dois les annoncer comme telles
+  dans la clé `situation` (ex: "Exemple fictif commenté : une entreprise du
+  secteur X...") et JAMAIS inventer un nom d'entreprise ou des chiffres précis
+  non vérifiables.
 - Le **vocabulaire métier** doit rester factuel et professionnel, sans
   références spirituelles, religieuses, ésotériques, ni promotion
   implicite de secteurs proscrits.
@@ -200,10 +204,10 @@ Réponds **uniquement avec un JSON valide** au format suivant, sans préambule :
   "definition_pedagogique": "Explication claire et structurée de la compétence en ~250 mots. Va au-delà du REAC : explique POURQUOI cette compétence existe, dans QUELS contextes elle s'applique, ce qu'elle permet d'accomplir concrètement. Un apprenant doit comprendre l'enjeu.",
   "etudes_de_cas": [
     {
-      "titre": "Titre court de l'étude de cas",
-      "situation": "Décor concret : lieu, acteurs, contexte (80 mots)",
+      "titre": "Titre court de l'illustration professionnelle commentée",
+      "situation": "Exemple fictif raconté par le formateur : décor, acteurs et contexte (80 mots)",
       "enjeu": "Qu'est-ce qui se joue dans cette situation ? (40 mots)",
-      "resolution_attendue": "Comment un professionnel compétent s'y prend (120 mots)",
+      "resolution_attendue": "Explication par le formateur de la conduite professionnelle adaptée (120 mots)",
       "variantes": "Variantes courantes du cas (50 mots)"
     }
   ],
@@ -224,7 +228,7 @@ Réponds **uniquement avec un JSON valide** au format suivant, sans préambule :
 ```
 
 Contraintes de densité :
-- `etudes_de_cas` : **4 à 6 études** concrètes, ancrées dans la réalité du métier
+- `etudes_de_cas` : **4 à 6 illustrations commentées** ancrées dans la réalité du métier, sans aucune activité à réaliser
 - `pieges_frequents` : **4 à 6 pièges** réalistes
 - `vocabulaire_metier` : **8 à 15 termes** clés
 - `contexte_terrain` : 200 mots minimum, immersif
@@ -740,9 +744,16 @@ def build_kb_context(job_id: int, max_chars: int = 180000) -> str:
             if e["contexte_terrain"]:
                 parts.append(f"**Contexte terrain** : {e['contexte_terrain']}\n")
             if e["etudes_de_cas"]:
-                parts.append("**Études de cas** :")
+                parts.append(
+                    "**Illustrations professionnelles fictives à raconter et commenter dans le cours** "
+                    "[jamais des activités apprenant] :"
+                )
                 for c in e["etudes_de_cas"]:
-                    parts.append(f"- *{c.get('titre', '')}* — {c.get('situation', '')} | Enjeu : {c.get('enjeu', '')} | Résolution : {c.get('resolution_attendue', '')}")
+                    parts.append(
+                        f"- Illustration commentée — {c.get('situation', '')} "
+                        f"| Enjeu expliqué : {c.get('enjeu', '')} "
+                        f"| Conduite professionnelle commentée : {c.get('resolution_attendue', '')}"
+                    )
             if e["pieges_frequents"]:
                 parts.append("**Pièges fréquents** :")
                 for p in e["pieges_frequents"]:

@@ -53,6 +53,11 @@ logger = get_logger(__name__)
 DEEPSEEK_MODEL = default_model()
 HOURS_PER_DAY = 7
 
+
+class DailySplitGenerationError(RuntimeError):
+    """Le modèle n'a pas produit de programme journalier valide après les retries locaux."""
+
+
 COURSE_AUDIO_SLOTS = [
     {"index": 0, "label": "Cours 1", "start": "9h00", "end": "9h45", "duration_min": 45, "filename": "cours_9h00_9h45.mp3"},
     {"index": 1, "label": "Cours 2", "start": "10h05", "end": "10h50", "duration_min": 45, "filename": "cours_10h05_10h50.mp3"},
@@ -466,6 +471,8 @@ RÉFÉRENTIEL REAC :
 CONSIGNE :
 Crée un programme de formation détaillé et pédagogiquement structuré, orienté cours magistral TTS.
 Le programme doit couvrir 100% des compétences du REAC.
+La formation est composée exclusivement de cours expliqués oralement par le professeur.
+Les savoir-faire du REAC doivent être enseignés, démontrés et commentés, jamais transformés en activité à réaliser par l'apprenant.
 
 STRUCTURE ATTENDUE (suis ce format précisément) :
 
@@ -495,24 +502,26 @@ Durée : Xh | Compétences REAC couvertes : CP1, CP2...
    - [Sous-thème B]
 [... autant de sections que nécessaire]
 
-**Cas pratiques suggérés :**
-- [Cas pratique 1]
-- [Cas pratique 2]
+**Exemples professionnels commentés à intégrer au cours :**
+- [Situation fictive racontée puis expliquée par le professeur]
+- [Autre exemple professionnel analysé oralement]
 
 [Répéter pour chaque module et chaque bloc]
 
 ## MODULES TRANSVERSAUX
 [Communication professionnelle, outils numériques, etc.]
 
-## PRÉPARATION À LA CERTIFICATION [hors TTS]
-[Méthodologie examen, entraînements, dossier professionnel]
+## REPÈRES SUR LA CERTIFICATION [hors TTS]
+[Présentation informative des attendus et du dossier professionnel]
 
 RÈGLES :
 - Chaque module doit avoir une durée réaliste (entre 5h et 25h maximum)
 - La somme des durées hors [hors TTS] doit être égale à {TOTAL_HOURS}h
 - Chaque sous-thème doit être assez précis pour générer 15 minutes de cours oral
 - Évite les répétitions entre modules
-- Intègre les savoir-faire et savoirs du REAC dans les sous-thèmes"""
+- Intègre les savoir-faire et savoirs du REAC dans les sous-thèmes
+- 100% du volume pédagogique est du cours magistral audio : aucune séance d'exercice, cas pratique, étude de cas, atelier, mise en situation, simulation, jeu de rôle, QCM ou quiz
+- Un exemple professionnel est uniquement raconté et commenté par le professeur à l'intérieur d'un cours ; il ne devient jamais un module, une séance ou une consigne apprenant"""
 
 _DAILY_SPLIT_PROMPT = """Tu es un expert en ingénierie pédagogique.
 
@@ -530,6 +539,9 @@ Génère uniquement les journées {DAY_START} à {DAY_END}, en répartissant le 
 RÈGLES :
 - Chaque journée = exactement 7 heures de contenu
 - Chaque journée a EXACTEMENT 7 cours dans "sub_parts", alignés sur la playlist audio interne ci-dessous.
+- Chaque entrée de "sub_parts" est exclusivement un cours magistral expliqué par le professeur.
+- Ne crée jamais de séance d'exercice, cas pratique, étude de cas, atelier, mise en situation, simulation, jeu de rôle, QCM ou quiz.
+- Les exemples métier sont racontés et commentés par le professeur à l'intérieur du cours ; l'apprenant n'a aucune activité à réaliser.
 - Les durées pédagogiques du programme global doivent être redistribuées sur ces cours internes.
 - Un module peut occuper plusieurs cours, ou plusieurs petits modules peuvent partager un cours si c'est pédagogiquement cohérent.
 - Ne coupe jamais une idée au hasard : chaque cours doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
@@ -599,6 +611,9 @@ RÈGLES :
 - Pour chaque journée, crée exactement le nombre de cours vocaux indiqué dans le planning ci-dessus.
 - Respecte la durée et le budget de mots propres à chaque cours. Ne fusionne, ne supprime et n'ajoute aucun cours.
 - Un cours correspond à un chapitre pédagogique autonome.
+- Chaque chapitre est exclusivement un cours magistral expliqué par le professeur.
+- Ne crée jamais de séance d'exercice, cas pratique, étude de cas, atelier, mise en situation, simulation, jeu de rôle, QCM ou quiz.
+- Les exemples métier sont racontés et commentés par le professeur à l'intérieur du cours ; l'apprenant n'a aucune activité à réaliser.
 - Un module peut occuper plusieurs cours, ou plusieurs petits modules peuvent partager un cours si c'est pédagogiquement cohérent.
 - Ne coupe jamais une idée au hasard : chaque cours doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
 - Le dernier cours de chaque journée doit conclure la journée. Lui seul annonce la prochaine séance, sauf lors de la dernière journée de la formation.
@@ -637,6 +652,125 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
     }}
   ]
 }}"""
+
+
+_LEARNER_ACTIVITY_PATTERNS = (
+    (
+        "exercice",
+        re.compile(
+            r"\bexercices?\s+(?:pratiques?|guid[ée]s?|"
+            r"d['’]application|d['’]entra[iî]nement|"
+            r"[àa]\s+r[ée]aliser|en\s+groupe|individuels?|interactifs?)\b|"
+            r"(?m:^\s*(?:cours|module|s[ée]ance|journ[ée]e)\b"
+            r"[^\n]{0,120}\bexercices?\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    ("cas pratique", re.compile(r"\bcas\s+pratiques?\b", re.IGNORECASE)),
+    ("étude de cas", re.compile(r"\b[ée]tudes?\s+de\s+cas\b", re.IGNORECASE)),
+    ("travaux pratiques", re.compile(r"\btravaux?\s+pratiques?\b", re.IGNORECASE)),
+    ("mise en situation", re.compile(r"\bmises?\s+en\s+situation\b", re.IGNORECASE)),
+    ("jeu de rôle", re.compile(r"\bjeux?\s+de\s+r[oô]les?\b", re.IGNORECASE)),
+    ("QCM", re.compile(r"\bqcm\b", re.IGNORECASE)),
+    ("quiz", re.compile(r"\bquiz\b", re.IGNORECASE)),
+    (
+        "atelier pédagogique",
+        re.compile(
+            r"\bateliers?\s+(?:pratiques?|p[ée]dagogiques?|"
+            r"d['’]application|d['’]entra[iî]nement|participatifs?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "simulation pédagogique",
+        re.compile(
+            r"\bsimulations?\s+(?:pratiques?|p[ée]dagogiques?|"
+            r"d['’](?:entretien|examen|situation))\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "activité pratique",
+        re.compile(
+            r"\bactivit[ée]s?\s+(?:pratiques?|p[ée]dagogiques?|"
+            r"d['’]application)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "séance pratique",
+        re.compile(
+            r"\bs[ée]ances?\s+(?:pratiques?|d['’]exercices?|"
+            r"d['’]application|d['’]entra[iî]nement)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "entraînement",
+        re.compile(
+            r"\bentra[iî]nements?\s+(?:pratiques?|[àa]\s+l['’]examen|"
+            r"[àa]\s+la\s+certification|guid[ée]s?)\b|"
+            r"\bs[ée]ances?\s+d['’]entra[iî]nement\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+_LEGITIMATE_EXERCISE_CONTEXT_RE = re.compile(
+    r"\b(?:conditions?|modalit[ée]s?|cadres?|contextes?)\s+"
+    r"d['’]exercice\b|"
+    r"\bexercice\s+(?:du|de\s+la)\s+(?:m[ée]tier|profession)\b|"
+    r"\bexercice\s+de\s+l['’]activit[ée]\b|"
+    r"\bdans\s+l['’]exercice\s+de\s+(?:ses|leurs)\s+fonctions\b",
+    re.IGNORECASE,
+)
+
+
+def _learner_activity_violations(text: str) -> list[str]:
+    """Détecte les activités apprenant, sans confondre l'exercice d'un métier."""
+    scan_text = _LEGITIMATE_EXERCISE_CONTEXT_RE.sub("", str(text or ""))
+    return [
+        label
+        for label, pattern in _LEARNER_ACTIVITY_PATTERNS
+        if pattern.search(scan_text)
+    ]
+
+
+def _assert_lecture_only_program(text: str, *, context: str) -> None:
+    violations = _learner_activity_violations(text)
+    if violations:
+        raise ValueError(
+            f"{context} contient une activité apprenant interdite : "
+            + ", ".join(violations)
+        )
+
+
+def _iter_daily_teaching_text(days: list[dict]):
+    for day in days:
+        for key in ("title", "day_recap", "day_transition"):
+            yield day.get(key)
+        for module in day.get("modules_covered") or []:
+            yield module
+        for part in day.get("sub_parts") or []:
+            for key in ("name", "module_content"):
+                yield part.get(key)
+            brief = part.get("generation_brief") or {}
+            # `avoid` peut légitimement nommer une activité à ne pas produire.
+            for key in ("must_cover", "examples", "finish", "handoff"):
+                value = brief.get(key)
+                if isinstance(value, list):
+                    yield from value
+                else:
+                    yield value
+
+
+def _assert_lecture_only_days(days: list[dict]) -> None:
+    combined = "\n".join(
+        str(value).strip()
+        for value in _iter_daily_teaching_text(days)
+        if str(value or "").strip()
+    )
+    _assert_lecture_only_program(combined, context="Le programme journée")
 
 
 def _build_global_program_prompt(
@@ -1151,6 +1285,10 @@ def generate_global_program(
                     max_tokens=16000,
                     model=used_model,
                 )
+                _assert_lecture_only_program(
+                    program,
+                    context="Le programme global",
+                )
                 if checkpoint:
                     checkpoint()
                 update_job(
@@ -1424,93 +1562,6 @@ def _complete_day_program_shape(
     return _normalize_day_audio_slots(day, schedule_day=schedule_day)
 
 
-def _global_program_slice(global_program: str, day_number: int, nb_days: int, max_chars: int = 1800) -> str:
-    text = re.sub(r"\s+", " ", str(global_program or "")).strip()
-    if len(text) <= max_chars:
-        return text
-    nb_days = max(1, int(nb_days or 1))
-    chunk = max(max_chars, len(text) // nb_days)
-    start = min(max(0, (day_number - 1) * chunk), max(0, len(text) - max_chars))
-    return text[start:start + max_chars].strip()
-
-
-def _fallback_day_program(
-    tp_name: str,
-    nb_days: int,
-    global_program: str,
-    day_number: int,
-    reason: str,
-    schedule_day: dict | None = None,
-) -> dict:
-    focus = _global_program_slice(global_program, day_number, nb_days)
-    focus_short = focus[:900] if focus else (
-        "reprendre les compétences du référentiel et les transformer en progression pédagogique opérationnelle"
-    )
-    themes = [
-        ("Cadre et objectifs du thème", "poser le contexte, les objectifs et les notions clés"),
-        ("Notions fondamentales", "expliquer les bases indispensables avec des exemples simples"),
-        ("Concepts clés", "approfondir les concepts structurants et leurs liens"),
-        ("Méthode professionnelle", "montrer une méthode d'action applicable en situation métier"),
-        ("Démonstration guidée", "décomposer une démarche complète étape par étape"),
-        ("Cas pratique guidé", "développer un cas concret et faire verbaliser le raisonnement attendu"),
-        ("Points de vigilance", "identifier les erreurs fréquentes, limites et bonnes pratiques"),
-        ("Mise en situation", "faire le lien avec une situation réaliste de terrain"),
-        ("Approfondissement", "consolider les acquis avec des variantes et contre-exemples"),
-        ("Synthèse et transition", "résumer les acquis et préparer la suite de la progression"),
-    ]
-    if schedule_day is None:
-        # Preserve the exact seven-theme legacy fallback ordering.
-        themes = [
-            themes[0],
-            themes[1],
-            themes[3],
-            themes[5],
-            themes[6],
-            themes[7],
-            themes[9],
-        ]
-        course_count = len(COURSE_AUDIO_SLOTS)
-    else:
-        course_count = len(_v2_course_slots(schedule_day))
-        themes = themes[:course_count]
-        themes[-1] = (
-            "Synthèse et transition",
-            "résumer les acquis et préparer la suite de la progression",
-        )
-
-    sub_parts = []
-    for idx, (title, role) in enumerate(themes[:course_count]):
-        label = f"Cours {idx + 1}"
-        sub_parts.append({
-            "index": idx,
-            "name": f"{label} — {title}",
-            "module_content": (
-                f"Cette partie doit {role}. Elle s'appuie sur le programme global de "
-                f"la formation : {focus_short}. Le formateur doit rester concret, "
-                "progressif et naturel, sans mentionner les horaires ni la mécanique interne."
-            ),
-            "generation_brief": {
-                "must_cover": [title, "application métier", "lien avec le référentiel"],
-                "examples": ["exemple professionnel fictif et réaliste"],
-                "finish": "Synthèse courte qui ferme le point avant la suite.",
-                "avoid": ["horaires", "durée", "nom de template", "répétition de l'introduction générale"],
-                "handoff": "Transition naturelle vers le point suivant ou la pause.",
-            },
-        })
-    raw_day = {
-        "day_number": day_number,
-        "title": f"Journée {day_number} — Progression {tp_name}",
-        "modules_covered": [],
-        "sub_parts": sub_parts,
-        "day_recap": "" if day_number == 1 else "Lors de la dernière séance, nous avons vu les bases nécessaires pour aborder cette nouvelle étape.",
-        "day_transition": "À la prochaine séance, nous aborderons la suite logique de cette progression.",
-        "generation_warning": f"Fallback déterministe utilisé après échec JSON du batch daily : {reason[:300]}",
-    }
-    if schedule_day is None:
-        raw_day["hours"] = HOURS_PER_DAY
-    return _normalize_day_audio_slots(raw_day, schedule_day=schedule_day)
-
-
 def _split_batch(tp_name: str, nb_days: int, global_program: str,
                  day_start: int, day_end: int, model: str,
                  reac_text: str = "", rc_text: str = "", rome_text: str = "",
@@ -1560,13 +1611,15 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
                 model=model,
             )
             data = _clean_json(raw)
-            return _normalize_daily_payload(
+            days = _normalize_daily_payload(
                 data,
                 day_start,
                 day_end,
                 tp_name,
                 schedule_days=schedule_days,
             )
+            _assert_lecture_only_days(days)
+            return days
         except DeepSeekRateLimitError as e:
             if attempt < DAILY_SPLIT_ATTEMPTS - 1:
                 logger.warning(
@@ -1608,25 +1661,17 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
             )
         return days
 
-    logger.error(
-        "❌ Batch journée %s JSON impossible à réparer, fallback déterministe : %s",
-        day_start,
-        last_error,
+    attempt_label = "tentative" if DAILY_SPLIT_ATTEMPTS == 1 else "tentatives"
+    message = (
+        f"Journée {day_start} impossible à générer correctement après "
+        f"{DAILY_SPLIT_ATTEMPTS} {attempt_label} : {last_error}"
     )
-    return [
-        _fallback_day_program(
-            tp_name,
-            nb_days,
-            global_program,
-            day_start,
-            str(last_error or ""),
-            schedule_day=_schedule_day(schedule_days, day_start),
-        )
-    ]
+    logger.error("❌ %s", message)
+    raise DailySplitGenerationError(message) from last_error
 
 
 def run_daily_split(job_id: int, model: str = None) -> dict:
-    """Découpe le programme global en N journées et persiste un résultat exploitable."""
+    """Découpe le programme global et persiste uniquement un résultat validé."""
     try:
         job = get_job(job_id)
         if not job:
@@ -1685,7 +1730,7 @@ def run_daily_split(job_id: int, model: str = None) -> dict:
                     results[idx] = []
 
         if errors:
-            raise ValueError("; ".join(errors))
+            raise DailySplitGenerationError("; ".join(errors))
 
         # Fusionner et trier par day_number
         all_days = []
@@ -1708,21 +1753,17 @@ def run_daily_split(job_id: int, model: str = None) -> dict:
             raise ValueError(
                 f"Daily split incohérent : attendu jours {expected_numbers}, reçu {actual_numbers}"
             )
+        _assert_lecture_only_days(all_days)
 
         logger.info(f"✅ Job {job_id} : {len(all_days)} journées générées au total")
-        generated_via = (
-            "api_fallback"
-            if any(day.get("generation_warning") for day in all_days)
-            else "api"
-        )
         update_job(
             job_id,
             status="daily_ready",
             daily_programs=json.dumps(all_days, ensure_ascii=False),
-            daily_programs_generated_via=generated_via,
+            daily_programs_generated_via="api",
             error_message=None,
         )
-        return {"ok": True, "days": len(all_days), "generated_via": generated_via}
+        return {"ok": True, "days": len(all_days), "generated_via": "api"}
 
     except Exception as e:
         logger.error(f"❌ Job {job_id} découpage journées échoué : {e}")

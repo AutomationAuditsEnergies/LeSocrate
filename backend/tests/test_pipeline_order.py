@@ -396,6 +396,25 @@ class PipelineOrderTest(unittest.TestCase):
         )
         self.assertEqual(checkpoints, [])
 
+    def test_daily_step_is_not_validated_when_generation_fails(self):
+        job = _job(
+            platform_id=1,
+            status="global_validated",
+            daily_programs="[]",
+        )
+        with patch.object(
+            fr,
+            "run_daily_split",
+            side_effect=RuntimeError("Journée 1 impossible à générer correctement"),
+        ), patch.object(fr, "update_job") as update:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Journée 1 impossible à générer correctement",
+            ):
+                fr._execute_ap_step(99, "daily", job)
+
+        update.assert_not_called()
+
     def test_audio_gate_requires_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=False)
         try:

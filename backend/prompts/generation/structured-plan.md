@@ -7,6 +7,11 @@ Le plan est libre pendant sa création, puis obligatoire pour la génération.
 Contraintes :
 - 7 cours exactement.
 - 2 à 4 parties par cours.
+- Chaque entrée est exclusivement un cours magistral expliqué par le professeur.
+  Ne planifie jamais d'exercice, cas pratique, étude de cas, atelier, mise en
+  situation, simulation, jeu de rôle, QCM, quiz ou activité à réaliser.
+- Les situations métier servent uniquement d'exemples fictifs racontés et
+  commentés par le professeur à l'intérieur d'une explication.
 - Cours interne 1 de la première journée : accueil, programme annuel synthétique,
   thèmes de la journée, transition vers premier grand thème, objectif/axes.
 - Cours interne 1 d'une journée suivante : accueil de journée et reprise de progression,

@@ -8,6 +8,32 @@ from services.pipeline_queue.contracts import LeaseLostError
 
 
 class DurableFoundationStagesTest(unittest.TestCase):
+    def test_kb_context_turns_legacy_cases_into_narrated_examples(self):
+        with patch.object(
+            kbs,
+            "list_kb",
+            return_value=[{
+                "competence_title": "Conseiller un client",
+                "definition_pedagogique": "",
+                "contexte_terrain": "",
+                "etudes_de_cas": [{
+                    "titre": "Cas pratique guidé",
+                    "situation": "Exemple fictif : un client hésite.",
+                    "enjeu": "Clarifier le besoin.",
+                    "resolution_attendue": "Le professeur explique la méthode.",
+                }],
+                "pieges_frequents": [],
+                "vocabulaire_metier": {},
+                "status": "completed",
+            }],
+        ):
+            context = kbs.build_kb_context(42)
+
+        self.assertIn("Illustrations professionnelles fictives", context)
+        self.assertIn("Exemple fictif : un client hésite.", context)
+        self.assertNotIn("Cas pratique guidé", context)
+        self.assertNotIn("Études de cas", context)
+
     def test_completed_kb_runs_synchronously_and_keeps_its_checkpoints(self):
         job = {
             "id": 42,
@@ -156,6 +182,52 @@ class DurableFoundationStagesTest(unittest.TestCase):
             inspect.getsource(fps.generate_global_program),
         )
         self.assertFalse(hasattr(fps, "launch_global_program_generation"))
+
+    def test_global_program_regenerates_a_learner_activity_before_saving(self):
+        job = {
+            "id": 42,
+            "tp_name": "TP Test",
+            "rncp_code": "RNCP1",
+            "reac_text": "Référentiel complet",
+            "nb_days": 2,
+        }
+        invalid_program = "### MODULE 1.1 : Cas pratique guidé"
+        valid_program = "### MODULE 1.1 : Fondamentaux de la relation client"
+
+        with patch.object(fps, "get_job", return_value=job), patch.object(
+            fps,
+            "update_job",
+        ) as update, patch.object(
+            fps,
+            "_v2_schedule_days",
+            return_value=[],
+        ), patch(
+            "services.knowledge_base_service.build_kb_context",
+            return_value="Base enrichie",
+        ), patch.object(
+            fps,
+            "_build_global_program_prompt",
+            return_value="Prompt",
+        ), patch.object(
+            fps,
+            "_deepseek_post",
+            side_effect=[invalid_program, valid_program],
+        ) as deepseek, patch.object(fps.time, "sleep"):
+            fps.generate_global_program(42)
+
+        self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(
+            update.call_args_list,
+            [
+                call(42, status="global_generating"),
+                call(
+                    42,
+                    status="global_ready",
+                    global_program=valid_program,
+                    global_program_generated_via="api",
+                ),
+            ],
+        )
 
     def test_global_program_failure_is_propagated_to_the_durable_worker(self):
         job = {
