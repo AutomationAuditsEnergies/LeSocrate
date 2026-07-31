@@ -10,20 +10,11 @@ from repositories.hr_write_repository import CloneSourceInvalid
 from routes.hr_routes import create_hr_blueprint
 
 
-class _SocketIOStub:
-    def __init__(self):
-        self.started = []
-
-    def start_background_task(self, *args, **kwargs):
-        self.started.append((args, kwargs))
-
-
 class HrTenantIsolationRouteTest(unittest.TestCase):
     def setUp(self):
-        self.socketio = _SocketIOStub()
         app = Flask(__name__)
         app.secret_key = "hr-tenant-isolation"
-        app.register_blueprint(create_hr_blueprint(self.socketio))
+        app.register_blueprint(create_hr_blueprint())
         self.client = app.test_client()
 
     def _login(self, *, account_type="training_center", account_id=10):
@@ -117,7 +108,6 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                     resource_id=resource_id,
                     **kwargs,
                 )
-        self.assertEqual(self.socketio.started, [])
 
     def test_indirect_folder_document_request_and_segment_ids_are_hidden_first(self):
         self._login()
@@ -351,7 +341,6 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 410)
         self.assertFalse(response.get_json()["success"])
-        self.assertEqual(self.socketio.started, [])
 
     def test_shared_tts_prompt_is_superadmin_only(self):
         self._login()

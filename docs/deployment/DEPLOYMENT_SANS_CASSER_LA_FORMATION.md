@@ -92,10 +92,10 @@ Dans la prod, ne mets rien : elle garde `/home/database.db`.
 ### 2 bis. Corriger l'erreur "Application Error" du slot staging
 
 Cette erreur arrive quand le slot démarre avant d'avoir installé les dépendances
-Python. Les logs typiques sont :
+Python. Les logs typiques d'une dépendance serveur absente sont :
 
 ```text
-ModuleNotFoundError: No module named 'eventlet'
+ModuleNotFoundError: No module named 'gunicorn'
 WARNING: Could not find virtual environment directory /home/site/wwwroot/antenv
 ```
 
@@ -106,7 +106,7 @@ Correction attendue :
 3. Le workflow remet la commande de démarrage :
 
 ```text
-gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8000 --timeout 120 run:app
+python -m gunicorn --worker-class gthread --workers 1 --threads 8 --bind 0.0.0.0:8000 --timeout 120 main_app:app
 ```
 
 ### 3. Donner au frontend staging l'URL exacte du backend staging

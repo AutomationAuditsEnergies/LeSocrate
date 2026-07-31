@@ -11,7 +11,7 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
     def setUp(self):
         app = Flask(__name__)
         app.secret_key = "test"
-        app.register_blueprint(create_hr_blueprint(None))
+        app.register_blueprint(create_hr_blueprint())
         self.client = app.test_client()
 
     def test_cours_folders_route_uses_migrated_pipeline_repository(self):

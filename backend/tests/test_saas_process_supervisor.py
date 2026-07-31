@@ -19,7 +19,25 @@ class SaaSProcessSupervisorTests(unittest.TestCase):
             ["web", "pipeline-worker", "course-scheduler"],
         )
         web, pipeline, scheduler = specs
-        self.assertEqual(web.command, (sys.executable, "run.py"))
+        self.assertEqual(
+            web.command,
+            (
+                sys.executable,
+                "-m",
+                "gunicorn",
+                "--worker-class",
+                "gthread",
+                "--workers",
+                "1",
+                "--threads",
+                "8",
+                "--bind",
+                "0.0.0.0:8000",
+                "--timeout",
+                "120",
+                "main_app:app",
+            ),
+        )
         self.assertTrue(web.critical)
         self.assertEqual(web.env["PIPELINE_EMBEDDED_WORKER"], "0")
         self.assertEqual(web.env["COURSE_SCHEDULER_ENABLED"], "0")

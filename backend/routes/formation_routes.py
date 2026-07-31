@@ -1552,21 +1552,11 @@ def _spawn_audio_background_task(
     use_native_thread: bool,
     name: str,
 ):
-    """Start audio independently from the caller's Eventlet hub.
-
-    The dedicated course-scheduler worker is a regular threaded process and
-    deliberately does not monkey-patch Eventlet. Scheduled J-1 work therefore
-    uses a native daemon thread; manual Flask launches keep their historical
-    Eventlet greenlet behavior.
-    """
-    if use_native_thread:
-        runner = threading.Thread(target=target, name=name, daemon=True)
-        runner.start()
-        return runner
-
-    import eventlet
-
-    return eventlet.spawn(target)
+    """Start audio independently from the HTTP request thread."""
+    del use_native_thread  # Conservé dans le contrat d'appel du scheduler.
+    runner = threading.Thread(target=target, name=name, daemon=True)
+    runner.start()
+    return runner
 
 
 def _assert_scheduled_audio_ownership(
@@ -2799,8 +2789,6 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
 def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> None:
     """Exécute UNE étape de l'auto-pilot (synchrone — bloque le tick courant)."""
-    import eventlet
-
     if job.get("status") in ("error", "audio_error"):
         fallback = _pipeline_error_fallback_status(job)
         update_job(job_id, status=fallback, error_message=None)
@@ -2888,13 +2876,12 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
 
     elif step == "content":
         # Mode API : génération synchrone par folder, avec concurrence bornée.
-        # Pas de thread background durable : run_content_generation reste appelé
-        # dans le greenlet auto-pilot — résiste aux restarts Azure car :
+        # Pas de tâche background détachée : run_content_generation reste appelé
+        # dans le work item durable — résiste aux restarts Azure car :
         #   - folder existant mais job running/idle → run reprend les segments manquants
         #   - folder existant + job completed → skip via done_set
         #   - aucun thread mort possible (pas de thread du tout)
         import json as _json
-        import eventlet as _eventlet
         from services.content_generation_service import run_content_generation
         from repositories.pipeline_repository import (
             list_content_completion_rows_for_folders,
@@ -3036,9 +3023,12 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         if day_workers <= 1:
             day_results = [_run_content_day(task) for task in day_tasks]
         else:
-            pool = _eventlet.GreenPool(size=day_workers)
-            greenlets = [pool.spawn(_run_content_day, task) for task in day_tasks]
-            day_results = [greenlet.wait() for greenlet in greenlets]
+            with ThreadPoolExecutor(
+                max_workers=day_workers,
+                thread_name_prefix=f"pipeline-{job_id}-day",
+            ) as pool:
+                futures = [pool.submit(_run_content_day, task) for task in day_tasks]
+                day_results = [future.result() for future in futures]
 
         failed_days = [result for result in day_results if not result.get("ok")]
         if failed_days:
@@ -3436,7 +3426,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
                 )
             except Exception:
                 pass
-            eventlet.sleep(5)
+            time.sleep(5)
         # Status posé APRÈS le loop — si Azure redémarre en cours de route,
         # dirty=1 sur les folders non traités permettra à _determine_next_ap_step
         # de détecter que l'audio est incomplet et de relancer l'étape.

@@ -1,13 +1,5 @@
 # state.py - Variables globales partagées de l'application
 
-# Dictionnaire pour stocker les utilisateurs connectés (SocketIO)
-# Format: {sid: username}
-connected_users = {}
-
-# Mapping sid → platform_id pour filtrer par plateforme
-# Format: {sid: platform_id}
-connected_users_platform = {}
-
 # Tokens d'authentification pour navigation privée / cross-origin
 # Format: {token_uuid: {nom, prenom, log_id, platform_id}}
 user_tokens = {}

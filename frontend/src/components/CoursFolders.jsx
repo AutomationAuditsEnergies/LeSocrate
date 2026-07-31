@@ -490,7 +490,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setEditBreakDraft({ intro: '', outro: '' })
     resetScriptAnnotationDraft()
     setScriptAnnotations([])
-    // Arrête le polling local mais la tâche backend continue (greenlet eventlet).
+    // Arrête le polling local mais la tâche backend continue.
     // À la prochaine ouverture, resumeActiveTextReview() reprendra le suivi.
     if (textReviewPollRef.current) {
       clearInterval(textReviewPollRef.current)

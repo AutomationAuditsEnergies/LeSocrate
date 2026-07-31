@@ -241,7 +241,7 @@ class HrContentJobDynamicCountTest(unittest.TestCase):
 
             app = Flask(__name__)
             app.secret_key = "dynamic-content-count"
-            app.register_blueprint(create_hr_blueprint(None))
+            app.register_blueprint(create_hr_blueprint())
             client = app.test_client()
             with client.session_transaction() as session:
                 session["is_admin"] = True

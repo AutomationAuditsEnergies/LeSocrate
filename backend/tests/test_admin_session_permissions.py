@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from flask import Flask
 
@@ -10,7 +10,7 @@ class AdminSessionPermissionsTest(unittest.TestCase):
     def setUp(self):
         app = Flask(__name__)
         app.secret_key = "admin-session-permissions"
-        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+        app.register_blueprint(admin_routes.create_admin_blueprint())
         self.client = app.test_client()
 
     def test_session_exposes_current_database_permissions(self):

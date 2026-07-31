@@ -2,8 +2,6 @@ import json
 import inspect
 import os
 import sqlite3
-import types
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -583,22 +581,26 @@ class PipelineOrderTest(unittest.TestCase):
         ]
         captured = {"pool_size": None, "tasks": [], "created_jobs": [], "run_calls": []}
 
-        class FakeGreenlet:
+        class FakeFuture:
             def __init__(self, result):
                 self._result = result
 
-            def wait(self):
+            def result(self):
                 return self._result
 
-        class FakeGreenPool:
-            def __init__(self, size):
-                captured["pool_size"] = size
+        class FakeThreadPoolExecutor:
+            def __init__(self, max_workers, **_kwargs):
+                captured["pool_size"] = max_workers
 
-            def spawn(self, fn, task):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def submit(self, fn, task):
                 captured["tasks"].append(task)
-                return FakeGreenlet(fn(task))
-
-        fake_eventlet = types.SimpleNamespace(GreenPool=FakeGreenPool, sleep=lambda _seconds: None)
+                return FakeFuture(fn(task))
 
         def fake_reset_jobs(jobs):
             captured["created_jobs"].extend(jobs)
@@ -616,7 +618,11 @@ class PipelineOrderTest(unittest.TestCase):
             auto_pilot_generate_audio=0,
         )
 
-        with patch.dict(sys.modules, {"eventlet": fake_eventlet}), patch.object(
+        with patch.object(
+            fr,
+            "ThreadPoolExecutor",
+            FakeThreadPoolExecutor,
+        ), patch.object(
             fr,
             "update_job",
         ), patch.object(

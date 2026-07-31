@@ -375,8 +375,8 @@ def _mirror_training_center_to_sqlite_if_enabled(account, password_hash, now_str
             mirror_conn.close()
 
 
-def create_admin_blueprint(socketio):
-    """Factory pour créer le blueprint admin avec accès à socketio"""
+def create_admin_blueprint():
+    """Crée le blueprint d'administration HTTP."""
     admin_bp = Blueprint("admin", __name__)
 
     # Only browser-facing routes whose resource is selected through a
@@ -1748,16 +1748,6 @@ def create_admin_blueprint(socketio):
             affected_rows = cursor.rowcount
             conn.commit()
             conn.close()
-
-            # Signal uniquement aux clients de la plateforme concernée
-            socketio.emit(
-                "force_logout",
-                {
-                    "message": "Formation terminée - Déconnexion automatique",
-                    "redirect_url": "/logout",
-                },
-                room=f"platform_{platform_id}",
-            )
 
             logger.info(f"✅ {affected_rows} utilisateurs déconnectés P{platform_id}")
 

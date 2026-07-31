@@ -3,20 +3,12 @@ import sqlite3
 import tempfile
 import unittest
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from flask import Flask
 
 from repositories import pipeline_repository
 from routes import admin_routes
-
-
-class _SocketIOStub:
-    def __init__(self):
-        self.emit = Mock()
-
-    def start_background_task(self, *args, **kwargs):
-        raise AssertionError("background side effect must not run")
 
 
 class AdminTenantScopeRouteTest(unittest.TestCase):
@@ -40,10 +32,9 @@ class AdminTenantScopeRouteTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        self.socketio = _SocketIOStub()
         app = Flask(__name__)
         app.secret_key = "admin-tenant-scope"
-        app.register_blueprint(admin_routes.create_admin_blueprint(self.socketio))
+        app.register_blueprint(admin_routes.create_admin_blueprint())
         self.client = app.test_client()
 
     def tearDown(self):
@@ -152,7 +143,6 @@ class AdminTenantScopeRouteTest(unittest.TestCase):
         self.assertEqual(get_connection.call_count, len(responses))
         get_time.assert_not_called()
         supabase_create.assert_not_called()
-        self.socketio.emit.assert_not_called()
         self.assertEqual(simulated_offsets, {1: "owned-state"})
 
     def test_ai_order_body_platform_is_scoped_even_when_header_is_owned(self):

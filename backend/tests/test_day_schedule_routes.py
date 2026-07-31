@@ -42,7 +42,7 @@ class DayScheduleTemplateRoutesTest(unittest.TestCase):
     def setUp(self):
         app = Flask(__name__)
         app.config.update(TESTING=True, SECRET_KEY="schedule-routes-test")
-        app.register_blueprint(create_hr_blueprint(None))
+        app.register_blueprint(create_hr_blueprint())
         self.client = app.test_client()
         self._login_center()
 

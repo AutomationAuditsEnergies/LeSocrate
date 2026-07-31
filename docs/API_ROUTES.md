@@ -1,8 +1,8 @@
 # 📡 API Backend - Routes Disponibles
 
 ## 🔗 URL Backend
-- **Développement:** `http://localhost:5000`
-- **Frontend Vite proxy:** Configuré automatiquement pour `/api` et `/socket.io`
+- **Développement:** `http://localhost:5001`
+- **Frontend Vite proxy:** Configuré automatiquement pour `/api`
 
 ---
 
@@ -357,112 +357,13 @@ Informations détaillées du cours (debug)
 
 ---
 
-## 🔌 SocketIO Events
-
-### Client → Server
-
-#### `connect`
-Connexion au serveur
-
-#### `disconnect`
-Déconnexion du serveur
-
-#### `user_connected`
-Enregistre un utilisateur connecté
-
-**Emit:**
-```javascript
-socket.emit('user_connected', {
-  username: 'Jean Dupont'
-})
-```
-
-#### `get_participants`
-Demande la liste des participants
-
-**Emit:**
-```javascript
-socket.emit('get_participants')
-```
-
-**Response:**
-```javascript
-socket.on('participants_list', (data) => {
-  console.log(data.participants) // ['Jean Dupont', 'Marie Martin', ...]
-})
-```
-
-#### `send_question`
-Envoie une question au RAG
-
-**Emit:**
-```javascript
-socket.emit('send_question', {
-  username: 'Jean Dupont',
-  question: 'Comment fonctionne la blockchain ?'
-})
-```
-
----
-
-### Server → Client
-
-#### `participants_update`
-Mise à jour du nombre de participants
-
-**Receive:**
-```javascript
-socket.on('participants_update', (data) => {
-  console.log(data.count) // 42
-})
-```
-
-#### `new_message`
-Nouveau message (question ou réponse)
-
-**Receive:**
-```javascript
-socket.on('new_message', (data) => {
-  console.log(data)
-  // {
-  //   username: 'Jean Dupont',
-  //   message: 'Comment fonctionne la blockchain ?',
-  //   timestamp: '14:30:25',
-  //   type: 'question'
-  // }
-  //
-  // ou
-  //
-  // {
-  //   username: 'Professeur',
-  //   message: 'La blockchain est...',
-  //   timestamp: '14:30:27',
-  //   type: 'answer'
-  // }
-})
-```
-
-#### `force_logout`
-Force la déconnexion (émis par admin)
-
-**Receive:**
-```javascript
-socket.on('force_logout', (data) => {
-  console.log(data.message) // 'Formation terminée - Déconnexion automatique'
-  console.log(data.redirect_url) // '/logout'
-  // Rediriger l'utilisateur
-})
-```
-
----
-
 ## 📝 Notes Importantes
 
 1. **Sessions:** Le backend utilise des sessions Flask. Les cookies sont partagés via CORS avec `credentials: true`.
 
 2. **CORS:** Configuré pour `http://localhost:5173` et `http://localhost:3000`.
 
-3. **Proxy Vite:** Toutes les requêtes vers `/api` et `/socket.io` sont automatiquement proxiées vers `http://localhost:5000`.
+3. **Proxy Vite:** Toutes les requêtes vers `/api` sont automatiquement proxiées vers `http://localhost:5001`.
 
 4. **Authentification Admin:**
    - Username: `admin`

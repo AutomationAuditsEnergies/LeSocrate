@@ -91,6 +91,7 @@ from services.recruitment_conversation_service import interpret_recruitment_answ
 from services.teacher_asset_service import resolve_folder_blob_path
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
+from utils.concurrency import start_background_thread
 from utils.slug import slugify, unique_slug
 import state
 
@@ -276,8 +277,8 @@ def _call_platform(pid, path, method="POST", json_data=None):
         return None, str(e)
 
 
-def create_hr_blueprint(socketio):
-    """Factory pour créer le blueprint HR avec accès à socketio"""
+def create_hr_blueprint():
+    """Crée le blueprint du workspace centre."""
     hr_bp = Blueprint("hr", __name__)
 
     @hr_bp.route("/api/hr/enabled")
@@ -4196,9 +4197,11 @@ def create_hr_blueprint(socketio):
             conn.commit()
             conn.close()
 
-            # Lancer en background avec eventlet
-            import eventlet
-            eventlet.spawn(_process_document_background, document_id)
+            start_background_thread(
+                _process_document_background,
+                document_id,
+                name=f"document-audio-{document_id}",
+            )
 
             return jsonify({"success": True, "status": "processing"}), 200
         except Exception as e:
@@ -4243,9 +4246,11 @@ def create_hr_blueprint(socketio):
             if not docs:
                 return jsonify({"success": True, "message": "Tous les documents ont déjà un audio"}), 200
 
-            # Lancer en background (séquentiel)
-            import eventlet
-            eventlet.spawn(_process_folder_background, folder_id)
+            start_background_thread(
+                _process_folder_background,
+                folder_id,
+                name=f"folder-audio-{folder_id}",
+            )
 
             return jsonify({"success": True, "processing": len(docs)}), 200
         except Exception as e:
@@ -4430,8 +4435,10 @@ def create_hr_blueprint(socketio):
             except Exception as e:
                 _content_jobs[folder_id].update({"status": "error", "message": str(e)})
 
-        import eventlet
-        eventlet.spawn(_run)
+        start_background_thread(
+            _run,
+            name=f"content-generation-{folder_id}",
+        )
 
         return jsonify({"success": True, "message": "Génération lancée"}), 202
 
@@ -4781,7 +4788,7 @@ def create_hr_blueprint(socketio):
     def review_text_with_rules(folder_id):
         """Phase 3b' : applique les règles au TEXTE des segments (pas aux MP3).
 
-        Async : démarre un greenlet eventlet et retourne immédiatement un
+        Async : démarre un thread local et retourne immédiatement un
         task_id. Le frontend poll ensuite GET .../rules/review-text/status/<id>
         pour suivre la progression (utile parce que la revérif prend 10-15 min
         et dépasserait le timeout HTTP Azure App Service ~230s).

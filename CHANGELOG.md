@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-07-31
+
+### refactor(runtime): retrait de SocketIO et Eventlet
+
+Le frontend n'utilisait plus aucun canal SocketIO. Les rooms, événements de
+présence, messages temps réel et signaux de déconnexion inutilisés sont donc
+supprimés. L'API Formation3 tourne désormais sous Gunicorn `gthread` et les
+fan-outs bornés du pipeline utilisent les threads standards, sans modifier la
+file durable, les checkpoints ni les limites de concurrence.
+
+### refactor(slides): retrait de l'ancien générateur audio Whisper
+
+L'ancienne chaîne audio → transcription Whisper → reconstruction des slides et
+ses modules de fusion sont supprimés. Les slides proviennent uniquement du
+script validé et de leur deck persistant par cours ; les anciennes routes
+répondent explicitement `410 Gone`.
+
 ## 2026-07-29
 
 ### refactor(pipeline): suppression définitive du runner Claude Code local

@@ -3,7 +3,7 @@
 ## Contexte global
 Ajouter sur le **HR Dashboard** (`/hr-dashboard`) de la plateforme Socrate un système de **dossiers de cours dynamiques** par plateforme, avec upload de PDFs et pipeline TTS (fish.audio).
 
-**Stack** : React 19 + Vite (frontend) / Flask + Flask-SocketIO (backend) / SQLite (DB) / Azure Blob Storage
+**Stack** : React 19 + Vite (frontend) / Flask + Gunicorn gthread (backend) / PostgreSQL ou SQLite local / Azure Blob Storage
 **HR Dashboard existant** : `/Users/amelle/Desktop/SocrateReprise/LeSocrate/frontend/src/pages/HRDashboard.jsx`
 **Backend routes HR** : `/Users/amelle/Desktop/SocrateReprise/LeSocrate/backend/routes/hr_routes.py`
 **DB** : `/Users/amelle/Desktop/SocrateReprise/LeSocrate/backend/database/db.py`
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS cours_documents (
 
 ### 5a. Lancer la TTS pour un document spécifique
 - `POST /api/hr/cours-documents/<document_id>/generate-audio`
-- Lance `process_document()` en background (eventlet thread, comme l'upload audio existant)
+- Lance `process_document()` dans un thread local
 - Retourne immédiatement `{ "status": "processing" }`
 
 ### 5b. Lancer la TTS pour tout un dossier

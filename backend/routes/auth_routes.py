@@ -310,8 +310,8 @@ def _close_all_student_logs(depart):
     return disconnected
 
 
-def create_auth_blueprint(socketio):
-    """Factory pour créer le blueprint auth avec accès à socketio"""
+def create_auth_blueprint():
+    """Crée le blueprint d'authentification HTTP."""
     auth_bp = Blueprint("auth", __name__)
 
     @auth_bp.route("/api/auth/supabase-config", methods=["GET"])
@@ -726,18 +726,6 @@ def create_auth_blueprint(socketio):
             depart = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
             nb_deconnectes = _close_all_student_logs(depart)
             logger.info(f"✅ {nb_deconnectes} utilisateurs déconnectés automatiquement")
-
-            # Forcer la redirection de tous les utilisateurs connectés
-            socketio.emit(
-                "force_logout",
-                {
-                    "message": "Fin de formation - Déconnexion automatique",
-                    "redirect_url": "/logout",
-                },
-            )
-            logger.info(
-                "📢 Signal de déconnexion envoyé à tous les utilisateurs connectés"
-            )
 
             return {"success": True, "users_disconnected": nb_deconnectes}, 200
 

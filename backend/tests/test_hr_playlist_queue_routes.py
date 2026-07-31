@@ -18,7 +18,7 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
     def setUp(self):
         app = Flask(__name__)
         app.secret_key = "test"
-        app.register_blueprint(create_hr_blueprint(None))
+        app.register_blueprint(create_hr_blueprint())
         self.client = app.test_client()
         with self.client.session_transaction() as session:
             session["is_admin"] = True
@@ -30,7 +30,7 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
         module.get_job_from_db = lambda _folder_id: {"status": "completed"}
         return module
 
-    def test_generate_playlist_enqueues_folder_resource_without_eventlet(self):
+    def test_generate_playlist_enqueues_folder_resource_without_local_background_task(self):
         queued = SimpleNamespace(
             id="work-audio",
             run_id="requested-run",

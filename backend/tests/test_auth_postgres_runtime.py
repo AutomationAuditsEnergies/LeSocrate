@@ -36,10 +36,9 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
         self.assertEqual(payload["session_id"], 42)
 
     def setUp(self):
-        self.socketio = Mock()
         app = Flask(__name__)
         app.config.update(TESTING=True, SECRET_KEY="auth-postgres-test")
-        app.register_blueprint(auth_routes.create_auth_blueprint(self.socketio))
+        app.register_blueprint(auth_routes.create_auth_blueprint())
         self.client = app.test_client()
 
     def _postgres_only(self):
@@ -338,7 +337,6 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(response.get_json()["users_disconnected"], 7)
         close_all.assert_called_once()
-        self.socketio.emit.assert_called_once()
 
     def test_room_heartbeat_starts_presence_and_reissues_token_after_reconnect(self):
         recipient_hash = "c" * 64

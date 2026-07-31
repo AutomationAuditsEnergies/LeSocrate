@@ -29,7 +29,7 @@ MAX_BACKUPS = 15
 MIN_AUTO_RESTORE_BYTES = 1024 * 1024
 
 # État de santé partagé, consulté par le before_request de main_app et
-# l'endpoint /api/admin/db/status. Protégé par _state_lock (eventlet-safe :
+# l'endpoint /api/admin/db/status. Protégé par _state_lock :
 # threading.Lock est monkey-patché en lock green-thread).
 _state_lock = threading.Lock()
 db_health = {
@@ -311,7 +311,7 @@ def startup_check():
 
 
 def periodic_backup_loop(sleep_fn, interval_seconds: int = 6 * 3600):
-    """Boucle de backup périodique. sleep_fn = socketio.sleep (eventlet-safe)."""
+    """Boucle de backup périodique avec une fonction de sommeil injectable."""
     while True:
         sleep_fn(interval_seconds)
         try:

@@ -20,12 +20,6 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
-      // Proxy SocketIO vers le backend Flask
-      '/socket.io': {
-        target: 'http://localhost:5001',
-        changeOrigin: true,
-        ws: true,
-      },
     },
   },
 })

@@ -37,6 +37,13 @@ def _enabled(env: Mapping[str, str], name: str) -> bool:
     return str(env.get(name, "0")).strip().lower() in TRUE_VALUES
 
 
+def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
+    try:
+        return max(1, int(env.get(name) or default))
+    except (TypeError, ValueError):
+        return default
+
+
 def build_child_specs(env: Mapping[str, str] | None = None) -> tuple[ChildSpec, ...]:
     """Build isolated child environments without mutating ``os.environ``."""
     base_env = dict(os.environ if env is None else env)
@@ -48,8 +55,30 @@ def build_child_specs(env: Mapping[str, str] | None = None) -> tuple[ChildSpec, 
         "PIPELINE_EMBEDDED_WORKER": "0",
         "COURSE_SCHEDULER_ENABLED": "0",
     }
+    port = str(base_env.get("PORT") or base_env.get("WEBSITES_PORT") or "8000")
+    web_threads = str(max(2, _positive_int(base_env, "WEB_THREADS", 8)))
     specs = [
-        ChildSpec("web", (python, "run.py"), web_env, critical=True),
+        ChildSpec(
+            "web",
+            (
+                python,
+                "-m",
+                "gunicorn",
+                "--worker-class",
+                "gthread",
+                "--workers",
+                "1",
+                "--threads",
+                web_threads,
+                "--bind",
+                f"0.0.0.0:{port}",
+                "--timeout",
+                "120",
+                "main_app:app",
+            ),
+            web_env,
+            critical=True,
+        ),
     ]
 
     pipeline_enabled = _enabled(base_env, "PIPELINE_DEDICATED_WORKER") or _enabled(

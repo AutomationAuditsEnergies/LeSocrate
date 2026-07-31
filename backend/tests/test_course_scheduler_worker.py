@@ -1,6 +1,4 @@
-import sys
 import threading
-import types
 import unittest
 from unittest.mock import patch
 
@@ -10,7 +8,7 @@ from workers import course_scheduler_worker as worker
 
 
 class CourseSchedulerWorkerTest(unittest.TestCase):
-    def test_autonomous_worker_starts_scheduled_audio_without_eventlet_hub(self):
+    def test_autonomous_worker_starts_scheduled_audio_in_standard_thread(self):
         audio_started = threading.Event()
         audio_finished = threading.Event()
 
@@ -34,11 +32,6 @@ class CourseSchedulerWorkerTest(unittest.TestCase):
                 trigger_source="scheduled_24h",
             )
             return [{"success": status == 202, "status": status}]
-
-        def forbidden_eventlet_spawn(*_args, **_kwargs):
-            raise AssertionError("le worker autonome ne doit pas dépendre du hub Eventlet")
-
-        fake_eventlet = types.SimpleNamespace(spawn=forbidden_eventlet_spawn)
 
         with (
             patch.object(worker, "advance_course_schedules", return_value=[]),
@@ -90,7 +83,6 @@ class CourseSchedulerWorkerTest(unittest.TestCase):
                 return_value=True,
             ),
             patch("services.formation_observability_service.log_pipeline_event"),
-            patch.dict(sys.modules, {"eventlet": fake_eventlet}),
         ):
             result = worker.run_scheduler_tick_once()
             self.assertTrue(audio_started.wait(1.0))
@@ -117,9 +109,6 @@ class CourseSchedulerWorkerTest(unittest.TestCase):
             claim_released.set()
             return True
 
-        def forbidden_eventlet_spawn(*_args, **_kwargs):
-            raise AssertionError("--once doit exécuter l'audio inline, sans daemon Eventlet")
-
         def run_main():
             try:
                 main_results.append(worker.main(["--once"]))
@@ -128,7 +117,6 @@ class CourseSchedulerWorkerTest(unittest.TestCase):
             finally:
                 main_returned.set()
 
-        fake_eventlet = types.SimpleNamespace(spawn=forbidden_eventlet_spawn)
         due_session = {
             "id": 9,
             "platform_id": 12,
@@ -199,7 +187,6 @@ class CourseSchedulerWorkerTest(unittest.TestCase):
                 side_effect=mark_claim_failed,
             ),
             patch("services.formation_observability_service.log_pipeline_event"),
-            patch.dict(sys.modules, {"eventlet": fake_eventlet}),
         ):
             runner = threading.Thread(target=run_main, name="test-scheduler-once")
             runner.start()

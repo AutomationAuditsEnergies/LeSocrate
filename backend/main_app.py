@@ -1,9 +1,9 @@
 # main_app.py - Point d'entrée principal de l'application (refactorisé)
 # Backend API pur pour frontend React
 import os
+import threading
 import time
 from flask import Flask, g, request, session
-from flask_socketio import SocketIO
 
 # Configuration et logging
 from config import (
@@ -35,9 +35,6 @@ from routes.chat_routes import chat_bp
 from routes.hr_routes import create_hr_blueprint
 from routes.formation_routes import formation_bp
 from routes.billing_routes import billing_bp
-
-# SocketIO handlers
-from socketio_handlers.handlers import register_socketio_handlers
 
 # Configuration du logging
 configure_logging()
@@ -96,19 +93,10 @@ configure_api_cors(app, _cors_origins)
 logger.info("🚀 Initialisation de l'application Flask (mode API)")
 logger.info(f"✅ CORS configuré pour: {_cors_origins}")
 
-# Initialisation de SocketIO avec eventlet et CORS
-socketio = SocketIO(
-    app,
-    cors_allowed_origins=_cors_origins,
-    async_mode="eventlet"
-)
-logger.info("✅ SocketIO initialisé avec eventlet et CORS")
-
 # Enregistrement des blueprints
-# Les blueprints qui ont besoin de socketio sont créés via factory
-auth_bp = create_auth_blueprint(socketio)
-admin_bp = create_admin_blueprint(socketio)
-hr_bp = create_hr_blueprint(socketio)
+auth_bp = create_auth_blueprint()
+admin_bp = create_admin_blueprint()
+hr_bp = create_hr_blueprint()
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(video_bp)
@@ -439,10 +427,6 @@ def class_access(center_slug, platform_slug):
         },
     })
 
-# Enregistrement des gestionnaires SocketIO
-register_socketio_handlers(socketio)
-logger.info("✅ Gestionnaires SocketIO enregistrés")
-
 # SQLite is a supported local/migration backend, never a hidden production
 # dependency. Pure Postgres deployments must be able to run without DB_PATH.
 if sqlite_runtime_enabled():
@@ -465,7 +449,12 @@ if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
 # Backup périodique SQLite seulement. PostgreSQL/Blob rely on their managed
 # backup/retention policies and are verified by deployment health checks.
 if sqlite_runtime_enabled():
-    socketio.start_background_task(db_safety.periodic_backup_loop, socketio.sleep)
+    threading.Thread(
+        target=db_safety.periodic_backup_loop,
+        args=(time.sleep,),
+        name="sqlite-backup",
+        daemon=True,
+    ).start()
     logger.info("✅ Backup DB SQLite périodique programmé (toutes les 6h)")
 
 def _embedded_pipeline_worker_loop():
@@ -499,11 +488,15 @@ def _embedded_pipeline_worker_loop():
         except Exception as exc:
             mark_pipeline_worker_crashed(str(exc))
             logger.exception("PIPELINE_EMBEDDED_WORKER_CRASHED restart_in_seconds=10")
-            socketio.sleep(10)
+            time.sleep(10)
 
 
 if _EMBEDDED_PIPELINE_WORKER_ENABLED:
-    socketio.start_background_task(_embedded_pipeline_worker_loop)
+    threading.Thread(
+        target=_embedded_pipeline_worker_loop,
+        name="embedded-pipeline-worker",
+        daemon=True,
+    ).start()
     logger.info("✅ Worker pipeline durable embarqué programmé")
 
 
@@ -538,11 +531,15 @@ def _embedded_course_scheduler_loop():
         except Exception as exc:
             _COURSE_SCHEDULER_STATE["last_error"] = str(exc)[:300]
             logger.exception("COURSE_SCHEDULER_TICK_FAILED retry_in_seconds=%s", interval)
-        socketio.sleep(interval)
+        time.sleep(interval)
 
 
 if _COURSE_SCHEDULER_ENABLED:
-    socketio.start_background_task(_embedded_course_scheduler_loop)
+    threading.Thread(
+        target=_embedded_course_scheduler_loop,
+        name="embedded-course-scheduler",
+        daemon=True,
+    ).start()
     logger.info("✅ Planificateur durable des séances et audios programmé")
 
 
@@ -554,7 +551,7 @@ if __name__ == "__main__":
 
     if is_azure:
         logger.info("🌐 Démarrage en mode PRODUCTION (Azure)")
-        socketio.run(app, host="0.0.0.0", port=port, debug=False)
+        app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
     else:
         logger.info("💻 Démarrage en mode DÉVELOPPEMENT (local)")
-        socketio.run(app, host="0.0.0.0", port=port, debug=True)
+        app.run(host="0.0.0.0", port=port, debug=True, threaded=True)

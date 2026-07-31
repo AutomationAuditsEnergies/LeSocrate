@@ -109,17 +109,28 @@ class SlidesTenantScopeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         generate.assert_not_called()
 
-    def test_legacy_superadmin_keeps_prototype_status_access(self):
+    def test_legacy_audio_slide_endpoints_are_retired(self):
         self._login(account_type="legacy_admin", account_id=1)
-        with patch.object(
-            slides_routes,
-            "get_generation_status",
-            return_value={"status": "ready"},
+        for method, path in (
+            ("post", "/api/slides/generate"),
+            ("post", "/api/slides/generate-v3"),
+            ("get", "/api/slides/status"),
+            ("post", "/api/slides/clear"),
         ):
-            response = self.client.get("/api/slides/status")
+            with self.subTest(path=path):
+                response = getattr(self.client, method)(path, json={})
+                self.assertEqual(response.status_code, 410)
+                self.assertEqual(
+                    response.get_json()["code"],
+                    "audio_slide_generation_retired",
+                )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["status"], "ready")
+    def test_legacy_admin_must_request_a_persisted_folder_deck(self):
+        self._login(account_type="legacy_admin", account_id=1)
+        response = self.client.get("/api/slides/data")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "folder_id_required")
 
 
 if __name__ == "__main__":

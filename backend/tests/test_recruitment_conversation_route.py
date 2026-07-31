@@ -17,7 +17,7 @@ class RecruitmentConversationRouteTest(unittest.TestCase):
     def setUp(self):
         app = Flask(__name__)
         app.secret_key = "test"
-        app.register_blueprint(create_hr_blueprint(None))
+        app.register_blueprint(create_hr_blueprint())
         self.client = app.test_client()
         with self.client.session_transaction() as session:
             session["is_admin"] = True

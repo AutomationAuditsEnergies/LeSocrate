@@ -1,6 +1,6 @@
 # Socrate
 
-Application de formation audio synchronisee, avec backend Flask/SocketIO,
+Application de formation audio synchronisee, avec backend Flask/Gunicorn,
 frontend React/Vite, pipeline de generation de contenus pedagogiques et outils
 TTS.
 

@@ -977,11 +977,7 @@ def download_reac_text(rncp_code: str) -> str:
 
 
 def _cooperative_sleep(seconds: float) -> None:
-    try:
-        import eventlet
-        eventlet.sleep(seconds)
-    except Exception:
-        time.sleep(seconds)
+    time.sleep(seconds)
 
 
 def _reac_retry_delays(attempts: int) -> list[float]:

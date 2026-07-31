@@ -46,7 +46,7 @@ jobs:
       contents: read
     env:
       APP_NAME: socrate-backend-p2
-      STARTUP_COMMAND: python run.py
+      STARTUP_COMMAND: python -m gunicorn --worker-class gthread --workers 1 --threads 8 --bind 0.0.0.0:8000 --timeout 120 main_app:app
 
     steps:
       - name: Download artifact from build job

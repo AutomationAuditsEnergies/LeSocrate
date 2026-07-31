@@ -86,11 +86,7 @@ def _provider_concurrency_limit(provider: str, model: str) -> int:
 
 
 def _new_semaphore(limit: int):
-    try:
-        from eventlet.semaphore import Semaphore
-        return Semaphore(limit)
-    except Exception:
-        return threading.BoundedSemaphore(limit)
+    return threading.BoundedSemaphore(limit)
 
 
 def _get_llm_semaphore(provider: str, model: str, limit: int):
@@ -180,11 +176,7 @@ def is_deterministic_deepseek_error(exc: BaseException) -> bool:
 
 
 def _sleep(seconds: float) -> None:
-    try:
-        import eventlet
-        eventlet.sleep(seconds)
-    except Exception:
-        time.sleep(seconds)
+    time.sleep(seconds)
 
 
 def _transient_http_wait(attempt: int) -> float:

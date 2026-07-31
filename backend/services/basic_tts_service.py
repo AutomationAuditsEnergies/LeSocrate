@@ -11,14 +11,9 @@ Voix françaises disponibles (configurable via `EDGE_TTS_VOICE`) :
 - fr-FR-VivienneMultilingualNeural (féminine, multilingue)
 - fr-FR-RemyMultilingualNeural (masculine, multilingue)
 
-Edge-tts utilise asyncio + websockets en interne, incompatible avec
-l'eventlet+monkey_patch du serveur Flask/SocketIO : même via
-`eventlet.tpool`, la boucle asyncio tourne sur les modules socket/ssl
-patchés et peut se figer sans timeout (observé sur socrate1 le 2026-06-12 :
-4 synthèses parallèles gelées indéfiniment, 0 erreur, 0 retry). La synthèse
-passe donc par le CLI `python -m edge_tts` en sous-processus : process
-propre sans monkeypatch, timeout dur, et toute erreur remonte immédiatement
-aux retries de `convert_to_speech_basic`.
+La synthèse passe par le CLI `python -m edge_tts` en sous-processus afin
+d'isoler la boucle asyncio, d'imposer un timeout dur et de faire remonter toute
+erreur immédiatement aux retries de `convert_to_speech_basic`.
 
 Usage : 3ᵉ option dans l'étape 7 de `/formation-pipeline`, à côté de Fish
 Audio (payant) et du mock silence (gratuit mais pas écoutable).

@@ -59,6 +59,7 @@ from repositories.pipeline_repository import (
     update_content_generation_job,
 )
 from utils.deepseek_client import default_model, post_message as _llm_post
+from utils.concurrency import run_parallel_ordered
 from utils.logger import get_logger
 from services.content_pipeline.artifacts import (
     CONTENT_AUDIO_PLAN_BLOB as _CONTENT_AUDIO_PLAN_BLOB,
@@ -11398,20 +11399,12 @@ def _run_structured_parallel(items: list, worker, *, workers: int) -> list:
     workers = max(1, min(int(workers or 1), len(items)))
     if workers <= 1:
         return [worker(item) for item in items]
-    import eventlet
-    pool = eventlet.GreenPool(size=workers)
-    greenlets = [pool.spawn(worker, item) for item in items]
-    results = []
-    first_error = None
-    for greenlet in greenlets:
-        try:
-            results.append(greenlet.wait())
-        except Exception as exc:
-            if first_error is None:
-                first_error = exc
-    if first_error is not None:
-        raise first_error
-    return results
+    return run_parallel_ordered(
+        items,
+        worker,
+        max_workers=workers,
+        thread_name_prefix="structured-course",
+    )
 
 
 def _generate_structured_course_body(
@@ -12838,7 +12831,7 @@ def _run_structured_content_generation(
 def run_content_generation(folder_id, on_progress=None, mode="normal", model=None):
     """
     Lance ou reprend la génération de contenu pour un dossier.
-    Doit être appelé dans un greenlet eventlet (non-bloquant).
+    Peut être appelé par un work item durable ou un thread administratif.
 
     on_progress(sub_idx, total_sub_parts, passe, total_words, message) — callback optionnel.
 
@@ -13137,14 +13130,13 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
                 _generate_sub_part(sub_idx, sub_part_name)
         else:
-            import eventlet
-            pool = eventlet.GreenPool(size=parallel_workers)
-            greenlets = [
-                pool.spawn(_generate_sub_part, sub_idx, sub_part_name)
-                for sub_idx, sub_part_name in enumerate(sub_parts_to_run)
-            ]
-            for g in greenlets:
-                g.wait()
+            sub_part_items = list(enumerate(sub_parts_to_run))
+            run_parallel_ordered(
+                sub_part_items,
+                lambda item: _generate_sub_part(*item),
+                max_workers=parallel_workers,
+                thread_name_prefix=f"content-{job_id}",
+            )
 
         # En mode mini : marquer completed sans upload (pas de texte complet)
         if is_mini:
@@ -14673,7 +14665,6 @@ def generate_audio_from_script(
             and ((blocs_by_number.get(bloc_num) or {}).get("text") or "").strip()
         ]
         if len(dirty_course_items) > 1:
-            import eventlet as _ev
             workers = min(fish_course_workers, len(dirty_course_items))
             logger.info(
                 "PIPELINE_AUDIO_FISH_PARALLEL_COURSES formation_job_id=%s content_job_id=%s folder_id=%s courses=%s workers=%s",
@@ -14688,11 +14679,13 @@ def generate_audio_from_script(
                 len(playlist_items),
                 f"Fish Audio — génération parallèle de {len(dirty_course_items)} cours ({workers} workers)...",
             )
-            pool = _ev.GreenPool(size=workers)
-            pile = _ev.GreenPile(pool)
-            for args in dirty_course_items:
-                pile.spawn(_parallel_fish_course_worker, *args)
-            for result in pile:
+            results = run_parallel_ordered(
+                dirty_course_items,
+                lambda args: _parallel_fish_course_worker(*args),
+                max_workers=workers,
+                thread_name_prefix=f"fish-course-{folder_id}",
+            )
+            for result in results:
                 parallel_fish_course_results[result["item_idx"]] = result
         else:
             parallel_fish_courses_enabled = False
@@ -14714,7 +14707,6 @@ def generate_audio_from_script(
             if file_type != "cours"
         ]
         if len(break_items) > 1:
-            import eventlet as _ev
             workers = min(break_workers, len(break_items))
             logger.info(
                 "PIPELINE_AUDIO_PARALLEL_BREAKS formation_job_id=%s content_job_id=%s folder_id=%s breaks=%s workers=%s",
@@ -14729,11 +14721,13 @@ def generate_audio_from_script(
                 len(playlist_items),
                 f"Q&A/pauses — génération parallèle de {len(break_items)} fichiers ({workers} workers)...",
             )
-            pool = _ev.GreenPool(size=workers)
-            pile = _ev.GreenPile(pool)
-            for args in break_items:
-                pile.spawn(_parallel_break_worker, *args)
-            for result in pile:
+            results = run_parallel_ordered(
+                break_items,
+                lambda args: _parallel_break_worker(*args),
+                max_workers=workers,
+                thread_name_prefix=f"audio-break-{folder_id}",
+            )
+            for result in results:
                 parallel_break_results[result["item_idx"]] = result
         else:
             parallel_breaks_enabled = False
@@ -16753,12 +16747,12 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
     if len(chunks) == 1 or _REVIEW_CHUNK_CONCURRENCY <= 1:
         results = [_run_chunk(chunk) for chunk in chunks]
     else:
-        import eventlet
-        pool = eventlet.GreenPool(size=_REVIEW_CHUNK_CONCURRENCY)
-        pile = eventlet.GreenPile(pool)
-        for chunk in chunks:
-            pile.spawn(_run_chunk, chunk)
-        results = list(pile)
+        results = run_parallel_ordered(
+            chunks,
+            _run_chunk,
+            max_workers=_REVIEW_CHUNK_CONCURRENCY,
+            thread_name_prefix="content-review",
+        )
         results.sort(key=lambda r: r["chunk"]["index"])
 
     updated_text = current_text

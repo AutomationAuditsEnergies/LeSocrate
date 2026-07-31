@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 
 from config import FRANCE_TZ
@@ -35,6 +36,7 @@ from utils.deepseek_client import (
     DeepSeekRateLimitError,
     post_message,
 )
+from utils.concurrency import run_parallel_ordered, start_background_thread
 
 
 logger = logging.getLogger(__name__)
@@ -673,7 +675,7 @@ def _append_task_log(task_id: str, line: str) -> None:
 
 def start_text_review_async(folder_id: int, *, dry_run: bool = False,
                             sub_part_indices: list[int] | None = None) -> str:
-    """Démarre la revérif texte dans un greenlet eventlet et retourne task_id.
+    """Démarre la revérif texte dans un thread local et retourne task_id.
 
     Travaille au niveau **bloc cours** (les 7 MP3 d'une journée correspondant à
     des cours de 45-55 min). Les règles éditoriales du formateur portent sur
@@ -703,7 +705,6 @@ def start_text_review_async(folder_id: int, *, dry_run: bool = False,
         f"Lancement : {total} bloc(s) cours à examiner, "
         f"dry_run={dry_run}, parallel={_TEXT_REVIEW_PARALLEL}")
 
-    import eventlet
     def _runner():
         try:
             summary = review_blocs_with_rules(
@@ -729,7 +730,10 @@ def start_text_review_async(folder_id: int, *, dry_run: bool = False,
                 task["ended_at"] = _now_str()
             logger.exception(f"❌ Revérif texte async folder={folder_id} échouée")
             _append_task_log(task_id, f"❌ Échec : {exc}")
-    eventlet.spawn(_runner)
+    start_background_thread(
+        _runner,
+        name=f"script-review-{folder_id}",
+    )
     return task_id
 
 
@@ -805,9 +809,8 @@ def review_blocs_with_rules(
     # Charge les segments source une fois (pour le mapping patches → segments)
     segments_rows = _list_completed_segment_tuples(context["job_id"])
 
-    import eventlet
-    state_lock = eventlet.semaphore.Semaphore(1)
-    db_lock = eventlet.semaphore.Semaphore(1)
+    state_lock = threading.Lock()
+    db_lock = threading.Lock()
 
     summary = {
         "dry_run": bool(dry_run),
@@ -1030,11 +1033,12 @@ def review_blocs_with_rules(
                 f"{entry['words_before']} → {entry['words_after']} mots, "
                 f"{len(violations)} règle(s))")
 
-    pool = eventlet.GreenPool(size=pool_size)
-    pile = eventlet.GreenPile(pool)
-    for bloc in blocs:
-        pile.spawn(_process_bloc, bloc)
-    list(pile)
+    run_parallel_ordered(
+        blocs,
+        _process_bloc,
+        max_workers=pool_size,
+        thread_name_prefix=f"script-rules-{folder_id}",
+    )
 
     logger.info(
         f"📝 Revérif blocs cours folder={folder_id} : "
@@ -1093,11 +1097,10 @@ def review_segments_with_rules(
     }
 
     # Lock pour MAJ concurrentes du summary, du task state, des détails.
-    import eventlet
-    state_lock = eventlet.semaphore.Semaphore(1)
+    state_lock = threading.Lock()
     # Lock écriture DB SQLite : write-lock global, mieux vaut sérialiser
     # les UPDATE pour éviter "database is locked".
-    db_lock = eventlet.semaphore.Semaphore(1)
+    db_lock = threading.Lock()
 
     def _update_task(**fields):
         if not progress_task_id:
@@ -1109,7 +1112,7 @@ def review_segments_with_rules(
     with state_lock:
         _update_task(segments_total=len(segments))
 
-    # Groupe les segments par sous-partie : 1 "agent" (greenlet) traite tous
+    # Groupe les segments par sous-partie : 1 worker traite tous
     # les passes d'une même sous-partie séquentiellement. Pool plafonné à
     # _TEXT_REVIEW_PARALLEL pour ne pas saturer DeepSeek / SQLite.
     from collections import defaultdict
@@ -1321,12 +1324,12 @@ def review_segments_with_rules(
         if progress_task_id:
             _append_task_log(progress_task_id, f"✓ {sub_idx_label} : terminé")
 
-    # Lance le pool de greenlets
-    pool = eventlet.GreenPool(size=pool_size)
-    pile = eventlet.GreenPile(pool)
-    for sub_idx_key in group_keys:
-        pile.spawn(_process_group, sub_idx_key)
-    list(pile)  # bloque jusqu'à ce que tous les greenlets aient fini
+    run_parallel_ordered(
+        group_keys,
+        _process_group,
+        max_workers=pool_size,
+        thread_name_prefix=f"segment-rules-{folder_id}",
+    )
 
     logger.info(
         f"📝 Revérif texte folder={folder_id} : "

@@ -1,6 +1,6 @@
 import os
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from flask import Flask
 from werkzeug.security import generate_password_hash
@@ -28,7 +28,7 @@ class AdminSecretSafetyTest(unittest.TestCase):
     def test_legacy_center_login_is_rejected_before_any_database_lookup(self):
         app = Flask(__name__)
         app.secret_key = "test-secret"
-        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+        app.register_blueprint(admin_routes.create_admin_blueprint())
 
         with app.test_client() as client, patch.object(
             admin_routes, "DATABASE_BACKEND", "postgres"
@@ -50,7 +50,7 @@ class AdminSecretSafetyTest(unittest.TestCase):
     def test_registration_never_opens_sqlite_in_pure_postgres(self):
         app = Flask(__name__)
         app.secret_key = "test-secret"
-        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+        app.register_blueprint(admin_routes.create_admin_blueprint())
         account = {
             "id": 42,
             "username": "centre@example.test",
@@ -97,7 +97,7 @@ class AdminSecretSafetyTest(unittest.TestCase):
     def test_unknown_password_reset_never_opens_sqlite_in_pure_postgres(self):
         app = Flask(__name__)
         app.secret_key = "test-secret"
-        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+        app.register_blueprint(admin_routes.create_admin_blueprint())
 
         with app.test_client() as client, patch.object(
             admin_routes, "DATABASE_BACKEND", "postgres"
@@ -122,7 +122,7 @@ class AdminSecretSafetyTest(unittest.TestCase):
     def test_postgres_registration_ignores_optional_sqlite_mirror_failure(self):
         app = Flask(__name__)
         app.secret_key = "test-secret"
-        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+        app.register_blueprint(admin_routes.create_admin_blueprint())
         account = {
             "id": 43,
             "username": "hybrid@example.test",
