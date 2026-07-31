@@ -72,6 +72,32 @@ def _teacher_order_chain_payload(item: WorkItem) -> dict:
     return {"teacher_order_id": order_id} if order_id else {}
 
 
+def _as_permanent_pipeline_error(
+    exc: BaseException,
+) -> PermanentWorkError | None:
+    """Classe les erreurs qu'aucune relance de la file ne peut corriger."""
+    if isinstance(exc, PermanentWorkError):
+        return exc
+
+    from utils.deepseek_client import is_deterministic_deepseek_error
+
+    if is_deterministic_deepseek_error(exc):
+        return PermanentWorkError(str(exc))
+
+    current = exc
+    visited = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        response = getattr(current, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code in (400, 401, 402, 403, 404, 410, 422):
+            return PermanentWorkError(
+                f"Erreur HTTP définitive {status_code} : {current}"
+            )
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _complete_teacher_order_if_present(item: WorkItem, job: dict) -> None:
     if not item.payload.get("teacher_order_id"):
         return
@@ -200,6 +226,9 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
             message=f"Étape auto-pilot échouée : {step}",
             error=str(exc)[:500],
         )
+        permanent_error = _as_permanent_pipeline_error(exc)
+        if permanent_error is not None:
+            raise permanent_error from exc
         raise
     lease.checkpoint()
     _log_event(

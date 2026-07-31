@@ -159,6 +159,26 @@ class DeepSeekAPIError(Exception):
         return self.status_code in (400, 401, 402, 403, 404, 422)
 
 
+def is_deterministic_deepseek_error(exc: BaseException) -> bool:
+    """Reconnaît les erreurs DeepSeek qu'une nouvelle tentative ne corrigera pas."""
+    current = exc
+    visited = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, DeepSeekAPIError) and current.is_deterministic:
+            return True
+        if isinstance(current, ValueError):
+            message = str(current)
+            if (
+                "DEEPSEEK_API_KEY" in message
+                or "Modèle non pris en charge" in message
+                or "post_message: 'model' est requis" in message
+            ):
+                return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _sleep(seconds: float) -> None:
     try:
         import eventlet
@@ -214,7 +234,14 @@ def parse_retry_after(resp) -> float:
     return 60.0
 
 
-def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature=None) -> str:
+def post_message(
+    messages,
+    max_tokens=8000,
+    model=None,
+    timeout=600,
+    temperature=None,
+    http_max_attempts=None,
+) -> str:
     """
     Appelle l'interface DeepSeek compatible ``POST /v1/messages``.
 
@@ -248,7 +275,11 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
     if thinking == "enabled" and effort in ("high", "max"):
         payload["output_config"] = {"effort": effort}
 
-    max_attempts = _llm_http_max_attempts()
+    max_attempts = (
+        _llm_http_max_attempts()
+        if http_max_attempts is None
+        else max(1, min(6, int(http_max_attempts)))
+    )
     transient_errors = (
         _http.exceptions.ChunkedEncodingError,
         _http.exceptions.ConnectionError,

@@ -33,6 +33,7 @@ from services.knowledge_base_service import (
     list_kb,
     kb_stats,
 )
+from utils.deepseek_client import is_deterministic_deepseek_error
 from utils.logger import get_logger
 from services.admin_access_service import can_access_formation_pipeline
 from services.formation_runtime_state import PIPELINE_EXECUTION_STATE
@@ -117,6 +118,40 @@ def _formation_content_day_workers(default: int = 3) -> int:
     except (TypeError, ValueError):
         maximum = 8
     return max(1, min(max(1, maximum), workers))
+
+
+def _preferred_pipeline_failure_cause(failures: list[dict]) -> BaseException | None:
+    """Conserve une cause exploitable par la politique de retry durable."""
+    def _wait_seconds(cause: BaseException) -> float:
+        try:
+            return float(getattr(cause, "wait_seconds", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    causes = [
+        failure.get("exception")
+        for failure in failures
+        if isinstance(failure.get("exception"), BaseException)
+    ]
+    return next(
+        (cause for cause in causes if is_deterministic_deepseek_error(cause)),
+        next(
+            (
+                cause
+                for cause in causes
+                if _wait_seconds(cause) > 0
+            ),
+            causes[0] if causes else None,
+        ),
+    )
+
+
+def _raise_pipeline_batch_failure(message: str, failures: list[dict]) -> None:
+    error = RuntimeError(message)
+    cause = _preferred_pipeline_failure_cause(failures)
+    if cause is not None:
+        raise error from cause
+    raise error
 
 
 def _normalize_pipeline_model_choice(raw, default=None):
@@ -2816,7 +2851,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
 
         reac = download_reac_text_with_retry(
             job["rncp_code"],
-            attempts=3,
+            attempts=1,
             on_attempt=_log_reac_attempt,
         )
         rc_text, rome_text = None, None
@@ -2989,6 +3024,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
                     "day_num": day_num,
                     "folder_id": folder_id,
                     "error": str(exc)[:500],
+                    "exception": exc,
                 }
 
         if day_workers <= 1:
@@ -3000,12 +3036,13 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
 
         failed_days = [result for result in day_results if not result.get("ok")]
         if failed_days:
-            raise RuntimeError(
+            _raise_pipeline_batch_failure(
                 "Génération contenu échouée sur journées : "
                 + ", ".join(
                     f"J{result['day_num']} folder={result['folder_id']} ({result.get('error')})"
                     for result in failed_days
-                )
+                ),
+                failed_days,
             )
 
         logger.info(f"🤖 ✓ Contenu généré job {job_id}")
@@ -3048,12 +3085,21 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
                         if len(error_samples) >= 2:
                             break
                     suffix = f" : {' ; '.join(error_samples)}" if error_samples else ""
-                    failed.append(f"{fid}({result['segments_failed']} segments échoués{suffix})")
+                    failed.append({
+                        "label": f"{fid}({result['segments_failed']} segments échoués{suffix})",
+                    })
             except Exception as e:
                 logger.warning(f"⚠️ Review folder {fid} : {e}")
-                failed.append(str(fid))
+                failed.append({
+                    "label": f"{fid}({str(e)[:180]})",
+                    "exception": e,
+                })
         if failed:
-            raise RuntimeError(f"Review échouée sur folders : {', '.join(failed)}")
+            _raise_pipeline_batch_failure(
+                "Review échouée sur folders : "
+                + ", ".join(failure["label"] for failure in failed),
+                failed,
+            )
         logger.info(
             "🤖 ✓ Rapports conformité persistés job %s : %s/%s",
             job_id,
@@ -3242,7 +3288,12 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
                     )
                 except Exception:
                     pass
-                return {"status": "failed", "folder_id": fid, "error": err}
+                return {
+                    "status": "failed",
+                    "folder_id": fid,
+                    "error": err,
+                    "exception": e,
+                }
 
         if pending_rows:
             active_workers = min(slide_workers, len(pending_rows))
@@ -3257,16 +3308,23 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
                         if result.get("status") == "generated":
                             generated += 1
                         else:
-                            failures.append(f"{result.get('folder_id')}({result.get('error')})")
+                            failures.append(result)
             else:
                 for fid, cg_job_id in pending_rows:
                     result = _generate_slide_folder(fid, cg_job_id)
                     if result.get("status") == "generated":
                         generated += 1
                     else:
-                        failures.append(f"{result.get('folder_id')}({result.get('error')})")
+                        failures.append(result)
         if failures:
-            raise RuntimeError("Slides échouées sur folders : " + ", ".join(failures))
+            _raise_pipeline_batch_failure(
+                "Slides échouées sur folders : "
+                + ", ".join(
+                    f"{failure.get('folder_id')}({failure.get('error')})"
+                    for failure in failures
+                ),
+                failures,
+            )
         logger.info(
             "🤖 ✓ Slides générées job %s : generated=%s skipped=%s workers=%s model=%s",
             job_id,

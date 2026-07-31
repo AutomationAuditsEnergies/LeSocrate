@@ -1732,61 +1732,46 @@ def _align_section_to_slide_anchors(section: dict, units: list[dict], anchors: l
             "reason": "units_insufficient",
         }
 
-    base_prompt = _section_alignment_prompt(section, units, ordered_anchors)
-    last_reason = "invalid_or_failed_alignment"
-    for attempt in range(2):
-        prompt = base_prompt
-        if attempt:
-            prompt = f"""{base_prompt}
-
-CORRECTION OBLIGATOIRE:
-La réponse précédente était invalide ({last_reason}).
-Cette fois, tu dois fournir exactement {len(ordered_anchors)} assignations:
-- tous les anchor_id prévus, une seule fois chacun;
-- aucune unité oubliée;
-- des plages contiguës qui couvrent de 0 à {len(units) - 1};
-- JSON valide uniquement.
-Choisis les frontières les plus cohérentes avec le texte, sans inventer de contenu.
-"""
-        try:
-            response = post_message(
-                [{"role": "user", "content": prompt}],
-                max_tokens=2200,
-                model=model,
-                timeout=180,
-                temperature=0 if attempt else None,
-            )
-            parsed = _parse_json_object(response)
-            assignments = _validate_section_assignments(parsed, ordered_anchors, units)
-            if assignments:
-                return assignments, {
-                    "status": "llm_retry" if attempt else "llm",
-                    "assignments": len(assignments),
-                    "attempts": attempt + 1,
-                }
-            last_reason = "invalid_assignments"
-            logger.warning(
-                "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID course=%s section=%s anchors=%s units=%s attempt=%s",
-                section.get("course_number"),
-                section.get("section_label"),
-                len(ordered_anchors),
-                len(units),
-                attempt + 1,
-            )
-        except Exception as exc:
-            last_reason = f"{exc.__class__.__name__}: {str(exc)[:180]}"
-            logger.exception(
-                "PIPELINE_SLIDES_SECTION_ALIGNMENT_ERROR course=%s section=%s attempt=%s error=%s",
-                section.get("course_number"),
-                section.get("section_label"),
-                attempt + 1,
-                exc,
-            )
+    prompt = _section_alignment_prompt(section, units, ordered_anchors)
+    # L'appel réseau ne se répète pas ici : la file durable possède le retry.
+    response = post_message(
+        [{"role": "user", "content": prompt}],
+        max_tokens=2200,
+        model=model,
+        timeout=180,
+        temperature=None,
+        http_max_attempts=1,
+    )
+    last_reason = "invalid_assignments"
+    try:
+        parsed = _parse_json_object(response)
+        assignments = _validate_section_assignments(parsed, ordered_anchors, units)
+        if assignments:
+            return assignments, {
+                "status": "llm",
+                "assignments": len(assignments),
+                "attempts": 1,
+            }
+        logger.warning(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID course=%s section=%s anchors=%s units=%s",
+            section.get("course_number"),
+            section.get("section_label"),
+            len(ordered_anchors),
+            len(units),
+        )
+    except Exception as exc:
+        last_reason = f"{exc.__class__.__name__}: {str(exc)[:180]}"
+        logger.warning(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID_JSON course=%s section=%s error=%s",
+            section.get("course_number"),
+            section.get("section_label"),
+            exc,
+        )
 
     return _fallback_section_assignments(ordered_anchors, units, "fallback_invalid_alignment"), {
         "status": "fallback",
         "reason": last_reason,
-        "attempts": 2,
+        "attempts": 1,
     }
 
 
@@ -3806,101 +3791,74 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
 
 
 def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_profile: dict, max_batch_slides: int) -> tuple[list[dict], dict]:
-    base_prompt = _prompt_for_blocks(blocks, source_title, pace_profile, max_batch_slides)
-    last_error = None
+    prompt = _prompt_for_blocks(blocks, source_title, pace_profile, max_batch_slides)
+    response = post_message(
+        [{"role": "user", "content": prompt}],
+        max_tokens=5000,
+        model=model,
+        timeout=240,
+        temperature=None,
+        http_max_attempts=1,
+    )
+    parsed = _parse_json_object(response)
+    raw_slides = parsed.get("slides", [])
+    if not isinstance(raw_slides, list):
+        raise ValueError("Réponse LLM sans tableau slides")
 
-    for attempt in range(2):
-        prompt = base_prompt
-        if attempt:
-            prompt = f"""{base_prompt}
+    template_backlog = _normalize_template_backlog(
+        parsed.get("template_backlog")
+        if isinstance(parsed.get("template_backlog"), list)
+        else []
+    )
 
-CORRECTION STRICTE:
-La génération précédente du batch a échoué ({last_error}).
-Cette fois, pour toute fenêtre dont `source_alignment` vaut `section_slide_alignment`, tu n'as pas le choix:
-- produis exactement 1 slide pour cette fenêtre;
-- recopie son unique `slide_anchor_id`;
-- utilise son `source_block_id`;
-- n'invente pas de contenu;
-- choisis le meilleur `template_type` depuis le catalogue selon le texte réel, même s'il diffère du `planned_template_type`.
-- exception stricte: un anchor de conclusion de cours (`cX-conclusion-recap-slide`) doit rester en `recap`.
-- renseigne aussi `pedagogical_shape`, `shape_evidence`, `template_decision_reason` et `rejected_templates`.
-Les autres fenêtres restent facultatives.
-Réponds uniquement avec le JSON demandé.
-"""
+    block_by_id = {block["source_block_id"]: block for block in blocks}
+    per_block_counts = {}
+    slides = []
+
+    for raw in raw_slides:
+        if not isinstance(raw, dict):
+            continue
         try:
-            response = post_message(
-                [{"role": "user", "content": prompt}],
-                max_tokens=5000,
-                model=model,
-                timeout=240,
-                temperature=0 if attempt else None,
+            source_block_id = int(raw.get("source_block_id"))
+        except (TypeError, ValueError):
+            continue
+        block = block_by_id.get(source_block_id)
+        if not block:
+            continue
+        if block.get("source_alignment") == "section_slide_alignment":
+            per_block_limit = 1
+        else:
+            per_block_limit = max(
+                pace_profile["max_slides_per_block"],
+                len(block.get("slide_anchors") or []),
             )
-            parsed = _parse_json_object(response)
-            raw_slides = parsed.get("slides", [])
-            if not isinstance(raw_slides, list):
-                raise ValueError("Réponse LLM sans tableau slides")
-        except Exception as exc:
-            last_error = f"{exc.__class__.__name__}: {str(exc)[:180]}"
-            if attempt == 0 and _strict_anchor_blocks(blocks):
-                logger.warning(
-                    "PIPELINE_SLIDES_BATCH_RETRY_STRICT blocks=%s-%s error=%s",
-                    blocks[0].get("source_block_id") if blocks else None,
-                    blocks[-1].get("source_block_id") if blocks else None,
-                    exc,
-                )
-                continue
-            raise
+        if per_block_counts.get(source_block_id, 0) >= per_block_limit:
+            continue
+        slides.append(_normalize_slide(raw, block))
+        per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
+        if len(slides) >= max_batch_slides:
+            break
 
-        template_backlog = _normalize_template_backlog(parsed.get("template_backlog") if isinstance(parsed.get("template_backlog"), list) else [])
+    slides, strict_fallback_slides = _ensure_strict_anchor_slides(
+        slides,
+        blocks,
+        "missing_strict_section_slide",
+    )
 
-        block_by_id = {block["source_block_id"]: block for block in blocks}
-        per_block_counts = {}
-        slides = []
+    for slide in slides:
+        gap = slide.get("ideal_template_gap") or {}
+        if gap.get("needed") and gap.get("suggested_template_name") and gap.get("reason"):
+            template_backlog.extend(_normalize_template_backlog([gap], max_items=1))
 
-        for raw in raw_slides:
-            if not isinstance(raw, dict):
-                continue
-            try:
-                source_block_id = int(raw.get("source_block_id"))
-            except (TypeError, ValueError):
-                continue
-            block = block_by_id.get(source_block_id)
-            if not block:
-                continue
-            if block.get("source_alignment") == "section_slide_alignment":
-                per_block_limit = 1
-            else:
-                per_block_limit = max(
-                    pace_profile["max_slides_per_block"],
-                    len(block.get("slide_anchors") or []),
-                )
-            if per_block_counts.get(source_block_id, 0) >= per_block_limit:
-                continue
-            slides.append(_normalize_slide(raw, block))
-            per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
-            if len(slides) >= max_batch_slides:
-                break
-
-        slides, strict_fallback_slides = _ensure_strict_anchor_slides(
-            slides,
-            blocks,
-            "missing_strict_section_slide",
-        )
-
-        for slide in slides:
-            gap = slide.get("ideal_template_gap") or {}
-            if gap.get("needed") and gap.get("suggested_template_name") and gap.get("reason"):
-                template_backlog.extend(_normalize_template_backlog([gap], max_items=1))
-
-        return slides, {
-            "template_backlog": _normalize_template_backlog(template_backlog),
-            "raw_backlog_count": len(parsed.get("template_backlog") or []) if isinstance(parsed.get("template_backlog"), list) else 0,
-            "curation_enabled": _slide_curation_enabled(),
-            "attempts": attempt + 1,
-            "strict_fallback_slides": strict_fallback_slides,
-        }
-
-    raise RuntimeError(last_error or "batch_generation_failed")
+    return slides, {
+        "template_backlog": _normalize_template_backlog(template_backlog),
+        "raw_backlog_count": len(parsed.get("template_backlog") or [])
+        if isinstance(parsed.get("template_backlog"), list)
+        else 0,
+        "curation_enabled": _slide_curation_enabled(),
+        "attempts": 1,
+        "strict_fallback_slides": strict_fallback_slides,
+    }
 
 
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:

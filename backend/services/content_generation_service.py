@@ -58,12 +58,7 @@ from repositories.pipeline_repository import (
     update_content_segment_plan_repair,
     update_content_generation_job,
 )
-from utils.deepseek_client import (
-    DeepSeekAPIError,
-    DeepSeekRateLimitError,
-    default_model,
-    post_message as _llm_post,
-)
+from utils.deepseek_client import default_model, post_message as _llm_post
 from utils.logger import get_logger
 from services.content_pipeline.artifacts import (
     CONTENT_AUDIO_PLAN_BLOB as _CONTENT_AUDIO_PLAN_BLOB,
@@ -2639,50 +2634,47 @@ def _merge_course_beats_enrichment(course_plan: dict, enrichment: dict) -> dict:
 def _enrich_structured_course_plan_with_beats(*, plan: dict, course_plan: dict, job: dict, model=None) -> dict:
     course_number = int(course_plan.get("course_number") or 0)
     prompt = _build_course_beats_enrichment_prompt(plan, course_plan, job=job)
-    for attempt in range(2):
-        started_at = time.time()
-        try:
-            logger.info(
-                "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_START formation_job_id=%s content_job_id=%s course=%s attempt=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                course_number,
-                attempt + 1,
-            )
-            raw = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=6500,
-                model=model,
-            )
-            enrichment = _parse_course_beats_enrichment(raw, course_number)
-            merged = _merge_course_beats_enrichment(course_plan, enrichment)
-            logger.info(
-                "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_DONE formation_job_id=%s content_job_id=%s course=%s status=%s beats=%s duration_ms=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                course_number,
-                (merged.get("teaching_beats_enrichment") or {}).get("status"),
-                (merged.get("teaching_beats_enrichment") or {}).get("beats"),
-                int((time.time() - started_at) * 1000),
-            )
-            return merged
-        except Exception as exc:
-            logger.warning(
-                "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_WARN formation_job_id=%s content_job_id=%s course=%s attempt=%s error=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                course_number,
-                attempt + 1,
-                str(exc)[:260],
-            )
-            if attempt == 1:
-                fallback = {**course_plan}
-                fallback["teaching_beats_enrichment"] = {
-                    "status": "fallback_existing",
-                    "reason": str(exc)[:260],
-                }
-                return fallback
-    return course_plan
+    started_at = time.time()
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_START formation_job_id=%s content_job_id=%s course=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_number,
+    )
+    # Une erreur fournisseur remonte à la file durable. Seule une réponse
+    # reçue mais inexploitable conserve le plan squelette déjà valide.
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=6500,
+        model=model,
+    )
+    try:
+        enrichment = _parse_course_beats_enrichment(raw, course_number)
+        merged = _merge_course_beats_enrichment(course_plan, enrichment)
+        logger.info(
+            "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_DONE formation_job_id=%s content_job_id=%s course=%s status=%s beats=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            (merged.get("teaching_beats_enrichment") or {}).get("status"),
+            (merged.get("teaching_beats_enrichment") or {}).get("beats"),
+            int((time.time() - started_at) * 1000),
+        )
+        return merged
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_WARN formation_job_id=%s content_job_id=%s course=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            str(exc)[:260],
+        )
+        fallback = {**course_plan}
+        fallback["teaching_beats_enrichment"] = {
+            "status": "fallback_existing",
+            "reason": str(exc)[:260],
+        }
+        return fallback
 
 
 def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
@@ -2788,62 +2780,52 @@ def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, 
 
 def _generate_structured_course_plan(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
     if _structured_plan_two_stage_enabled():
-        for attempt in range(3):
-            try:
-                return _generate_structured_course_plan_two_stage(
-                    job,
-                    playlist_items,
-                    sub_parts,
-                    module_contents,
-                    model=model,
-                )
-            except Exception as e:
-                logger.warning("⚠️ Plan structuré deux niveaux tentative %s/3 échouée : %s", attempt + 1, str(e)[:300])
-                if attempt == 2:
-                    raise
-        raise ValueError("Plan structuré deux niveaux impossible")
+        return _generate_structured_course_plan_two_stage(
+            job,
+            playlist_items,
+            sub_parts,
+            module_contents,
+            model=model,
+        )
 
-    for attempt in range(3):
-        try:
-            attempt_started_at = time.time()
-            prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents, planning_mode="full")
-            logger.info(
-                "PIPELINE_STRUCTURED_PLAN_FULL_START formation_job_id=%s content_job_id=%s folder=%s attempt=%s model=%s prompt_chars=%s max_tokens=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                job.get("folder_id"),
-                attempt + 1,
-                model or DEEPSEEK_MODEL,
-                len(prompt),
-                9000,
-            )
-            raw = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=9000,
-                model=model,
-            )
-            plan = _normalize_structured_course_plans(
-                _parse_structured_course_plan(raw),
-                job=job,
-                playlist_items=playlist_items,
-                sub_parts=sub_parts,
-            )
-            logger.info(
-                "PIPELINE_STRUCTURED_PLAN_FULL_DONE formation_job_id=%s content_job_id=%s folder=%s attempt=%s response_chars=%s courses=%s duration_ms=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                job.get("folder_id"),
-                attempt + 1,
-                len(raw or ""),
-                len(plan.get("courses") or []),
-                int((time.time() - attempt_started_at) * 1000),
-            )
-            return plan
-        except Exception as e:
-            logger.warning("⚠️ Plan structuré tentative %s/3 échouée : %s", attempt + 1, str(e)[:300])
-            if attempt == 2:
-                raise
-    raise ValueError("Plan structuré impossible")
+    attempt_started_at = time.time()
+    prompt = _build_structured_course_plan_prompt(
+        job,
+        playlist_items,
+        sub_parts,
+        module_contents,
+        planning_mode="full",
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_FULL_START formation_job_id=%s content_job_id=%s folder=%s model=%s prompt_chars=%s max_tokens=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        model or DEEPSEEK_MODEL,
+        len(prompt),
+        9000,
+    )
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=9000,
+        model=model,
+    )
+    plan = _normalize_structured_course_plans(
+        _parse_structured_course_plan(raw),
+        job=job,
+        playlist_items=playlist_items,
+        sub_parts=sub_parts,
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_FULL_DONE formation_job_id=%s content_job_id=%s folder=%s response_chars=%s courses=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        len(raw or ""),
+        len(plan.get("courses") or []),
+        int((time.time() - attempt_started_at) * 1000),
+    )
+    return plan
 
 
 def _section_label(section: dict) -> str:
@@ -4963,6 +4945,7 @@ Réponds uniquement avec ce JSON valide :
             max_tokens=500,
             model=model or DEEPSEEK_MODEL,
             timeout=90,
+            http_max_attempts=1,
         )
         data = _extract_llm_json(raw)
         decision = str(data.get("decision") or "").strip().lower()
@@ -5691,6 +5674,7 @@ Réponds uniquement avec le texte remanié, sans commentaire."""
         messages=[{"role": "user", "content": prompt}],
         max_tokens=min(12000, int(target_words * 2.2) + 500),
         model=model or default_model(),
+        http_max_attempts=1,
     )
     reduced = (reduced or "").replace("```", "").strip()
     if not reduced:
@@ -7140,12 +7124,13 @@ PROGRAMME :
 
 
 def _deepseek_post(messages, max_tokens, model=None):
-    """Appel au client HTTP DeepSeek mutualisé."""
+    """Un seul appel HTTP ; la file durable possède la politique de retry."""
     return _llm_post(
         messages=messages,
         max_tokens=max_tokens,
         model=model or DEEPSEEK_MODEL,
         timeout=600,
+        http_max_attempts=1,
     )
 
 
@@ -7174,40 +7159,38 @@ def extract_sub_parts(program_text, course_count=NUM_SUB_PARTS):
 
     logger.info("🔍 Extraction des sous-parties avec DeepSeek...")
 
-    for attempt in range(3):
-        try:
-            raw = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500,
-            ).strip()
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1500,
+    ).strip()
 
-            # Nettoyer au cas où DeepSeek ajoute du texte avant/après le JSON
-            json_match = re.search(r"\{[\s\S]*\}", raw)
-            if not json_match:
-                raise ValueError("Pas de JSON valide dans la réponse")
+    # Nettoyer au cas où DeepSeek ajoute du texte avant/après le JSON.
+    json_match = re.search(r"\{[\s\S]*\}", raw)
+    if not json_match:
+        raise ValueError("Pas de JSON valide dans la réponse")
 
-            data = json.loads(json_match.group())
-            if "sub_parts" not in data or len(data["sub_parts"]) < 1:
-                raise ValueError(f"Format incorrect : {list(data.keys())}")
+    data = json.loads(json_match.group())
+    if "sub_parts" not in data or len(data["sub_parts"]) < 1:
+        raise ValueError(f"Format incorrect : {list(data.keys())}")
 
-            # Verrouiller le nombre exact attendu par le manifeste de journée.
-            sub_parts = [
-                _strip_internal_schedule_from_label(item)
-                for item in data["sub_parts"][:course_count]
-            ]
-            while len(sub_parts) < course_count:
-                sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
+    # Verrouiller le nombre exact attendu par le manifeste de journée.
+    sub_parts = [
+        _strip_internal_schedule_from_label(item)
+        for item in data["sub_parts"][:course_count]
+    ]
+    while len(sub_parts) < course_count:
+        sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
 
-            result = {"title": data.get("title", "Formation professionnelle"), "sub_parts": sub_parts}
-            logger.info(f"✅ {len(result['sub_parts'])} sous-parties extraites pour : {result['title']}")
-            return result
-
-        except Exception as e:
-            if attempt < 2:
-                logger.warning(f"⚠️ Tentative extraction {attempt+1}/3 échouée : {e}, retry...")
-                time.sleep(3)
-            else:
-                raise ValueError(f"Extraction échouée après 3 tentatives : {e}")
+    result = {
+        "title": data.get("title", "Formation professionnelle"),
+        "sub_parts": sub_parts,
+    }
+    logger.info(
+        "✅ %s sous-parties extraites pour : %s",
+        len(result["sub_parts"]),
+        result["title"],
+    )
+    return result
 
 
 # ─── Génération d'un segment (une passe) ─────────────────────────────────────
@@ -7256,22 +7239,11 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
     mode_label = "from_scratch" if from_scratch else "expansion"
     logger.info(f"  📝 Génération passe {passe} [{mode_label}] pour '{sub_part_name}'...")
 
-    generated = None
-    for attempt in range(3):
-        try:
-            generated = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=16000,
-                model=model,
-            )
-            break
-        except Exception as e:
-            if attempt < 2:
-                wait = 15 * (attempt + 1)
-                logger.warning(f"  ⚠️ Retry {attempt+1}/3 dans {wait}s : {e}")
-                time.sleep(wait)
-            else:
-                raise
+    generated = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=16000,
+        model=model,
+    )
 
     # Couche 2 — Boucle de continuation si volume insuffisant.
     # Le volume est dérivé des créneaux `cours` uniquement, à la cadence TTS
@@ -13597,6 +13569,7 @@ Réponds uniquement avec ce JSON valide :
             max_tokens=700,
             model=model or DEEPSEEK_MODEL,
             timeout=90,
+            http_max_attempts=1,
         )
         opening_text, rewritten_start = _parse_course_handoff_json(raw)
     except Exception as e:
@@ -13707,6 +13680,7 @@ Réponds uniquement avec ce JSON valide :
             max_tokens=700,
             model=model or DEEPSEEK_MODEL,
             timeout=90,
+            http_max_attempts=1,
         )
         opening_text, rewritten_start = _parse_course_handoff_json(raw)
     except Exception as e:
@@ -16420,7 +16394,6 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
-_REVIEW_MAX_ATTEMPTS = 3
 _REVIEW_RULESET_VERSION = "2026-05-31-compliance-v8-minimal"
 _HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v9-polish-only"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
@@ -16662,15 +16635,6 @@ Contraintes impératives :
 """
 
 
-def _cooperative_sleep(seconds: float) -> None:
-    """Sleep compatible eventlet si disponible, sinon sleep standard."""
-    try:
-        import eventlet
-        eventlet.sleep(seconds)
-    except Exception:
-        time.sleep(seconds)
-
-
 def _chunk_text(text: str, max_words: int = _REVIEW_CHUNK_WORDS) -> list:
     """Découpe un segment en chunks paragraph-aware d'environ max_words mots."""
     words = text.split()
@@ -16718,41 +16682,20 @@ def _chunk_text(text: str, max_words: int = _REVIEW_CHUNK_WORDS) -> list:
     return chunks
 
 
-def _review_chunk_with_retries(prompt: str, group_label: str, chunk_index: int, model=None) -> dict:
-    """Appelle le reviewer API avec retries sur erreurs transitoires et parse JSON."""
-    last_error = None
-    for attempt in range(_REVIEW_MAX_ATTEMPTS):
-        try:
-            raw = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=_REVIEW_MAX_TOKENS,
-                model=model,
-            )
-            patches, parse_error = _parse_patches_response(raw)
-            if not parse_error:
-                return {"ok": True, "patches": patches}
-            last_error = f"[{group_label} chunk {chunk_index}] parse: {parse_error}"
-            wait = 15 * (attempt + 1)
-        except DeepSeekRateLimitError as e:
-            last_error = f"[{group_label} chunk {chunk_index}] rate_limit: {str(e)[:200]}"
-            wait = max(float(getattr(e, "wait_seconds", 0) or 0), 15 * (attempt + 1))
-        except DeepSeekAPIError as e:
-            last_error = f"[{group_label} chunk {chunk_index}] API {e.status_code}: {str(e)[:200]}"
-            if getattr(e, "is_deterministic", False):
-                return {"ok": False, "error": last_error}
-            wait = 15 * (attempt + 1)
-        except Exception as e:
-            last_error = f"[{group_label} chunk {chunk_index}] API error: {str(e)[:200]}"
-            wait = 15 * (attempt + 1)
-
-        if attempt < _REVIEW_MAX_ATTEMPTS - 1:
-            logger.warning(
-                f"    ⚠️ Salve '{group_label}' chunk {chunk_index} tentative "
-                f"{attempt + 1}/{_REVIEW_MAX_ATTEMPTS} : {last_error} — retry dans {wait:.0f}s"
-            )
-            _cooperative_sleep(wait)
-
-    return {"ok": False, "error": last_error or f"[{group_label} chunk {chunk_index}] échec inconnu"}
+def _review_chunk_once(prompt: str, group_label: str, chunk_index: int, model=None) -> dict:
+    """Un appel reviewer ; un échec est repris par la file durable."""
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_REVIEW_MAX_TOKENS,
+        model=model,
+    )
+    patches, parse_error = _parse_patches_response(raw)
+    if parse_error:
+        return {
+            "ok": False,
+            "error": f"[{group_label} chunk {chunk_index}] parse: {parse_error}",
+        }
+    return {"ok": True, "patches": patches}
 
 
 def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=None) -> tuple:
@@ -16783,7 +16726,7 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
             chunk_index=chunk["index"], chunk_total=chunk["total"],
             review_context=review_context,
         )
-        result = _review_chunk_with_retries(prompt, group_label, chunk["index"], model=model)
+        result = _review_chunk_once(prompt, group_label, chunk["index"], model=model)
         result["chunk"] = chunk
         return result
 

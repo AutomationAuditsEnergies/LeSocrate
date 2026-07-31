@@ -34,6 +34,7 @@ from repositories.pipeline_repository import (
     update_pipeline_job,
 )
 from utils.deepseek_client import (
+    DeepSeekAPIError,
     DeepSeekRateLimitError,
     default_model,
     post_message as _post_deepseek_message,
@@ -1214,11 +1215,12 @@ def fetch_rome_data(rncp_code: str) -> str:
 # ─── Appel DeepSeek ───────────────────────────────────────────────────────────
 
 def _deepseek_post(messages, max_tokens=16000, model=None):
-    """Wrapper local qui injecte le modèle par défaut du service pipeline."""
+    """Un seul appel HTTP ; la file durable possède la politique de retry."""
     return _post_deepseek_message(
         messages,
         max_tokens=max_tokens,
         model=model or DEEPSEEK_MODEL,
+        http_max_attempts=1,
     )
 
 
@@ -1276,43 +1278,26 @@ def generate_global_program(
             schedule_days=schedule_days,
         )
 
-        for attempt in range(5):
-            if checkpoint:
-                checkpoint()
-            try:
-                program = _deepseek_post(
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=16000,
-                    model=used_model,
-                )
-                _assert_lecture_only_program(
-                    program,
-                    context="Le programme global",
-                )
-                if checkpoint:
-                    checkpoint()
-                update_job(
-                    job_id,
-                    status="global_ready",
-                    global_program=program,
-                    global_program_generated_via="api",
-                )
-                logger.info(f"✅ Job {job_id} : programme global généré ({len(program)} chars)")
-                return
-            except LeaseLostError:
-                raise
-            except DeepSeekRateLimitError as e:
-                if attempt < 4:
-                    logger.warning(f"⏳ Retry {attempt+1}/5 génération global (429, sleep {e.wait_seconds:.0f}s)")
-                    time.sleep(e.wait_seconds)
-                else:
-                    raise
-            except Exception as e:
-                if attempt < 4:
-                    logger.warning(f"⚠️ Retry {attempt+1}/5 génération global : {e}")
-                    time.sleep(15)
-                else:
-                    raise
+        if checkpoint:
+            checkpoint()
+        program = _deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=16000,
+            model=used_model,
+        )
+        _assert_lecture_only_program(
+            program,
+            context="Le programme global",
+        )
+        if checkpoint:
+            checkpoint()
+        update_job(
+            job_id,
+            status="global_ready",
+            global_program=program,
+            global_program_generated_via="api",
+        )
+        logger.info(f"✅ Job {job_id} : programme global généré ({len(program)} chars)")
 
     except LeaseLostError:
         logger.warning("PIPELINE_GLOBAL_PROGRAM_LEASE_LOST job=%s", job_id)
@@ -1338,7 +1323,6 @@ def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
 # privilégie donc la robustesse : 1 jour par réponse, avec concurrence bornée.
 BATCH_SIZE = _env_int("FORMATION_DAILY_BATCH_SIZE", 1, min_value=1, max_value=5)
 DAILY_SPLIT_WORKERS = _env_int("FORMATION_DAILY_SPLIT_WORKERS", 3, min_value=1, max_value=6)
-DAILY_SPLIT_ATTEMPTS = _env_int("FORMATION_DAILY_SPLIT_ATTEMPTS", 4, min_value=1, max_value=8)
 DAILY_SPLIT_MAX_TOKENS = _env_int("FORMATION_DAILY_SPLIT_MAX_TOKENS", 12000, min_value=4000, max_value=24000)
 
 
@@ -1718,72 +1702,33 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
         )
         .replace("{GLOBAL_PROGRAM}", global_program[:20000] + enrichment)
     )
-    last_error = None
-    for attempt in range(DAILY_SPLIT_ATTEMPTS):
-        try:
-            raw = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=DAILY_SPLIT_MAX_TOKENS,
-                model=model,
-            )
-            data = _clean_json(raw)
-            days = _normalize_daily_payload(
-                data,
-                day_start,
-                day_end,
-                tp_name,
-                schedule_days=schedule_days,
-            )
-            _assert_lecture_only_days(days)
-            return days
-        except DeepSeekRateLimitError as e:
-            if attempt < DAILY_SPLIT_ATTEMPTS - 1:
-                logger.warning(
-                    f"⏳ Retry {attempt+1}/{DAILY_SPLIT_ATTEMPTS} batch jours {day_start}-{day_end} "
-                    f"(429, sleep {e.wait_seconds:.0f}s)"
-                )
-                time.sleep(e.wait_seconds)
-            else:
-                raise
-        except Exception as e:
-            last_error = e
-            if attempt < DAILY_SPLIT_ATTEMPTS - 1:
-                logger.warning(
-                    f"⚠️ Retry {attempt+1}/{DAILY_SPLIT_ATTEMPTS} "
-                    f"batch jours {day_start}-{day_end} : {e}"
-                )
-                time.sleep(10)
-    if day_start < day_end:
-        logger.warning(
-            "⚠️ Batch jours %s-%s invalide après retries, découpage en journées unitaires",
+    try:
+        raw = _deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=DAILY_SPLIT_MAX_TOKENS,
+            model=model,
+        )
+        data = _clean_json(raw)
+        days = _normalize_daily_payload(
+            data,
             day_start,
             day_end,
+            tp_name,
+            schedule_days=schedule_days,
         )
-        days = []
-        for day_number in range(day_start, day_end + 1):
-            days.extend(
-                _split_batch(
-                    tp_name=tp_name,
-                    nb_days=nb_days,
-                    global_program=global_program,
-                    day_start=day_number,
-                    day_end=day_number,
-                    model=model,
-                    reac_text=reac_text,
-                    rc_text=rc_text,
-                    rome_text=rome_text,
-                    schedule_days=schedule_days,
-                )
-            )
+        _assert_lecture_only_days(days)
         return days
-
-    attempt_label = "tentative" if DAILY_SPLIT_ATTEMPTS == 1 else "tentatives"
-    message = (
-        f"Journée {day_start} impossible à générer correctement après "
-        f"{DAILY_SPLIT_ATTEMPTS} {attempt_label} : {last_error}"
-    )
-    logger.error("❌ %s", message)
-    raise DailySplitGenerationError(message) from last_error
+    except (LeaseLostError, DeepSeekRateLimitError, DeepSeekAPIError):
+        raise
+    except Exception as exc:
+        label = (
+            f"Journée {day_start}"
+            if day_start == day_end
+            else f"Journées {day_start}-{day_end}"
+        )
+        message = f"{label} impossible à générer correctement : {exc}"
+        logger.error("❌ %s", message)
+        raise DailySplitGenerationError(message) from exc
 
 
 def run_daily_split(
@@ -1903,10 +1848,21 @@ def run_daily_split(
                     except LeaseLostError:
                         raise
                     except Exception as e:
-                        errors.append(f"Batch {start}-{end} : {e}")
+                        errors.append((start, end, e))
 
         if errors:
-            raise DailySplitGenerationError("; ".join(errors))
+            for _start, _end, exc in errors:
+                if isinstance(
+                    exc,
+                    (DeepSeekRateLimitError, DeepSeekAPIError),
+                ):
+                    raise exc
+            raise DailySplitGenerationError(
+                "; ".join(
+                    f"Batch {start}-{end} : {exc}"
+                    for start, end, exc in errors
+                )
+            )
 
         all_days = [
             days_by_number[number]

@@ -22,7 +22,6 @@ Le flag `dirty` permet la régénération sélective si l'utilisateur édite.
 import os
 import re
 import json
-import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
@@ -36,9 +35,8 @@ from repositories.pipeline_repository import (
     upsert_pending_knowledge_base_entries,
 )
 from utils.deepseek_client import (
-    DeepSeekAPIError,
-    DeepSeekRateLimitError,
     default_model,
+    is_deterministic_deepseek_error,
     post_message as _post_deepseek_message,
 )
 from utils.logger import get_logger
@@ -241,11 +239,12 @@ Contraintes de densité :
 # ─── Helper DeepSeek ──────────────────────────────────────────────────────────
 
 def _deepseek_post(messages, max_tokens=8000, model=None):
-    """Wrapper local qui injecte le modèle par défaut du service."""
+    """Un seul appel HTTP ; la file durable possède la politique de retry."""
     return _post_deepseek_message(
         messages,
         max_tokens=max_tokens,
         model=model or DEEPSEEK_MODEL,
+        http_max_attempts=1,
     )
 
 
@@ -446,37 +445,21 @@ def extract_competences(
         .replace("{EDITORIAL_RULES}", _load_editorial_rules())
         .replace("{REAC_TEXT}", reac_text[:80000])
     )
-    for attempt in range(5):
-        if checkpoint:
-            checkpoint()
-        try:
-            response = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=8000,
-                model=model,
-            )
-            data = _parse_json_response(response)
-            competences = data.get("competences", [])
-            if not competences:
-                raise ValueError("Réponse DeepSeek sans compétences")
-            if checkpoint:
-                checkpoint()
-            logger.info(f"✅ {len(competences)} compétences extraites du REAC")
-            return competences
-        except LeaseLostError:
-            raise
-        except DeepSeekRateLimitError as e:
-            if attempt < 4:
-                logger.warning(f"⏳ Retry {attempt+1}/5 extraction (429, sleep {e.wait_seconds:.0f}s)")
-                time.sleep(e.wait_seconds)
-            else:
-                raise
-        except Exception as e:
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 extraction compétences : {e}")
-                time.sleep(10)
-            else:
-                raise
+    if checkpoint:
+        checkpoint()
+    response = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=8000,
+        model=model,
+    )
+    data = _parse_json_response(response)
+    competences = data.get("competences", [])
+    if not competences:
+        raise ValueError("Réponse DeepSeek sans compétences")
+    if checkpoint:
+        checkpoint()
+    logger.info(f"✅ {len(competences)} compétences extraites du REAC")
+    return competences
 
 
 # ─── Enrichissement d'une compétence ──────────────────────────────────────────
@@ -498,51 +481,17 @@ def enrich_competence(
         .replace("{EDITORIAL_RULES}", _load_editorial_rules())
         .replace("{RAW_SOURCE}", competence.get("raw_source", ""))
     )
-    for attempt in range(5):
-        if checkpoint:
-            checkpoint()
-        try:
-            response = _deepseek_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=12000,  # augmenté de 8000 : JSON enrichi peut dépasser
-                model=model,
-            )
-            result = _parse_json_response(response)
-            if checkpoint:
-                checkpoint()
-            return result
-        except LeaseLostError:
-            raise
-        except DeepSeekRateLimitError as e:
-            if attempt < 4:
-                logger.warning(
-                    f"⏳ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' "
-                    f"(429, sleep {e.wait_seconds:.0f}s)"
-                )
-                time.sleep(e.wait_seconds)
-            else:
-                raise
-        except DeepSeekAPIError as e:
-            # Fail-fast sur les erreurs déterministes (400, 401, 403, 404, 422) :
-            # retry n'aidera pas (credit balance vide, mauvaise clé, modèle
-            # invalide…). Propager le message lisible plutôt que de spammer.
-            if e.is_deterministic:
-                logger.error(
-                    f"⛔ Enrichissement '{competence['competence_title']}' — "
-                    f"erreur déterministe {e.status_code} ({e.error_type}), no retry : {e.message}"
-                )
-                raise
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' : {e}")
-                time.sleep(10)
-            else:
-                raise
-        except Exception as e:
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' : {e}")
-                time.sleep(10)
-            else:
-                raise
+    if checkpoint:
+        checkpoint()
+    response = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=12000,
+        model=model,
+    )
+    result = _parse_json_response(response)
+    if checkpoint:
+        checkpoint()
+    return result
 
 
 def _count_words_in_enriched(enriched: dict) -> int:
@@ -665,6 +614,8 @@ def build_knowledge_base(
             except LeaseLostError:
                 raise
             except Exception as e:
+                if is_deterministic_deepseek_error(e):
+                    raise
                 logger.error(f"❌ Enrichissement '{title}' : {e}")
                 mark_competence_error(job_id, idx, str(e))
                 return ("error", 0)

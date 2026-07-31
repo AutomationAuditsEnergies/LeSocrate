@@ -484,7 +484,7 @@ class HumanizationReviewRulesTest(unittest.TestCase):
             "description": "test",
         }
 
-        with patch.object(cgs, "_review_chunk_with_retries") as reviewer:
+        with patch.object(cgs, "_review_chunk_once") as reviewer:
             updated, applied, rejected, error, proposed = cgs._review_group_chunks(
                 "Bonjour. On commence directement.",
                 "",

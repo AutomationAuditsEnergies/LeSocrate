@@ -109,6 +109,35 @@ class DeepSeekClientRetryTest(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
         self.assertEqual(sleep.call_count, 1)
 
+    def test_pipeline_can_disable_client_http_retries(self):
+        success = _FakeResponse(
+            200,
+            {"content": [{"type": "text", "text": "ne doit pas être appelée"}]},
+        )
+        with patch.dict(
+            client.os.environ,
+            {"DEEPSEEK_API_KEY": "test-key"},
+        ), patch.object(
+            client._http,
+            "post",
+            side_effect=[
+                client._http.exceptions.ChunkedEncodingError(
+                    "Response ended prematurely"
+                ),
+                success,
+            ],
+        ) as post, patch.object(client, "_sleep") as sleep:
+            with self.assertRaises(client._http.exceptions.ChunkedEncodingError):
+                client.post_message(
+                    [{"role": "user", "content": "hello"}],
+                    model="deepseek-v4-pro",
+                    max_tokens=100,
+                    http_max_attempts=1,
+                )
+
+        self.assertEqual(post.call_count, 1)
+        sleep.assert_not_called()
+
     def test_does_not_retry_insufficient_balance(self):
         response = _FakeResponse(
             402,

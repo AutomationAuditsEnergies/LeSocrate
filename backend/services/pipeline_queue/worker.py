@@ -59,6 +59,26 @@ class RetryPolicy:
         return max(0.0, base * factor)
 
 
+def retry_delay_seconds(
+    policy: RetryPolicy,
+    attempt_count: int,
+    exc: BaseException,
+) -> float:
+    """Combine le backoff durable avec un éventuel Retry-After fournisseur."""
+    delay = policy.delay_seconds(attempt_count)
+    current = exc
+    visited = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        try:
+            advised = float(getattr(current, "wait_seconds", 0) or 0)
+        except (TypeError, ValueError):
+            advised = 0
+        delay = max(delay, advised)
+        current = current.__cause__ or current.__context__
+    return delay
+
+
 class LeaseGuard:
     def __init__(
         self,
@@ -319,7 +339,11 @@ class PipelineWorker:
                     )
                     return ProcessOutcome(WorkStatus.DEAD_LETTERED.value, item.id, error)
 
-                delay = self.retry_policy.delay_seconds(item.attempt_count)
+                delay = retry_delay_seconds(
+                    self.retry_policy,
+                    item.attempt_count,
+                    exc,
+                )
                 retry_at = utcnow() + timedelta(seconds=delay)
                 self.repository.retry(
                     item.id,

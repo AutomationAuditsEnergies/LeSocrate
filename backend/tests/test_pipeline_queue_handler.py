@@ -3,11 +3,12 @@ import types
 import unittest
 from unittest.mock import patch
 
-from services.pipeline_queue.contracts import WorkItem
+from services.pipeline_queue.contracts import PermanentWorkError, WorkItem
 from services.pipeline_queue.handlers import (
     handle_auto_pilot_work_item,
     mark_auto_pilot_dead_letter,
 )
+from utils.deepseek_client import DeepSeekAPIError
 
 
 def _item(payload=None):
@@ -153,6 +154,36 @@ class PipelineQueueHandlerTest(unittest.TestCase):
             ["step_started", "step_failed"],
         )
         self.assertEqual(events[-1][2]["error"], "LLM timeout")
+
+    def test_deterministic_provider_failure_becomes_permanent(self):
+        routes_package, observability, events, _updates = self._modules(
+            execute_error=DeepSeekAPIError(
+                402,
+                "unknown_error",
+                "Insufficient Balance",
+            ),
+            next_steps=("global",),
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            with self.assertRaisesRegex(
+                PermanentWorkError,
+                "Insufficient Balance",
+            ):
+                handle_auto_pilot_work_item(
+                    _item({"expected_step": "global"}),
+                    _Lease(),
+                )
+
+        self.assertEqual(
+            [event_type for _job_id, event_type, _kwargs in events],
+            ["step_started", "step_failed"],
+        )
 
     def test_out_of_order_tick_skips_execution_and_chains_current_step(self):
         routes_package, observability, events, updates = self._modules(

@@ -16,7 +16,11 @@ from services.pipeline_queue.repository import WorkItemRepository
 from services.pipeline_queue.routing import AUDIO_TASK_TYPES, AI_TASK_TYPES
 from services.pipeline_queue.service import cancel_latest_work_item, get_latest_work_item
 from services.pipeline_queue.settings import QueueSettings
-from services.pipeline_queue.worker import PipelineWorker, RetryPolicy
+from services.pipeline_queue.worker import (
+    PipelineWorker,
+    RetryPolicy,
+    retry_delay_seconds,
+)
 
 
 def _settings(backend="database"):
@@ -35,6 +39,19 @@ def _settings(backend="database"):
 
 
 class PipelineWorkQueueTest(unittest.TestCase):
+    def test_durable_retry_respects_provider_retry_after(self):
+        error = RuntimeError("rate limit")
+        error.wait_seconds = 180
+
+        self.assertEqual(
+            retry_delay_seconds(
+                RetryPolicy((30,), jitter_ratio=0),
+                1,
+                error,
+            ),
+            180,
+        )
+
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(prefix="pipeline-work-", suffix=".db")
         os.close(fd)

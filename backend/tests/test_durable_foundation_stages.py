@@ -8,6 +8,40 @@ from services.pipeline_queue.contracts import LeaseLostError
 
 
 class DurableFoundationStagesTest(unittest.TestCase):
+    def test_formation_wrappers_disable_hidden_http_retries(self):
+        with patch.object(
+            fps,
+            "_post_deepseek_message",
+            return_value="formation",
+        ) as formation_post, patch.object(
+            kbs,
+            "_post_deepseek_message",
+            return_value="kb",
+        ) as kb_post:
+            self.assertEqual(fps._deepseek_post([], model="model"), "formation")
+            self.assertEqual(kbs._deepseek_post([], model="model"), "kb")
+
+        self.assertEqual(
+            formation_post.call_args.kwargs["http_max_attempts"],
+            1,
+        )
+        self.assertEqual(kb_post.call_args.kwargs["http_max_attempts"], 1)
+
+    def test_kb_extraction_calls_the_model_once_per_durable_attempt(self):
+        with patch.object(
+            kbs,
+            "_deepseek_post",
+            side_effect=RuntimeError("provider indisponible"),
+        ) as deepseek:
+            with self.assertRaisesRegex(RuntimeError, "provider indisponible"):
+                kbs.extract_competences(
+                    "REAC",
+                    "TP Test",
+                    "RNCP1",
+                )
+
+        deepseek.assert_called_once()
+
     def test_kb_context_turns_legacy_cases_into_narrated_examples(self):
         with patch.object(
             kbs,
@@ -183,7 +217,7 @@ class DurableFoundationStagesTest(unittest.TestCase):
         )
         self.assertFalse(hasattr(fps, "launch_global_program_generation"))
 
-    def test_global_program_regenerates_a_learner_activity_before_saving(self):
+    def test_global_program_delegates_invalid_activity_to_durable_retry(self):
         job = {
             "id": 42,
             "tp_name": "TP Test",
@@ -192,8 +226,6 @@ class DurableFoundationStagesTest(unittest.TestCase):
             "nb_days": 2,
         }
         invalid_program = "### MODULE 1.1 : Cas pratique guidé"
-        valid_program = "### MODULE 1.1 : Fondamentaux de la relation client"
-
         with patch.object(fps, "get_job", return_value=job), patch.object(
             fps,
             "update_job",
@@ -211,20 +243,23 @@ class DurableFoundationStagesTest(unittest.TestCase):
         ), patch.object(
             fps,
             "_deepseek_post",
-            side_effect=[invalid_program, valid_program],
-        ) as deepseek, patch.object(fps.time, "sleep"):
-            fps.generate_global_program(42)
+            return_value=invalid_program,
+        ) as deepseek:
+            with self.assertRaisesRegex(ValueError, "activité apprenant interdite"):
+                fps.generate_global_program(42)
 
-        self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(deepseek.call_count, 1)
         self.assertEqual(
             update.call_args_list,
             [
                 call(42, status="global_generating"),
                 call(
                     42,
-                    status="global_ready",
-                    global_program=valid_program,
-                    global_program_generated_via="api",
+                    status="error",
+                    error_message=(
+                        "Le programme global contient une activité apprenant "
+                        "interdite : cas pratique"
+                    ),
                 ),
             ],
         )
@@ -255,7 +290,7 @@ class DurableFoundationStagesTest(unittest.TestCase):
             fps,
             "_deepseek_post",
             side_effect=RuntimeError("LLM indisponible"),
-        ), patch.object(fps.time, "sleep"):
+        ):
             with self.assertRaisesRegex(RuntimeError, "LLM indisponible"):
                 fps.generate_global_program(42)
 

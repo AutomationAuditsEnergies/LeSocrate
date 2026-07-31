@@ -34,19 +34,17 @@ class DailySplitJsonRepairTest(unittest.TestCase):
         self.assertEqual(len(days[0]["sub_parts"]), len(fps.COURSE_AUDIO_SLOTS))
         self.assertEqual(days[0]["sub_parts"][0]["audio_slot"], "Cours 1")
 
-    def test_exhausted_retries_raise_instead_of_fabricating_a_day(self):
+    def test_invalid_response_is_delegated_to_the_durable_retry(self):
         with (
-            patch.object(fps, "DAILY_SPLIT_ATTEMPTS", 2),
             patch.object(
                 fps,
                 "_deepseek_post",
                 return_value="réponse sans JSON",
             ) as deepseek,
-            patch.object(fps.time, "sleep"),
         ):
             with self.assertRaisesRegex(
                 fps.DailySplitGenerationError,
-                "Journée 1 impossible à générer correctement après 2 tentatives",
+                "Journée 1 impossible à générer correctement",
             ):
                 fps._split_batch(
                     tp_name="TP Test",
@@ -57,7 +55,7 @@ class DailySplitJsonRepairTest(unittest.TestCase):
                     model="test-model",
                 )
 
-        self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(deepseek.call_count, 1)
 
 
 if __name__ == "__main__":

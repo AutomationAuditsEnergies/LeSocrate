@@ -11,6 +11,7 @@ from unittest.mock import patch
 from routes import formation_routes as fr
 from services import content_generation_service as cgs
 from services import formation_pipeline_service as fps
+from utils.deepseek_client import DeepSeekAPIError, DeepSeekRateLimitError
 
 
 def _connect(path):
@@ -103,6 +104,39 @@ def _job(**overrides):
 
 
 class PipelineOrderTest(unittest.TestCase):
+    def test_parallel_step_failure_preserves_deterministic_provider_cause(self):
+        transient = RuntimeError("timeout")
+        deterministic = DeepSeekAPIError(
+            401,
+            "authentication_error",
+            "clé invalide",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "étape échouée") as raised:
+            fr._raise_pipeline_batch_failure(
+                "étape échouée",
+                [
+                    {"exception": transient},
+                    {"exception": deterministic},
+                ],
+            )
+
+        self.assertIs(raised.exception.__cause__, deterministic)
+
+    def test_parallel_step_failure_preserves_provider_retry_after(self):
+        rate_limit = DeepSeekRateLimitError(180)
+
+        with self.assertRaisesRegex(RuntimeError, "étape échouée") as raised:
+            fr._raise_pipeline_batch_failure(
+                "étape échouée",
+                [
+                    {"exception": RuntimeError("autre erreur")},
+                    {"exception": rate_limit},
+                ],
+            )
+
+        self.assertIs(raised.exception.__cause__, rate_limit)
+
     def test_scheduled_audio_is_not_completed_after_partial_publication(self):
         source = inspect.getsource(fr.start_folder_audio_generation)
         publication_guard = source.index("if publish_errors or missing_files")

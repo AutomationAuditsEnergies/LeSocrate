@@ -548,7 +548,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             [f"strict-anchor-{index}" for index in range(4)],
         )
 
-    def test_section_alignment_retries_with_temperature_zero_before_fallback(self):
+    def test_section_alignment_uses_fallback_after_one_model_call(self):
         section = {
             "course_number": 1,
             "course_title": "Cours test",
@@ -567,17 +567,34 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
 
         def fake_post_message(*_args, **kwargs):
             temperatures.append(kwargs.get("temperature"))
-            if len(temperatures) == 1:
-                return '{"assignments":[{"anchor_id":"a1","unit_start":0,"unit_end":0}]}'
-            return '{"assignments":[{"anchor_id":"a1","unit_start":0,"unit_end":0},{"anchor_id":"a2","unit_start":1,"unit_end":1}]}'
+            self.assertEqual(kwargs.get("http_max_attempts"), 1)
+            return '{"assignments":[{"anchor_id":"a1","unit_start":0,"unit_end":0}]}'
 
         with patch.object(slides, "post_message", side_effect=fake_post_message):
             assignments, debug = slides._align_section_to_slide_anchors(section, units, anchors, "test-model")
 
-        self.assertEqual(debug["status"], "llm_retry")
-        self.assertEqual(debug["attempts"], 2)
-        self.assertEqual(temperatures, [None, 0])
+        self.assertEqual(debug["status"], "fallback")
+        self.assertEqual(debug["attempts"], 1)
+        self.assertEqual(temperatures, [None])
         self.assertEqual([assignment["anchor_id"] for assignment in assignments], ["a1", "a2"])
+
+    def test_slide_batch_failure_calls_model_once(self):
+        with patch.object(
+            slides,
+            "post_message",
+            side_effect=RuntimeError("provider indisponible"),
+        ) as post:
+            with self.assertRaisesRegex(RuntimeError, "provider indisponible"):
+                slides._generate_batch(
+                    [_strict_block(0)],
+                    "Jour test",
+                    "test-model",
+                    slides.PACE_PROFILES["normal"],
+                    1,
+                )
+
+        post.assert_called_once()
+        self.assertEqual(post.call_args.kwargs["http_max_attempts"], 1)
 
     def test_section_unanchored_slide_keeps_full_block_range(self):
         block = _unanchored_conclusion_block(3)

@@ -77,6 +77,72 @@ class ExtractSubPartsDynamicCountTest(unittest.TestCase):
         post.assert_not_called()
 
 
+class PipelineContentRetryOwnershipTest(unittest.TestCase):
+    def test_content_wrapper_disables_hidden_http_retries(self):
+        with patch.object(cgs, "_llm_post", return_value="ok") as post:
+            self.assertEqual(
+                cgs._deepseek_post(
+                    [{"role": "user", "content": "test"}],
+                    max_tokens=100,
+                    model="deepseek-v4-pro",
+                ),
+                "ok",
+            )
+
+        self.assertEqual(post.call_args.kwargs["http_max_attempts"], 1)
+
+    def test_structured_plan_failure_calls_generator_once(self):
+        with patch.object(
+            cgs,
+            "_structured_plan_two_stage_enabled",
+            return_value=True,
+        ), patch.object(
+            cgs,
+            "_generate_structured_course_plan_two_stage",
+            side_effect=RuntimeError("provider indisponible"),
+        ) as generate:
+            with self.assertRaisesRegex(RuntimeError, "provider indisponible"):
+                cgs._generate_structured_course_plan(
+                    {"id": 1},
+                    [],
+                    [],
+                    {},
+                    model="deepseek-v4-pro",
+                )
+
+        generate.assert_called_once()
+
+    def test_legacy_segment_failure_calls_model_once(self):
+        with patch.object(
+            cgs,
+            "_deepseek_post",
+            side_effect=RuntimeError("provider indisponible"),
+        ) as post:
+            with self.assertRaisesRegex(RuntimeError, "provider indisponible"):
+                cgs._generate_segment_text(
+                    1,
+                    "Thème",
+                    "Titre",
+                    "Programme",
+                    "",
+                    from_scratch=True,
+                    module_content="Contenu source",
+                )
+
+        post.assert_called_once()
+
+    def test_review_failure_calls_model_once_and_propagates(self):
+        with patch.object(
+            cgs,
+            "_deepseek_post",
+            side_effect=RuntimeError("provider indisponible"),
+        ) as post:
+            with self.assertRaisesRegex(RuntimeError, "provider indisponible"):
+                cgs._review_chunk_once("prompt", "groupe", 1)
+
+        post.assert_called_once()
+
+
 class FolderCourseCountWiringTest(unittest.TestCase):
     def test_resolves_count_from_exact_folder_playlist(self):
         with patch(

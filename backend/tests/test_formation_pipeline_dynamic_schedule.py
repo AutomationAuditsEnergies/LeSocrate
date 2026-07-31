@@ -287,38 +287,33 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertNotIn("EXACTEMENT 7", captured["prompt"])
         self.assertIn("exclusivement un cours magistral", captured["prompt"])
 
-    def test_daily_split_regenerates_a_learner_activity(self):
+    def test_daily_split_delegates_invalid_activity_to_durable_retry(self):
         schedule_days = fps._v2_schedule_days(
             _v2_job([self.day_four])
         )
         invalid_day = _raw_generated_day(1, 4)
         invalid_day["sub_parts"][0]["name"] = "Cours 1 — Cas pratique guidé"
-        valid_day = _raw_generated_day(1, 4)
 
         with patch.object(
             fps,
-            "DAILY_SPLIT_ATTEMPTS",
-            2,
-        ), patch.object(
-            fps,
             "_deepseek_post",
-            side_effect=[
-                json.dumps({"days": [invalid_day]}),
-                json.dumps({"days": [valid_day]}),
-            ],
-        ) as deepseek, patch.object(fps.time, "sleep"):
-            days = fps._split_batch(
-                tp_name="TP dynamique",
-                nb_days=1,
-                global_program="Programme",
-                day_start=1,
-                day_end=1,
-                model="test-model",
-                schedule_days=schedule_days,
-            )
+            return_value=json.dumps({"days": [invalid_day]}),
+        ) as deepseek:
+            with self.assertRaisesRegex(
+                fps.DailySplitGenerationError,
+                "activité apprenant interdite",
+            ):
+                fps._split_batch(
+                    tp_name="TP dynamique",
+                    nb_days=1,
+                    global_program="Programme",
+                    day_start=1,
+                    day_end=1,
+                    model="test-model",
+                    schedule_days=schedule_days,
+                )
 
-        self.assertEqual(deepseek.call_count, 2)
-        self.assertEqual(days[0]["sub_parts"][0]["name"], "Cours 1 — Thème 1")
+        self.assertEqual(deepseek.call_count, 1)
 
     def test_run_daily_split_never_persists_a_fallback_after_failure(self):
         job = _v2_job([self.day_five])
