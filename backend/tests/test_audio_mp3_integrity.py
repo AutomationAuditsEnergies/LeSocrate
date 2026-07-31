@@ -127,6 +127,60 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         self.assertNotIn(b"CONCL", audio_bytes)
         self.assertIn(b"PAD", audio_bytes)
 
+    def test_fish_slide_boundaries_use_real_mp3_durations(self):
+        bloc = {
+            "bloc_number": 1,
+            "target_sec": 60,
+            "text": "un deux trois quatre",
+            "word_count": 4,
+            "start_w": 0,
+            "end_w": 4,
+        }
+        slides = [
+            {"slide_id": "s1", "source_ref": {"word_start": 0, "word_end": 2}},
+            {"slide_id": "s2", "source_ref": {"word_start": 2, "word_end": 4}},
+        ]
+        timestamp_meta = {
+            "provider": "fish_audio",
+            "audio_duration_sec": 3.0,
+            "spoken_word_count": 2,
+            "words_per_minute": 40.0,
+            "timeline": [],
+        }
+
+        with patch.object(
+            cgs,
+            "_fish_silent_mp3_approx_no_ffmpeg",
+            side_effect=[(b"START", 17.0), (b"END", 34.0)],
+        ), patch(
+            "services.tts_service.convert_to_speech_with_timestamps",
+            side_effect=[(b"VOICE1", timestamp_meta), (b"VOICE2", timestamp_meta)],
+        ), patch.object(
+            cgs,
+            "_mp3_duration_seconds_no_ffprobe",
+            side_effect=[3.4, 3.6],
+        ), patch(
+            "services.basic_tts_service.concat_mp3_bytes",
+            return_value=b"FINAL",
+        ):
+            _, voice_duration, _, attempts, timings, _, _ = (
+                cgs._synthesize_course_audio_synced_to_slides(
+                    bloc,
+                    slides,
+                    "cours.mp3",
+                    mock=False,
+                    basic_tts=False,
+                )
+            )
+
+        self.assertEqual(voice_duration, 7.0)
+        self.assertEqual(timings[0]["start_time"], 17.0)
+        self.assertEqual(timings[0]["end_time"], 20.4)
+        self.assertEqual(timings[1]["start_time"], 20.4)
+        self.assertEqual(timings[1]["end_time"], 24.0)
+        self.assertEqual(attempts[0]["timeline_duration_sec"], 3.0)
+        self.assertEqual(attempts[0]["media_duration_sec"], 3.4)
+
     def test_contextual_break_silence_fallback_preserves_slot_duration(self):
         with patch(
             "services.break_transition_service.build_break_transition_texts",

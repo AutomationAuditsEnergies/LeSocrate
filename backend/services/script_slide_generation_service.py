@@ -595,6 +595,18 @@ def get_latest_script_slide_deck(folder_id: int, content_job_id: int | None = No
     return _decode_deck_row(row)
 
 
+def is_script_slide_deck_usable(deck: dict | None) -> bool:
+    """Reject decks persisted by the former batch-error fallback path."""
+    if not deck or not (deck.get("slides") or []):
+        return False
+    batches = (deck.get("pipeline_debug") or {}).get("batches") or []
+    return not any(
+        str((batch or {}).get("status") or "").strip().lower() == "fallback"
+        for batch in batches
+        if isinstance(batch, dict)
+    )
+
+
 def _audio_basename(value: str | None) -> str:
     clean = str(value or "").split("?", 1)[0].split("#", 1)[0]
     return os.path.basename(clean).lower()
@@ -3804,6 +3816,8 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
     raw_slides = parsed.get("slides", [])
     if not isinstance(raw_slides, list):
         raise ValueError("Réponse LLM sans tableau slides")
+    if not raw_slides:
+        raise ValueError("Réponse LLM sans aucune slide générée")
 
     template_backlog = _normalize_template_backlog(
         parsed.get("template_backlog")
@@ -3838,6 +3852,9 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
         per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
         if len(slides) >= max_batch_slides:
             break
+
+    if not slides:
+        raise ValueError("Réponse LLM sans slide exploitable")
 
     slides, strict_fallback_slides = _ensure_strict_anchor_slides(
         slides,
@@ -4269,23 +4286,14 @@ def _run_slide_generation_from_source(
             max_batch_slides,
             batch_anchor_count,
         )
-        try:
-            batch_slides, curation_debug = _generate_batch(batch, source["program_title"], model, pace_config, max_batch_slides)
-            status = "llm"
-        except Exception as exc:
-            logger.exception("PIPELINE_SLIDES_BATCH_ERROR folder=%s batch=%s-%s error=%s", folder_id, start, start + len(batch) - 1, exc)
-            batch_slides, strict_fallback_slides = _ensure_strict_anchor_slides(
-                [],
-                batch,
-                "batch_error_strict_anchor_fallback",
-            )
-            curation_debug = {
-                "template_backlog": [],
-                "curation_enabled": _slide_curation_enabled(),
-                "strict_fallback_slides": strict_fallback_slides,
-                "fallback_reason": f"{exc.__class__.__name__}: {str(exc)[:180]}",
-            }
-            status = "fallback"
+        batch_slides, curation_debug = _generate_batch(
+            batch,
+            source["program_title"],
+            model,
+            pace_config,
+            max_batch_slides,
+        )
+        status = "llm"
         logger.info(
             "PIPELINE_SLIDES_BATCH_DONE folder=%s content_job=%s batch=%s-%s status=%s slides=%s duration_ms=%s",
             folder_id,
@@ -4326,40 +4334,7 @@ def _run_slide_generation_from_source(
             }
             for future in as_completed(future_map):
                 job = future_map[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    logger.exception(
-                        "PIPELINE_SLIDES_BATCH_FUTURE_ERROR folder=%s content_job=%s batch=%s-%s error=%s",
-                        folder_id,
-                        source.get("content_job_id"),
-                        job["start"],
-                        job["start"] + len(job["batch"]) - 1,
-                        exc,
-                    )
-                    batch_slides, strict_fallback_slides = _ensure_strict_anchor_slides(
-                        [],
-                        job["batch"],
-                        "batch_future_error_strict_anchor_fallback",
-                    )
-                    result = {
-                        "batch_index": job["batch_index"],
-                        "slides": batch_slides,
-                        "debug": {
-                            "start_block": job["batch"][0]["source_block_id"],
-                            "end_block": job["batch"][-1]["source_block_id"],
-                            "blocks": len(job["batch"]),
-                            "max_slides": job["max_batch_slides"],
-                            "anchors": job["anchor_count"],
-                            "status": "fallback",
-                            "curation": {
-                                "template_backlog": [],
-                                "curation_enabled": _slide_curation_enabled(),
-                                "strict_fallback_slides": strict_fallback_slides,
-                                "fallback_reason": f"{exc.__class__.__name__}: {str(exc)[:180]}",
-                            },
-                        },
-                    }
+                result = future.result()
                 batch_results[job["batch_index"]] = result
     else:
         for job in batch_jobs:

@@ -2754,19 +2754,25 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # texte, pour ne plus rester cachées dans l'étape TTS synchronisée.
     slide_rows = list_completed_content_jobs_for_folders(folder_ids)
     missing_slide_decks = []
+    from services.script_slide_generation_service import is_script_slide_deck_usable
     for row in slide_rows:
         fid = int(row["folder_id"])
         deck_row = get_latest_script_slide_deck_row(
             folder_id=fid,
             content_job_id=int(row["content_job_id"]),
         )
-        deck_has_slides = False
+        deck_is_usable = False
         if deck_row:
             try:
-                deck_has_slides = len(_json.loads(deck_row.get("slides_json") or "[]")) > 0
+                deck_is_usable = is_script_slide_deck_usable({
+                    "slides": _json.loads(deck_row.get("slides_json") or "[]"),
+                    "pipeline_debug": _json.loads(
+                        deck_row.get("pipeline_debug_json") or "{}"
+                    ),
+                })
             except Exception:
-                deck_has_slides = False
-        if not deck_has_slides:
+                deck_is_usable = False
+        if not deck_is_usable:
             missing_slide_decks.append(fid)
     if missing_slide_decks:
         return "slides"
@@ -3190,6 +3196,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         from services.script_slide_generation_service import (
             generate_slides_from_script,
             get_latest_script_slide_deck,
+            is_script_slide_deck_usable,
         )
         from services.formation_observability_service import log_pipeline_event
         from repositories.pipeline_repository import list_completed_content_jobs_for_folders
@@ -3212,7 +3219,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         pending_rows = []
         for fid, cg_job_id in rows:
             existing = get_latest_script_slide_deck(fid, content_job_id=cg_job_id)
-            if existing and (existing.get("slides") or []):
+            if is_script_slide_deck_usable(existing):
                 skipped += 1
                 continue
             pending_rows.append((fid, cg_job_id))

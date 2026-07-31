@@ -5418,6 +5418,8 @@ def _synthesize_course_audio_synced_to_slides(
         )
 
         chunk_actual_reading = None
+        timeline_duration_sec = 0.0
+        media_duration_sec = 0.0
         if mock:
             audio_bytes, duration_sec = _silent_mp3_approx_no_ffmpeg(1)
             mode = "mock"
@@ -5435,7 +5437,22 @@ def _synthesize_course_audio_synced_to_slides(
                 chunk_actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=text)
             else:
                 audio_bytes = convert_to_speech(text, speed=api_speed)
-            duration_sec = float((chunk_actual_reading or {}).get("audio_duration_sec") or 0.0)
+            timeline_duration_sec = float(
+                (chunk_actual_reading or {}).get("audio_duration_sec") or 0.0
+            )
+            try:
+                media_duration_sec = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+            except Exception:
+                logger.warning(
+                    "PIPELINE_AUDIO_SLIDE_MP3_DURATION_FALLBACK filename=%s chunk=%s",
+                    filename,
+                    chunk_idx + 1,
+                    exc_info=True,
+                )
+            # The browser plays MPEG frames, not the provider's text timeline.
+            # A tiny discrepancy on every separately generated slide otherwise
+            # accumulates into a visible drift later in the course.
+            duration_sec = media_duration_sec or timeline_duration_sec
             if not duration_sec:
                 duration_sec = _mp3_duration_seconds_no_ffprobe(audio_bytes)
             mode = (
@@ -5494,6 +5511,8 @@ def _synthesize_course_audio_synced_to_slides(
         cursor_sec = end_sec
         attempt_record = {"kind": mode, "chunk": chunk_idx + 1, "duration": duration_sec}
         if not basic_tts and not mock and chunk_actual_reading:
+            attempt_record["timeline_duration_sec"] = round(timeline_duration_sec, 3)
+            attempt_record["media_duration_sec"] = round(media_duration_sec, 3)
             chunk_actual_reading = dict(chunk_actual_reading)
             chunk_actual_reading["audio_start_sec"] = round(start_sec, 3)
             chunk_actual_reading["audio_end_sec"] = round(end_sec, 3)
@@ -14159,11 +14178,12 @@ def generate_audio_from_script(
         from services.script_slide_generation_service import (
             generate_slides_from_script,
             get_latest_script_slide_deck,
+            is_script_slide_deck_usable,
         )
         slide_deck = get_latest_script_slide_deck(folder_id, content_job_id=job_id)
-        if not slide_deck and auto_generate_slides:
+        if not is_script_slide_deck_usable(slide_deck) and auto_generate_slides:
             logger.info(
-                f"🖼️ Folder {folder_id}: aucun deck slides, génération automatique avant TTS sync"
+                f"🖼️ Folder {folder_id}: aucun deck slides valide, génération automatique avant TTS sync"
             )
             generate_slides_from_script(
                 folder_id=folder_id,
@@ -14173,9 +14193,9 @@ def generate_audio_from_script(
                 model=slide_model,
             )
             slide_deck = get_latest_script_slide_deck(folder_id, content_job_id=job_id)
-        if not slide_deck:
+        if not is_script_slide_deck_usable(slide_deck):
             raise ValueError(
-                f"Aucun deck de slides persistant pour le dossier {folder_id}. "
+                f"Aucun deck de slides valide pour le dossier {folder_id}. "
                 "Générez les slides d'abord ou relancez avec auto_generate_slides=true."
             )
         logger.info(

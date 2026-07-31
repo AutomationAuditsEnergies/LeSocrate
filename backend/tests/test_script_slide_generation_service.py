@@ -515,7 +515,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             "anchor-2",
         ])
 
-    def test_batch_error_fallback_preserves_strict_anchor_slides(self):
+    def test_batch_error_aborts_deck_instead_of_persisting_false_success(self):
         strict_blocks = [_strict_block(index) for index in range(4)]
         anchors = [block["slide_anchors"][0] for block in strict_blocks]
         source = {
@@ -530,23 +530,30 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         with patch.object(slides, "_extract_slide_anchors_from_plan", return_value=anchors), \
              patch.object(slides, "_build_section_aligned_source_blocks", return_value=(strict_blocks, 400, {})), \
              patch.object(slides, "_generate_batch", side_effect=RuntimeError("boom")):
-            result = slides._run_slide_generation_from_source(
-                source,
-                job_id=99,
-                max_slides=2,
-                pace="normal",
-                model="test-model",
-                persist=False,
-                content_plan={"courses": []},
-            )
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                slides._run_slide_generation_from_source(
+                    source,
+                    job_id=99,
+                    max_slides=2,
+                    pace="normal",
+                    model="test-model",
+                    persist=False,
+                    content_plan={"courses": []},
+                )
 
-        self.assertEqual(len(result["slides"]), 4)
-        self.assertGreaterEqual(result["stats"]["max_slides"], 4)
-        self.assertEqual(result["stats"]["strict_anchor_fallback_slides"], 4)
-        self.assertEqual(
-            [slide.get("slide_anchor_id") for slide in result["slides"]],
-            [f"strict-anchor-{index}" for index in range(4)],
-        )
+    def test_deck_with_historical_batch_fallback_is_not_usable(self):
+        self.assertFalse(slides.is_script_slide_deck_usable({
+            "slides": [{"slide_id": "fallback-slide"}],
+            "pipeline_debug": {
+                "batches": [{"status": "fallback"}],
+            },
+        }))
+        self.assertTrue(slides.is_script_slide_deck_usable({
+            "slides": [{"slide_id": "generated-slide"}],
+            "pipeline_debug": {
+                "batches": [{"status": "llm"}],
+            },
+        }))
 
     def test_section_alignment_uses_fallback_after_one_model_call(self):
         section = {
