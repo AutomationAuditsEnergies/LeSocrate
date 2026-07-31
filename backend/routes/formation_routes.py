@@ -36,7 +36,6 @@ from services.knowledge_base_service import (
 from utils.deepseek_client import is_deterministic_deepseek_error
 from utils.logger import get_logger
 from services.admin_access_service import can_access_formation_pipeline
-from services.formation_runtime_state import PIPELINE_EXECUTION_STATE
 
 logger = get_logger(__name__)
 
@@ -1408,26 +1407,6 @@ def volume_audit(job_id):
 def launch_volume_safety(job_id, folder_id):
     """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
     return _retired_manual_pipeline_response("launch_volume_safety")
-
-
-@formation_bp.route(
-    "/api/formation/<int:job_id>/content/<int:folder_id>/volume-safety/status",
-    methods=["GET"],
-)
-def volume_safety_status(job_id, folder_id):
-    """Récupère l'état de la dernière exécution volume safety pour ce folder.
-
-    Retourne {status: 'idle'|'running'|'done'|'error', model?, result?, error?}.
-    """
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
-
-    state = PIPELINE_EXECUTION_STATE.get(
-        (job_id, f"volume_safety_{folder_id}")
-    )
-    if not state:
-        return jsonify({"status": "idle"}), 200
-    return jsonify(state), 200
 
 
 # ─── Ancienne reprise partielle de la génération texte ───────────────────────

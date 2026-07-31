@@ -208,6 +208,13 @@ class PipelineQueueRouteTest(unittest.TestCase):
         update_job.assert_not_called()
         create_aggregate.assert_not_called()
 
+    def test_removed_volume_safety_memory_status_is_not_exposed(self):
+        response = self.client.get(
+            "/api/formation/42/content/301/volume-safety/status"
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_resume_preserves_paid_teacher_order_until_terminal_completion(self):
         dead_lettered = SimpleNamespace(
             id="work-dead",
