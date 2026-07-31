@@ -75,12 +75,23 @@ def _make_review_db(*, humanized: bool, reviewed: bool, segment_count: int = 18)
 
 
 def _job(**overrides):
+    completed_day = {
+        "day_number": 1,
+        "sub_parts": [
+            {
+                "name": f"Cours {index}",
+                "module_content": f"Contenu pédagogique {index}",
+            }
+            for index in range(1, 8)
+        ],
+    }
     data = {
         "id": 99,
         "status": "text_ready",
         "reac_text": "reac",
         "global_program": "global",
-        "daily_programs": "[{\"day_number\": 1}]",
+        "daily_programs": json.dumps([completed_day]),
+        "daily_programs_validated": 1,
         "nb_days": 1,
         "auto_pilot_skip_vs": 1,
         "auto_pilot_volume_done": 1,
@@ -414,6 +425,72 @@ class PipelineOrderTest(unittest.TestCase):
                 fr._execute_ap_step(99, "daily", job)
 
         update.assert_not_called()
+
+    def test_daily_step_delegates_checkpoint_and_validation_atomically(self):
+        job = _job(
+            platform_id=1,
+            status="global_validated",
+            daily_programs="[]",
+        )
+
+        def checkpoint():
+            return None
+
+        with patch.object(fr, "run_daily_split") as run_daily, patch.object(
+            fr,
+            "update_job",
+        ) as update:
+            fr._execute_ap_step(99, "daily", job, checkpoint=checkpoint)
+
+        run_daily.assert_called_once_with(
+            99,
+            model="deepseek-v4-pro",
+            checkpoint=checkpoint,
+        )
+        update.assert_not_called()
+
+    def test_partial_or_unvalidated_daily_checkpoint_stays_on_daily_step(self):
+        day_one = fps._normalize_day_audio_slots(
+            {
+                "day_number": 1,
+                "sub_parts": [
+                    {
+                        "name": f"Cours {index}",
+                        "module_content": f"Contenu {index}",
+                    }
+                    for index in range(1, 8)
+                ],
+            }
+        )
+        day_two = fps._normalize_day_audio_slots(
+            {
+                "day_number": 2,
+                "sub_parts": [
+                    {
+                        "name": f"Cours {index}",
+                        "module_content": f"Contenu {index}",
+                    }
+                    for index in range(1, 8)
+                ],
+            }
+        )
+        partial = _job(
+            status="daily_splitting",
+            nb_days=2,
+            daily_programs=json.dumps([day_one]),
+            daily_programs_validated=1,
+        )
+        complete_but_unvalidated = _job(
+            status="daily_splitting",
+            nb_days=2,
+            daily_programs=json.dumps([day_one, day_two]),
+            daily_programs_validated=0,
+        )
+
+        with patch.object(fr, "get_job", return_value=partial):
+            self.assertEqual(fr._determine_next_ap_step(99), "daily")
+        with patch.object(fr, "get_job", return_value=complete_but_unvalidated):
+            self.assertEqual(fr._determine_next_ap_step(99), "daily")
 
     def test_audio_gate_requires_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=False)

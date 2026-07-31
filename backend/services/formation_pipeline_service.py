@@ -1562,6 +1562,122 @@ def _complete_day_program_shape(
     return _normalize_day_audio_slots(day, schedule_day=schedule_day)
 
 
+def daily_programs_checkpoint_state(job: dict) -> dict:
+    """Retourne les journées valides déjà persistées pour ce job immuable."""
+    schedule_days = _v2_schedule_days(job)
+    try:
+        expected_count = (
+            len(schedule_days)
+            if schedule_days
+            else int(job.get("nb_days") or 0)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Nombre de journées invalide") from exc
+    if expected_count <= 0:
+        raise ValueError("Le pipeline doit contenir au moins une journée")
+
+    raw_value = job.get("daily_programs")
+    if isinstance(raw_value, list):
+        raw_days = raw_value
+        invalid_count = 0
+    else:
+        try:
+            raw_days = json.loads(raw_value or "[]")
+            invalid_count = 0
+        except (TypeError, json.JSONDecodeError):
+            raw_days = []
+            invalid_count = 1
+    if not isinstance(raw_days, list):
+        raw_days = []
+        invalid_count += 1
+
+    expected_numbers = list(range(1, expected_count + 1))
+    by_number = {}
+    for raw_day in raw_days:
+        if not isinstance(raw_day, dict):
+            invalid_count += 1
+            continue
+        number = _coerce_day_number(
+            raw_day.get("day_number") or raw_day.get("day_index")
+        )
+        if number not in expected_numbers or number in by_number:
+            invalid_count += 1
+            continue
+
+        schedule_day = _schedule_day(schedule_days, number)
+        expected_course_count = (
+            len(_v2_course_slots(schedule_day))
+            if schedule_day
+            else len(COURSE_AUDIO_SLOTS)
+        )
+        sub_parts = raw_day.get("sub_parts")
+        if (
+            not isinstance(sub_parts, list)
+            or len(sub_parts) != expected_course_count
+            or any(not isinstance(part, dict) for part in sub_parts)
+        ):
+            invalid_count += 1
+            continue
+
+        try:
+            day = _complete_day_program_shape(
+                raw_day,
+                number,
+                job.get("tp_name") or "Formation",
+                schedule_day=schedule_day,
+            )
+            _assert_lecture_only_days([day])
+        except Exception:
+            invalid_count += 1
+            continue
+        by_number[number] = day
+
+    days = [by_number[number] for number in expected_numbers if number in by_number]
+    missing_numbers = [
+        number for number in expected_numbers if number not in by_number
+    ]
+    return {
+        "days": days,
+        "by_number": by_number,
+        "expected_count": expected_count,
+        "expected_numbers": expected_numbers,
+        "missing_numbers": missing_numbers,
+        "invalid_count": invalid_count,
+        "complete": not missing_numbers and invalid_count == 0,
+        "schedule_days": schedule_days,
+    }
+
+
+def daily_programs_are_complete(job: dict) -> bool:
+    """Indique si toutes les journées attendues sont présentes et valides."""
+    try:
+        return bool(daily_programs_checkpoint_state(job)["complete"])
+    except (TypeError, ValueError):
+        return False
+
+
+def _missing_day_batches(
+    missing_numbers: list[int],
+    batch_size: int,
+) -> list[tuple[int, int]]:
+    """Regroupe uniquement les journées manquantes, sans englober un checkpoint."""
+    numbers = sorted({int(number) for number in missing_numbers})
+    if not numbers:
+        return []
+    size = max(1, int(batch_size or 1))
+    batches = []
+    batch_start = numbers[0]
+    batch_end = numbers[0]
+    for number in numbers[1:]:
+        if number == batch_end + 1 and number - batch_start + 1 <= size:
+            batch_end = number
+            continue
+        batches.append((batch_start, batch_end))
+        batch_start = batch_end = number
+    batches.append((batch_start, batch_end))
+    return batches
+
+
 def _split_batch(tp_name: str, nb_days: int, global_program: str,
                  day_start: int, day_end: int, model: str,
                  reac_text: str = "", rc_text: str = "", rome_text: str = "",
@@ -1670,33 +1786,49 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
     raise DailySplitGenerationError(message) from last_error
 
 
-def run_daily_split(job_id: int, model: str = None) -> dict:
-    """Découpe le programme global et persiste uniquement un résultat validé."""
+def run_daily_split(
+    job_id: int,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> dict:
+    """Reprend les journées persistées et sauvegarde chaque nouveau batch valide."""
     try:
+        if checkpoint:
+            checkpoint()
         job = get_job(job_id)
         if not job:
             raise ValueError(f"Job {job_id} introuvable")
 
-        update_job(job_id, status="daily_splitting", error_message=None)
         used_model = model or DEEPSEEK_MODEL
-        schedule_days = _v2_schedule_days(job)
-        nb_days = len(schedule_days) if schedule_days else job["nb_days"]
+        state = daily_programs_checkpoint_state(job)
+        schedule_days = state["schedule_days"]
+        nb_days = state["expected_count"]
+        days_by_number = dict(state["by_number"])
+        resumed_count = len(days_by_number)
+        update_job(
+            job_id,
+            status="daily_splitting",
+            daily_programs=json.dumps(state["days"], ensure_ascii=False),
+            daily_programs_validated=0,
+            error_message=None,
+        )
+        if checkpoint:
+            checkpoint()
         logger.info(
-            "🔄 Job %s : découpage en %s journée(s), batch=%s, workers=%s (modèle: %s)...",
+            "🔄 Job %s : découpage en %s journée(s), reprises=%s, "
+            "batch=%s, workers=%s (modèle: %s)...",
             job_id,
             nb_days,
+            resumed_count,
             BATCH_SIZE,
             DAILY_SPLIT_WORKERS,
             used_model,
         )
 
-        # Découper en batches
-        batches = []
-        for start in range(1, nb_days + 1, BATCH_SIZE):
-            end = min(start + BATCH_SIZE - 1, nb_days)
-            batches.append((start, end))
-
-        results = [None] * len(batches)
+        batches = _missing_day_batches(
+            state["missing_numbers"],
+            BATCH_SIZE,
+        )
         errors = []
 
         def run_batch(day_start, day_end):
@@ -1713,58 +1845,106 @@ def run_daily_split(job_id: int, model: str = None) -> dict:
                 schedule_days=schedule_days,
             )
 
-        workers = min(max(1, DAILY_SPLIT_WORKERS), max(1, len(batches)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            future_map = {
-                pool.submit(run_batch, start, end): (idx, start, end)
-                for idx, (start, end) in enumerate(batches)
-            }
-            for future in as_completed(future_map):
-                idx, start, end = future_map[future]
-                try:
-                    days = future.result()
-                    results[idx] = days
-                    logger.info(f"✅ Batch {start}-{end} : {len(days)} journée(s)")
-                except Exception as e:
-                    errors.append(f"Batch {start}-{end} : {e}")
-                    results[idx] = []
+        if batches:
+            workers = min(max(1, DAILY_SPLIT_WORKERS), len(batches))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                future_map = {
+                    pool.submit(run_batch, start, end): (start, end)
+                    for start, end in batches
+                }
+                for future in as_completed(future_map):
+                    start, end = future_map[future]
+                    try:
+                        days = future.result()
+                        for day in sorted(
+                            days,
+                            key=lambda item: _coerce_day_number(
+                                item.get("day_number")
+                            ) or 0,
+                        ):
+                            number = _coerce_day_number(day.get("day_number"))
+                            if (
+                                number not in state["expected_numbers"]
+                                or not start <= number <= end
+                            ):
+                                raise ValueError(
+                                    f"Journée inattendue {number} pour le batch "
+                                    f"{start}-{end}"
+                                )
+                            days_by_number[number] = day
+
+                            partial_days = [
+                                days_by_number[expected_number]
+                                for expected_number in state["expected_numbers"]
+                                if expected_number in days_by_number
+                            ]
+                            _assert_lecture_only_days(partial_days)
+                            if checkpoint:
+                                checkpoint()
+                            update_job(
+                                job_id,
+                                status="daily_splitting",
+                                daily_programs=json.dumps(
+                                    partial_days,
+                                    ensure_ascii=False,
+                                ),
+                                daily_programs_validated=0,
+                                error_message=None,
+                            )
+                            if checkpoint:
+                                checkpoint()
+                            logger.info(
+                                "✅ Job %s : checkpoint journée %s (%s/%s)",
+                                job_id,
+                                number,
+                                len(partial_days),
+                                nb_days,
+                            )
+                    except LeaseLostError:
+                        raise
+                    except Exception as e:
+                        errors.append(f"Batch {start}-{end} : {e}")
 
         if errors:
             raise DailySplitGenerationError("; ".join(errors))
 
-        # Fusionner et trier par day_number
-        all_days = []
-        for batch_days in results:
-            all_days.extend(batch_days or [])
-        all_days.sort(key=lambda d: d.get("day_number", 0))
         all_days = [
-            _complete_day_program_shape(
-                day,
-                i + 1,
-                job["tp_name"],
-                schedule_day=_schedule_day(schedule_days, i + 1),
-            )
-            for i, day in enumerate(all_days)
+            days_by_number[number]
+            for number in state["expected_numbers"]
+            if number in days_by_number
         ]
-
-        expected_numbers = list(range(1, nb_days + 1))
         actual_numbers = [_coerce_day_number(day.get("day_number")) for day in all_days]
-        if actual_numbers != expected_numbers:
+        if actual_numbers != state["expected_numbers"]:
             raise ValueError(
-                f"Daily split incohérent : attendu jours {expected_numbers}, reçu {actual_numbers}"
+                "Daily split incohérent : attendu jours "
+                f"{state['expected_numbers']}, reçu {actual_numbers}"
             )
         _assert_lecture_only_days(all_days)
 
+        if checkpoint:
+            checkpoint()
         logger.info(f"✅ Job {job_id} : {len(all_days)} journées générées au total")
         update_job(
             job_id,
-            status="daily_ready",
+            status="daily_validated",
             daily_programs=json.dumps(all_days, ensure_ascii=False),
+            daily_programs_validated=1,
             daily_programs_generated_via="api",
             error_message=None,
         )
-        return {"ok": True, "days": len(all_days), "generated_via": "api"}
+        if checkpoint:
+            checkpoint()
+        return {
+            "ok": True,
+            "days": len(all_days),
+            "resumed_days": resumed_count,
+            "generated_days": len(all_days) - resumed_count,
+            "generated_via": "api",
+        }
 
+    except LeaseLostError:
+        logger.warning("PIPELINE_DAILY_SPLIT_LEASE_LOST job=%s", job_id)
+        raise
     except Exception as e:
         logger.error(f"❌ Job {job_id} découpage journées échoué : {e}")
         update_job(job_id, status="error", error_message=str(e))

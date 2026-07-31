@@ -22,6 +22,7 @@ from services.formation_pipeline_service import (
     fetch_rome_data,
     generate_global_program,
     run_daily_split,
+    daily_programs_are_complete,
     update_job,
     get_job,
     _normalize_day_audio_slots,
@@ -2637,7 +2638,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
         return "reac"
 
     # 2. KB
-    kb_done = j.get("status") in (
+    kb_done = bool(j.get("global_program")) or j.get("status") in (
         "kb_ready", "global_ready", "global_validated", "daily_ready",
         "daily_validated", "text_ready", "tts_launched", "audio_running",
         "audio_completed", "audio_launched",
@@ -2660,8 +2661,10 @@ def _determine_next_ap_step(job_id: int) -> str | None:
         return "global"
 
     # 4. Programmes journée
-    daily = j.get("daily_programs") or "[]"
-    if not daily or daily in ("[]", '"[]"'):
+    if (
+        not j.get("daily_programs_validated")
+        or not daily_programs_are_complete(j)
+    ):
         return "daily"
 
     # 5. Génération contenu.
@@ -2839,8 +2842,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         logger.info(f"🤖 ✓ Programme global validé job {job_id}")
 
     elif step == "daily":
-        run_daily_split(job_id, model=api_model)
-        update_job(job_id, daily_programs_validated=1, status="daily_validated")
+        run_daily_split(job_id, model=api_model, checkpoint=checkpoint)
         logger.info(f"🤖 ✓ Programmes journée validés job {job_id}")
 
     elif step == "content":

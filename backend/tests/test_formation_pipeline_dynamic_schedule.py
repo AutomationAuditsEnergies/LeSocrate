@@ -338,9 +338,14 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertEqual(updates[0]["status"], "daily_splitting")
         self.assertEqual(updates[-1]["status"], "error")
         self.assertIn(str(failure), updates[-1]["error_message"])
-        self.assertFalse(any("daily_programs" in fields for fields in updates))
+        saved_days = [
+            json.loads(fields["daily_programs"])
+            for fields in updates
+            if "daily_programs" in fields
+        ]
+        self.assertEqual(saved_days, [[]])
         self.assertFalse(
-            any(fields.get("status") == "daily_ready" for fields in updates)
+            any(fields.get("daily_programs_validated") == 1 for fields in updates)
         )
 
     def test_run_daily_split_uses_snapshot_length_not_legacy_nb_days(self):
@@ -367,16 +372,128 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertEqual(result["days"], 2)
         self.assertEqual(captured[0]["nb_days"], 2)
         self.assertEqual(len(captured[0]["schedule_days"]), 2)
-        saved = next(
-            call.kwargs["daily_programs"]
+        final_update = next(
+            call.kwargs
             for call in update.call_args_list
-            if "daily_programs" in call.kwargs
+            if call.kwargs.get("status") == "daily_validated"
         )
-        saved_days = json.loads(saved)
+        saved_days = json.loads(final_update["daily_programs"])
         self.assertEqual(
             [len(day["sub_parts"]) for day in saved_days],
             [4, 5],
         )
+        self.assertEqual(final_update["daily_programs_validated"], 1)
+
+    def test_run_daily_split_resumes_only_the_missing_days(self):
+        schedule_days = fps._v2_schedule_days(
+            _v2_job([self.day_four, self.day_five])
+        )
+        persisted_day = fps._complete_day_program_shape(
+            _raw_generated_day(1, 4),
+            1,
+            "TP dynamique",
+            schedule_day=schedule_days[0],
+        )
+        job = _v2_job(
+            [self.day_four, self.day_five],
+            daily_programs=json.dumps([persisted_day]),
+            daily_programs_validated=0,
+        )
+        captured = []
+
+        def fake_split(**kwargs):
+            captured.append(kwargs)
+            return [_raw_generated_day(2, 5)]
+
+        with (
+            patch.object(fps, "get_job", return_value=job),
+            patch.object(fps, "update_job") as update,
+            patch.object(fps, "_split_batch", side_effect=fake_split),
+        ):
+            result = fps.run_daily_split(91, model="test-model")
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(
+            (captured[0]["day_start"], captured[0]["day_end"]),
+            (2, 2),
+        )
+        self.assertEqual(result["resumed_days"], 1)
+        self.assertEqual(result["generated_days"], 1)
+        final_update = next(
+            call.kwargs
+            for call in update.call_args_list
+            if call.kwargs.get("status") == "daily_validated"
+        )
+        self.assertEqual(
+            [
+                day["day_number"]
+                for day in json.loads(final_update["daily_programs"])
+            ],
+            [1, 2],
+        )
+
+    def test_successful_day_is_checkpointed_before_another_day_fails(self):
+        job = _v2_job([self.day_four, self.day_five])
+
+        def fake_split(**kwargs):
+            if kwargs["day_start"] == 2:
+                raise fps.DailySplitGenerationError(
+                    "Journée 2 impossible à générer correctement"
+                )
+            return [_raw_generated_day(1, 4)]
+
+        with (
+            patch.object(fps, "BATCH_SIZE", 1),
+            patch.object(fps, "get_job", return_value=job),
+            patch.object(fps, "update_job") as update,
+            patch.object(fps, "_split_batch", side_effect=fake_split),
+        ):
+            with self.assertRaises(fps.DailySplitGenerationError):
+                fps.run_daily_split(91, model="test-model")
+
+        saved_payloads = [
+            json.loads(call.kwargs["daily_programs"])
+            for call in update.call_args_list
+            if "daily_programs" in call.kwargs
+        ]
+        self.assertTrue(
+            any(
+                [day["day_number"] for day in payload] == [1]
+                for payload in saved_payloads
+            )
+        )
+        self.assertFalse(
+            any(
+                call.kwargs.get("daily_programs_validated") == 1
+                for call in update.call_args_list
+            )
+        )
+
+    def test_multi_day_batch_still_checkpoints_each_day_separately(self):
+        job = _v2_job([self.day_four, self.day_five])
+
+        with (
+            patch.object(fps, "BATCH_SIZE", 2),
+            patch.object(fps, "get_job", return_value=job),
+            patch.object(fps, "update_job") as update,
+            patch.object(
+                fps,
+                "_split_batch",
+                return_value=[
+                    _raw_generated_day(1, 4),
+                    _raw_generated_day(2, 5),
+                ],
+            ),
+        ):
+            fps.run_daily_split(91, model="test-model")
+
+        partial_sizes = [
+            len(json.loads(call.kwargs["daily_programs"]))
+            for call in update.call_args_list
+            if call.kwargs.get("status") == "daily_splitting"
+            and "daily_programs" in call.kwargs
+        ]
+        self.assertEqual(partial_sizes, [0, 1, 2])
 
     def test_launch_tts_passes_exactly_x_v2_courses_and_their_budgets(self):
         generated_day = _raw_generated_day(
