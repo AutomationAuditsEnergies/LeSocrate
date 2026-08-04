@@ -156,7 +156,7 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             (35 * 60) - 30,
         )
 
-    def test_dynamic_voice_gate_reserves_exactly_thirty_seconds_total(self):
+    def test_dynamic_voice_gate_keeps_natural_audio_for_runtime_timeline(self):
         target_sec = 35 * 60
         bloc = {
             "bloc_number": 1,
@@ -172,11 +172,10 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             bloc,
             target_sec - 30,
         )
-        with self.assertRaisesRegex(ValueError, "silence final"):
-            cgs._assert_course_voice_before_final_silence(
-                bloc,
-                target_sec - 29.9,
-            )
+        cgs._assert_course_voice_before_final_silence(
+            bloc,
+            target_sec + 90,
+        )
 
     def test_dynamic_generation_context_uses_the_matching_course_budget(self):
         playlist = [

@@ -88,6 +88,75 @@ class AudioPublishStorageTest(unittest.TestCase):
             ["course-sessions/501/cours_9h00_9h45.mp3"],
         )
 
+    def test_scheduled_v2_publish_creates_adaptive_playback_manifest(self):
+        source_blobs = [
+            SimpleNamespace(name="platform-5/folder-55/playlist/course_01.mp3"),
+            SimpleNamespace(name="platform-5/folder-55/playlist/qa_01.mp3"),
+        ]
+        source_client = Mock()
+        source_client.download_blob.return_value.readall.side_effect = [
+            b"course-mp3",
+            b"qa-mp3",
+        ]
+        source_container = Mock()
+        source_container.list_blobs.return_value = source_blobs
+        source_container.get_blob_client.return_value = source_client
+        tts_service = Mock()
+        tts_service.get_container_client.return_value = source_container
+
+        destination_container = Mock()
+        audio_service = Mock()
+        audio_service.get_container_client.return_value = destination_container
+
+        with patch.dict(
+            service.os.environ,
+            {
+                "AZURE_TTS_STORAGE_CONNECTION_STRING": "tts",
+                "AZURE_AUDIO_STORAGE_CONNECTION_STRING": "audio",
+            },
+            clear=False,
+        ), patch.object(
+            service.BlobServiceClient,
+            "from_connection_string",
+            side_effect=[tts_service, audio_service],
+        ), patch.object(
+            service,
+            "ensure_platform_audio_storage",
+        ), patch(
+            "services.content_generation_service._mp3_duration_seconds_no_ffprobe",
+            side_effect=[3180.8, 900.1],
+        ), patch(
+            "services.day_playlist_service.resolve_folder_playlist",
+            return_value={
+                "schema_version": 2,
+                "playlist_items": [
+                    ("course_01.mp3", 3600, "cours", 1),
+                    ("qa_01.mp3", 900, "qa", 1),
+                ],
+            },
+        ), patch(
+            "services.adaptive_playback_service.upload_occurrence_playback_manifest",
+            return_value="course-sessions/501/playback-manifest.json",
+        ) as upload_manifest:
+            result = service.publish_playlist_audio_to_platform(
+                5,
+                55,
+                filenames=["course_01.mp3", "qa_01.mp3"],
+                source_platform_id=5,
+                destination_prefix="course-sessions/501",
+                create_playback_manifest=True,
+            )
+
+        manifest = upload_manifest.call_args.args[2]
+        self.assertEqual(
+            [item["effective_duration_sec"] for item in manifest["segments"]],
+            [3181, 1319],
+        )
+        self.assertEqual(
+            result["playback_manifest_blob"],
+            "course-sessions/501/playback-manifest.json",
+        )
+
     def test_reuse_publishes_the_registered_durable_asset_when_pipeline_copy_is_gone(self):
         registered_blob = Mock()
         registered_blob.exists.return_value = True

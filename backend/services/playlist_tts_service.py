@@ -17,7 +17,6 @@ import os
 import io
 import re
 from pydub import AudioSegment
-from pydub.generators import Sine
 from utils.logger import get_logger
 from utils.deepseek_client import default_model, post_message as _llm_post
 from services.tts_service import convert_to_speech, extract_text_from_pdf, extract_text_from_file
@@ -135,8 +134,8 @@ def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_
     """
     Construit un audio de pause/Q&A :
     intro TTS optionnelle + silence + outro TTS + 2s de silence final.
-    Si l'intro est vide, ajoute un tone quasi inaudible au tout début pour
-    amorcer le MP3 sans faire entendre de voix.
+    Si l'intro est vide, le fichier commence par un vrai silence numérique :
+    aucune syllabe ni tonalité d'amorce n'est ajoutée.
     """
     tts = convert_func or convert_to_speech
     intro_text = (intro_text or "").strip()
@@ -160,12 +159,7 @@ def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_
     if silence_ms < 0:
         silence_ms = 0
 
-    if intro_text:
-        start_silence = AudioSegment.silent(duration=lead_in_ms)
-    else:
-        primer_ms = 80
-        primer = Sine(440).to_audio_segment(duration=primer_ms).apply_gain(-60)
-        start_silence = primer + AudioSegment.silent(duration=max(lead_in_ms - primer_ms, 0))
+    start_silence = AudioSegment.silent(duration=lead_in_ms)
     mid_silence = AudioSegment.silent(duration=silence_ms)
     trailing_silence = AudioSegment.silent(duration=outro_tail_ms)
 

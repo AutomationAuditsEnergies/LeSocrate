@@ -79,6 +79,48 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         self.assertIn(b"PAD", audio_bytes)
         self.assertNotIn(b"meta-two", audio_bytes)
 
+    def test_dynamic_slide_synced_course_keeps_natural_duration_without_padding(self):
+        bloc = {
+            "bloc_number": 1,
+            "target_sec": 3600,
+            "dynamic_schedule": True,
+            "text": "un deux trois quatre",
+            "word_count": 4,
+            "start_w": 0,
+            "end_w": 4,
+        }
+        slides = [
+            {"slide_id": "s1", "source_ref": {"word_start": 0, "word_end": 4}},
+        ]
+        voice = _id3_header(b"edge-natural") + b"\xff\xfbVOICE"
+
+        with patch(
+            "services.basic_tts_service.convert_to_speech_basic",
+            return_value=voice,
+        ), patch.object(
+            cgs,
+            "_mp3_duration_seconds_no_ffprobe",
+            return_value=3180.0,
+        ), patch.object(
+            cgs,
+            "_edge_muted_padding_audio",
+        ) as muted_padding:
+            audio_bytes, voice_duration, fit_method, attempts, _timings, _, _ = (
+                cgs._synthesize_course_audio_synced_to_slides(
+                    bloc,
+                    slides,
+                    "course_01.mp3",
+                    mock=False,
+                    basic_tts=True,
+                )
+            )
+
+        self.assertEqual(voice_duration, 3180.0)
+        self.assertEqual(fit_method, "slide_sync_edge_natural")
+        self.assertFalse(any(item["kind"] == "final_silence_padding" for item in attempts))
+        muted_padding.assert_not_called()
+        self.assertIn(b"VOICE", audio_bytes)
+
     def test_edge_tts_uses_measured_muted_padding_when_runtime_fit_is_disabled(self):
         bloc = {
             "bloc_number": 1,
@@ -208,6 +250,31 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         silence.assert_called_once_with(600)
         self.assertEqual(audio_bytes, b"FULL-SILENCE")
         self.assertEqual(mode, "silence_fallback")
+
+    def test_fish_end_only_break_starts_with_real_silence_without_primer_voice(self):
+        with patch(
+            "services.tts_service.convert_to_speech",
+            return_value=b"OUTRO",
+        ) as tts, patch.object(
+            cgs,
+            "_mp3_duration_seconds_no_ffprobe",
+            return_value=5.0,
+        ), patch.object(
+            cgs,
+            "_fish_silent_mp3_approx_no_ffmpeg",
+            side_effect=[(b"LEADING-SILENCE", 53.0), (b"TAIL-SILENCE", 2.0)],
+        ), patch(
+            "services.basic_tts_service.concat_mp3_bytes",
+            side_effect=lambda parts: b"|".join(parts),
+        ):
+            audio_bytes, duration = cgs._build_end_only_fish_break_audio_no_ffmpeg(
+                "La pause est terminée.",
+                60,
+            )
+
+        tts.assert_called_once_with("La pause est terminée.")
+        self.assertEqual(duration, 60.0)
+        self.assertEqual(audio_bytes, b"LEADING-SILENCE|OUTRO|TAIL-SILENCE")
 
 
 if __name__ == "__main__":

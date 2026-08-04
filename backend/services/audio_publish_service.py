@@ -136,6 +136,7 @@ def publish_playlist_audio_to_platform(
     archive_existing=False,
     archive_reason="auto-publish",
     destination_prefix=None,
+    create_playback_manifest=False,
 ):
     """Copie les MP3 vers le cache privé global ou celui d'une occurrence."""
     tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
@@ -149,6 +150,8 @@ def publish_playlist_audio_to_platform(
     wanted = {os.path.basename(str(name).split("?", 1)[0]) for name in (filenames or []) if name}
     dest_container = _platform_audio_container(platform_id)
     occurrence_prefix = _safe_occurrence_prefix(destination_prefix)
+    if create_playback_manifest and not occurrence_prefix:
+        raise ValueError("Le manifeste adaptatif exige un préfixe de séance")
     prefix = f"platform-{source_platform_id}/folder-{folder_id}/playlist/"
 
     tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
@@ -223,6 +226,7 @@ def publish_playlist_audio_to_platform(
 
     copied = []
     copied_blob_names = []
+    media_durations = {}
     errors = []
     for entry in source_entries:
         filename = entry["filename"]
@@ -233,6 +237,14 @@ def publish_playlist_audio_to_platform(
                 .download_blob()
                 .readall()
             )
+            if create_playback_manifest:
+                from services.content_generation_service import (
+                    _mp3_duration_seconds_no_ffprobe,
+                )
+
+                media_durations[filename] = _mp3_duration_seconds_no_ffprobe(
+                    audio_bytes
+                )
             destination_name = (
                 f"{occurrence_prefix}/{filename}"
                 if occurrence_prefix
@@ -258,10 +270,38 @@ def publish_playlist_audio_to_platform(
             logger.error("❌ Publication audio %s échouée: %s", filename, exc)
             errors.append({"filename": filename, "error": str(exc)})
 
+    playback_manifest = None
+    playback_manifest_blob = None
+    if create_playback_manifest and not errors:
+        from services.adaptive_playback_service import (
+            build_occurrence_playback_manifest,
+            upload_occurrence_playback_manifest,
+        )
+        from services.day_playlist_service import resolve_folder_playlist
+
+        resolved_playlist = resolve_folder_playlist(folder_id)
+        if int(resolved_playlist.get("schema_version") or 1) != 2:
+            raise ValueError(
+                "Le manifeste adaptatif est réservé aux journées audio V2"
+            )
+        playback_manifest = build_occurrence_playback_manifest(
+            resolved_playlist["playlist_items"],
+            media_durations,
+            folder_id=folder_id,
+        )
+        playback_manifest_blob = upload_occurrence_playback_manifest(
+            platform_id,
+            occurrence_prefix,
+            playback_manifest,
+            blob_service_client=audio_bsc,
+        )
+
     return {
         "published": copied,
         "published_blob_names": copied_blob_names,
         "destination_prefix": occurrence_prefix or None,
         "publish_errors": errors,
         "archive": archive_result,
+        "playback_manifest": playback_manifest,
+        "playback_manifest_blob": playback_manifest_blob,
     }

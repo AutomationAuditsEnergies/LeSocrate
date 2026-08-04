@@ -4554,27 +4554,39 @@ def _smaller_runtime_fit_word_limit(chunk: dict, available_sec: float, observed_
     return max(8, min(words - 1, fit_words))
 
 
-def _assert_audio_duration_within_slot(filename: str, duration_sec: float, target_sec: int) -> None:
-    """Last safety gate before Azure upload: no generated MP3 may exceed its slot."""
+def _assert_audio_duration_within_slot(
+    filename: str,
+    duration_sec: float,
+    target_sec: int,
+    *,
+    max_duration_sec: float | None = None,
+) -> None:
+    """Last upload gate, optionally including the following flexible buffer."""
     if not target_sec or duration_sec is None:
         return
-    if float(duration_sec) > float(target_sec) + _UPLOAD_DURATION_TOLERANCE_SEC:
+    allowed_duration = float(
+        max_duration_sec if max_duration_sec is not None else target_sec
+    )
+    if float(duration_sec) > allowed_duration + _UPLOAD_DURATION_TOLERANCE_SEC:
         raise ValueError(
             f"{filename} dépasse la durée autorisée "
-            f"({float(duration_sec):.1f}s > {int(target_sec)}s). "
-            "Audio non uploadé pour éviter un débord de playlist."
+            f"({float(duration_sec):.1f}s > {allowed_duration:.1f}s). "
+            "Audio non uploadé pour préserver le bloc flexible minimal."
         )
 
 
 def _assert_course_voice_before_final_silence(bloc: dict, voice_duration_sec: float) -> None:
-    """Keep spoken course audio before the reserved final-silence window."""
+    """Keep natural speech before the protected break boundary."""
     target_sec = int(bloc.get("target_sec") or 0)
     if not target_sec or voice_duration_sec is None:
         return
-    max_voice_sec = _course_voice_window_sec(
-        target_sec,
-        bool(bloc.get("dynamic_schedule")),
-    )
+    dynamic_schedule = bool(bloc.get("dynamic_schedule"))
+    if dynamic_schedule:
+        # V2 keeps the natural asset intact.  The occurrence playback manifest
+        # performs the exceptional hard stop while preserving the minimum
+        # break; generation must not rewrite or discard the course.
+        return
+    max_voice_sec = _course_voice_window_sec(target_sec, False)
     if float(voice_duration_sec) > max_voice_sec:
         raise ValueError(
             f"Bloc {bloc.get('bloc_number')} dépasse la limite de parole avant "
@@ -5549,7 +5561,7 @@ def _synthesize_course_audio_synced_to_slides(
                 "avant le report du texte."
             )
         voice_stop_duration = cursor_sec
-        if target_sec > voice_stop_duration:
+        if not dynamic_schedule and target_sec > voice_stop_duration:
             # Toujours produire le remplissage avec Edge lui-même. Le MP3
             # silencieux embarqué n'a pas le même profil (sample rate/bitrate)
             # et sa concaténation avec Edge fausse la durée lue par certains
@@ -5572,7 +5584,7 @@ def _synthesize_course_audio_synced_to_slides(
         voice_stop_duration = cursor_sec
         final_duration = voice_stop_duration
         output_duration = voice_stop_duration
-        if output_duration < target_sec:
+        if not dynamic_schedule and output_duration < target_sec:
             silence_bytes, silence_duration = _fish_silent_mp3_approx_no_ffmpeg(target_sec - output_duration)
             if silence_bytes and silence_duration > 0:
                 audio_parts.append(silence_bytes)
@@ -5586,17 +5598,21 @@ def _synthesize_course_audio_synced_to_slides(
 
         output_bytes = concat_mp3_bytes(audio_parts)
 
-    fit_method = (
-        "slide_sync_mock"
-        if mock
-        else "slide_sync_edge_runtime_fit_fast"
-        if use_runtime_fit and fast_tts_pipeline
-        else "slide_sync_edge_runtime_fit"
-        if use_runtime_fit
-        else "slide_sync_edge_no_padding"
-        if basic_tts
-        else f"slide_sync_fish_speed={api_speed}"
-    )
+    if mock:
+        fit_method = "slide_sync_mock"
+    elif use_runtime_fit and fast_tts_pipeline:
+        fit_method = "slide_sync_edge_runtime_fit_fast"
+    elif use_runtime_fit:
+        fit_method = "slide_sync_edge_runtime_fit"
+    elif basic_tts:
+        fit_method = (
+            "slide_sync_edge_natural"
+            if dynamic_schedule
+            else "slide_sync_edge_no_padding"
+        )
+    else:
+        natural_marker = "_natural" if dynamic_schedule else ""
+        fit_method = f"slide_sync_fish{natural_marker}_speed={api_speed}"
     return (
         output_bytes,
         cursor_sec - voice_start_sec,
@@ -13338,9 +13354,9 @@ def _build_end_only_fish_break_audio_no_ffmpeg(
     """Build a long Q&A/pause with Fish audio, without pydub/ffmpeg.
 
     Fish break assembly cannot rely on pydub in Azure App Service because the
-    ffmpeg binaries are not installed. We keep the playable file primed with a
-    very short Fish "Ok.", then use Fish-compatible silent MP3 frames until the
-    outro near the end of the slot.
+    ffmpeg binaries are not installed. Fish-compatible silent MP3 frames make
+    the file genuinely playable from t=0 without an audible primer; the outro
+    remains aligned near the end of the slot.
     """
     from services.basic_tts_service import concat_mp3_bytes
     from services.tts_service import convert_to_speech
@@ -13349,12 +13365,6 @@ def _build_end_only_fish_break_audio_no_ffmpeg(
     if not outro_text:
         raise ValueError("Break Fish end-only vide")
 
-    primer_text = (os.getenv("FISH_BREAK_PRIMER_TEXT") or "Ok.").strip() or "Ok."
-    if on_progress:
-        on_progress("Fish Audio amorce")
-    primer_bytes = convert_to_speech(primer_text)
-    primer_duration = _mp3_duration_seconds_no_ffprobe(primer_bytes)
-
     if on_progress:
         on_progress("Fish Audio outro")
     outro_bytes = convert_to_speech(outro_text)
@@ -13362,18 +13372,18 @@ def _build_end_only_fish_break_audio_no_ffmpeg(
 
     target = float(max(int(duration_sec or 0), 0))
     outro_tail_sec = 2.0 if target >= 2.0 else 0.0
-    pre_target = max(0.0, target - primer_duration - outro_duration - outro_tail_sec)
+    pre_target = max(0.0, target - outro_duration - outro_tail_sec)
     pre_bytes, pre_duration = _fish_silent_mp3_approx_no_ffmpeg(pre_target)
-    tail_target = max(0.0, target - primer_duration - pre_duration - outro_duration)
+    tail_target = max(0.0, target - pre_duration - outro_duration)
     tail_bytes, tail_duration = _fish_silent_mp3_approx_no_ffmpeg(tail_target)
 
-    final_duration = primer_duration + pre_duration + outro_duration + tail_duration
+    final_duration = pre_duration + outro_duration + tail_duration
     if final_duration < target - _UPLOAD_DURATION_TOLERANCE_SEC:
         raise ValueError(
             f"Fallback Fish end-only trop court ({final_duration:.1f}s < {target:.1f}s)"
         )
 
-    return concat_mp3_bytes([primer_bytes, pre_bytes, outro_bytes, tail_bytes]), final_duration
+    return concat_mp3_bytes([pre_bytes, outro_bytes, tail_bytes]), final_duration
 
 
 def _course_opening_transitions_enabled() -> bool:
@@ -13678,6 +13688,7 @@ def _build_contextual_break_audio(
         _generate_silence_mp3,
         _get_recycled_qa_pause,
     )
+    end_only_break = _playlist_uses_dynamic_schedule(playlist_items)
 
     def _emit(message: str):
         if on_progress:
@@ -13767,6 +13778,9 @@ def _build_contextual_break_audio(
     if manual_break:
         intro = (manual_break.get("intro") or "").strip()
         outro = (manual_break.get("outro") or "").strip()
+        if end_only_break:
+            outro = outro or intro
+            intro = ""
         _emit(f"{filename} — texte manuel...")
         if basic_tts:
             audio_bytes, final_duration = _build_timed_edge_break_audio(
@@ -13884,6 +13898,9 @@ def _build_contextual_break_audio(
             get_bloc_text=_get_bloc_text_for_break,
             model=llm_model,
         )
+        if end_only_break:
+            outro = outro or intro
+            intro = ""
         _emit(f"{filename} — synthèse audio transition...")
         if basic_tts:
             audio_bytes, final_duration = _build_timed_edge_break_audio(
@@ -14192,8 +14209,20 @@ def generate_audio_from_script(
         is_last_folder=is_last_folder,
         model=llm_model,
     )
+    from services.adaptive_playback_service import course_playback_cap_seconds
+
+    playback_cap_by_bloc = {
+        int(item[3]): course_playback_cap_seconds(playlist_items, item_index)
+        for item_index, item in enumerate(playlist_items)
+        if item[2] == "cours"
+    }
     for bloc in blocs:
         bloc["total_courses"] = course_count
+        if bloc.get("dynamic_schedule"):
+            bloc["max_playback_sec"] = playback_cap_by_bloc.get(
+                int(bloc.get("bloc_number") or 0),
+                int(bloc.get("target_sec") or 0),
+            )
     _apply_course_bloc_overrides(blocs, saved_script_plan.get("course_bloc_overrides"))
     if target_filename:
         matching_item = next((item for item in playlist_items if item[0] == target_filename), None)
@@ -15303,8 +15332,12 @@ def generate_audio_from_script(
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 final_duration = target_sec
-        if not mock:
-            _assert_audio_duration_within_slot(filename, final_duration, target_sec)
+        if not mock and not bloc.get("dynamic_schedule"):
+            _assert_audio_duration_within_slot(
+                filename,
+                final_duration,
+                target_sec,
+            )
         blob_path = f"{azure_prefix}{filename}"
         upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
@@ -15522,6 +15555,7 @@ def _serialize_course_bloc(
         "bloc_number": bloc_number,
         "filename": bloc.get("filename") or _course_filename_for_bloc(playlist_spec, bloc_number),
         "duration_sec": int(bloc.get("target_sec") or _course_duration_for_bloc(playlist_spec, bloc_number)),
+        "max_playback_sec": int(bloc.get("max_playback_sec") or 0) or None,
         "duration_min": round(int(bloc.get("target_sec") or 0) / 60, 1) if bloc.get("target_sec") else COURS_DURATIONS_MIN.get(bloc_number),
         "status": status,
         "text": bloc_text,

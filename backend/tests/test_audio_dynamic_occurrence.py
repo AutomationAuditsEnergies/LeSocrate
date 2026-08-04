@@ -112,6 +112,57 @@ class DynamicOccurrenceAudioTest(unittest.TestCase):
         )
         self.assertTrue(all(item["folder_id"] == 52 for item in playlist))
 
+    def test_v2_occurrence_applies_its_immutable_adaptive_timeline(self):
+        occurrence = {
+            "module_day_id": 404,
+            "session_index": 1,
+            "audio_storage_prefix": "course-sessions/701",
+        }
+        adaptive_manifest = {
+            "schema_version": 1,
+            "segments": [
+                {
+                    "filename": "course_01.mp3",
+                    "asset_duration_sec": 3180.8,
+                    "effective_start_sec": 0,
+                    "effective_duration_sec": 3180,
+                    "effective_end_sec": 3180,
+                },
+                {
+                    "filename": "qa_01.mp3",
+                    "asset_duration_sec": 600.1,
+                    "effective_start_sec": 3180,
+                    "effective_duration_sec": 1020,
+                    "effective_end_sec": 4200,
+                    "elastic": True,
+                },
+            ],
+        }
+
+        with (
+            patch(
+                "repositories.pipeline_repository."
+                "list_course_folder_ids_for_platform",
+                return_value=[52],
+            ),
+            patch(
+                "services.day_playlist_service.resolve_folder_playlist",
+                return_value=_resolved_manifest(),
+            ),
+            patch(
+                "services.adaptive_playback_service."
+                "load_occurrence_playback_manifest",
+                return_value=adaptive_manifest,
+            ) as load_manifest,
+        ):
+            playlist = audio_service.get_course_session_playlist(12, occurrence)
+
+        self.assertEqual(playlist[0]["duration"], 3180)
+        self.assertEqual(playlist[0]["asset_duration"], 3180.8)
+        self.assertEqual(playlist[1]["duration"], 1020)
+        self.assertTrue(playlist[1]["elastic"])
+        load_manifest.assert_called_once_with(12, "course-sessions/701")
+
     def test_server_clock_moves_through_v2_manifest_in_the_same_order(self):
         occurrence = {
             "module_day_id": 404,

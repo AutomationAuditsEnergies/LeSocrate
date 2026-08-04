@@ -2151,6 +2151,7 @@ def start_folder_audio_generation(
                         if schedule_session_id
                         else None
                     ),
+                    create_playback_manifest=bool(schedule_session_id),
                 )
                 publish_errors = publish_result.get("publish_errors") or []
                 published_files = publish_result.get("published") or []

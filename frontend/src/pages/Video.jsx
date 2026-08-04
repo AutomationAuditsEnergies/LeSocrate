@@ -10,7 +10,11 @@ import {
   buildAudioSlideTimings,
   findActiveAudioSlideTiming,
 } from '../components/slides/audioSlideSync'
-import { getStudentAudioProxyPath, isBreakAudioType } from '../studentCoursePlayback.js'
+import {
+  buildBreakPlaybackPlan,
+  getStudentAudioProxyPath,
+  isBreakAudioType,
+} from '../studentCoursePlayback.js'
 
 function formatCountdown(seconds) {
   const total = Math.max(0, Math.ceil(Number(seconds) || 0))
@@ -199,6 +203,9 @@ export default function Video() {
           title: data.audio_title,
           offset: data.offset,
           duration: data.audio_duration,
+          plannedDuration: data.audio_planned_duration,
+          assetDuration: data.audio_asset_duration,
+          hardStopped: Boolean(data.audio_hard_stopped),
           remaining: data.remaining,
           streamToken: data.audio_stream_token,
           id: data.audio_id,
@@ -306,91 +313,149 @@ export default function Video() {
 
   // Positionner l'audio à l'offset correct quand il est chargé
   useEffect(() => {
-    if (audioInfo?.status === 'playing' && !isBreakAudioType(audioInfo.type) && audioRef.current) {
-      const audio = audioRef.current
-      const targetOffset = Math.max(0, Number(audioInfo.offset) || 0)
-      let hasAttemptedPlay = false
-      let endedTimer = null
-      setPlaybackTime(targetOffset * 1000)
+    if (audioInfo?.status !== 'playing' || !audioRef.current || !audioSrc) return undefined
 
-      const syncPlaybackTime = () => {
-        setPlaybackTime((Number(audio.currentTime) || 0) * 1000)
-      }
-      const handleLoadedMetadata = () => {
-        if (targetOffset > 0) {
-          const maxOffset = Number.isFinite(audio.duration)
-            ? Math.max(0, audio.duration - 0.05)
-            : targetOffset
-          audio.currentTime = Math.min(targetOffset, maxOffset)
-        }
-        syncPlaybackTime()
-      }
-      const handleCanPlay = () => {
-        if (hasAttemptedPlay || !audio.paused) return
-        hasAttemptedPlay = true
-        audio.play().then(() => setShowPlayPrompt(false)).catch((err) => {
-          if (err.name === 'NotAllowedError') {
-            audio.muted = true
-            setMuted(true)
-            audio.play().then(() => setShowPlayPrompt(true)).catch(() => {
-              setShowPlayPrompt(true)
-            })
-          }
-        })
-      }
-      const handleEnded = () => {
-        setShowPlayPrompt(false)
-        endedTimer = window.setTimeout(() => fetchAudioStatus({ silent: true }), 500)
-      }
-      const handleError = () => {
-        console.error('[Audio] Erreur chargement du proxy:', audio.error)
+    const audio = audioRef.current
+    const breakAudio = isBreakAudioType(audioInfo.type)
+    const initialOffset = Math.max(0, Number(audioInfo.offset) || 0)
+    const initialRemaining = Math.max(0, Number(audioInfo.remaining) || 0)
+    const effectiveDuration = Math.max(0, Number(audioInfo.duration) || 0)
+    const startedAt = Date.now()
+    let hasAttemptedPlay = false
+    let refreshed = false
+    let inSilentPreRoll = false
+    let silentPreRollEndsAt = 0
+    let silentLoopStart = 0.05
+    let endedTimer = null
+
+    const refreshAtBoundary = (delay = 0) => {
+      if (refreshed) return
+      refreshed = true
+      setShowPlayPrompt(false)
+      endedTimer = window.setTimeout(
+        () => fetchAudioStatus({ silent: true }),
+        delay,
+      )
+    }
+
+    const positionMedia = () => {
+      const decodedAssetDuration = Number.isFinite(audio.duration)
+        ? audio.duration
+        : Math.max(0, Number(audioInfo.assetDuration) || 0)
+      if (!breakAudio) {
+        const maxOffset = decodedAssetDuration > 0
+          ? Math.max(0, decodedAssetDuration - 0.05)
+          : initialOffset
+        audio.currentTime = Math.min(initialOffset, maxOffset)
+        setPlaybackTime(initialOffset * 1000)
+        return
       }
 
-      audio.addEventListener('loadedmetadata', handleLoadedMetadata)
-      audio.addEventListener('seeked', syncPlaybackTime)
-      audio.addEventListener('timeupdate', syncPlaybackTime)
-      audio.addEventListener('playing', syncPlaybackTime)
-      audio.addEventListener('canplay', handleCanPlay)
-      audio.addEventListener('ended', handleEnded)
-      audio.addEventListener('error', handleError)
-      audio.load()
-
-      return () => {
-        audio.pause()
-        audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
-        audio.removeEventListener('seeked', syncPlaybackTime)
-        audio.removeEventListener('timeupdate', syncPlaybackTime)
-        audio.removeEventListener('playing', syncPlaybackTime)
-        audio.removeEventListener('canplay', handleCanPlay)
-        audio.removeEventListener('ended', handleEnded)
-        audio.removeEventListener('error', handleError)
-        if (endedTimer) window.clearTimeout(endedTimer)
+      const plan = buildBreakPlaybackPlan({
+        effectiveOffset: initialOffset,
+        effectiveDuration,
+        assetDuration: decodedAssetDuration,
+      })
+      silentLoopStart = decodedAssetDuration > 5 ? 2 : 0.05
+      if (plan.preRollRemaining > 0) {
+        inSilentPreRoll = true
+        silentPreRollEndsAt = Date.now() + plan.preRollRemaining * 1000
+        audio.currentTime = Math.min(
+          silentLoopStart,
+          Math.max(0, decodedAssetDuration - 0.05),
+        )
+      } else {
+        const maxOffset = Math.max(0, decodedAssetDuration - 0.05)
+        audio.currentTime = Math.min(plan.mediaOffset, maxOffset)
       }
     }
 
-    if (audioInfo?.status === 'playing' && isBreakAudioType(audioInfo.type)) {
-      // A break is silence, so no blob needs to be exposed or downloaded. Its
-      // countdown starts from the occurrence-bound server state and is
-      // re-synchronised by fetchAudioStatus at the boundary.
-      const initialRemaining = Math.max(0, Number(audioInfo.remaining) || 0)
-      const initialOffset = Math.max(0, Number(audioInfo.offset) || 0)
-      const startedAt = Date.now()
-      let refreshed = false
-
-      const tick = () => {
-        const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
-        const remaining = Math.max(0, initialRemaining - elapsed)
-        setBreakRemaining(Math.ceil(remaining))
-        setPlaybackTime((initialOffset + elapsed) * 1000)
-        if (remaining <= 0 && !refreshed) {
-          refreshed = true
-          fetchAudioStatus({ silent: true })
-        }
+    const syncPlaybackClock = () => {
+      if (!breakAudio) {
+        setPlaybackTime((Number(audio.currentTime) || 0) * 1000)
+        return
       }
 
-      tick()
-      const countdownTimer = window.setInterval(tick, 500)
-      return () => window.clearInterval(countdownTimer)
+      const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
+      const remaining = Math.max(0, initialRemaining - elapsed)
+      setBreakRemaining(Math.ceil(remaining))
+      setPlaybackTime(Math.min(effectiveDuration, initialOffset + elapsed) * 1000)
+
+      if (inSilentPreRoll) {
+        if (Date.now() >= silentPreRollEndsAt) {
+          inSilentPreRoll = false
+          audio.currentTime = 0
+        } else if (audio.currentTime >= silentLoopStart + 0.75) {
+          // The MP3 itself supplies the digital silence while an early course
+          // has made this break longer than its nominal asset.
+          audio.currentTime = silentLoopStart
+        }
+      }
+      if (remaining <= 0) {
+        audio.pause()
+        refreshAtBoundary()
+      }
+    }
+
+    const attemptPlay = () => {
+      if (hasAttemptedPlay || !audio.paused) return
+      hasAttemptedPlay = true
+      audio.play().then(() => setShowPlayPrompt(false)).catch((err) => {
+        if (err.name === 'NotAllowedError') {
+          audio.muted = true
+          setMuted(true)
+          audio.play().then(() => setShowPlayPrompt(true)).catch(() => {
+            setShowPlayPrompt(true)
+          })
+        }
+      })
+    }
+
+    const handleLoadedMetadata = () => {
+      positionMedia()
+      syncPlaybackClock()
+    }
+    const handleCanPlay = () => attemptPlay()
+    const handleTimeUpdate = () => syncPlaybackClock()
+    const handleEnded = () => {
+      if (breakAudio && inSilentPreRoll) {
+        audio.currentTime = silentLoopStart
+        audio.play().catch(() => setShowPlayPrompt(true))
+        return
+      }
+      const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
+      const boundaryDelay = Math.max(0, initialRemaining - elapsed) * 1000
+      refreshAtBoundary(boundaryDelay + 50)
+    }
+    const handleError = () => {
+      console.error('[Audio] Erreur chargement du proxy:', audio.error)
+    }
+
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+    audio.addEventListener('timeupdate', handleTimeUpdate)
+    audio.addEventListener('playing', syncPlaybackClock)
+    audio.addEventListener('canplay', handleCanPlay)
+    audio.addEventListener('ended', handleEnded)
+    audio.addEventListener('error', handleError)
+    audio.load()
+
+    const clockTimer = window.setInterval(syncPlaybackClock, 250)
+    const hardBoundaryTimer = window.setTimeout(() => {
+      audio.pause()
+      refreshAtBoundary()
+    }, Math.max(0, initialRemaining * 1000))
+
+    return () => {
+      audio.pause()
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.removeEventListener('timeupdate', handleTimeUpdate)
+      audio.removeEventListener('playing', syncPlaybackClock)
+      audio.removeEventListener('canplay', handleCanPlay)
+      audio.removeEventListener('ended', handleEnded)
+      audio.removeEventListener('error', handleError)
+      window.clearInterval(clockTimer)
+      window.clearTimeout(hardBoundaryTimer)
+      if (endedTimer) window.clearTimeout(endedTimer)
     }
   }, [
     audioInfo?.status,
@@ -398,6 +463,7 @@ export default function Video() {
     audioInfo?.id,
     audioInfo?.type,
     audioInfo?.duration,
+    audioInfo?.assetDuration,
     audioInfo?.offset,
     audioInfo?.remaining,
     currentAudioName,
@@ -577,7 +643,7 @@ export default function Video() {
               </button>
             )}
 
-            {audioInfo?.status === 'playing' && !isBreakAudioType(audioInfo.type) && audioSrc && (
+            {audioInfo?.status === 'playing' && audioSrc && (
               <audio
                 ref={audioRef}
                 id="audio"

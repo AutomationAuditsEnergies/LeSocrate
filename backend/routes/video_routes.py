@@ -367,6 +367,15 @@ def video_status():
             "audio_id": audio_info["id"],
             "audio_type": audio_info["type"],
             "audio_duration": audio_info.get("duration", 0),
+            "audio_planned_duration": audio_info.get(
+                "planned_duration",
+                audio_info.get("duration", 0),
+            ),
+            "audio_asset_duration": audio_info.get(
+                "asset_duration",
+                audio_info.get("duration", 0),
+            ),
+            "audio_hard_stopped": bool(audio_info.get("hard_stopped")),
             "offset": offset,
             "remaining": remaining,
             "next_audio_id": next_audio.get("id") if next_audio else None,

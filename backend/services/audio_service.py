@@ -327,6 +327,23 @@ def get_course_session_playlist(platform_id, occurrence=None):
                 "schedule_schema_version": 2,
             }
         )
+    occurrence_prefix = str(
+        (occurrence or {}).get("audio_storage_prefix") or ""
+    ).strip().strip("/")
+    if occurrence_prefix:
+        from services.adaptive_playback_service import (
+            apply_occurrence_playback_manifest,
+            load_occurrence_playback_manifest,
+        )
+
+        playback_manifest = load_occurrence_playback_manifest(
+            int(platform_id),
+            occurrence_prefix,
+        )
+        playlist = apply_occurrence_playback_manifest(
+            playlist,
+            playback_manifest,
+        )
     return playlist
 
 
