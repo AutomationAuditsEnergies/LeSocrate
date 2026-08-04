@@ -6,19 +6,25 @@ import {
   ChevronLeft,
   ChevronsUpDown,
   Copy,
+  CreditCard,
+  ExternalLink,
   Globe2,
+  KeyRound,
   LogIn,
   LogOut,
+  Mail,
   PanelLeft,
   PenLine,
+  ReceiptText,
   Settings,
   ShieldCheck,
+  Trash2,
   UserPlus,
-  UserRound,
   UsersRound,
+  X,
 } from 'lucide-react'
 import { apiFetch } from '../api'
-import { clearSupabaseSession } from '../supabaseClient'
+import { clearSupabaseSession, getSupabaseClient } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
 import DayScheduleTemplates from './DayScheduleTemplates.jsx'
@@ -131,7 +137,6 @@ export default function HRDashboard() {
       ? savedSection
       : 'recruit'
   })
-  const [interfaceLanguage, setInterfaceLanguage] = useState(() => localStorage.getItem('center_interface_language') || 'fr')
   const [recruitmentPrefilled, setRecruitmentPrefilled] = useState(false)
   const [attendancePlatformId, setAttendancePlatformId] = useState('')
   const [attendanceDate, setAttendanceDate] = useState(todayDateInput)
@@ -146,6 +151,7 @@ export default function HRDashboard() {
   const [retryingTeacherOrderId, setRetryingTeacherOrderId] = useState(null)
   const [orderNotice, setOrderNotice] = useState(null)
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [showMobileSettings, setShowMobileSettings] = useState(false)
   const [onboardingStep, setOnboardingStep] = useState(0)
   const [onboardingSaving, setOnboardingSaving] = useState(false)
   const CARDS_PER_PAGE = 10
@@ -1143,6 +1149,8 @@ export default function HRDashboard() {
   const teacherRosterVisible = !showModulesModal && !showCreateModal && workspaceSection === 'teachers'
   const recruitmentAssistantVisible = !showModulesModal && !showCreateModal && workspaceSection === 'recruit'
   const scheduleTemplatesVisible = !showModulesModal && !showCreateModal && workspaceSection === 'schedule-templates'
+  const centerAccountEmail = localStorage.getItem('center_account_email') || 'Compte centre'
+  const centerAccountName = localStorage.getItem('center_account_name') || 'Centre de formation'
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -1156,11 +1164,6 @@ export default function HRDashboard() {
           onShowScheduleTemplates={showScheduleTemplatesView}
           onLogout={handleLogout}
           loggingOut={loggingOut}
-          language={interfaceLanguage}
-          onLanguageChange={(language) => {
-            setInterfaceLanguage(language)
-            localStorage.setItem('center_interface_language', language)
-          }}
         />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -1202,6 +1205,14 @@ export default function HRDashboard() {
                 style={{ color: '#3F3F46', backgroundColor: workspaceSection === 'schedule-templates' ? '#E9E9E7' : 'transparent' }}
               >
                 <Icon name="calendar_view_day" className="text-lg" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowMobileSettings(true)}
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-[#3F3F46] transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+                aria-label="Paramètres du compte"
+              >
+                <Settings size={18} strokeWidth={1.7} aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -1830,6 +1841,15 @@ export default function HRDashboard() {
         />
       )}
 
+      {showMobileSettings && createPortal(
+        <CenterSettingsModal
+          accountName={centerAccountName}
+          accountEmail={centerAccountEmail}
+          onClose={() => setShowMobileSettings(false)}
+        />,
+        document.body,
+      )}
+
     </div>
     </div>
   )
@@ -1844,11 +1864,9 @@ function CenterWorkspaceSidebar({
   onShowScheduleTemplates,
   onLogout,
   loggingOut,
-  language,
-  onLanguageChange,
 }) {
   const [collapsed, setCollapsed] = useState(false)
-  const [accountPanel, setAccountPanel] = useState('menu')
+  const [showSettings, setShowSettings] = useState(false)
   const accountDetailsRef = useRef(null)
   const accountEmail = localStorage.getItem('center_account_email') || 'Compte centre'
   const accountName = localStorage.getItem('center_account_name') || 'Centre de formation'
@@ -1881,14 +1899,12 @@ function CenterWorkspaceSidebar({
       if (event.type === 'keydown') {
         if (event.key !== 'Escape') return
         details.open = false
-        setAccountPanel('menu')
         details.querySelector('summary')?.focus()
         return
       }
 
       if (!details.contains(event.target)) {
         details.open = false
-        setAccountPanel('menu')
       }
     }
 
@@ -1953,7 +1969,6 @@ function CenterWorkspaceSidebar({
         <details
           ref={accountDetailsRef}
           className="group relative"
-          onToggle={(event) => { if (!event.currentTarget.open) setAccountPanel('menu') }}
         >
           <summary className={`flex min-h-11 cursor-pointer list-none items-center rounded-md py-1.5 transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 ${collapsed ? 'justify-center px-1' : 'gap-2.5 px-2'}`}>
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#191918] text-[11px] font-semibold text-white">
@@ -1971,57 +1986,479 @@ function CenterWorkspaceSidebar({
           </summary>
 
           <div className={`absolute bottom-[calc(100%+6px)] overflow-hidden rounded-lg border border-black/10 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.08)] ${collapsed ? 'left-0 w-[220px]' : 'left-0 w-full'}`}>
-            {accountPanel === 'menu' && (
-              <div className="p-1.5">
-                <button type="button" onClick={() => setAccountPanel('profile')} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
-                  <UserRound size={16} strokeWidth={1.6} aria-hidden="true" />
-                  <span>Profil</span>
-                </button>
-                <button type="button" onClick={() => setAccountPanel('settings')} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
-                  <Settings size={16} strokeWidth={1.6} aria-hidden="true" />
-                  <span>Paramètres</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={isSignedIn ? onLogout : () => window.location.assign('/connexion-centre')}
-                  disabled={isSignedIn && loggingOut}
-                  className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 disabled:opacity-60"
-                >
-                  {isSignedIn ? <LogOut size={16} strokeWidth={1.6} aria-hidden="true" /> : <LogIn size={16} strokeWidth={1.6} aria-hidden="true" />}
-                  {isSignedIn ? (loggingOut ? 'Déconnexion…' : 'Se déconnecter') : 'Se connecter'}
-                </button>
+            <div className="p-1.5">
+              <div className="border-b border-[#ECECEA] px-2 pb-2 pt-1">
+                <p className="truncate text-[13px] font-medium text-[#191918]">{accountName}</p>
+                <p className="mt-0.5 truncate text-xs text-[#73736F]">{accountEmail}</p>
               </div>
-            )}
-
-            {accountPanel === 'profile' && (
-              <div className="p-3">
-                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex min-h-11 items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
-                  <ChevronLeft size={14} strokeWidth={1.6} aria-hidden="true" /> Retour
-                </button>
-                <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</p>
-                <p className="mt-1 truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</p>
-              </div>
-            )}
-
-            {accountPanel === 'settings' && (
-              <div className="p-3">
-                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex min-h-11 items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50">
-                  <ChevronLeft size={14} strokeWidth={1.6} aria-hidden="true" /> Retour
-                </button>
-                <p className="mb-2 text-xs font-semibold" style={{ color: colors.text }}>Langue de l’interface</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {['fr', 'en'].map((option) => (
-                    <button key={option} type="button" onClick={() => onLanguageChange(option)} className="min-h-11 rounded-md border px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50" style={{ backgroundColor: language === option ? '#E9E9E7' : '#fff', borderColor: language === option ? '#A1A1AA' : '#DFDCD9', color: language === option ? '#18181B' : '#73736F' }}>
-                      {option.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+              <button
+                type="button"
+                onClick={() => {
+                  accountDetailsRef.current.open = false
+                  setShowSettings(true)
+                }}
+                className="mt-1 flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+              >
+                <Settings size={16} strokeWidth={1.6} aria-hidden="true" />
+                <span>Paramètres</span>
+              </button>
+              <button
+                type="button"
+                onClick={isSignedIn ? onLogout : () => window.location.assign('/connexion-centre')}
+                disabled={isSignedIn && loggingOut}
+                className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#B42318] transition-colors hover:bg-[#FFF3F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318]/35 disabled:opacity-60"
+              >
+                {isSignedIn ? <LogOut size={16} strokeWidth={1.6} aria-hidden="true" /> : <LogIn size={16} strokeWidth={1.6} aria-hidden="true" />}
+                {isSignedIn ? (loggingOut ? 'Déconnexion…' : 'Se déconnecter') : 'Se connecter'}
+              </button>
+            </div>
           </div>
         </details>
       </div>
+
+      {showSettings && createPortal(
+        <CenterSettingsModal
+          accountName={accountName}
+          accountEmail={accountEmail}
+          onClose={() => setShowSettings(false)}
+        />,
+        document.body,
+      )}
     </aside>
+  )
+}
+
+const SETTINGS_TABS = [
+  { id: 'account', label: 'Compte', icon: ShieldCheck },
+  { id: 'billing', label: 'Facturation', icon: CreditCard },
+]
+
+const BILLING_OPERATION_LABELS = {
+  new_teacher: 'Création d’un professeur IA',
+  reuse_teacher: 'Réutilisation d’un professeur IA',
+}
+
+const formatBillingDate = (value) => {
+  if (!value) return 'Date indisponible'
+  return new Intl.DateTimeFormat('fr-FR', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date(value))
+}
+
+function CenterSettingsModal({ accountName, accountEmail, onClose }) {
+  const [activeTab, setActiveTab] = useState('account')
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authProviders, setAuthProviders] = useState([])
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [passwordMessage, setPasswordMessage] = useState(null)
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false)
+  const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [deletingAccount, setDeletingAccount] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const [billingOrders, setBillingOrders] = useState([])
+  const [billingHistoryLoading, setBillingHistoryLoading] = useState(false)
+  const [billingHistoryLoaded, setBillingHistoryLoaded] = useState(false)
+  const [billingError, setBillingError] = useState('')
+  const [invoiceLoadingId, setInvoiceLoadingId] = useState(null)
+  const closeButtonRef = useRef(null)
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    closeButtonRef.current?.focus()
+    return () => { document.body.style.overflow = previousOverflow }
+  }, [])
+
+  useEffect(() => {
+    const handleEscape = (event) => {
+      if (event.key === 'Escape' && !deletingAccount && !passwordSaving) onClose()
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [deletingAccount, onClose, passwordSaving])
+
+  useEffect(() => {
+    let cancelled = false
+    getSupabaseClient()
+      .then(async (client) => {
+        if (!client) return
+        const { data, error } = await client.auth.getUser()
+        if (error || cancelled) return
+        const providers = new Set([
+          ...(Array.isArray(data.user?.app_metadata?.providers) ? data.user.app_metadata.providers : []),
+          ...(data.user?.identities || []).map((identity) => identity.provider),
+        ])
+        setAuthProviders([...providers].filter(Boolean))
+      })
+      .catch((error) => console.warn('Lecture de la méthode de connexion impossible:', error))
+      .finally(() => { if (!cancelled) setAuthLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab !== 'billing' || billingHistoryLoaded) return
+    let cancelled = false
+    setBillingHistoryLoading(true)
+    setBillingError('')
+    apiFetch('/api/hr/billing/history')
+      .then(async (response) => ({ response, data: await response.json().catch(() => ({})) }))
+      .then(({ response, data }) => {
+        if (cancelled) return
+        if (!response.ok || !data.success) throw new Error(data.error || 'Historique indisponible.')
+        setBillingOrders(data.orders || [])
+      })
+      .catch((error) => { if (!cancelled) setBillingError(error.message || 'Historique indisponible.') })
+      .finally(() => {
+        if (!cancelled) {
+          setBillingHistoryLoaded(true)
+          setBillingHistoryLoading(false)
+        }
+      })
+    return () => { cancelled = true }
+  }, [activeTab, billingHistoryLoaded])
+
+  const usesGoogle = authProviders.includes('google')
+  const usesEmailPassword = authProviders.includes('email') || authProviders.length === 0
+  const totalPaidCents = billingOrders
+    .filter((order) => order.payment_status === 'paid')
+    .reduce((sum, order) => sum + Number(order.charged_amount_cents || 0), 0)
+
+  const updatePassword = async (event) => {
+    event.preventDefault()
+    setPasswordMessage(null)
+    if (newPassword.length < 8) {
+      setPasswordMessage({ tone: 'error', text: 'Le mot de passe doit contenir au moins 8 caractères.' })
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ tone: 'error', text: 'Les deux mots de passe ne correspondent pas.' })
+      return
+    }
+    setPasswordSaving(true)
+    try {
+      const client = await getSupabaseClient()
+      if (!client) throw new Error('Le service d’authentification est indisponible.')
+      const { error } = await client.auth.updateUser({ password: newPassword })
+      if (error) throw error
+      setNewPassword('')
+      setConfirmPassword('')
+      setPasswordMessage({ tone: 'success', text: 'Votre mot de passe a été modifié.' })
+    } catch (error) {
+      setPasswordMessage({ tone: 'error', text: error.message || 'Impossible de modifier le mot de passe.' })
+    } finally {
+      setPasswordSaving(false)
+    }
+  }
+
+  const deleteAccount = async () => {
+    if (deleteConfirmation !== accountName || deletingAccount) return
+    setDeletingAccount(true)
+    setDeleteError('')
+    try {
+      const response = await apiFetch('/api/admin/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: deleteConfirmation }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) throw new Error(data.error || 'Impossible de supprimer le compte.')
+      await clearSupabaseSession().catch(() => {})
+      localStorage.removeItem('admin_auth_token')
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('center_account_email')
+      localStorage.removeItem('center_account_name')
+      window.location.assign('/connexion-centre')
+    } catch (error) {
+      setDeleteError(error.message || 'Impossible de supprimer le compte.')
+      setDeletingAccount(false)
+    }
+  }
+
+  const openInvoice = async (orderId) => {
+    if (invoiceLoadingId) return
+    const invoiceWindow = window.open('about:blank', '_blank')
+    if (invoiceWindow) invoiceWindow.opener = null
+    setInvoiceLoadingId(orderId)
+    setBillingError('')
+    try {
+      const response = await apiFetch(`/api/hr/billing/orders/${orderId}/invoice`)
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success || !data.url) {
+        throw new Error(data.error || 'Facture indisponible.')
+      }
+      if (invoiceWindow) invoiceWindow.location.assign(data.url)
+      else window.location.assign(data.url)
+    } catch (error) {
+      invoiceWindow?.close()
+      setBillingError(error.message || 'Facture indisponible.')
+    } finally {
+      setInvoiceLoadingId(null)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-[#111827]/45 p-0 backdrop-blur-[2px] md:p-4"
+      style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif' }}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !deletingAccount && !passwordSaving) onClose()
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        className="flex h-dvh w-full overflow-hidden bg-white md:h-[min(760px,calc(100dvh-32px))] md:max-w-[1120px] md:rounded-2xl md:shadow-[0_24px_48px_rgba(15,23,42,0.22)]"
+      >
+        <aside className="flex w-[230px] shrink-0 flex-col border-r border-[#E2E8F0] bg-[#F8FAFC] px-3 py-4 max-md:w-[92px] max-md:px-2">
+          <div className="mb-7 flex items-center gap-3 px-2 max-md:justify-center max-md:px-0">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#EDE9FE] text-sm font-semibold text-[#6D28D9]">
+              {accountName.slice(0, 1).toUpperCase() || 'C'}
+            </span>
+            <span className="min-w-0 max-md:hidden">
+              <span className="block truncate text-sm font-semibold text-[#0F172A]">{accountName}</span>
+              <span className="mt-0.5 block truncate text-xs text-[#64748B]">Espace de travail</span>
+            </span>
+          </div>
+          <nav className="space-y-1" aria-label="Rubriques des paramètres">
+            {SETTINGS_TABS.map((tab) => {
+              const TabIcon = tab.icon
+              const selected = activeTab === tab.id
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  aria-current={selected ? 'page' : undefined}
+                  className={`flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/45 max-md:flex-col max-md:justify-center max-md:gap-1 max-md:px-1 max-md:text-[11px] ${selected ? 'bg-[#EDE9FE] text-[#6D28D9]' : 'text-[#475569] hover:bg-[#EEF2F6] hover:text-[#0F172A]'}`}
+                >
+                  <TabIcon size={17} strokeWidth={selected ? 2 : 1.7} aria-hidden="true" />
+                  <span>{tab.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+        </aside>
+
+        <div className="relative min-w-0 flex-1 overflow-y-auto bg-white">
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-lg text-[#64748B] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F172A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/45"
+            aria-label="Fermer les paramètres"
+          >
+            <X size={19} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+
+          <div className="mx-auto w-full max-w-[760px] px-5 py-8 sm:px-8 md:px-10 md:py-10">
+            {activeTab === 'account' ? (
+              <div>
+                <header className="pr-12">
+                  <h2 id="settings-title" className="text-2xl font-semibold tracking-[-0.01em] text-[#0F172A]">Compte</h2>
+                  <p className="mt-1.5 text-sm text-[#475569]">Sécurité et gestion de votre compte centre.</p>
+                </header>
+
+                <section className="mt-8">
+                  <h3 className="text-sm font-semibold text-[#334155]">Méthode de connexion</h3>
+                  <div className="mt-3 rounded-xl border border-[#E2E8F0]">
+                    <div className="flex min-h-[76px] items-center gap-3 px-4 py-3">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F1F5F9] text-[#475569]">
+                        {usesGoogle ? <span className="text-base font-semibold text-[#4285F4]">G</span> : <Mail size={18} strokeWidth={1.7} aria-hidden="true" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#0F172A]">
+                          {authLoading ? 'Vérification…' : usesGoogle ? 'Google' : 'Email et mot de passe'}
+                          {!authLoading && <span className="rounded-full bg-[#ECFDF3] px-2 py-0.5 text-[11px] font-medium text-[#027A48]">Lié</span>}
+                        </span>
+                        <span className="mt-1 block truncate text-sm text-[#64748B]">{accountEmail}</span>
+                      </span>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="mt-8">
+                  <h3 className="text-sm font-semibold text-[#334155]">Mot de passe</h3>
+                  {usesGoogle && !usesEmailPassword ? (
+                    <div className="mt-3 rounded-xl bg-[#F8FAFC] px-4 py-4 text-sm leading-6 text-[#475569]">
+                      Votre connexion est gérée par Google. Modifiez votre mot de passe depuis votre compte Google.
+                    </div>
+                  ) : (
+                    <form onSubmit={updatePassword} className="mt-3 rounded-xl border border-[#E2E8F0] p-4 sm:p-5">
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <label className="text-sm font-medium text-[#334155]">
+                          Nouveau mot de passe
+                          <input
+                            type="password"
+                            autoComplete="new-password"
+                            value={newPassword}
+                            onChange={(event) => setNewPassword(event.target.value)}
+                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/20"
+                            placeholder="8 caractères minimum"
+                          />
+                        </label>
+                        <label className="text-sm font-medium text-[#334155]">
+                          Confirmer le mot de passe
+                          <input
+                            type="password"
+                            autoComplete="new-password"
+                            value={confirmPassword}
+                            onChange={(event) => setConfirmPassword(event.target.value)}
+                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/20"
+                            placeholder="Saisissez-le à nouveau"
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                        {passwordMessage ? (
+                          <p className={`text-sm ${passwordMessage.tone === 'success' ? 'text-[#027A48]' : 'text-[#B42318]'}`} role="status">
+                            {passwordMessage.text}
+                          </p>
+                        ) : <p className="text-xs text-[#64748B]">Utilisez un mot de passe unique.</p>}
+                        <button
+                          type="submit"
+                          disabled={passwordSaving || !newPassword || !confirmPassword}
+                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#8B5CF6] px-4 text-sm font-medium text-white transition-colors hover:bg-[#7C3AED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/45 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          <KeyRound size={16} strokeWidth={1.8} aria-hidden="true" />
+                          {passwordSaving ? 'Modification…' : 'Modifier le mot de passe'}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </section>
+
+                <section className="mt-10 border-t border-[#E2E8F0] pt-8">
+                  <h3 className="text-sm font-semibold text-[#B42318]">Zone dangereuse</h3>
+                  <div className="mt-3 rounded-xl border border-[#FECDCA] bg-[#FFF7F6] p-4 sm:flex sm:items-center sm:justify-between sm:gap-5">
+                    <div>
+                      <p className="text-sm font-semibold text-[#7A271A]">Supprimer le compte</p>
+                      <p className="mt-1 max-w-[56ch] text-sm leading-5 text-[#912018]">Cette action supprime l’espace centre, ses professeurs, ses formations et ses données. Elle est irréversible.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteConfirmation(true)}
+                      className="mt-4 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-[#FDA29B] bg-white px-4 text-sm font-medium text-[#B42318] transition-colors hover:bg-[#FFF1F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D92D20]/30 sm:mt-0"
+                    >
+                      <Trash2 size={16} strokeWidth={1.8} aria-hidden="true" />
+                      Supprimer le compte
+                    </button>
+                  </div>
+                </section>
+              </div>
+            ) : (
+              <div>
+                <header className="pr-12">
+                  <h2 id="settings-title" className="text-2xl font-semibold tracking-[-0.01em] text-[#0F172A]">Facturation</h2>
+                  <p className="mt-1.5 text-sm text-[#475569]">Suivez vos dépenses et téléchargez les documents associés.</p>
+                </header>
+
+                <section className="mt-8 rounded-xl bg-[#F8FAFC] px-5 py-5">
+                  <div className="flex flex-wrap items-end justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium text-[#475569]">Total payé</p>
+                      <p className="mt-1 text-3xl font-semibold tracking-[-0.02em] text-[#0F172A]">{formatPrice(totalPaidCents, 'eur')}</p>
+                    </div>
+                    <p className="text-sm text-[#64748B]">{billingOrders.length} opération{billingOrders.length > 1 ? 's' : ''}</p>
+                  </div>
+                </section>
+
+                <section className="mt-8">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-[#334155]">Historique des dépenses</h3>
+                    <span className="text-xs text-[#64748B]">Factures Stripe</span>
+                  </div>
+
+                  {billingHistoryLoading ? (
+                    <div className="mt-3 space-y-2" aria-label="Chargement des dépenses">
+                      {[0, 1, 2].map((item) => <div key={item} className="h-[74px] animate-pulse rounded-xl bg-[#F1F5F9]" />)}
+                    </div>
+                  ) : billingError && billingOrders.length === 0 ? (
+                    <div className="mt-3 flex min-h-[190px] flex-col items-center justify-center rounded-xl border border-[#FECDCA] bg-[#FFF7F6] px-5 text-center" role="alert">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-white text-[#B42318]"><ReceiptText size={19} strokeWidth={1.7} aria-hidden="true" /></span>
+                      <p className="mt-4 text-sm font-semibold text-[#7A271A]">Historique indisponible</p>
+                      <p className="mt-1 max-w-[44ch] text-sm leading-5 text-[#912018]">{billingError}</p>
+                    </div>
+                  ) : billingOrders.length === 0 ? (
+                    <div className="mt-3 flex min-h-[190px] flex-col items-center justify-center rounded-xl border border-dashed border-[#CBD5E1] px-5 text-center">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#F1F5F9] text-[#64748B]"><ReceiptText size={19} strokeWidth={1.7} aria-hidden="true" /></span>
+                      <p className="mt-4 text-sm font-semibold text-[#334155]">Aucune dépense enregistrée</p>
+                      <p className="mt-1 max-w-[44ch] text-sm leading-5 text-[#64748B]">Vos paiements apparaîtront ici dès qu’une commande aura été confirmée.</p>
+                    </div>
+                  ) : (
+                    <div className="mt-3 overflow-hidden rounded-xl border border-[#E2E8F0]">
+                      {billingOrders.map((order, index) => (
+                        <div key={order.id} className={`flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center ${index > 0 ? 'border-t border-[#E2E8F0]' : ''}`}>
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F1F5F9] text-[#475569] max-sm:hidden">
+                            <ReceiptText size={18} strokeWidth={1.7} aria-hidden="true" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-semibold text-[#0F172A]">{order.training_title || BILLING_OPERATION_LABELS[order.operation_type] || 'Commande'}</span>
+                            <span className="mt-1 block text-xs text-[#64748B]">{BILLING_OPERATION_LABELS[order.operation_type] || 'Service'} · {formatBillingDate(order.paid_at || order.created_at)}</span>
+                          </span>
+                          <span className="flex items-center justify-between gap-4 sm:justify-end">
+                            <span className="text-sm font-semibold text-[#0F172A]">{formatPrice(Number(order.charged_amount_cents || 0), order.currency || 'eur')}</span>
+                            {order.payment_status === 'refunded' ? (
+                              <span className="rounded-full bg-[#FFF7ED] px-2.5 py-1 text-xs font-medium text-[#9A3412]">Remboursé</span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => openInvoice(order.id)}
+                                disabled={invoiceLoadingId === order.id}
+                                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[#CBD5E1] bg-white px-3 text-xs font-medium text-[#334155] transition-colors hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/35 disabled:opacity-55"
+                              >
+                                {invoiceLoadingId === order.id ? 'Ouverture…' : 'Facture'}
+                                <ExternalLink size={13} strokeWidth={1.8} aria-hidden="true" />
+                              </button>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {billingError && billingOrders.length > 0 && <p className="mt-3 text-sm text-[#B42318]" role="alert">{billingError}</p>}
+                </section>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {showDeleteConfirmation && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0F172A]/50 p-4">
+          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" className="w-full max-w-[460px] rounded-2xl bg-white p-6 shadow-[0_24px_48px_rgba(15,23,42,0.25)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="delete-account-title" className="text-lg font-semibold text-[#7A271A]">Supprimer définitivement le compte ?</h3>
+                <p className="mt-2 text-sm leading-6 text-[#475569]">Saisissez <strong className="font-semibold text-[#0F172A]">{accountName}</strong> pour confirmer la suppression de toutes les données du centre.</p>
+              </div>
+              <button type="button" onClick={() => setShowDeleteConfirmation(false)} disabled={deletingAccount} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#64748B] hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40" aria-label="Annuler la suppression"><X size={18} aria-hidden="true" /></button>
+            </div>
+            <label className="mt-5 block text-sm font-medium text-[#334155]">
+              Nom du centre
+              <input
+                type="text"
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                autoFocus
+                className="mt-2 h-11 w-full rounded-lg border border-[#FDA29B] px-3 text-sm text-[#0F172A] outline-none focus:border-[#D92D20] focus:ring-2 focus:ring-[#D92D20]/15"
+              />
+            </label>
+            {deleteError && <p className="mt-3 text-sm text-[#B42318]" role="alert">{deleteError}</p>}
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setShowDeleteConfirmation(false)} disabled={deletingAccount} className="min-h-11 rounded-lg border border-[#CBD5E1] px-4 text-sm font-medium text-[#334155] hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/35 disabled:opacity-50">Annuler</button>
+              <button type="button" onClick={deleteAccount} disabled={deleteConfirmation !== accountName || deletingAccount} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#D92D20] px-4 text-sm font-medium text-white hover:bg-[#B42318] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D92D20]/35 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"><Trash2 size={16} aria-hidden="true" />{deletingAccount ? 'Suppression…' : 'Supprimer définitivement'}</button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
   )
 }
 

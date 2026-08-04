@@ -82,6 +82,30 @@ class BillingRetryRoutesTest(unittest.TestCase):
         self.assertFalse(response.get_json()["worker"]["healthy"])
         self.assertEqual(response.get_json()["worker"]["status"], "stale")
 
+    def test_center_can_list_only_its_billing_history(self):
+        self._login_center()
+        orders = [{"id": str(self.public_id), "payment_status": "paid"}]
+        with patch.object(billing_routes, "postgres_enabled", return_value=True), patch.object(
+            billing_routes, "billing_history", return_value=orders
+        ) as history:
+            response = self.client.get("/api/hr/billing/history")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["orders"], orders)
+        history.assert_called_once_with(42)
+
+    def test_invoice_lookup_is_scoped_to_the_logged_in_center(self):
+        self._login_center()
+        with patch.object(
+            billing_routes,
+            "get_center_invoice_link",
+            return_value={"url": "https://invoice.test/1", "document_type": "invoice"},
+        ) as invoice:
+            response = self.client.get(f"/api/hr/billing/orders/{self.public_id}/invoice")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        invoice.assert_called_once_with(str(self.public_id), 42)
+
 
 if __name__ == "__main__":
     unittest.main()

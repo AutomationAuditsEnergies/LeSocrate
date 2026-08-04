@@ -25,6 +25,7 @@ from repositories.core_repository import (
     DuplicateTrainingCenterUsername,
     create_ai_teacher_order,  # compatibility symbol retained for legacy tests; POST returns 410
     create_training_center,
+    delete_training_center_account,
     get_training_center_by_username,
     list_ai_teacher_orders,
     upsert_student_profile_with_id,
@@ -169,7 +170,7 @@ def _create_training_center_supabase_user(email, password, center_name):
 
 def _delete_training_center_supabase_user(auth_user_id):
     if not auth_user_id or not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return
+        return False
     try:
         response = http_requests.delete(
             f"{SUPABASE_URL}/auth/v1/admin/users/{auth_user_id}",
@@ -181,8 +182,11 @@ def _delete_training_center_supabase_user(auth_user_id):
                 "SUPABASE_CENTER_COMPENSATION_DELETE_FAILED status=%s",
                 response.status_code,
             )
+            return False
+        return True
     except Exception:
         logger.warning("SUPABASE_CENTER_COMPENSATION_DELETE_FAILED", exc_info=True)
+        return False
 
 
 def _parse_platform_id(raw):
@@ -1362,6 +1366,40 @@ def create_admin_blueprint():
         except Exception as e:
             logger.error(f"❌ Erreur logout admin: {e}")
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
+
+    @admin_bp.route("/api/admin/account", methods=["DELETE"])
+    def delete_admin_account():
+        """Delete the authenticated centre and all tenant-owned resources."""
+        if session.get("admin_account_type") != "training_center":
+            return jsonify({"success": False, "error": "Compte centre requis"}), 403
+        if not postgres_enabled():
+            return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+
+        account = getattr(g, "training_center_account", None) or {}
+        confirmation = str((request.get_json(silent=True) or {}).get("confirmation") or "").strip()
+        center_name = str(account.get("center_name") or session.get("center_name") or "").strip()
+        if not center_name or confirmation != center_name:
+            return jsonify({
+                "success": False,
+                "error": "Le nom du centre ne correspond pas.",
+            }), 400
+
+        account_id = _training_center_account_id()
+        auth_user_id = str(account.get("auth_user_id") or "").strip() or None
+        try:
+            deleted = delete_training_center_account(account_id, auth_user_id)
+            if not deleted:
+                return jsonify({"success": False, "error": "Compte centre introuvable"}), 404
+            auth_deleted = _delete_training_center_supabase_user(auth_user_id)
+            _clear = ("is_admin", "admin_account_id", "admin_account_type", "center_name")
+            for key in _clear:
+                session.pop(key, None)
+            if auth_user_id and not auth_deleted:
+                logger.warning("CENTER_AUTH_USER_DELETE_DEFERRED account_id=%s", account_id)
+            return jsonify({"success": True, "message": "Compte supprimé"}), 200
+        except Exception:
+            logger.exception("CENTER_ACCOUNT_DELETE_FAILED account_id=%s", account_id)
+            return jsonify({"success": False, "error": "Impossible de supprimer le compte."}), 500
 
     def _require_admin():
         if not session.get("is_admin"):

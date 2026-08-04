@@ -329,9 +329,35 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(line_items[0]["price_data"]["unit_amount"], 3000)
         self.assertEqual(line_items[0]["quantity"], 10)
         self.assertEqual(checkout_args["mode"], "payment")
+        self.assertEqual(checkout_args["invoice_creation"], {"enabled": True})
         self.assertEqual(checkout_args["payment_method_types"], ["card"])
         self.assertIn(str(order["public_id"]), checkout_args["success_url"])
         self.assertIn(str(order["public_id"]), checkout_args["cancel_url"])
+
+    @patch.object(billing_service, "_stripe")
+    @patch.object(billing_service, "get_center_order")
+    def test_invoice_link_prefers_hosted_invoice(self, get_order, stripe_client):
+        get_order.return_value = {
+            "payment_status": "paid",
+            "stripe_checkout_session_id": "cs_test_invoice",
+            "stripe_payment_intent_id": "pi_test_invoice",
+        }
+        retrieve = Mock(return_value=SimpleNamespace(
+            invoice=SimpleNamespace(hosted_invoice_url="https://invoice.stripe.test/i/1"),
+            payment_intent=None,
+        ))
+        stripe_client.return_value = SimpleNamespace(
+            checkout=SimpleNamespace(Session=SimpleNamespace(retrieve=retrieve)),
+        )
+
+        result = billing_service.get_center_invoice_link("order-1", 42)
+
+        self.assertEqual(result["document_type"], "invoice")
+        self.assertEqual(result["url"], "https://invoice.stripe.test/i/1")
+        retrieve.assert_called_once_with(
+            "cs_test_invoice",
+            expand=["invoice", "payment_intent.latest_charge"],
+        )
 
     @patch.object(billing_service, "create_order")
     @patch.object(billing_service, "get_product_catalog")

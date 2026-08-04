@@ -316,6 +316,25 @@ def get_order(public_id: str, *, center_account_id: int | None = None) -> dict[s
             return cur.fetchone()
 
 
+def list_center_billing_orders(center_account_id: int) -> list[dict[str, Any]]:
+    """Return the centre's durable payment history, newest charge first."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_teacher_orders
+                WHERE center_account_id = %s
+                  AND payment_status IN ('paid', 'refunded')
+                  AND COALESCE(charged_amount_cents, 0) > 0
+                ORDER BY COALESCE(paid_at, created_at) DESC, id DESC
+                LIMIT 100
+                """,
+                (int(center_account_id),),
+            )
+            return list(cur.fetchall())
+
+
 def get_order_by_pipeline_job_id(
     pipeline_job_id: int,
     *,

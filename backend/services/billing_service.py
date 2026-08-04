@@ -20,6 +20,7 @@ from repositories.billing_repository import (
     get_center_billing_account,
     get_order,
     get_reusable_module,
+    list_center_billing_orders,
     record_webhook_failure,
     retry_order_fulfillment,
 )
@@ -448,6 +449,8 @@ def serialize_order(order: dict[str, Any], *, include_project: bool = False) -> 
         "platform_id": order.get("platform_id"),
         "pipeline_job_id": order.get("pipeline_job_id"),
         "last_error": order.get("last_error"),
+        "paid_at": order.get("paid_at"),
+        "refunded_at": order.get("refunded_at"),
         "created_at": order.get("created_at"),
         "updated_at": order.get("updated_at"),
     }
@@ -468,6 +471,47 @@ def billing_context(center_account_id: int) -> dict[str, Any]:
         "exemption_label": "Compte interne, paiement non requis" if exempt else None,
         "products": get_product_catalog(),
     }
+
+
+def billing_history(center_account_id: int) -> list[dict[str, Any]]:
+    return [serialize_order(order) for order in list_center_billing_orders(center_account_id)]
+
+
+def get_center_invoice_link(public_id: str, center_account_id: int) -> dict[str, str]:
+    """Resolve a hosted Stripe invoice, with the card receipt as a fallback."""
+    order = get_center_order(public_id, center_account_id)
+    if order.get("payment_status") not in {"paid", "refunded"}:
+        raise BillingError("Aucune facture n’est disponible pour cette commande.", status_code=404)
+
+    stripe = _stripe()
+    checkout_session_id = order.get("stripe_checkout_session_id")
+    if checkout_session_id:
+        checkout = stripe.checkout.Session.retrieve(
+            checkout_session_id,
+            expand=["invoice", "payment_intent.latest_charge"],
+        )
+        invoice = getattr(checkout, "invoice", None)
+        invoice_url = getattr(invoice, "hosted_invoice_url", None)
+        if invoice_url:
+            return {"url": invoice_url, "document_type": "invoice"}
+        payment_intent = getattr(checkout, "payment_intent", None)
+        latest_charge = getattr(payment_intent, "latest_charge", None)
+        receipt_url = getattr(latest_charge, "receipt_url", None)
+        if receipt_url:
+            return {"url": receipt_url, "document_type": "receipt"}
+
+    payment_intent_id = order.get("stripe_payment_intent_id")
+    if payment_intent_id:
+        payment_intent = stripe.PaymentIntent.retrieve(
+            payment_intent_id,
+            expand=["latest_charge"],
+        )
+        latest_charge = getattr(payment_intent, "latest_charge", None)
+        receipt_url = getattr(latest_charge, "receipt_url", None)
+        if receipt_url:
+            return {"url": receipt_url, "document_type": "receipt"}
+
+    raise BillingError("La facture n’est pas encore disponible.", status_code=404)
 
 
 def _billing_now():
@@ -772,6 +816,7 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
     public_id = str(order["public_id"])
     checkout_params = dict(
         mode="payment",
+        invoice_creation={"enabled": True},
         # Keep the first production rollout synchronous and predictable.
         # Card wallets such as Apple Pay/Google Pay still use the card rail.
         payment_method_types=["card"],

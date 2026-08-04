@@ -7,9 +7,11 @@ from flask import Blueprint, jsonify, request, session
 from database.postgres import postgres_enabled
 from services.billing_service import (
     BillingError,
+    billing_history,
     billing_context,
     create_teacher_order,
     get_center_order,
+    get_center_invoice_link,
     process_stripe_webhook,
     retry_center_order,
     serialize_order,
@@ -44,6 +46,30 @@ def get_billing_catalog():
         return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
     try:
         return jsonify({"success": True, **billing_context(center_id)}), 200
+    except BillingError as exc:
+        return _error(exc)
+
+
+@billing_bp.get("/api/hr/billing/history")
+def get_billing_history():
+    center_id = _center_id()
+    if not center_id:
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    if not postgres_enabled():
+        return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    try:
+        return jsonify({"success": True, "orders": billing_history(center_id)}), 200
+    except BillingError as exc:
+        return _error(exc)
+
+
+@billing_bp.get("/api/hr/billing/orders/<uuid:public_id>/invoice")
+def get_billing_invoice(public_id):
+    center_id = _center_id()
+    if not center_id:
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    try:
+        return jsonify({"success": True, **get_center_invoice_link(str(public_id), center_id)}), 200
     except BillingError as exc:
         return _error(exc)
 

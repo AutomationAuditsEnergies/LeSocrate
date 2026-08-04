@@ -185,6 +185,24 @@ def get_training_center_by_id(center_id):
         )
 
 
+def delete_training_center_account(center_id: int, auth_user_id: str | None) -> bool:
+    """Delete one tenant account after its authenticated identity is verified."""
+    if not postgres_enabled() or not center_id:
+        return False
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM training_center_accounts
+                WHERE id = %s
+                  AND auth_user_id IS NOT DISTINCT FROM %s::uuid
+                RETURNING id
+                """,
+                (int(center_id), auth_user_id),
+            )
+            return cur.fetchone() is not None
+
+
 def get_training_center_by_auth_user_id(auth_user_id):
     if not postgres_enabled() or not auth_user_id:
         return None
