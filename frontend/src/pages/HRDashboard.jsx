@@ -88,7 +88,6 @@ export default function HRDashboard() {
   const [studentEmailsSaving, setStudentEmailsSaving] = useState(null)
   const [studentEmailDrafts, setStudentEmailDrafts] = useState({})
   const [expandedStudentsPlatform, setExpandedStudentsPlatform] = useState(null)
-  const [pdfUploading, setPdfUploading] = useState(null)
   const [audiosLoading, setAudiosLoading] = useState(null)
   const [darkMode, setDarkMode] = useState(false)
   const [currentCourseTime, setCurrentCourseTime] = useState(null)
@@ -569,15 +568,6 @@ export default function HRDashboard() {
           fetchPlatforms()
           setDeleteConfirm(null)
         }
-      } else if (deleteConfirm.type === 'pdf') {
-        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}/pdf`, {
-          method: 'DELETE',
-        })
-        const data = await resp.json()
-        if (data.success) {
-          fetchPlatforms(deleteConfirm.platformId)
-          setDeleteConfirm(null)
-        }
       } else if (deleteConfirm.type === 'module') {
         if (deleteConfirmTypedName !== deleteConfirm.confirmKey) return
         const resp = await apiFetch(`/api/hr/formation-modules/${deleteConfirm.moduleId}`, {
@@ -654,25 +644,6 @@ export default function HRDashboard() {
       setShowOnboarding(false)
     } finally {
       setOnboardingSaving(false)
-    }
-  }
-
-  const handlePdfUpload = async (platformId, file) => {
-    setPdfUploading(platformId)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/upload-pdf-rag`, {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await resp.json()
-      if (data.success) fetchPlatforms(platformId)
-    } catch (e) {
-      console.error('Erreur upload PDF:', e)
-    } finally {
-      setPdfUploading(null)
     }
   }
 
@@ -758,11 +729,6 @@ export default function HRDashboard() {
     if (refreshed.ok && refreshedData.success) setCurrentCourseTime(refreshedData)
     await fetchPlatforms(courseTimePlatformId)
     return data
-  }
-
-  const handleDeletePdf = (platformId) => {
-    const platformName = platforms.find((platform) => platform.id === platformId)?.name
-    setDeleteConfirm({ type: 'pdf', platformId, platformName })
   }
 
   const handleOpenCoursFolders = (platform) => {
@@ -1376,7 +1342,6 @@ export default function HRDashboard() {
               expandedPlatform={expandedPlatform}
               platformAudios={platformAudios}
               audiosLoading={audiosLoading}
-              pdfUploading={pdfUploading}
               colors={colors}
               darkMode={darkMode}
               studentEmailsByPlatform={studentEmailsByPlatform}
@@ -1399,10 +1364,6 @@ export default function HRDashboard() {
               onAttendanceDateChange={setAttendanceDate}
               onRefreshAttendance={(platformId) => fetchAttendance(platformId, attendanceDate)}
               onExportAttendance={(week, platformId) => handleExportAttendance(week, platformId)}
-              onOpenPdfModal={(platform) => {
-                closeCardPanels()
-                return platform
-              }}
               onOpenCourseTimeModal={async (platform) => {
                 closeCardPanels()
                 setCourseTimePlatformId(platform.id)
@@ -1414,8 +1375,6 @@ export default function HRDashboard() {
                 } catch { setCurrentCourseTime(null) }
               }}
               onOpenCoursFolders={handleOpenCoursFolders}
-              onPdfUpload={handlePdfUpload}
-              onDeletePdf={handleDeletePdf}
               onCloseCardPanels={closeCardPanels}
               currentCourseTime={currentCourseTime}
               onSetCourseTime={handleSetCourseTime}
@@ -1433,10 +1392,10 @@ export default function HRDashboard() {
       </div>
 
       {/* Modal confirmation suppression — branche par type :
-          - audio/pdf : confirmation simple (atomique, peu d'impact)
+          - audio : confirmation simple (atomique, peu d'impact)
           - platform : confirmation enrichie + type-to-confirm (cascade,
             irréversibilité, registre Examiner's Desk per DESIGN.md). */}
-      {deleteConfirm && deleteConfirm.type !== 'platform' && (
+      {deleteConfirm && deleteConfirm.type === 'audio' && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
           style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
@@ -1451,18 +1410,10 @@ export default function HRDashboard() {
           >
             <div className="p-6 text-center">
               <h3 className="text-lg font-bold mb-2" style={{ color: '#0f172a' }}>
-                {deleteConfirm.type === 'audio' ? 'Supprimer cet audio ?' : 'Supprimer ce PDF ?'}
+                Supprimer cet audio ?
               </h3>
               <p className="text-sm mb-6" style={{ color: '#64748b' }}>
-                {deleteConfirm.type === 'audio' ? (
-                  <>
-                    Voulez-vous vraiment supprimer <strong>"{deleteConfirm.filename}"</strong> ? Cette action est irréversible.
-                  </>
-                ) : (
-                  <>
-                    Voulez-vous vraiment supprimer le PDF de <strong>{deleteConfirm.platformName || 'cette plateforme'}</strong> ? Cette action est irréversible.
-                  </>
-                )}
+                Voulez-vous vraiment supprimer <strong>"{deleteConfirm.filename}"</strong> ? Cette action est irréversible.
               </p>
               <div className="flex gap-3">
                 <button
@@ -3151,7 +3102,6 @@ function PlatformCardsView({
   expandedPlatform,
   platformAudios,
   audiosLoading,
-  pdfUploading,
   colors,
   darkMode,
   studentEmailsByPlatform,
@@ -3174,11 +3124,8 @@ function PlatformCardsView({
   onAttendanceDateChange,
   onRefreshAttendance,
   onExportAttendance,
-  onOpenPdfModal,
   onOpenCourseTimeModal,
   onOpenCoursFolders,
-  onPdfUpload,
-  onDeletePdf,
   onCloseCardPanels,
   currentCourseTime,
   onSetCourseTime,
@@ -3346,7 +3293,6 @@ function PlatformCardsView({
             expanded={expandedPlatform === p.id}
             audios={platformAudios[p.id] || []}
             audiosLoading={audiosLoading === p.id}
-            pdfUploading={pdfUploading === p.id}
             colors={colors}
             darkMode={darkMode}
             studentEmails={studentEmailsByPlatform[p.id] || []}
@@ -3369,11 +3315,8 @@ function PlatformCardsView({
             onAttendanceDateChange={onAttendanceDateChange}
             onRefreshAttendance={() => onRefreshAttendance(p.id)}
             onExportAttendance={(week) => onExportAttendance(week, p.id)}
-            onOpenPdfModal={() => onOpenPdfModal(p)}
             onOpenCourseTimeModal={() => onOpenCourseTimeModal(p)}
             onOpenCoursFolders={() => onOpenCoursFolders(p)}
-            onPdfUpload={(file) => onPdfUpload(p.id, file)}
-            onDeletePdf={() => onDeletePdf(p.id)}
             onBeforeFlip={onCloseCardPanels}
             currentCourseTime={currentCourseTime}
             onSetCourseTime={onSetCourseTime}
@@ -5769,15 +5712,14 @@ function StudentsToolContent({
 }
 
 function PlatformCard({
-  platform: p, audios, audiosLoading, pdfUploading,
+  platform: p, audios, audiosLoading,
   colors, darkMode, studentEmails = [], studentEmailsLoading = false,
   studentEmailsSaving = false, studentEmailDraft = '',
   attendanceDate, attendanceData, attendanceLoading = false, attendanceError = '',
   onExpand, onRefreshAudios, onToggleStudentEmails, onToggleAttendance,
   onStudentEmailDraftChange, onAddStudentEmails, onDeleteStudentEmail,
   onAttendanceDateChange, onRefreshAttendance,
-  onExportAttendance, onOpenPdfModal, onOpenCourseTimeModal,
-  onPdfUpload, onDeletePdf, onOpenCoursFolders,
+  onExportAttendance, onOpenCourseTimeModal, onOpenCoursFolders,
   currentCourseTime, onSetCourseTime, onRetrySessionAudio, onPreviewSessionPostponement,
   onPostponeSession, onAudiosPublished, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
   onBeforeFlip,
@@ -5810,7 +5752,6 @@ function PlatformCard({
     boxShadow: '0 1px 3px rgba(0,0,0,.08), 0 1px 2px -1px rgba(0,0,0,.08)',
   }
   const actionItems = [
-    { key: 'pdf', label: 'PDF', icon: 'picture_as_pdf', onOpen: onOpenPdfModal },
     ...(p.active ? [
       { key: 'planning', label: 'Planning', icon: 'schedule', onOpen: onOpenCourseTimeModal },
       { key: 'audios', label: 'Audios', icon: 'audiotrack', onOpen: onExpand },
@@ -5951,16 +5892,10 @@ function PlatformCard({
             style={{ border: `1px solid ${colors.border}` }}
           >
             <aside
-              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2 ${activeTool ? 'hidden sm:flex' : 'flex min-h-[430px]'} flex-col`}
+              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2 ${activeTool ? 'hidden' : 'flex min-h-[430px]'} flex-col`}
               style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
             >
               <div className="relative min-h-[250px] flex-1 overflow-hidden" style={{ backgroundColor: `${robotTheme.glow}12` }}>
-                <span
-                  className="absolute left-5 top-5 z-10 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
-                  style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
-                >
-                  {rosterMeta.label}
-                </span>
                 <span
                   className="absolute bottom-[12%] left-1/2 h-8 w-[58%] -translate-x-1/2 rounded-full opacity-20 blur-xl"
                   style={{ backgroundColor: robotTheme.glow }}
@@ -6210,15 +6145,6 @@ function PlatformCard({
           colors={colors}
           darkMode={darkMode}
         >
-          {activeTool === 'pdf' && (
-            <PDFModal
-              embedded
-              platform={p}
-              onUpload={onPdfUpload}
-              onDelete={onDeletePdf}
-              uploading={pdfUploading}
-            />
-          )}
           {activeTool === 'planning' && (
             <CourseTimeModal
               embedded

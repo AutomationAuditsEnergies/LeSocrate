@@ -102,6 +102,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
   const [audioPlaylistItems, setAudioPlaylistItems] = useState([]) // manifeste V1/V2 attendu
+  const [courseMaterials, setCourseMaterials] = useState([]) // PDF généré par journée à H-48
+  const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
+  const [courseMaterialsError, setCourseMaterialsError] = useState('')
   const [deletingAudioFile, setDeletingAudioFile] = useState('')
   const [dragFolderIdx, setDragFolderIdx] = useState(null)
   const [dragOverFolderIdx, setDragOverFolderIdx] = useState(null)
@@ -171,6 +174,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setDarkMode(isDark)
 
     fetchFolders()
+    fetchCourseMaterials()
 
     // Écouter les changements de mode
     const observer = new MutationObserver(() => {
@@ -201,6 +205,25 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       console.error('Erreur chargement dossiers:', e)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchCourseMaterials = async () => {
+    setCourseMaterialsLoading(true)
+    setCourseMaterialsError('')
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/course-materials`)
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Impossible de charger les supports PDF.')
+      }
+      setCourseMaterials(Array.isArray(data.materials) ? data.materials : [])
+    } catch (e) {
+      console.error('Erreur chargement supports PDF:', e)
+      setCourseMaterials([])
+      setCourseMaterialsError(e.message || 'Impossible de charger les supports PDF.')
+    } finally {
+      setCourseMaterialsLoading(false)
     }
   }
 
@@ -1535,6 +1558,15 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     : canGeneratePlaylistAudio
       ? `Générer ${expectedCourseLabel} du dossier`
       : 'Script texte requis'
+  const materialForFolder = (folder, folderIndex) => (
+    courseMaterials.find(material => Number(material.folder_id) === Number(folder?.id))
+    || courseMaterials.find(material => Number(material.session_index) === Number(folderIndex) + 1)
+    || null
+  )
+  const selectedFolderIndex = folders.findIndex(folder => Number(folder.id) === Number(selectedFolder?.id))
+  const selectedCourseMaterial = selectedFolder
+    ? materialForFolder(selectedFolder, Math.max(0, selectedFolderIndex))
+    : null
 
   return (
     <div
@@ -1679,8 +1711,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                     Glissez les cours pour changer leur ordre chronologique
                   </p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                    {folders.map((folder, idx) => (
-                      <div
+                    {folders.map((folder, idx) => {
+                      const courseMaterial = materialForFolder(folder, idx)
+                      return (
+                        <div
                         key={folder.id}
                         draggable
                         onDragStart={(e) => handleFolderDragStart(e, idx)}
@@ -1755,6 +1789,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                             <p className="text-sm" style={{ color: colors.textMuted }}>
                               {folder.document_count || 0} document{folder.document_count !== 1 ? 's' : ''}
                             </p>
+                            <p className="mt-1.5 flex items-center gap-1.5 text-xs" style={{ color: courseMaterial ? '#047857' : colors.textMuted }}>
+                              <Icon
+                                name={courseMaterial ? 'picture_as_pdf' : courseMaterialsError ? 'error_outline' : 'schedule'}
+                                style={{ fontSize: '15px' }}
+                              />
+                              {courseMaterialsLoading
+                                ? 'Vérification du support…'
+                                : courseMaterialsError
+                                  ? 'État du support indisponible'
+                                  : courseMaterial
+                                    ? 'Support PDF prêt'
+                                    : 'Support PDF à venir'}
+                            </p>
                           </div>
                           <button
                             onClick={(e) => {
@@ -1767,8 +1814,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                             <Icon name="delete" className="text-sm" />
                           </button>
                         </div>
-                      </div>
-                    ))}
+                        </div>
+                      )
+                    })}
                   </div>
                 </>
               )}
@@ -1802,7 +1850,73 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                 </button>
               </div>
 
-	              <div className="mb-4">
+              <div className="mb-4 space-y-3">
+                {/* ── Support PDF généré pour cette journée ── */}
+                <div className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}>
+                  <div className="flex items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+                    <Icon name="picture_as_pdf" style={{ color: colors.textMuted, fontSize: '17px' }} />
+                    <span className="text-sm font-semibold" style={{ color: colors.text }}>Support PDF de la journée</span>
+                  </div>
+                  <div className="flex min-h-[58px] flex-wrap items-center gap-3 px-4 py-3">
+                    {courseMaterialsLoading ? (
+                      <p className="text-xs" style={{ color: colors.textMuted }}>Vérification du support…</p>
+                    ) : courseMaterialsError ? (
+                      <>
+                        <Icon name="error_outline" style={{ color: '#b91c1c', fontSize: '18px' }} />
+                        <p className="min-w-0 flex-1 text-xs" style={{ color: '#b91c1c' }}>{courseMaterialsError}</p>
+                        <button
+                          type="button"
+                          onClick={fetchCourseMaterials}
+                          className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold"
+                          style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                        >
+                          Réessayer
+                        </button>
+                      </>
+                    ) : selectedCourseMaterial ? (
+                      <>
+                        <Icon name="check_circle" style={{ color: '#047857', fontSize: '18px' }} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-semibold" style={{ color: colors.textSecondary }}>
+                            Support de la journée {selectedCourseMaterial.session_index}
+                          </p>
+                          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>
+                            Généré automatiquement sans balises techniques
+                          </p>
+                        </div>
+                        <a
+                          href={selectedCourseMaterial.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold no-underline"
+                          style={{ backgroundColor: colors.text, color: colors.cardBg }}
+                        >
+                          Ouvrir le PDF
+                          <Icon name="open_in_new" style={{ fontSize: '15px' }} />
+                        </a>
+                      </>
+                    ) : (
+                      <>
+                        <Icon name="schedule" style={{ color: colors.textMuted, fontSize: '18px' }} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Support à venir</p>
+                          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>
+                            Il sera créé automatiquement avec les audios à H-48.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={fetchCourseMaterials}
+                          className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold"
+                          style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                        >
+                          Actualiser
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
                 {/* ── Panneau : Audios générés ── */}
                 <div className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}>
                   <div className="flex items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>

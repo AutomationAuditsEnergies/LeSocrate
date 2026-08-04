@@ -414,6 +414,11 @@ def list_daily_course_pdf_materials(
         materials.append({
             "session_id": session_id,
             "session_index": int(session.get("session_index") or 0),
+            "folder_id": (
+                int(session["audio_folder_id"])
+                if session.get("audio_folder_id") is not None
+                else None
+            ),
             "scheduled_at": session.get("scheduled_at"),
             "filename": COURSE_PDF_FILENAME,
             "size": int(getattr(blob, "size", 0) or 0),

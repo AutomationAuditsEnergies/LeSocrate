@@ -184,6 +184,7 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
                 [{
                     "id": 501,
                     "session_index": 1,
+                    "audio_folder_id": 55,
                     "scheduled_at": "2026-07-22 09:00:00",
                 }],
                 blob_service_client=client,
@@ -194,6 +195,7 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
         )
         self.assertEqual(len(materials), 1)
         self.assertEqual(materials[0]["session_id"], 501)
+        self.assertEqual(materials[0]["folder_id"], 55)
         self.assertTrue(materials[0]["url"].endswith("?sig=read"))
 
 
