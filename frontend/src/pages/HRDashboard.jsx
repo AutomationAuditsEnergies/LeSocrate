@@ -2113,7 +2113,13 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
         if (!response.ok || !data.success) throw new Error(data.error || 'Historique indisponible.')
         setBillingOrders(data.orders || [])
       })
-      .catch((error) => { if (!cancelled) setBillingError(error.message || 'Historique indisponible.') })
+      .catch((error) => {
+        console.warn('Lecture de l’historique de facturation impossible:', error)
+        if (!cancelled) {
+          setBillingOrders([])
+          setBillingError('')
+        }
+      })
       .finally(() => {
         if (!cancelled) {
           setBillingHistoryLoaded(true)
@@ -2204,7 +2210,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-[#111827]/45 p-0 backdrop-blur-[2px] md:p-4"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-[#111827]/45 p-0 md:p-4"
       style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif' }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !deletingAccount && !passwordSaving) onClose()
@@ -2218,7 +2224,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
       >
         <aside className="flex w-[230px] shrink-0 flex-col border-r border-[#E2E8F0] bg-[#F8FAFC] px-3 py-4 max-md:w-[92px] max-md:px-2">
           <div className="mb-7 flex items-center gap-3 px-2 max-md:justify-center max-md:px-0">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#EDE9FE] text-sm font-semibold text-[#6D28D9]">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] bg-white text-sm font-semibold text-[#334155]">
               {accountName.slice(0, 1).toUpperCase() || 'C'}
             </span>
             <span className="min-w-0 max-md:hidden">
@@ -2236,7 +2242,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
                   aria-current={selected ? 'page' : undefined}
-                  className={`flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/45 max-md:flex-col max-md:justify-center max-md:gap-1 max-md:px-1 max-md:text-[11px] ${selected ? 'bg-[#EDE9FE] text-[#6D28D9]' : 'text-[#475569] hover:bg-[#EEF2F6] hover:text-[#0F172A]'}`}
+                  className={`flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#475569]/30 max-md:flex-col max-md:justify-center max-md:gap-1 max-md:px-1 max-md:text-[11px] ${selected ? 'bg-white text-[#0F172A] shadow-[inset_0_0_0_1px_#E2E8F0]' : 'text-[#64748B] hover:bg-[#EEF2F6] hover:text-[#0F172A]'}`}
                 >
                   <TabIcon size={17} strokeWidth={selected ? 2 : 1.7} aria-hidden="true" />
                   <span>{tab.label}</span>
@@ -2251,7 +2257,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
             ref={closeButtonRef}
             type="button"
             onClick={onClose}
-            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-lg text-[#64748B] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F172A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/45"
+            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-lg text-[#64748B] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F172A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#475569]/30"
             aria-label="Fermer les paramètres"
           >
             <X size={19} strokeWidth={1.8} aria-hidden="true" />
@@ -2299,7 +2305,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                             autoComplete="new-password"
                             value={newPassword}
                             onChange={(event) => setNewPassword(event.target.value)}
-                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/20"
+                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#64748B] focus:ring-2 focus:ring-[#64748B]/15"
                             placeholder="8 caractères minimum"
                           />
                         </label>
@@ -2310,7 +2316,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                             autoComplete="new-password"
                             value={confirmPassword}
                             onChange={(event) => setConfirmPassword(event.target.value)}
-                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/20"
+                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#64748B] focus:ring-2 focus:ring-[#64748B]/15"
                             placeholder="Saisissez-le à nouveau"
                           />
                         </label>
@@ -2324,7 +2330,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                         <button
                           type="submit"
                           disabled={passwordSaving || !newPassword || !confirmPassword}
-                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#8B5CF6] px-4 text-sm font-medium text-white transition-colors hover:bg-[#7C3AED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/45 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
+                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#0F172A] px-4 text-sm font-medium text-white transition-colors hover:bg-[#1E293B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#475569]/35 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
                         >
                           <KeyRound size={16} strokeWidth={1.8} aria-hidden="true" />
                           {passwordSaving ? 'Modification…' : 'Modifier le mot de passe'}
@@ -2359,11 +2365,11 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                   <p className="mt-1.5 text-sm text-[#475569]">Suivez vos dépenses et téléchargez les documents associés.</p>
                 </header>
 
-                <section className="mt-8 rounded-xl bg-[#F8FAFC] px-5 py-5">
+                <section className="mt-8 border-y border-[#E2E8F0] py-4">
                   <div className="flex flex-wrap items-end justify-between gap-4">
                     <div>
                       <p className="text-sm font-medium text-[#475569]">Total payé</p>
-                      <p className="mt-1 text-3xl font-semibold tracking-[-0.02em] text-[#0F172A]">{formatPrice(totalPaidCents, 'eur')}</p>
+                      <p className="mt-1 text-2xl font-semibold tracking-[-0.01em] text-[#0F172A]">{formatPrice(totalPaidCents, 'eur')}</p>
                     </div>
                     <p className="text-sm text-[#64748B]">{billingOrders.length} opération{billingOrders.length > 1 ? 's' : ''}</p>
                   </div>
@@ -2379,17 +2385,11 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                     <div className="mt-3 space-y-2" aria-label="Chargement des dépenses">
                       {[0, 1, 2].map((item) => <div key={item} className="h-[74px] animate-pulse rounded-xl bg-[#F1F5F9]" />)}
                     </div>
-                  ) : billingError && billingOrders.length === 0 ? (
-                    <div className="mt-3 flex min-h-[190px] flex-col items-center justify-center rounded-xl border border-[#FECDCA] bg-[#FFF7F6] px-5 text-center" role="alert">
-                      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-white text-[#B42318]"><ReceiptText size={19} strokeWidth={1.7} aria-hidden="true" /></span>
-                      <p className="mt-4 text-sm font-semibold text-[#7A271A]">Historique indisponible</p>
-                      <p className="mt-1 max-w-[44ch] text-sm leading-5 text-[#912018]">{billingError}</p>
-                    </div>
                   ) : billingOrders.length === 0 ? (
                     <div className="mt-3 flex min-h-[190px] flex-col items-center justify-center rounded-xl border border-dashed border-[#CBD5E1] px-5 text-center">
                       <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#F1F5F9] text-[#64748B]"><ReceiptText size={19} strokeWidth={1.7} aria-hidden="true" /></span>
-                      <p className="mt-4 text-sm font-semibold text-[#334155]">Aucune dépense enregistrée</p>
-                      <p className="mt-1 max-w-[44ch] text-sm leading-5 text-[#64748B]">Vos paiements apparaîtront ici dès qu’une commande aura été confirmée.</p>
+                      <p className="mt-4 text-sm font-semibold text-[#334155]">Aucune dépense à ce jour</p>
+                      <p className="mt-1 max-w-[44ch] text-sm leading-5 text-[#64748B]">Les paiements apparaîtront ici après votre première commande.</p>
                     </div>
                   ) : (
                     <div className="mt-3 overflow-hidden rounded-xl border border-[#E2E8F0]">
@@ -2411,7 +2411,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                                 type="button"
                                 onClick={() => openInvoice(order.id)}
                                 disabled={invoiceLoadingId === order.id}
-                                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[#CBD5E1] bg-white px-3 text-xs font-medium text-[#334155] transition-colors hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/35 disabled:opacity-55"
+                                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[#CBD5E1] bg-white px-3 text-xs font-medium text-[#334155] transition-colors hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#475569]/30 disabled:opacity-55"
                               >
                                 {invoiceLoadingId === order.id ? 'Ouverture…' : 'Facture'}
                                 <ExternalLink size={13} strokeWidth={1.8} aria-hidden="true" />

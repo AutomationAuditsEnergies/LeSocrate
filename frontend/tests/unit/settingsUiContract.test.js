@@ -21,6 +21,8 @@ test('provides account and billing settings as the two primary tabs', () => {
   assert.match(source, /apiFetch\('\/api\/admin\/account'/)
   assert.match(source, /apiFetch\('\/api\/hr\/billing\/history'/)
   assert.match(source, /billing\/orders\/\$\{orderId\}\/invoice/)
+  assert.match(source, /Aucune dépense à ce jour/)
+  assert.doesNotMatch(source, />Historique indisponible</)
 })
 
 test('requires the exact workspace name before destructive deletion', () => {
