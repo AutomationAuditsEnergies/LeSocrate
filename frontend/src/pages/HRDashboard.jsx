@@ -5089,7 +5089,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
               <div>
                 <h4 className="text-sm font-semibold" style={{ color: '#111418' }}>Supports de cours générés</h4>
                 <p className={`mt-1 text-xs ${embedded ? 'leading-4' : 'leading-5'}`} style={{ color: '#64748b' }}>
-                  Un PDF sans balises techniques est créé avec les audios de chaque journée lors de la préparation H-48.
+                  Un PDF sans balises techniques est créé pour chaque journée dès la fin de la pipeline.
                 </p>
               </div>
               {!courseMaterialsLoading && (
@@ -5925,7 +5925,7 @@ function PlatformCard({
                       {formatScheduleLongDateTime(nextCourseSession.scheduled_at)}
                     </p>
                     <p className="mt-3 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
-                      Les fichiers seront préparés automatiquement le{' '}
+                      Les audios seront préparés automatiquement le{' '}
                       <span className="font-semibold" style={{ color: colors.text }}>{nextCoursePreparationAt}</span>.
                     </p>
                     <p className="mt-2 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>

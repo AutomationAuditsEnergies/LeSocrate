@@ -106,11 +106,12 @@ def render_daily_course_pdf(
     # Lazy imports keep the web process bootable while deployments roll out the
     # new dependency; PDF generation itself fails explicitly if it is missing.
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.platypus import (
+        PageBreak,
         Paragraph,
         SimpleDocTemplate,
         Spacer,
@@ -196,7 +197,7 @@ def render_daily_course_pdf(
         fontSize=10.5,
         leading=16,
         textColor=ink,
-        alignment=TA_JUSTIFY,
+        alignment=TA_LEFT,
         spaceAfter=3.5 * mm,
         allowWidows=0,
         allowOrphans=0,
@@ -206,13 +207,14 @@ def render_daily_course_pdf(
     meta = []
     if rncp_code:
         clean_code = str(rncp_code).strip()
-        meta.append(("Titre", clean_code if clean_code.upper().startswith("RNCP") else f"RNCP {clean_code}"))
+        meta.append(("Certification", clean_code if clean_code.upper().startswith("RNCP") else f"RNCP {clean_code}"))
     if course_date:
         meta.append(("Date", course_date))
     meta.append(("Journée", str(day_number)))
 
     story = [
         Paragraph("LE SOCRATE", brand),
+        Spacer(1, 18 * mm),
         Paragraph(html.escape(_strip_technical_tags(formation_title)), title_style),
         Paragraph(
             html.escape(_strip_technical_tags(day_title) or f"Journée {day_number}"),
@@ -239,6 +241,7 @@ def render_daily_course_pdf(
             "Ce document reprend le texte pédagogique diffusé pendant cette journée de formation.",
             intro_style,
         ),
+        PageBreak(),
     ])
 
     rendered_sections = 0
@@ -255,6 +258,16 @@ def render_daily_course_pdf(
     if not rendered_sections:
         raise ValueError("Le texte de cette journée est vide")
 
+    def _cover_chrome(canvas, _doc):
+        canvas.saveState()
+        width, height = A4
+        canvas.setFillColor(violet)
+        canvas.rect(0, height - 5 * mm, width, 5 * mm, stroke=0, fill=1)
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(slate)
+        canvas.drawCentredString(width / 2, 10 * mm, "Le Socrate · Support de formation")
+        canvas.restoreState()
+
     def _page_chrome(canvas, doc):
         canvas.saveState()
         width, _height = A4
@@ -264,10 +277,10 @@ def render_daily_course_pdf(
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(slate)
         canvas.drawString(20 * mm, 9.5 * mm, "Le Socrate · Support de formation")
-        canvas.drawRightString(width - 20 * mm, 9.5 * mm, f"Page {doc.page}")
+        canvas.drawRightString(width - 20 * mm, 9.5 * mm, f"Page {doc.page - 1}")
         canvas.restoreState()
 
-    document.build(story, onFirstPage=_page_chrome, onLaterPages=_page_chrome)
+    document.build(story, onFirstPage=_cover_chrome, onLaterPages=_page_chrome)
     return output.getvalue()
 
 
@@ -277,7 +290,7 @@ def build_daily_course_pdf(
     folder_id: int,
     scheduled_at=None,
 ) -> tuple[bytes, str, dict[str, Any]]:
-    """Build the current reviewed text for the exact folder selected at H-48."""
+    """Build the final reviewed text for one pipeline course-day folder."""
     from repositories.pipeline_repository import get_content_generation_job_by_folder
     from services.formation_docx_service import _get_segments_for_folder
     from services.formation_pipeline_service import get_job
@@ -364,6 +377,75 @@ def publish_daily_course_pdf(
         "filename": filename,
         "size": len(pdf_bytes),
     }
+
+
+def publish_pipeline_course_pdfs(
+    *,
+    job_id: int,
+    platform_id: int,
+) -> list[dict[str, Any]]:
+    """Build every daily support as the text pipeline reaches completion.
+
+    The operation is idempotent: retries overwrite the same occurrence-scoped
+    blobs. Audio preparation can therefore remain independent at H-48.
+    """
+    from repositories.course_schedule_repository import list_course_sessions
+    from services.formation_pipeline_service import get_expected_course_folders
+
+    job_id = int(job_id)
+    platform_id = int(platform_id)
+    folder_ids = [
+        int(folder_id)
+        for folder_id in (
+            get_expected_course_folders(job_id).get("folder_ids") or []
+        )
+    ]
+    if not folder_ids:
+        raise ValueError(f"Aucune journée disponible pour le job {job_id}")
+
+    sessions = list_course_sessions(
+        platform_id,
+        limit=max(50, len(folder_ids)),
+    )
+    sessions_by_index = {
+        int(session.get("session_index") or 0): session
+        for session in sessions
+        if int(session.get("session_index") or 0) > 0
+    }
+
+    published = []
+    for day_index, folder_id in enumerate(folder_ids, start=1):
+        session = sessions_by_index.get(day_index)
+        if not session or not session.get("id"):
+            raise RuntimeError(
+                f"Séance {day_index} introuvable pour la plateforme {platform_id}"
+            )
+        session_id = int(session["id"])
+        pdf_bytes, pdf_filename, pdf_metadata = build_daily_course_pdf(
+            job_id=job_id,
+            folder_id=folder_id,
+            scheduled_at=session.get("scheduled_at"),
+        )
+        result = publish_daily_course_pdf(
+            platform_id=platform_id,
+            session_id=session_id,
+            pdf_bytes=pdf_bytes,
+            filename=pdf_filename,
+        )
+        published.append({
+            **result,
+            "session_id": session_id,
+            "folder_id": folder_id,
+            "metadata": pdf_metadata,
+        })
+
+    logger.info(
+        "PIPELINE_COURSE_PDFS_PUBLISHED job_id=%s platform_id=%s count=%s",
+        job_id,
+        platform_id,
+        len(published),
+    )
+    return published
 
 
 def list_daily_course_pdf_materials(

@@ -109,6 +109,37 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                     **kwargs,
                 )
 
+    def test_course_materials_backfills_completed_legacy_pipeline(self):
+        self._login(account_type="superadmin", account_id=None)
+        sessions = [{"id": 501, "session_index": 1}]
+        ready_material = {"session_id": 501, "session_index": 1}
+        with (
+            patch("routes.hr_routes.HR_ENABLED", True),
+            patch("routes.hr_routes.list_course_sessions", return_value=sessions),
+            patch(
+                "services.daily_course_pdf_service.list_daily_course_pdf_materials",
+                side_effect=[[], [ready_material]],
+            ) as list_materials,
+            patch(
+                "repositories.pipeline_repository.find_latest_pipeline_job_id_for_platform",
+                return_value=8,
+            ),
+            patch(
+                "services.formation_pipeline_service.get_job",
+                return_value={"id": 8, "status": "text_ready"},
+            ),
+            patch(
+                "services.daily_course_pdf_service.publish_pipeline_course_pdfs",
+                return_value=[ready_material],
+            ) as publish_materials,
+        ):
+            response = self.client.get("/api/hr/platforms/5/course-materials")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["materials"], [ready_material])
+        publish_materials.assert_called_once_with(job_id=8, platform_id=5)
+        self.assertEqual(list_materials.call_count, 2)
+
     def test_indirect_folder_document_request_and_segment_ids_are_hidden_first(self):
         self._login()
         cases = (

@@ -2,7 +2,7 @@ import io
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from azure.core.exceptions import ResourceExistsError
 from PyPDF2 import PdfReader
@@ -71,7 +71,85 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
             "platform-5/course-sessions/501/support-formation.pdf",
         )
 
-    def test_scheduled_audio_completes_only_after_pdf_is_published(self):
+    def test_pipeline_completion_publishes_every_daily_pdf(self):
+        with (
+            patch(
+                "services.formation_pipeline_service.get_expected_course_folders",
+                return_value={"folder_ids": [55, 56]},
+            ),
+            patch(
+                "repositories.course_schedule_repository.list_course_sessions",
+                return_value=[
+                    {"id": 501, "session_index": 1, "scheduled_at": "2026-07-22 09:00:00"},
+                    {"id": 502, "session_index": 2, "scheduled_at": "2026-07-23 09:00:00"},
+                ],
+            ),
+            patch.object(
+                service,
+                "build_daily_course_pdf",
+                side_effect=[
+                    (b"%PDF day 1", service.COURSE_PDF_FILENAME, {"day_number": 1}),
+                    (b"%PDF day 2", service.COURSE_PDF_FILENAME, {"day_number": 2}),
+                ],
+            ) as build_pdf,
+            patch.object(
+                service,
+                "publish_daily_course_pdf",
+                side_effect=[
+                    {"blob_key": "platform-5/course-sessions/501/support-formation.pdf"},
+                    {"blob_key": "platform-5/course-sessions/502/support-formation.pdf"},
+                ],
+            ) as publish_pdf,
+        ):
+            results = service.publish_pipeline_course_pdfs(job_id=8, platform_id=5)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual([result["folder_id"] for result in results], [55, 56])
+        self.assertEqual(
+            build_pdf.call_args_list,
+            [
+                call(job_id=8, folder_id=55, scheduled_at="2026-07-22 09:00:00"),
+                call(job_id=8, folder_id=56, scheduled_at="2026-07-23 09:00:00"),
+            ],
+        )
+        self.assertEqual(
+            [item.kwargs["session_id"] for item in publish_pdf.call_args_list],
+            [501, 502],
+        )
+
+    def test_finalize_text_publishes_pdfs_before_marking_pipeline_ready(self):
+        calls = []
+        with (
+            patch.object(
+                formation_routes,
+                "_finalize_text_ready_state",
+                side_effect=lambda job_id: calls.append(("finalize", job_id)),
+            ),
+            patch(
+                "services.daily_course_pdf_service.publish_pipeline_course_pdfs",
+                side_effect=lambda **kwargs: calls.append(("pdf", kwargs)) or [{"session_id": 501}],
+            ),
+            patch.object(
+                formation_routes,
+                "update_job",
+                side_effect=lambda job_id, **kwargs: calls.append(("update", job_id, kwargs)),
+            ),
+        ):
+            formation_routes._execute_ap_step(
+                8,
+                "finalize_text",
+                {
+                    "platform_id": 5,
+                    "auto_pilot_model": "pro",
+                    "auto_pilot_generate_audio": False,
+                },
+            )
+
+        self.assertEqual([entry[0] for entry in calls], ["finalize", "pdf", "update"])
+        self.assertEqual(calls[1][1], {"job_id": 8, "platform_id": 5})
+        self.assertEqual(calls[2][2]["status"], "text_ready")
+
+    def test_scheduled_audio_does_not_rebuild_pipeline_pdf(self):
         published_audio = [item[0] for item in PLAYLIST_SPEC]
         with (
             patch.object(formation_routes, "get_job", return_value={
@@ -113,10 +191,6 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
                 return_value=True,
             ),
             patch(
-                "repositories.course_schedule_repository.get_audio_generation_session",
-                return_value={"scheduled_at": "2026-07-22 09:00:00"},
-            ),
-            patch(
                 "repositories.course_schedule_repository.complete_audio_generation_session",
                 return_value=True,
             ),
@@ -126,15 +200,9 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
             ),
             patch(
                 "services.daily_course_pdf_service.build_daily_course_pdf",
-                return_value=(
-                    b"%PDF-1.4 fixture",
-                    service.COURSE_PDF_FILENAME,
-                    {"day_number": 1, "section_count": 2},
-                ),
             ) as build_pdf,
             patch(
                 "services.daily_course_pdf_service.publish_daily_course_pdf",
-                return_value={"blob_key": "platform-5/course-sessions/501/support-formation.pdf"},
             ) as publish_pdf,
             patch("services.formation_observability_service.log_pipeline_event"),
         ):
@@ -150,12 +218,8 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
 
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["status"], "audio_completed")
-        build_pdf.assert_called_once_with(
-            job_id=8,
-            folder_id=55,
-            scheduled_at="2026-07-22 09:00:00",
-        )
-        publish_pdf.assert_called_once()
+        build_pdf.assert_not_called()
+        publish_pdf.assert_not_called()
 
     def test_listing_never_crosses_platform_prefix(self):
         own_blob = SimpleNamespace(

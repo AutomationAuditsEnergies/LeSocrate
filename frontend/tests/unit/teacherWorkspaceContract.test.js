@@ -33,5 +33,7 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.doesNotMatch(dashboardSource, /absolute left-5 top-5[\s\S]*?rosterMeta\.label/)
   assert.match(coursesSource, /Support PDF de la journée/)
   assert.match(coursesSource, /Support PDF prêt/)
+  assert.match(coursesSource, /fin de la pipeline/)
+  assert.doesNotMatch(coursesSource, /avec les audios à H-48/)
   assert.match(coursesSource, /course-materials/)
 })

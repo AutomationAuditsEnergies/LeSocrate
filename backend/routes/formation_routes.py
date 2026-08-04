@@ -2091,41 +2091,6 @@ def start_folder_audio_generation(
                     llm_model=model,
                     preserve_existing=preserve_existing,
                 )
-            pdf_result = None
-            if schedule_session_id:
-                # The support is part of the H-48 occurrence contract.  It is
-                # derived from the same current reviewed folder selected for
-                # TTS, then stored in an occurrence-scoped immutable path.
-                from services.daily_course_pdf_service import (
-                    build_daily_course_pdf,
-                    publish_daily_course_pdf,
-                )
-
-                _assert_scheduled_audio_ownership(
-                    schedule_session_id,
-                    schedule_claim_started_at,
-                    ownership_state=ownership_state,
-                )
-                from repositories.course_schedule_repository import (
-                    get_audio_generation_session,
-                )
-
-                course_session = get_audio_generation_session(
-                    publish_platform_id,
-                    int(schedule_session_id),
-                ) or {}
-                pdf_bytes, pdf_filename, pdf_metadata = build_daily_course_pdf(
-                    job_id=int(job_id),
-                    folder_id=int(folder_id),
-                    scheduled_at=course_session.get("scheduled_at"),
-                )
-                pdf_result = publish_daily_course_pdf(
-                    platform_id=publish_platform_id,
-                    session_id=int(schedule_session_id),
-                    pdf_bytes=pdf_bytes,
-                    filename=pdf_filename,
-                )
-                pdf_result["metadata"] = pdf_metadata
             # Generation may have taken minutes. Re-fence immediately before
             # publishing anything to the learner-visible namespace.
             _assert_scheduled_audio_ownership(
@@ -2272,7 +2237,6 @@ def start_folder_audio_generation(
                     "generated": result_audio.get("generated") if isinstance(result_audio, dict) else None,
                     "skipped": result_audio.get("skipped") if isinstance(result_audio, dict) else None,
                     "publish": publish_result,
-                    "course_pdf": pdf_result,
                     "single_folder": True,
                     "trigger_source": trigger_source,
                     "schedule_session_id": schedule_session_id,
@@ -3316,6 +3280,12 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         # Keeping it inside its own work item makes failures retryable without
         # letting a GET/status request perform business writes.
         _finalize_text_ready_state(job_id)
+        from services.daily_course_pdf_service import publish_pipeline_course_pdfs
+
+        published_course_pdfs = publish_pipeline_course_pdfs(
+            job_id=int(job_id),
+            platform_id=int(platform_id),
+        )
         update_kwargs = {
             "status": "text_ready",
             "error_message": None,
@@ -3323,7 +3293,11 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         if job.get("auto_pilot_generate_audio") and not _legacy_bulk_audio_enabled():
             update_kwargs["auto_pilot_generate_audio"] = 0
         update_job(job_id, **update_kwargs)
-        logger.info("🤖 ✓ Finalisation texte durable terminée job %s", job_id)
+        logger.info(
+            "🤖 ✓ Finalisation texte durable terminée job %s, supports_pdf=%s",
+            job_id,
+            len(published_course_pdfs),
+        )
 
     elif step == "audio":
         if not _legacy_bulk_audio_enabled():

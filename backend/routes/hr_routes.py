@@ -3593,13 +3593,14 @@ def create_hr_blueprint():
         methods=["GET"],
     )
     def list_platform_course_materials(platform_id):
-        """List H-48 PDF supports generated for this platform's occurrences."""
+        """List pipeline-generated PDF supports for this platform's days."""
         denied = _require_admin()
         if denied:
             return denied
         try:
             from services.daily_course_pdf_service import (
                 list_daily_course_pdf_materials,
+                publish_pipeline_course_pdfs,
             )
 
             sessions = list_course_sessions(int(platform_id), limit=1000)
@@ -3607,6 +3608,39 @@ def create_hr_blueprint():
                 int(platform_id),
                 sessions,
             )
+            # Compatibility backfill for formations whose text pipeline
+            # completed before daily supports became a finalization artifact.
+            # The publisher overwrites stable blob keys, so retrying is safe.
+            if len(materials) < len(sessions):
+                try:
+                    from repositories.pipeline_repository import (
+                        find_latest_pipeline_job_id_for_platform,
+                    )
+                    from services.formation_pipeline_service import get_job
+
+                    job_id = find_latest_pipeline_job_id_for_platform(
+                        int(platform_id)
+                    )
+                    job = get_job(int(job_id)) if job_id else None
+                    if job and job.get("status") in {
+                        "text_ready",
+                        "audio_running",
+                        "audio_launched",
+                        "audio_completed",
+                    }:
+                        publish_pipeline_course_pdfs(
+                            job_id=int(job_id),
+                            platform_id=int(platform_id),
+                        )
+                        materials = list_daily_course_pdf_materials(
+                            int(platform_id),
+                            sessions,
+                        )
+                except Exception:
+                    logger.exception(
+                        "COURSE_PDF_COMPAT_BACKFILL_FAILED platform_id=%s",
+                        platform_id,
+                    )
             return jsonify({"success": True, "materials": materials}), 200
         except Exception:
             logger.exception(

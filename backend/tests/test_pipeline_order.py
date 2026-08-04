@@ -370,10 +370,14 @@ class PipelineOrderTest(unittest.TestCase):
             fr,
             "_finalize_text_ready_state",
             return_value={"module_status": "draft"},
-        ) as finalize, patch.object(fr, "update_job") as update:
+        ) as finalize, patch(
+            "services.daily_course_pdf_service.publish_pipeline_course_pdfs",
+            return_value=[{"session_id": 501}],
+        ) as publish_pdfs, patch.object(fr, "update_job") as update:
             fr._execute_ap_step(99, "finalize_text", job)
 
         finalize.assert_called_once_with(99)
+        publish_pdfs.assert_called_once_with(job_id=99, platform_id=1)
         update.assert_called_once_with(99, status="text_ready", error_message=None)
 
     def test_next_step_calculation_has_no_business_writes(self):

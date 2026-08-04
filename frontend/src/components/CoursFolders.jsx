@@ -102,7 +102,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
   const [audioPlaylistItems, setAudioPlaylistItems] = useState([]) // manifeste V1/V2 attendu
-  const [courseMaterials, setCourseMaterials] = useState([]) // PDF généré par journée à H-48
+  const [courseMaterials, setCourseMaterials] = useState([]) // PDF généré à la fin de la pipeline texte
   const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
   const [courseMaterialsError, setCourseMaterialsError] = useState('')
   const [deletingAudioFile, setDeletingAudioFile] = useState('')
@@ -1800,7 +1800,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                                   ? 'État du support indisponible'
                                   : courseMaterial
                                     ? 'Support PDF prêt'
-                                    : 'Support PDF à venir'}
+                                    : 'Support PDF indisponible'}
                             </p>
                           </div>
                           <button
@@ -1881,7 +1881,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                             Support de la journée {selectedCourseMaterial.session_index}
                           </p>
                           <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>
-                            Généré automatiquement sans balises techniques
+                            Créé à la fin de la pipeline, sans balises techniques
                           </p>
                         </div>
                         <a
@@ -1899,9 +1899,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                       <>
                         <Icon name="schedule" style={{ color: colors.textMuted, fontSize: '18px' }} />
                         <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Support à venir</p>
+                          <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Support indisponible</p>
                           <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>
-                            Il sera créé automatiquement avec les audios à H-48.
+                            Il est normalement créé dès la fin de la pipeline. Actualisez pour vérifier.
                           </p>
                         </div>
                         <button
