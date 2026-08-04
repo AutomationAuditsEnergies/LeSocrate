@@ -92,6 +92,69 @@ class RealPostgresIntegrationTest(unittest.TestCase):
                 )
                 self.assertIsNotNone(cur.fetchone())
 
+    def test_supabase_auth_binding_is_added_when_auth_users_exists(self):
+        auth_user_id = "9d388c09-07f7-46c8-ae1b-4de5d847f845"
+        try:
+            with psycopg.connect(self.database_url, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO training_center_accounts
+                            (username, password_hash, center_name, slug)
+                        VALUES
+                            ('centre-auth@example.test', 'hash', 'Centre Auth', 'centre-auth')
+                        """
+                    )
+                    cur.execute("CREATE SCHEMA auth")
+                    cur.execute(
+                        """
+                        CREATE TABLE auth.users (
+                            id UUID PRIMARY KEY,
+                            email TEXT
+                        )
+                        """
+                    )
+                    cur.execute(
+                        "INSERT INTO auth.users (id, email) VALUES (%s, %s)",
+                        (auth_user_id, "centre-auth@example.test"),
+                    )
+
+            self._apply_schema()
+            self._apply_schema()
+
+            with psycopg.connect(self.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT auth_user_id
+                        FROM training_center_accounts
+                        WHERE username = 'centre-auth@example.test'
+                        """
+                    )
+                    self.assertEqual(str(cur.fetchone()[0]), auth_user_id)
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'training_center_accounts_auth_user_id_fkey'
+                          AND conrelid = 'training_center_accounts'::regclass
+                        """
+                    )
+                    self.assertIsNotNone(cur.fetchone())
+                    cur.execute("DELETE FROM auth.users WHERE id = %s", (auth_user_id,))
+                    cur.execute(
+                        """
+                        SELECT auth_user_id
+                        FROM training_center_accounts
+                        WHERE username = 'centre-auth@example.test'
+                        """
+                    )
+                    self.assertIsNone(cur.fetchone()[0])
+        finally:
+            with psycopg.connect(self.database_url, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DROP SCHEMA IF EXISTS auth CASCADE")
+
     def test_core_migration_preserves_instant_counts_and_sequences(self):
         path, sqlite_conn = self._sqlite_fixture(
             """

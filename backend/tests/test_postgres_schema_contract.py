@@ -8,6 +8,17 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 class PostgresSchemaContractTest(unittest.TestCase):
+    def test_supabase_auth_relation_is_optional_for_portable_postgres(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        training_center_table = schema[
+            schema.index("CREATE TABLE IF NOT EXISTS training_center_accounts"):
+            schema.index("ALTER TABLE training_center_accounts")
+        ]
+        self.assertNotIn("REFERENCES auth.users", training_center_table)
+        self.assertIn("to_regclass('auth.users') IS NOT NULL", schema)
+        self.assertIn("training_center_accounts_auth_user_id_fkey", schema)
+        self.assertIn("REFERENCES auth.users(id)", schema)
+
     def test_schema_contains_every_runtime_pipeline_table_and_column(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
         for table, columns in PIPELINE_REQUIRED_SCHEMA.items():

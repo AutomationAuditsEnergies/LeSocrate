@@ -6,7 +6,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS training_center_accounts (
     id BIGSERIAL PRIMARY KEY,
-    auth_user_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE SET NULL,
+    auth_user_id UUID UNIQUE,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     password_debug_plaintext TEXT,
@@ -44,17 +44,23 @@ ALTER TABLE training_center_accounts
 
 DO $$
 BEGIN
-    IF NOT EXISTS (
+    -- Supabase Auth peut partager cette base, mais l'architecture supporte
+    -- aussi un PostgreSQL metier independant (Azure ou PostgreSQL standard).
+    -- Dans ce second cas, l'identifiant JWT reste stocke sans imposer le
+    -- schema prive `auth`, qui n'existe que dans une base Supabase complete.
+    IF to_regclass('auth.users') IS NOT NULL AND NOT EXISTS (
         SELECT 1
         FROM pg_constraint
         WHERE conname = 'training_center_accounts_auth_user_id_fkey'
           AND conrelid = 'training_center_accounts'::regclass
     ) THEN
-        ALTER TABLE training_center_accounts
-            ADD CONSTRAINT training_center_accounts_auth_user_id_fkey
-            FOREIGN KEY (auth_user_id)
-            REFERENCES auth.users(id)
-            ON DELETE SET NULL;
+        EXECUTE '
+            ALTER TABLE training_center_accounts
+                ADD CONSTRAINT training_center_accounts_auth_user_id_fkey
+                FOREIGN KEY (auth_user_id)
+                REFERENCES auth.users(id)
+                ON DELETE SET NULL
+        ';
     END IF;
 END $$;
 
@@ -62,13 +68,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_training_center_accounts_auth_user_id
     ON training_center_accounts(auth_user_id)
     WHERE auth_user_id IS NOT NULL;
 
-UPDATE training_center_accounts AS center
-SET auth_user_id = auth_user.id,
-    updated_at = NOW()
-FROM auth.users AS auth_user
-WHERE center.auth_user_id IS NULL
-  AND auth_user.email IS NOT NULL
-  AND LOWER(auth_user.email) = LOWER(center.username);
+DO $$
+BEGIN
+    IF to_regclass('auth.users') IS NOT NULL THEN
+        EXECUTE '
+            UPDATE training_center_accounts AS center
+            SET auth_user_id = auth_user.id,
+                updated_at = NOW()
+            FROM auth.users AS auth_user
+            WHERE center.auth_user_id IS NULL
+              AND auth_user.email IS NOT NULL
+              AND LOWER(auth_user.email) = LOWER(center.username)
+        ';
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS platform_config (
     id BIGSERIAL PRIMARY KEY,
