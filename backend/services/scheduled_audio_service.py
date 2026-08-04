@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 _DEFAULT_SCHEDULED_AUDIO_BATCH_SIZE = 50
 _MAX_SCHEDULED_AUDIO_BATCH_SIZE = 1000
-_DEFAULT_AUDIO_READY_HOURS_BEFORE = 24.0
+_DEFAULT_AUDIO_READY_HOURS_BEFORE = 48.0
 _DEFAULT_AUDIO_BUILD_BUFFER_HOURS = 2.0
 
 
@@ -46,8 +46,9 @@ def _scheduled_audio_batch_size() -> int:
 def _scheduled_audio_window_hours(horizon_hours=None) -> tuple[float, float]:
     """Return the readiness target and the proactive generation buffer.
 
-    The pedagogical contract is that a day's files are ready 24 hours before
-    class. Generation therefore has to start *before* H-24; starting at H-24
+    The pedagogical contract is that a day's files are ready 48 hours before
+    class so the operator can verify them at H-24. Generation therefore has to
+    start *before* H-48; starting at H-48
     would only guarantee that the work was queued, not that it was finished.
     ``SCHEDULED_AUDIO_HORIZON_HOURS`` remains a compatibility fallback for
     existing deployments and internal callers can override the target through
@@ -72,9 +73,9 @@ def _scheduled_audio_window_hours(horizon_hours=None) -> tuple[float, float]:
         ready_hours = float(ready_raw)
         buffer_hours = float(buffer_raw)
     except (TypeError, ValueError) as exc:
-        raise ValueError("La fenêtre de préparation audio J-1 est invalide") from exc
+        raise ValueError("La fenêtre de préparation audio H-48 est invalide") from exc
     if ready_hours <= 0 or buffer_hours < 0:
-        raise ValueError("La fenêtre de préparation audio J-1 est invalide")
+        raise ValueError("La fenêtre de préparation audio H-48 est invalide")
     return ready_hours, buffer_hours
 
 
@@ -83,7 +84,7 @@ def launch_scheduled_audio_session(
     *,
     tts_mode=None,
     stale_started_before=None,
-    trigger_source="scheduled_j1_preparation",
+    trigger_source="scheduled_h48_preparation",
     wait_for_completion=False,
 ):
     """Launch one occurrence through the durable session claim."""
@@ -222,12 +223,12 @@ def process_due_audio_generations(
     *,
     wait_for_completion=False,
 ):
-    """Launch one day's audio before its H-24 readiness deadline.
+    """Launch one day's audio before its H-48 readiness deadline.
 
     Database claims, fencing tokens and retry timestamps make repeated timer
     calls safe across restarts and multiple Azure instances. V2 occurrences
-    enter at H-24 for their immutable day manifest. Historic V1 occurrences
-    keep the proactive two-hour buffer and enter at H-26.
+    enter at H-48 for their immutable day manifest. Historic V1 occurrences
+    keep the proactive build buffer and enter at the full claim horizon.
     """
     ready_hours, build_buffer_hours = _scheduled_audio_window_hours(horizon_hours)
     claim_horizon_hours = ready_hours + build_buffer_hours
@@ -254,7 +255,7 @@ def process_due_audio_generations(
 
     results = []
     for session in due_sessions:
-        # V2 contract: TTS starts at H-24 for the exact immutable day
+        # V2 contract: TTS starts at H-48 for the exact immutable day
         # manifest. V1 keeps its historic proactive build buffer.
         if is_explicit_schedule_occurrence(session):
             scheduled_at = session.get("scheduled_at")

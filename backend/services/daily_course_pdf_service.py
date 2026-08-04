@@ -277,7 +277,7 @@ def build_daily_course_pdf(
     folder_id: int,
     scheduled_at=None,
 ) -> tuple[bytes, str, dict[str, Any]]:
-    """Build the current reviewed text for the exact folder selected at H-24."""
+    """Build the current reviewed text for the exact folder selected at H-48."""
     from repositories.pipeline_repository import get_content_generation_job_by_folder
     from services.formation_docx_service import _get_segments_for_folder
     from services.formation_pipeline_service import get_job

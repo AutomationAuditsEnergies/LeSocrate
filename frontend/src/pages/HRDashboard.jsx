@@ -5146,7 +5146,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
               <div>
                 <h4 className="text-sm font-semibold" style={{ color: '#111418' }}>Supports de cours générés</h4>
                 <p className={`mt-1 text-xs ${embedded ? 'leading-4' : 'leading-5'}`} style={{ color: '#64748b' }}>
-                  Un PDF sans balises techniques est créé avec les audios de chaque journée lors de la préparation H-24.
+                  Un PDF sans balises techniques est créé avec les audios de chaque journée lors de la préparation H-48.
                 </p>
               </div>
               {!courseMaterialsLoading && (
@@ -5789,6 +5789,11 @@ function PlatformCard({
   const isPreparing = preparation.status === 'preparing'
   const hasFailed = preparation.status === 'failed'
   const nextCourseSession = getNextCourseSession(p)
+  const nextCourseSessionLabel = nextCourseSession?.session_index
+    ? `Journée ${nextCourseSession.session_index}`
+    : 'Prochaine journée'
+  const nextCoursePreparationAt = formatScheduleDateTimeOffset(nextCourseSession?.scheduled_at, 48)
+  const nextCourseReviewAt = formatScheduleDateTimeOffset(nextCourseSession?.scheduled_at, 24)
   const rosterStage = getTeacherRosterStage(p)
   const robotTheme = getRobotTheme(p.center_platform_number || p.id, p.teacher_color)
   const rosterMeta = {
@@ -5946,26 +5951,59 @@ function PlatformCard({
             style={{ border: `1px solid ${colors.border}` }}
           >
             <aside
-              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2 ${activeTool ? 'hidden sm:block' : 'min-h-[260px]'}`}
+              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2 ${activeTool ? 'hidden sm:flex' : 'flex min-h-[430px]'} flex-col`}
               style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
             >
-              <span
-                className="absolute left-5 top-5 z-10 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
-                style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
-              >
-                {rosterMeta.label}
-              </span>
-              <div className="absolute inset-0" style={{ backgroundColor: `${robotTheme.glow}12` }} aria-hidden="true">
+              <div className="relative min-h-[250px] flex-1 overflow-hidden" style={{ backgroundColor: `${robotTheme.glow}12` }}>
+                <span
+                  className="absolute left-5 top-5 z-10 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                  style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
+                >
+                  {rosterMeta.label}
+                </span>
                 <span
                   className="absolute bottom-[12%] left-1/2 h-8 w-[58%] -translate-x-1/2 rounded-full opacity-20 blur-xl"
                   style={{ backgroundColor: robotTheme.glow }}
+                  aria-hidden="true"
                 />
                 <img
                   src={robotTheme.src}
                   alt=""
                   draggable={false}
-                  className="teacher-robot-float h-full w-full select-none object-contain px-7 py-10 sm:px-10 sm:py-14"
+                  className="teacher-robot-float h-full w-full select-none object-contain px-7 pb-4 pt-10 sm:px-10 sm:pb-5 sm:pt-12"
                 />
+              </div>
+
+              <div
+                className="relative z-10 shrink-0 border-t px-5 py-4 text-left"
+                style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
+              >
+                <p className="text-[11px] font-semibold" style={{ color: colors.textMuted }}>
+                  Prochaine diffusion
+                </p>
+                {nextCourseSession ? (
+                  <>
+                    <p className="mt-1 text-sm font-semibold leading-5" style={{ color: colors.text }}>
+                      {nextCourseSessionLabel}
+                    </p>
+                    <p className="text-xs font-medium leading-5" style={{ color: colors.textSecondary }}>
+                      {formatScheduleLongDateTime(nextCourseSession.scheduled_at)}
+                    </p>
+                    <p className="mt-3 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
+                      Les fichiers seront préparés automatiquement le{' '}
+                      <span className="font-semibold" style={{ color: colors.text }}>{nextCoursePreparationAt}</span>.
+                    </p>
+                    <p className="mt-2 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
+                      Revenez le{' '}
+                      <span className="font-semibold" style={{ color: colors.text }}>{nextCourseReviewAt}</span>{' '}
+                      pour vérifier que la {nextCourseSessionLabel.toLowerCase()} est prête via l’onglet Cours.
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                    Aucune séance n’est programmée pour le moment.
+                  </p>
+                )}
               </div>
             </aside>
 
@@ -6288,6 +6326,31 @@ function formatScheduleDateTime(value) {
   })
 }
 
+function formatScheduleLongDateTime(value) {
+  if (!value) return 'Non programmé'
+  const normalized = String(value).includes('T') ? value : String(value).replace(' ', 'T')
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Paris',
+  })
+}
+
+function formatScheduleDateTimeOffset(value, hoursBefore) {
+  if (!value) return 'date à confirmer'
+  const normalized = String(value).includes('T') ? value : String(value).replace(' ', 'T')
+  const scheduledAt = new Date(normalized)
+  if (Number.isNaN(scheduledAt.getTime())) return 'date à confirmer'
+  const offsetDate = new Date(scheduledAt.getTime() - Number(hoursBefore || 0) * 60 * 60 * 1000)
+  return formatScheduleLongDateTime(offsetDate.toISOString())
+}
+
 function formatPostponementDay(value) {
   if (!value) return 'la nouvelle date'
   const date = new Date(value)
@@ -6407,7 +6470,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
   const audioCopy = {
     ready: 'L’audio déjà prêt sera conservé pour cette nouvelle date.',
     preparing: 'La préparation audio continue et restera liée à ce cours.',
-    scheduled: 'L’audio sera préparé automatiquement 24 h avant la nouvelle date.',
+    scheduled: 'L’audio sera préparé automatiquement 48 h avant la nouvelle date.',
   }
 
   return (
@@ -6817,7 +6880,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                 <div>
                   <h4 className="text-sm font-semibold" style={{ color: '#0f172a' }}>Journées programmées</h4>
                   <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
-                    L’audio démarre 24 h avant chaque séance.
+                    Les fichiers sont préparés 48 h avant chaque séance pour être vérifiés à H-24.
                   </p>
                 </div>
                 <span className="text-xs font-medium" style={{ color: '#64748b' }}>

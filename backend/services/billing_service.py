@@ -519,7 +519,7 @@ def _billing_now():
 
 
 def _scheduled_audio_preparation_window_hours() -> tuple[float, float, float]:
-    legacy_ready = os.getenv("SCHEDULED_AUDIO_HORIZON_HOURS", "24")
+    legacy_ready = os.getenv("SCHEDULED_AUDIO_HORIZON_HOURS", "48")
     try:
         ready_hours = float(
             os.getenv("SCHEDULED_AUDIO_READY_HOURS_BEFORE", legacy_ready)

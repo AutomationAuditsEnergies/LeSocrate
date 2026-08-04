@@ -3593,7 +3593,7 @@ def create_hr_blueprint():
         methods=["GET"],
     )
     def list_platform_course_materials(platform_id):
-        """List H-24 PDF supports generated for this platform's occurrences."""
+        """List H-48 PDF supports generated for this platform's occurrences."""
         denied = _require_admin()
         if denied:
             return denied
@@ -3717,7 +3717,7 @@ def create_hr_blueprint():
 
         Sans corps `schedule`, utilise le planning persistant créé par le flow
         "Nouveau professeur IA", pousse la prochaine séance dans cours_config,
-        puis lance l'audio uniquement pour les séances dues dans la fenêtre 24h.
+        puis lance l'audio uniquement pour les séances dues dans la fenêtre 48h.
         """
         api_key = request.headers.get("X-Platform-Key", "")
         expected_key = os.environ.get("PLATFORM_API_KEY", "")

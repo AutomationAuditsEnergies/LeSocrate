@@ -1890,7 +1890,7 @@ def start_folder_audio_generation(
 ):
     """Lance l'audio d'une seule journée.
 
-    Utilisé par le bouton manuel d'une journée et par le timer 24h avant cours.
+    Utilisé par le bouton manuel d'une journée et par le timer 48h avant cours.
     Retourne (payload, http_status) pour rester réutilisable hors route Flask.
     """
     job = get_job(job_id)
@@ -2093,7 +2093,7 @@ def start_folder_audio_generation(
                 )
             pdf_result = None
             if schedule_session_id:
-                # The support is part of the H-24 occurrence contract.  It is
+                # The support is part of the H-48 occurrence contract.  It is
                 # derived from the same current reviewed folder selected for
                 # TTS, then stored in an occurrence-scoped immutable path.
                 from services.daily_course_pdf_service import (

@@ -90,7 +90,7 @@ export const CoursePlanner = () => {
         </div>
 
         <p className="cadrenza-course-planner__note">
-          Préparation automatique 24 h avant chaque cours
+          Préparation automatique 48 h avant chaque cours
         </p>
       </div>
     </div>
