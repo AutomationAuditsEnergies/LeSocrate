@@ -694,8 +694,6 @@ CREATE TABLE IF NOT EXISTS formation_pipeline_jobs (
     total_hours INTEGER NOT NULL,
     nb_days INTEGER NOT NULL,
     reac_text TEXT,
-    rc_text TEXT,
-    rome_text TEXT,
     global_program TEXT,
     global_program_validated BOOLEAN NOT NULL DEFAULT FALSE,
     daily_programs TEXT NOT NULL DEFAULT '[]',
@@ -709,10 +707,6 @@ CREATE TABLE IF NOT EXISTS formation_pipeline_jobs (
     auto_pilot_step TEXT,
     auto_pilot_model TEXT,
     auto_pilot_tts_mode TEXT,
-    auto_pilot_use_cc BOOLEAN NOT NULL DEFAULT FALSE,
-    auto_pilot_skip_vs BOOLEAN NOT NULL DEFAULT FALSE,
-    auto_pilot_generate_audio BOOLEAN NOT NULL DEFAULT FALSE,
-    auto_pilot_volume_done BOOLEAN NOT NULL DEFAULT FALSE,
     auto_pilot_post_review_docs_done BOOLEAN NOT NULL DEFAULT FALSE,
     auto_pilot_error TEXT,
     auto_pilot_locked_at TIMESTAMPTZ,
@@ -724,6 +718,14 @@ CREATE TABLE IF NOT EXISTS formation_pipeline_jobs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE formation_pipeline_jobs
+    DROP COLUMN IF EXISTS rc_text,
+    DROP COLUMN IF EXISTS rome_text,
+    DROP COLUMN IF EXISTS auto_pilot_use_cc,
+    DROP COLUMN IF EXISTS auto_pilot_volume_done,
+    DROP COLUMN IF EXISTS auto_pilot_generate_audio,
+    DROP COLUMN IF EXISTS auto_pilot_skip_vs;
 
 ALTER TABLE formation_pipeline_jobs
     ADD COLUMN IF NOT EXISTS schedule_schema_version INTEGER NOT NULL DEFAULT 1;
@@ -961,9 +963,6 @@ CREATE TABLE IF NOT EXISTS content_generation_segments (
     review_error TEXT,
     text_content_pre_review TEXT,
     review_signature TEXT,
-    humanized BOOLEAN NOT NULL DEFAULT FALSE,
-    humanization_error TEXT,
-    humanization_signature TEXT,
     structured_checkpoint_signature TEXT,
     structured_checkpoint_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -974,6 +973,10 @@ ALTER TABLE content_generation_segments
     ADD COLUMN IF NOT EXISTS structured_checkpoint_signature TEXT;
 ALTER TABLE content_generation_segments
     ADD COLUMN IF NOT EXISTS structured_checkpoint_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE content_generation_segments
+    DROP COLUMN IF EXISTS humanized,
+    DROP COLUMN IF EXISTS humanization_error,
+    DROP COLUMN IF EXISTS humanization_signature;
 
 CREATE TABLE IF NOT EXISTS content_script_annotations (
     id BIGSERIAL PRIMARY KEY,

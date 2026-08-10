@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react'
 import { apiFetch } from '../api'
 import AppLoader from '../components/AppLoader.jsx'
 
-const Icon = ({ name, className = '' }) => (
-  <span className={`material-icons ${className}`}>{name}</span>
+const Icon = ({ name, className = '', ...props }) => (
+  <span className={`material-icons ${className}`} aria-hidden="true" {...props}>{name}</span>
 )
 
 export default function ScheduleConfig() {
@@ -113,10 +113,10 @@ export default function ScheduleConfig() {
   return (
     <div style={{
       minHeight: '100vh',
-      backgroundColor: '#0f172a',
-      color: '#f1f5f9',
+      backgroundColor: '#09090b',
+      color: '#f4f4f5',
       padding: '40px 20px',
-      fontFamily: "'Poppins', sans-serif",
+      fontFamily: "'Inter', system-ui, sans-serif",
     }}>
       <div style={{ maxWidth: 600, margin: '0 auto' }}>
         {/* Header */}
@@ -126,7 +126,7 @@ export default function ScheduleConfig() {
             display: 'inline-flex',
             alignItems: 'center',
             gap: 8,
-            color: '#94a3b8',
+            color: '#a1a1aa',
             textDecoration: 'none',
             fontSize: 14,
             marginBottom: 32,
@@ -140,23 +140,23 @@ export default function ScheduleConfig() {
           fontWeight: 700,
           marginBottom: 8,
         }}>
-          <Icon name="schedule" style={{ verticalAlign: 'middle', marginRight: 12, color: '#8B5CF6' }} />
+          <Icon name="schedule" style={{ verticalAlign: 'middle', marginRight: 12, color: '#d4d4d8' }} />
           Planning saisonnier
         </h1>
-        <p style={{ color: '#64748b', fontSize: 14, marginBottom: 40 }}>
+        <p style={{ color: '#a1a1aa', fontSize: 14, marginBottom: 40 }}>
           Configure l'ordre du bloc 4 (pause midi / cours / Q&R) selon la saison.
           Ce réglage s'applique une fois par changement d'heure.
         </p>
 
         {/* Mode toggle */}
         <div style={{
-          backgroundColor: '#1e293b',
-          borderRadius: 16,
+          backgroundColor: '#18181b',
+          borderRadius: 12,
           padding: 24,
           marginBottom: 24,
-          border: '1px solid #334155',
+          border: '1px solid #3f3f46',
         }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 }}>
+          <p style={{ fontSize: 13, fontWeight: 600, color: '#a1a1aa', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 }}>
             Mode actuel
           </p>
 
@@ -171,18 +171,18 @@ export default function ScheduleConfig() {
                 style={{
                   flex: 1,
                   padding: '20px 16px',
-                  borderRadius: 12,
-                  border: `2px solid ${mode === opt.value ? '#8B5CF6' : '#334155'}`,
-                  backgroundColor: mode === opt.value ? '#312e81' : '#0f172a',
-                  color: mode === opt.value ? '#c4b5fd' : '#64748b',
+                  borderRadius: 8,
+                  border: `1px solid ${mode === opt.value ? '#a1a1aa' : '#3f3f46'}`,
+                  backgroundColor: mode === opt.value ? '#27272a' : '#09090b',
+                  color: mode === opt.value ? '#f4f4f5' : '#a1a1aa',
                   cursor: 'pointer',
                   transition: 'all 0.2s',
                   textAlign: 'center',
                 }}
               >
-                <Icon name={opt.icon} style={{ fontSize: 32, display: 'block', margin: '0 auto 8px', color: mode === opt.value ? '#8B5CF6' : '#475569' }} />
+                <Icon name={opt.icon} style={{ fontSize: 32, display: 'block', margin: '0 auto 8px', color: mode === opt.value ? '#f4f4f5' : '#71717a' }} />
                 <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{opt.label}</div>
-                <div style={{ fontSize: 12, color: mode === opt.value ? '#a78bfa' : '#475569' }}>{opt.desc}</div>
+                <div style={{ fontSize: 12, color: mode === opt.value ? '#d4d4d8' : '#71717a' }}>{opt.desc}</div>
               </button>
             ))}
           </div>
@@ -190,13 +190,13 @@ export default function ScheduleConfig() {
 
         {/* Détail de l'ordre */}
         <div style={{
-          backgroundColor: '#1e293b',
-          borderRadius: 16,
+          backgroundColor: '#18181b',
+          borderRadius: 12,
           padding: 24,
           marginBottom: 24,
-          border: '1px solid #334155',
+          border: '1px solid #3f3f46',
         }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 }}>
+          <p style={{ fontSize: 13, fontWeight: 600, color: '#a1a1aa', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 }}>
             Ordre du bloc 4 en mode {mode === 'ete' ? 'été' : 'hiver'}
           </p>
 
@@ -215,7 +215,7 @@ export default function ScheduleConfig() {
               gap: 12,
               padding: '12px 16px',
               borderRadius: 10,
-              backgroundColor: '#0f172a',
+              backgroundColor: '#09090b',
               marginBottom: i < 2 ? 8 : 0,
             }}>
               <span style={{
@@ -227,20 +227,20 @@ export default function ScheduleConfig() {
               }}>{i + 1}</span>
               <Icon name={item.icon} style={{ color: item.color, fontSize: 20 }} />
               <span style={{ flex: 1, fontSize: 14 }}>{item.label}</span>
-              <span style={{ fontSize: 13, color: '#64748b', fontFamily: 'monospace' }}>{item.time}</span>
+              <span style={{ fontSize: 13, color: '#71717a', fontFamily: 'monospace' }}>{item.time}</span>
             </div>
           ))}
         </div>
 
         {/* Formations concernées */}
         <div style={{
-          backgroundColor: '#1e293b',
-          borderRadius: 16,
+          backgroundColor: '#18181b',
+          borderRadius: 12,
           padding: 24,
           marginBottom: 32,
-          border: '1px solid #334155',
+          border: '1px solid #3f3f46',
         }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 }}>
+          <p style={{ fontSize: 13, fontWeight: 600, color: '#a1a1aa', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 }}>
             Formations concernées
           </p>
 
@@ -253,8 +253,8 @@ export default function ScheduleConfig() {
                 gap: 12,
                 padding: '14px 16px',
                 borderRadius: 10,
-                backgroundColor: selectedIds.includes(p.id) ? '#312e81' : '#0f172a',
-                border: `1px solid ${selectedIds.includes(p.id) ? '#8B5CF6' : '#334155'}`,
+                backgroundColor: selectedIds.includes(p.id) ? '#27272a' : '#09090b',
+                border: `1px solid ${selectedIds.includes(p.id) ? '#a1a1aa' : '#3f3f46'}`,
                 marginBottom: 8,
                 cursor: 'pointer',
                 transition: 'all 0.2s',
@@ -264,10 +264,10 @@ export default function ScheduleConfig() {
                 type="checkbox"
                 checked={selectedIds.includes(p.id)}
                 onChange={() => togglePlatform(p.id)}
-                style={{ accentColor: '#8B5CF6', width: 18, height: 18 }}
+                style={{ accentColor: '#f4f4f5', width: 18, height: 18 }}
               />
-              <Icon name="school" style={{ color: selectedIds.includes(p.id) ? '#8B5CF6' : '#475569' }} />
-              <span style={{ fontSize: 14, color: selectedIds.includes(p.id) ? '#e2e8f0' : '#94a3b8' }}>
+              <Icon name="school" style={{ color: selectedIds.includes(p.id) ? '#f4f4f5' : '#71717a' }} />
+              <span style={{ fontSize: 14, color: selectedIds.includes(p.id) ? '#f4f4f5' : '#a1a1aa' }}>
                 {p.name}
               </span>
             </label>
@@ -276,11 +276,11 @@ export default function ScheduleConfig() {
 
         {/* Éditeur prompt TTS */}
         <div style={{
-          backgroundColor: '#1e293b',
-          borderRadius: 16,
+          backgroundColor: '#18181b',
+          borderRadius: 12,
           padding: 24,
           marginBottom: 32,
-          border: '1px solid #334155',
+          border: '1px solid #3f3f46',
         }}>
           <button
             onClick={() => setPromptOpen(o => !o)}
@@ -291,14 +291,14 @@ export default function ScheduleConfig() {
               justifyContent: 'space-between',
               background: 'none',
               border: 'none',
-              color: '#94a3b8',
+              color: '#a1a1aa',
               cursor: 'pointer',
               padding: 0,
               marginBottom: promptOpen ? 16 : 0,
             }}
           >
             <span style={{ fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Icon name="auto_awesome" style={{ color: '#8B5CF6', fontSize: 18 }} />
+              <Icon name="auto_awesome" style={{ color: '#d4d4d8', fontSize: 18 }} />
               Prompt TTS (génération de contenu)
             </span>
             <Icon name={promptOpen ? 'expand_less' : 'expand_more'} />
@@ -306,13 +306,13 @@ export default function ScheduleConfig() {
 
           {promptOpen && (
             <>
-              <p style={{ fontSize: 12, color: '#64748b', marginBottom: 12, lineHeight: 1.5 }}>
+              <p style={{ fontSize: 12, color: '#a1a1aa', marginBottom: 12, lineHeight: 1.5 }}>
                 Ce prompt est utilisé pour générer le texte des cours en 3 passes.
-                Les variables <code style={{ backgroundColor: '#0f172a', padding: '2px 6px', borderRadius: 4, color: '#c4b5fd' }}>{'{NOM_DU_TITRE_PROFESSIONNEL}'}</code>, <code style={{ backgroundColor: '#0f172a', padding: '2px 6px', borderRadius: 4, color: '#c4b5fd' }}>{'{NOM_DE_LA_SOUS_PARTIE}'}</code> et <code style={{ backgroundColor: '#0f172a', padding: '2px 6px', borderRadius: 4, color: '#c4b5fd' }}>{'{COLLER_LE_PROGRAMME_ICI}'}</code> sont remplacées automatiquement.
+                Les variables <code style={{ backgroundColor: '#09090b', padding: '2px 6px', borderRadius: 4, color: '#d4d4d8' }}>{'{NOM_DU_TITRE_PROFESSIONNEL}'}</code>, <code style={{ backgroundColor: '#09090b', padding: '2px 6px', borderRadius: 4, color: '#d4d4d8' }}>{'{NOM_DE_LA_SOUS_PARTIE}'}</code> et <code style={{ backgroundColor: '#09090b', padding: '2px 6px', borderRadius: 4, color: '#d4d4d8' }}>{'{COLLER_LE_PROGRAMME_ICI}'}</code> sont remplacées automatiquement.
               </p>
 
               {promptLoading ? (
-                <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+                <div style={{ padding: 40, textAlign: 'center', color: '#71717a', fontSize: 13 }}>
                   Chargement du prompt...
                 </div>
               ) : (
@@ -326,9 +326,9 @@ export default function ScheduleConfig() {
                       minHeight: 360,
                       padding: 14,
                       borderRadius: 10,
-                      border: '1px solid #334155',
-                      backgroundColor: '#0f172a',
-                      color: '#e2e8f0',
+                      border: '1px solid #3f3f46',
+                      backgroundColor: '#09090b',
+                      color: '#f4f4f5',
                       fontSize: 12,
                       fontFamily: "'Fira Code', 'Courier New', monospace",
                       lineHeight: 1.6,
@@ -346,8 +346,8 @@ export default function ScheduleConfig() {
                       marginTop: 12,
                       borderRadius: 10,
                       border: 'none',
-                      backgroundColor: promptSaved ? '#16a34a' : '#8B5CF6',
-                      color: 'white',
+                      backgroundColor: promptSaved ? '#16a34a' : '#f4f4f5',
+                      color: promptSaved ? 'white' : '#09090b',
                       fontSize: 14,
                       fontWeight: 600,
                       cursor: promptSaving ? 'not-allowed' : 'pointer',
@@ -377,8 +377,8 @@ export default function ScheduleConfig() {
             padding: '16px',
             borderRadius: 12,
             border: 'none',
-            backgroundColor: saved ? '#16a34a' : '#8B5CF6',
-            color: 'white',
+            backgroundColor: saved ? '#16a34a' : '#f4f4f5',
+            color: saved ? 'white' : '#09090b',
             fontSize: 15,
             fontWeight: 600,
             cursor: saving ? 'not-allowed' : 'pointer',

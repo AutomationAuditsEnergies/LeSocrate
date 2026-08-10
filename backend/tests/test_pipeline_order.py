@@ -16,7 +16,7 @@ def _connect(path):
     return sqlite3.connect(path)
 
 
-def _make_review_db(*, humanized: bool, reviewed: bool, segment_count: int = 18):
+def _make_review_db(*, reviewed: bool, segment_count: int = 18):
     tmp = tempfile.NamedTemporaryFile(delete=False)
     tmp.close()
     conn = sqlite3.connect(tmp.name)
@@ -40,9 +40,6 @@ def _make_review_db(*, humanized: bool, reviewed: bool, segment_count: int = 18)
             job_id INTEGER NOT NULL,
             status TEXT NOT NULL,
             dirty INTEGER DEFAULT 0,
-            humanized INTEGER DEFAULT 0,
-            humanization_error TEXT,
-            humanization_signature TEXT,
             reviewed INTEGER DEFAULT 0,
             review_error TEXT,
             review_signature TEXT
@@ -56,14 +53,11 @@ def _make_review_db(*, humanized: bool, reviewed: bool, segment_count: int = 18)
         conn.execute(
             """
             INSERT INTO content_generation_segments
-                (id, job_id, status, humanized, humanization_signature,
-                 reviewed, review_signature)
-            VALUES (?, 20, 'completed', ?, ?, ?, ?)
+                (id, job_id, status, reviewed, review_signature)
+            VALUES (?, 20, 'completed', ?, ?)
             """,
             (
                 idx + 1,
-                1 if humanized else 0,
-                "human-sig" if humanized else None,
                 1 if reviewed else 0,
                 "review-sig" if reviewed else None,
             ),
@@ -92,10 +86,7 @@ def _job(**overrides):
         "daily_programs": json.dumps([completed_day]),
         "daily_programs_validated": 1,
         "nb_days": 1,
-        "auto_pilot_skip_vs": 1,
-        "auto_pilot_volume_done": 1,
         "auto_pilot_post_review_docs_done": 0,
-        "auto_pilot_generate_audio": 0,
     }
     data.update(overrides)
     return data
@@ -246,21 +237,21 @@ class PipelineOrderTest(unittest.TestCase):
             return fr._determine_next_ap_step(99)
 
     def test_local_compliance_runs_after_content(self):
-        db_path = _make_review_db(humanized=False, reviewed=False)
+        db_path = _make_review_db(reviewed=False)
         try:
             self.assertEqual(self._run_next_step(db_path, _job()), "review")
         finally:
             os.unlink(db_path)
 
     def test_post_review_docs_runs_after_local_compliance(self):
-        db_path = _make_review_db(humanized=True, reviewed=True)
+        db_path = _make_review_db(reviewed=True)
         try:
             self.assertEqual(self._run_next_step(db_path, _job()), "post_review_docs")
         finally:
             os.unlink(db_path)
 
     def test_post_review_documents_do_not_mark_teacher_ready_before_slides(self):
-        job = _job(platform_id=1, auto_pilot_generate_audio=0)
+        job = _job(platform_id=1)
         with patch.object(
             fps,
             "get_expected_course_folders",
@@ -364,7 +355,6 @@ class PipelineOrderTest(unittest.TestCase):
             platform_id=1,
             status="tts_launched",
             auto_pilot_post_review_docs_done=1,
-            auto_pilot_generate_audio=0,
         )
         with patch.object(
             fr,
@@ -529,7 +519,7 @@ class PipelineOrderTest(unittest.TestCase):
             self.assertEqual(fr._determine_next_ap_step(99), "daily")
 
     def test_audio_gate_requires_local_compliance(self):
-        db_path = _make_review_db(humanized=True, reviewed=False)
+        db_path = _make_review_db(reviewed=False)
         try:
             with patch("database.db.get_db_connection", side_effect=lambda: _connect(db_path)), patch.object(
                 cgs,
@@ -544,7 +534,7 @@ class PipelineOrderTest(unittest.TestCase):
             os.unlink(db_path)
 
     def test_structured_content_completion_uses_job_status_not_legacy_segment_count(self):
-        db_path = _make_review_db(humanized=False, reviewed=False, segment_count=7)
+        db_path = _make_review_db(reviewed=False, segment_count=7)
         daily = [{
             "day_number": 1,
             "sub_parts": [{"name": f"Partie {idx}"} for idx in range(7)],
@@ -618,8 +608,6 @@ class PipelineOrderTest(unittest.TestCase):
             tp_name="TP EC",
             daily_programs=json.dumps(daily_programs),
             auto_pilot_model="pro",
-            auto_pilot_use_cc=0,
-            auto_pilot_generate_audio=0,
         )
 
         with patch.object(

@@ -141,7 +141,6 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
                 {
                     "platform_id": 5,
                     "auto_pilot_model": "pro",
-                    "auto_pilot_generate_audio": False,
                 },
             )
 

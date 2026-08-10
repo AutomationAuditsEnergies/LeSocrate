@@ -15,14 +15,14 @@ export const CtaSection = () => {
               </div>
               <div className="items-start box-border caret-transparent flex text-[15.3846px] justify-center tracking-[-0.107692px] leading-[21.5385px] [mask-image:url('https://cdn.prod.website-files.com/69a20afc15652a660eec51f4/69a2be4f73a22681dba450c8_bg_mask__dot.png')] [mask-position:0px_0px] [mask-size:193.269px_193.269px] outline-[3px] absolute no-underline [mask-position:0px] inset-[0%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:[mask-size:178.667px_178.667px]">
                 <div className="aspect-square box-border caret-transparent blur-[11.5385px] text-[15.3846px] isolate tracking-[-0.107692px] leading-[21.5385px] max-w-[961.538px] outline-[3px] absolute no-underline w-full top-[61.5385px] md:blur-[21.3333px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:max-w-[888.889px] md:top-auto">
-                  <img
+                  <img loading="lazy" decoding="async"
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdfcf6c2ce4c322d0e85_hero_circle.svg"
                     alt=""
                     className="box-border caret-transparent inline-block text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] max-w-full object-cover outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                   />
                 </div>
                 <div className="aspect-square box-border caret-transparent blur-[11.5385px] text-[15.3846px] isolate tracking-[-0.107692px] leading-[21.5385px] max-w-[961.538px] outline-[3px] absolute no-underline w-full top-[61.5385px] md:blur-[21.3333px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:max-w-[888.889px] md:top-auto">
-                  <img
+                  <img loading="lazy" decoding="async"
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdfcf6c2ce4c322d0e85_hero_circle.svg"
                     alt=""
                     className="box-border caret-transparent inline-block text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] max-w-full object-cover outline-[3px] no-underline w-full -scale-100 md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"

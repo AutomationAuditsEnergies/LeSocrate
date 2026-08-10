@@ -12,11 +12,9 @@ import {
   Minus,
   PencilLine,
   Plus,
-  Save,
   Search,
   Trash2,
   Utensils,
-  X,
 } from 'lucide-react'
 
 import {
@@ -42,9 +40,9 @@ import {
 } from '../dayScheduleTemplateApi.js'
 import './DayScheduleTemplates.css'
 
-const BUTTON_BASE = 'day-schedule-focusable inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40'
-const BUTTON_PRIMARY = `${BUTTON_BASE} bg-[#18181B] text-white hover:bg-black`
-const BUTTON_SECONDARY = `${BUTTON_BASE} border border-[#D4D4D8] bg-white text-[#3F3F46] hover:bg-[#F4F4F5]`
+const BUTTON_BASE = 'day-schedule-focusable inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40'
+const BUTTON_PRIMARY = `${BUTTON_BASE} bg-[#18181B] text-white hover:bg-[#27272A] active:bg-[#09090B]`
+const BUTTON_SECONDARY = `${BUTTON_BASE} border border-[#D4D4D8] bg-white text-[#3F3F46] hover:bg-[#F4F4F5] active:bg-[#E4E4E7]`
 const CALENDAR_START_MINUTE = 0
 const CALENDAR_END_MINUTE = 24 * 60
 const CALENDAR_INITIAL_MINUTE = 8 * 60
@@ -634,6 +632,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     setSaving(true)
     setFeedback(null)
     try {
+      const createdNow = !draft.id
       const saved = draft.id
         ? await updateDayScheduleTemplate(result.template)
         : await createDayScheduleTemplate(result.template)
@@ -647,6 +646,10 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
       setMode('preview')
       setDraft(null)
       setFeedback({ tone: 'success', message: 'Template enregistré.' })
+      if (createdNow && onUseTemplate) {
+        window.sessionStorage.setItem('selected_day_schedule_template_id', String(saved.id))
+        onUseTemplate(saved)
+      }
     } catch (saveError) {
       setFeedback({
         tone: 'error',
@@ -724,12 +727,10 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
           {mode === 'edit' ? (
             <>
               <button type="button" className={BUTTON_SECONDARY} onClick={cancelEdit} disabled={saving}>
-                <X size={15} aria-hidden="true" />
                 Annuler
               </button>
               <button type="button" className={BUTTON_PRIMARY} onClick={saveDraft} disabled={saving}>
-                <Save size={15} aria-hidden="true" />
-                {saving ? 'Enregistrement…' : 'Enregistrer'}
+                {saving ? 'Enregistrement…' : 'Enregistrer le template'}
               </button>
             </>
           ) : templates.length > 0 && (
@@ -815,14 +816,16 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
                 </div>
               ) : (
                 <div className="day-schedule-empty-state">
-                  <Clock3 size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
-                  <h2 className="mt-4 text-base font-semibold text-[#18181B]">Créez une organisation de journée</h2>
-                  <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">
-                    La timeline impose l’ordre cours, questions-réponses et pause.
-                  </p>
-                  <button type="button" className={`${BUTTON_PRIMARY} mt-5`} onClick={startCreate}>
+                  <span className="day-schedule-empty-state__icon" aria-hidden="true">
+                    <Clock3 size={18} strokeWidth={1.7} />
+                  </span>
+                  <div className="day-schedule-empty-state__copy">
+                    <h2>Aucun template</h2>
+                    <p>Créez une journée type, puis réutilisez-la dans vos formations.</p>
+                  </div>
+                  <button type="button" className={BUTTON_PRIMARY} onClick={startCreate}>
                     <Plus size={15} aria-hidden="true" />
-                    Créer le premier template
+                    Créer un template
                   </button>
                 </div>
               )

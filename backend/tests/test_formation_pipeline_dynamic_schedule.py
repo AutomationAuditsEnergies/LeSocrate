@@ -75,8 +75,6 @@ def _v2_job(days, **overrides):
         ),
         "global_program": "Programme global",
         "reac_text": "Référentiel",
-        "rc_text": "",
-        "rome_text": "",
     }
     data.update(overrides)
     return data

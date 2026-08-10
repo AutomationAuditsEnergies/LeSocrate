@@ -15,35 +15,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -89,35 +89,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -162,35 +162,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -235,35 +235,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -311,35 +311,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -382,35 +382,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -455,35 +455,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -531,35 +531,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -602,35 +602,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -673,35 +673,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -745,35 +745,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -816,35 +816,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -888,35 +888,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -960,35 +960,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -1031,35 +1031,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -1106,35 +1106,35 @@ export const TestimonialGrid = () => {
                 <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
                   <div className="items-center box-border caret-transparent gap-x-[1.92308px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[1.92308px] no-underline md:gap-x-[1.77778px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[1.77778px]">
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
                       />
                     </div>
                     <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00bdafb40ec890ae547a22_review_star.png"
                         alt=""
                         className="box-border caret-transparent text-[15.3846px] h-[200%] tracking-[-0.107692px] leading-[21.5385px] max-w-[200%] object-cover outline-[3px] pointer-events-none absolute no-underline w-[200%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"

@@ -1,10 +1,10 @@
 .day-schedule-page {
-  --schedule-ink: #292824;
-  --schedule-text: #41403b;
-  --schedule-muted: #77756e;
-  --schedule-border: #dededb;
-  --schedule-border-soft: #efefed;
-  --schedule-canvas: #fafaf9;
+  --schedule-ink: #18181b;
+  --schedule-text: #3f3f46;
+  --schedule-muted: #71717a;
+  --schedule-border: #d4d4d8;
+  --schedule-border-soft: #e4e4e7;
+  --schedule-canvas: #fafafa;
   --schedule-surface: #ffffff;
   height: 100%;
   min-height: 0;
@@ -357,18 +357,56 @@
 }
 
 .day-schedule-workspace--empty {
-  width: min(100%, 620px);
-  margin-inline: auto;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .day-schedule-empty-state {
-  display: flex;
-  min-height: 240px;
+  display: grid;
+  min-height: 96px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid var(--schedule-border-soft);
+  border-bottom: 1px solid var(--schedule-border-soft);
+  padding: 18px 4px;
+  text-align: left;
+}
+
+.day-schedule-empty-state__icon {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
   align-items: center;
   justify-content: center;
-  flex-direction: column;
-  padding: 32px 24px;
-  text-align: center;
+  border-radius: 8px;
+  background: #f4f4f5;
+  color: #52525b;
+}
+
+.day-schedule-empty-state__copy {
+  min-width: 0;
+}
+
+.day-schedule-empty-state__copy h2,
+.day-schedule-empty-state__copy p {
+  margin: 0;
+}
+
+.day-schedule-empty-state__copy h2 {
+  color: var(--schedule-ink);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.day-schedule-empty-state__copy p {
+  margin-top: 3px;
+  color: var(--schedule-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .day-schedule-name-input,
@@ -376,8 +414,8 @@
 .day-schedule-start-control input {
   width: 100%;
   min-height: 42px;
-  border: 1px solid #cfcec9;
-  border-radius: 4px;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
   background: #fff;
   color: var(--schedule-ink);
   font: inherit;
@@ -804,6 +842,16 @@
 
   .day-schedule-library-list {
     grid-template-columns: 1fr;
+  }
+
+  .day-schedule-empty-state {
+    grid-template-columns: 40px minmax(0, 1fr);
+    padding-inline: 0;
+  }
+
+  .day-schedule-empty-state > button {
+    grid-column: 1 / -1;
+    justify-self: stretch;
   }
 
   .day-schedule-template-card-actions {

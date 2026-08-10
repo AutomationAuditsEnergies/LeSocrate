@@ -1,5 +1,5 @@
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import './Auth.css'
 
@@ -11,6 +11,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   const [submitting, setSubmitting] = useState(false)
   const [formMessage, setFormMessage] = useState(null)
   const [showPassword, setShowPassword] = useState(false)
+  const courseRoutesPreloadedRef = useRef(false)
 
   useEffect(() => {
     const pParam = searchParams.get('p')
@@ -31,17 +32,13 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
 
   }, [location.pathname, searchParams])
 
-  useEffect(() => {
-    const preload = () => {
-      preloadCourseRoutes?.().catch(() => {})
-    }
-    if ('requestIdleCallback' in window) {
-      const idleId = window.requestIdleCallback(preload, { timeout: 1500 })
-      return () => window.cancelIdleCallback(idleId)
-    }
-    const timeoutId = window.setTimeout(preload, 800)
-    return () => window.clearTimeout(timeoutId)
-  }, [preloadCourseRoutes])
+  const preloadCourseOnIntent = () => {
+    if (courseRoutesPreloadedRef.current || !preloadCourseRoutes) return
+    courseRoutesPreloadedRef.current = true
+    preloadCourseRoutes().catch(() => {
+      courseRoutesPreloadedRef.current = false
+    })
+  }
 
   const handleFormSubmit = async (event) => {
     event.preventDefault()
@@ -123,12 +120,23 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
       <div className="auth-layout">
         <aside className="auth-visual auth-visual--learner-login" aria-label="Bureau d’étude">
-          <img
-            className="auth-study-image"
-            src="/student-learning-login-unsplash-yen-vu.jpg"
-            alt="Un bureau d’étude avec des livres, des cahiers et un ordinateur"
-            draggable={false}
-          />
+          <picture>
+            <source
+              media="(min-width: 761px)"
+              srcSet="/student-learning-login-unsplash-yen-vu-600.webp 600w, /student-learning-login-unsplash-yen-vu-900.webp 900w"
+              sizes="34vw"
+              type="image/webp"
+            />
+            <img
+              className="auth-study-image"
+              src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
+              alt="Un bureau d’étude avec des livres, des cahiers et un ordinateur"
+              width="900"
+              height="1350"
+              fetchPriority="high"
+              draggable={false}
+            />
+          </picture>
         </aside>
 
         <section className="auth-panel" id="auth-main">
@@ -147,7 +155,12 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
               </div>
             )}
 
-            <form className="auth-form" onSubmit={handleFormSubmit}>
+            <form
+              className="auth-form"
+              onFocusCapture={preloadCourseOnIntent}
+              onPointerEnter={preloadCourseOnIntent}
+              onSubmit={handleFormSubmit}
+            >
               <div className="auth-form__row">
                 <div className="auth-field">
                   <label htmlFor="nom">Nom</label>

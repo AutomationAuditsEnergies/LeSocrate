@@ -33,7 +33,7 @@ export const FaqHelpCard = () => {
           >
             <div className="items-center box-border caret-transparent gap-x-[7.69231px] flex text-[15.3846px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative gap-y-[7.69231px] no-underline z-[2] rounded-[375px] md:gap-x-[7.11111px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[7.11111px] md:rounded-[1280px]">
               <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[11.5385px] justify-center tracking-[-0.107692px] leading-[21.5385px] mb-[-0.769231px] [mask-image:linear-gradient(90deg,rgba(0,0,0,0)_0%,rgb(255,255,255)_10%,rgb(255,255,255)_90%,rgba(0,0,0,0)_100%)] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[11.5385px] md:text-[14.2222px] md:h-[10.6667px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:mb-[-0.711111px] md:w-[10.6667px]">
-                <img
+                <img loading="lazy" decoding="async"
                   src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-3.svg"
                   alt="Icon"
                   className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
@@ -50,7 +50,7 @@ export const FaqHelpCard = () => {
         </div>
       </div>
       <div className="aspect-[202_/_227] box-border caret-transparent hidden text-[15.3846px] col-end-[-1] col-start-9 tracking-[-0.107692px] leading-[21.5385px] min-h-0 min-w-0 -order-1 outline-[3px] no-underline w-full overflow-hidden md:flex md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto] md:order-none">
-        <img
+        <img loading="lazy" decoding="async"
           src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a01e9968ac87e435432eb6f_con,tact__icon_(1).png"
           alt=""
           className="box-border caret-transparent inline-block text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] max-w-full min-h-0 min-w-0 object-cover outline-[3px] no-underline w-full md:block md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto]"

@@ -21,7 +21,9 @@ from repositories.core_repository import (
 )
 from repositories.course_schedule_repository import (
     add_explicit_course_reminder_recipients,
+    assign_existing_audio_to_session,
     delete_explicit_course_reminder_recipient,
+    get_audio_generation_session,
     list_course_schedule_dashboard_states,
     list_course_sessions,
     list_explicit_course_reminder_recipients,
@@ -96,18 +98,6 @@ import state
 
 logger = get_logger(__name__)
 
-
-def _retired_local_generation_response():
-    """Bloque les anciennes générations lancées dans le processus web."""
-    return jsonify({
-        "success": False,
-        "status": "retired",
-        "code": "local_generation_retired",
-        "error": (
-            "Cette génération locale a été retirée. "
-            "La création et la reprise passent désormais par la pipeline durable."
-        ),
-    }), 410
 
 PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", "pdfs")
 
@@ -1410,11 +1400,17 @@ def create_hr_blueprint():
                             "audio_generation_completed_at": schedule_row.get("audio_generation_completed_at"),
                             "audio_generation_attempts": schedule_row.get("audio_generation_attempts"),
                             "audio_generation_next_retry_at": schedule_row.get("audio_generation_next_retry_at"),
+                            "audio_generation_error": schedule_row.get("audio_generation_error"),
                         })
+                    upcoming_sessions = [
+                        build_course_session_state(item)
+                        for item in (schedule_row.get("upcoming_sessions") or [])
+                    ]
                     course_schedule = {
                         "timezone": schedule_row.get("timezone") or "Europe/Paris",
                         "start_time": schedule_row.get("start_time") or "09:00",
                         "next_session": next_session,
+                        "upcoming_sessions": upcoming_sessions,
                     }
                 # En multi-tenant, toute plateforme en BDD est active
                 active = pid == 1 or bool(pinfo.get("backend_url")) or pid >= 4
@@ -3751,7 +3747,7 @@ def create_hr_blueprint():
 
         Sans corps `schedule`, utilise le planning persistant créé par le flow
         "Nouveau professeur IA", pousse la prochaine séance dans cours_config,
-        puis lance l'audio uniquement pour les séances dues dans la fenêtre 48h.
+        puis lance l'audio uniquement pour les séances dues dans la fenêtre H-72.
         """
         api_key = request.headers.get("X-Platform-Key", "")
         expected_key = os.environ.get("PLATFORM_API_KEY", "")
@@ -3898,9 +3894,21 @@ def create_hr_blueprint():
 
         try:
             result = list_course_folder_rows_for_platform(platform_id)
+            sessions_by_index = {
+                int(session.get("session_index") or 0): build_course_session_state(session)
+                for session in list_course_sessions(platform_id, limit=1000)
+            }
+            folders = []
+            for index, folder in enumerate(result["folders"], start=1):
+                session_state = sessions_by_index.get(index)
+                folders.append({
+                    **folder,
+                    "session": session_state,
+                    "audio_status": session_state.get("audio_status") if session_state else "scheduled",
+                })
             return jsonify({
                 "success": True,
-                "folders": result["folders"],
+                "folders": folders,
                 "platform_id": result["platform_id"],
                 "source_platform_id": result["source_platform_id"],
             }), 200
@@ -4227,22 +4235,6 @@ def create_hr_blueprint():
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── Routes Pipeline TTS ────────────────────────────────────────────────
-    @hr_bp.route("/api/hr/cours-documents/<int:document_id>/generate-audio", methods=["POST"])
-    def generate_document_audio(document_id):
-        """Ancienne génération directe, remplacée par la file durable."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-all-audio", methods=["POST"])
-    def generate_folder_audio(folder_id):
-        """Ancienne génération directe, remplacée par la file durable."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
-
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/tts-status", methods=["GET"])
     def get_folder_tts_status(folder_id):
         """Retourne le statut TTS d'un dossier"""
@@ -4291,22 +4283,6 @@ def create_hr_blueprint():
 
     # ─── Consultation et correction du contenu généré ───────────────────
 
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job", methods=["POST"])
-    def create_content_job(folder_id):
-        """Ancienne création manuelle, remplacée par la pipeline durable."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/start", methods=["POST"])
-    def start_content_job(folder_id):
-        """Ancien lancement manuel, remplacé par la pipeline durable."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
-
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job", methods=["GET"])
     def get_content_job(folder_id):
         """Retourne le statut du job de génération de contenu."""
@@ -4336,14 +4312,6 @@ def create_hr_blueprint():
                 "num_sub_parts": len(job["sub_parts"]),
             },
         }), 200
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/cancel", methods=["POST"])
-    def cancel_content_job(folder_id):
-        """Ancienne annulation locale, remplacée par la pipeline durable."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/preview", methods=["GET"])
     def preview_content_prompt(folder_id):
@@ -4624,30 +4592,6 @@ def create_hr_blueprint():
             logger.error(f"❌ Erreur update rules: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text", methods=["POST"])
-    def review_text_with_rules(folder_id):
-        """Ancienne correction asynchrone locale, désormais retirée."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text/status/<task_id>", methods=["GET"])
-    def review_text_status(folder_id, task_id):
-        """Ancien suivi en mémoire, désormais retiré."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text/active", methods=["GET"])
-    def review_text_active(folder_id):
-        """Ancien suivi en mémoire, désormais retiré."""
-        denied = _require_admin()
-        if denied:
-            return denied
-        return _retired_local_generation_response()
-
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-post-tts", methods=["POST"])
     def review_post_tts_with_rules(folder_id):
         """Phase 3b : parcourt les chunks audio, applique les règles, splice les MP3 non-conformes."""
@@ -4757,7 +4701,6 @@ def create_hr_blueprint():
         cursor.execute("""
             UPDATE content_generation_segments
             SET text_content = ?, word_count = ?, dirty = 1,
-                humanized = 0, humanization_error = NULL, humanization_signature = NULL,
                 reviewed = 0, review_error = NULL, review_signature = NULL
             WHERE job_id = ? AND sub_part_index = ? AND passe = ?
         """, (new_text, new_word_count, job["id"], sub_part_index, passe))
@@ -4843,47 +4786,6 @@ def create_hr_blueprint():
         # allowing different folders of the same formation to run in parallel.
         return f"{_HR_AUDIO_QUEUE_SCOPE_PREFIX}:{int(folder_id)}"
 
-    def _enqueue_hr_audio_job(folder, task_type, payload):
-        """Atomically enqueue one audio operation for a folder resource."""
-        import uuid
-        from services.pipeline_queue import enqueue_work_item
-
-        folder_id = int(folder["id"])
-        pipeline_job_id = folder.get("formation_job_id")
-        run_id = uuid.uuid4().hex
-        item = enqueue_work_item(
-            pipeline_job_id=(int(pipeline_job_id) if pipeline_job_id is not None else None),
-            folder_id=folder_id,
-            resource_key=f"folder:{folder_id}",
-            task_type=task_type,
-            scope_key=_hr_audio_queue_scope(folder_id),
-            run_id=run_id,
-            dedupe_key=f"folder:{folder_id}:audio:{run_id}",
-            payload={**payload, "folder_id": folder_id},
-            max_attempts=5,
-        )
-        deduplicated = item.run_id != run_id
-        if deduplicated:
-            logger.warning(
-                "HR_PLAYLIST_QUEUE_DUPLICATE folder_id=%s existing_work_item_id=%s "
-                "existing_status=%s requested_task_type=%s",
-                folder_id,
-                item.id,
-                item.status,
-                task_type,
-            )
-        else:
-            logger.info(
-                "HR_PLAYLIST_QUEUE_ENQUEUED folder_id=%s pipeline_job_id=%s "
-                "work_item_id=%s run_id=%s task_type=%s",
-                folder_id,
-                pipeline_job_id,
-                item.id,
-                item.run_id,
-                task_type,
-            )
-        return item, deduplicated
-
     def _latest_hr_audio_job(folder_id):
         from services.pipeline_queue import get_latest_folder_work_item
 
@@ -4891,228 +4793,6 @@ def create_hr_blueprint():
             folder_id,
             scope_key=_hr_audio_queue_scope(folder_id),
         )
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-playlist", methods=["POST"])
-    def generate_playlist(folder_id):
-        """Lance la génération du manifeste MP3 exact d'un dossier."""
-        denied = _require_admin()
-        if denied:
-            return denied
-
-        try:
-            # Vérifier que le dossier existe et récupérer le platform_id
-            folder = get_course_folder_identity(folder_id)
-            if not folder:
-                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
-
-            platform_id = int(folder["platform_id"])
-
-            req_body = request.get_json(silent=True) or {}
-            playlist_mock = req_body.get("mock", False)   # mock mode classique (sans script)
-            script_mock = req_body.get("script_mock", False)  # mock mode script (silence au lieu TTS)
-            force_all = req_body.get("force_all", False)
-            preserve_existing = bool(req_body.get("preserve_existing", False))
-            include_breaks = bool(req_body.get("include_breaks", True))
-            parallel_breaks = bool(req_body.get("parallel_breaks", False))
-            sync_slides = bool(req_body.get("sync_slides", False))
-            auto_generate_slides = bool(req_body.get("auto_generate_slides", False))
-            slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
-            slide_pace = str(req_body.get("pace") or req_body.get("slide_pace") or "normal")
-            requested_voice_type_raw = str(req_body.get("voice_type") or req_body.get("tts_mode") or "").strip().lower()
-            voice_aliases = {
-                "gtts": "gtts",
-                "edge": "gtts",
-                "edge_tts": "gtts",
-                "basic": "gtts",
-                "basic_tts": "gtts",
-                "fish": "fish_audio",
-                "fish_audio": "fish_audio",
-                "fishaudio": "fish_audio",
-                "mock": "mock",
-            }
-            requested_voice_type = voice_aliases.get(requested_voice_type_raw) if requested_voice_type_raw else None
-
-            if requested_voice_type_raw and not requested_voice_type:
-                return jsonify({
-                    "success": False,
-                    "error": "Moteur audio inconnu. Utilise 'gtts' ou 'fish_audio'."
-                }), 400
-
-            # Vérifier si un script TTS existe pour ce dossier
-            from services.content_generation_service import get_job_from_db as _get_cjob
-            content_job = _get_cjob(folder_id)
-            has_script = bool(content_job and content_job.get("status") == "completed")
-
-            if requested_voice_type == "mock" and not script_mock and not playlist_mock:
-                script_mock = has_script
-                playlist_mock = not has_script
-
-            if script_mock and not has_script:
-                return jsonify({
-                    "success": False,
-                    "error": "Le mock script nécessite un script texte déjà généré pour ce dossier."
-                }), 400
-
-            if requested_voice_type and requested_voice_type != "mock" and not playlist_mock and not has_script:
-                return jsonify({
-                    "success": False,
-                    "error": "Génère d'abord le script texte du dossier avant de lancer l'audio gTTS ou Fish Audio."
-                }), 400
-
-            if script_mock or playlist_mock:
-                voice_type = "mock"
-            elif requested_voice_type:
-                voice_type = requested_voice_type
-            else:
-                # Compatibilité ancienne UI/API : sans choix explicite, l'ancien comportement reste Fish Audio.
-                voice_type = "fish_audio"
-
-            voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
-            if voice_type == "fish_audio":
-                parallel_breaks = False
-            if "sync_slides" not in req_body:
-                sync_slides = bool(has_script and not playlist_mock and force_all and voice_type in {"gtts", "fish_audio"})
-            if "auto_generate_slides" not in req_body:
-                auto_generate_slides = bool(sync_slides)
-
-            item, deduplicated = _enqueue_hr_audio_job(
-                folder,
-                "hr_playlist_generate",
-                {
-                    "platform_id": platform_id,
-                    "has_script": has_script,
-                    "playlist_mock": bool(playlist_mock),
-                    "script_mock": bool(script_mock),
-                    "force_all": bool(force_all),
-                    "preserve_existing": preserve_existing,
-                    "include_breaks": include_breaks,
-                    "parallel_breaks": parallel_breaks,
-                    "sync_slides": sync_slides,
-                    "auto_generate_slides": auto_generate_slides,
-                    "slide_max_slides": slide_max_slides,
-                    "slide_pace": slide_pace,
-                    "voice_type": voice_type,
-                    "voice_label": voice_label,
-                    "total_steps": 24,
-                    "initial_message": f"Démarrage audio {voice_label}...",
-                },
-            )
-            if deduplicated:
-                return jsonify({
-                    "success": False,
-                    "error": "Une génération est déjà en cours pour ce dossier",
-                    "work_item_id": item.id,
-                    "queue_status": item.status,
-                }), 409
-            return jsonify({
-                "success": True,
-                "message": "Pipeline mise en file durable",
-                "work_item_id": item.id,
-                "run_id": item.run_id,
-                "queue_status": item.status,
-            }), 202
-
-        except Exception as e:
-            logger.exception(
-                "HR_PLAYLIST_QUEUE_ENQUEUE_FAILED folder_id=%s error=%s",
-                folder_id,
-                str(e),
-            )
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-playlist-item", methods=["POST"])
-    def generate_playlist_item(folder_id):
-        """Lance la génération d'un seul fichier MP3 de la playlist."""
-        denied = _require_admin()
-        if denied:
-            return denied
-
-        try:
-            folder = get_course_folder_identity(folder_id)
-            if not folder:
-                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
-            platform_id = int(folder["platform_id"])
-
-            req_body = request.get_json(silent=True) or {}
-            filename = os.path.basename(str(req_body.get("filename") or "").split("?", 1)[0])
-            if not filename:
-                return jsonify({"success": False, "error": "filename est requis"}), 400
-
-            requested_voice_type_raw = str(req_body.get("voice_type") or "").strip().lower()
-            voice_aliases = {
-                "gtts": "gtts",
-                "edge": "gtts",
-                "edge_tts": "gtts",
-                "basic": "gtts",
-                "basic_tts": "gtts",
-                "fish": "fish_audio",
-                "fish_audio": "fish_audio",
-                "fishaudio": "fish_audio",
-            }
-            voice_type = voice_aliases.get(requested_voice_type_raw)
-            if not voice_type:
-                return jsonify({
-                    "success": False,
-                    "error": "Moteur audio inconnu. Utilise 'gtts' ou 'fish_audio'."
-                }), 400
-
-            from services.content_generation_service import get_job_from_db as _get_cjob
-            content_job = _get_cjob(folder_id)
-            has_script = bool(content_job and content_job.get("status") == "completed")
-            if not has_script:
-                return jsonify({
-                    "success": False,
-                    "error": "Génère d'abord le script texte du dossier avant de lancer l'audio."
-                }), 400
-
-            voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio"
-            normalized_filename = filename.lower()
-            is_course_audio = (
-                normalized_filename.endswith(".mp3")
-                and normalized_filename.startswith(("cours_", "course_"))
-            )
-            sync_slides = bool(req_body.get("sync_slides", is_course_audio)) and is_course_audio
-            auto_generate_slides = bool(req_body.get("auto_generate_slides", sync_slides))
-            slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
-            slide_pace = str(req_body.get("pace") or req_body.get("slide_pace") or "normal")
-            item, deduplicated = _enqueue_hr_audio_job(
-                folder,
-                "hr_playlist_item",
-                {
-                    "platform_id": platform_id,
-                    "filename": filename,
-                    "voice_type": voice_type,
-                    "voice_label": voice_label,
-                    "sync_slides": sync_slides,
-                    "auto_generate_slides": auto_generate_slides,
-                    "slide_max_slides": slide_max_slides,
-                    "slide_pace": slide_pace,
-                    "total_steps": 1,
-                    "initial_message": f"Démarrage {filename} en {voice_label}...",
-                },
-            )
-            if deduplicated:
-                return jsonify({
-                    "success": False,
-                    "error": "Une génération est déjà en cours pour ce dossier",
-                    "work_item_id": item.id,
-                    "queue_status": item.status,
-                }), 409
-            return jsonify({
-                "success": True,
-                "message": "Génération fichier mise en file durable",
-                "work_item_id": item.id,
-                "run_id": item.run_id,
-                "queue_status": item.status,
-            }), 202
-
-        except Exception as e:
-            logger.exception(
-                "HR_PLAYLIST_ITEM_QUEUE_ENQUEUE_FAILED folder_id=%s error=%s",
-                folder_id,
-                str(e),
-            )
-            return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/repair-audio-sync", methods=["POST"])
     def repair_audio_sync(folder_id):
@@ -5177,51 +4857,6 @@ def create_hr_blueprint():
             if "BlobNotFound" in str(e) or "The specified blob does not exist" in str(e):
                 return jsonify({"success": False, "error": "Aucun script généré pour ce dossier"}), 404
             logger.error(f"❌ Erreur get_playlist_script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-status", methods=["GET"])
-    def get_playlist_status(folder_id):
-        """Retourne l'état de la pipeline playlist pour un dossier."""
-        denied = _require_admin()
-        if denied:
-            return denied
-
-        try:
-            job = _latest_hr_audio_job(folder_id)
-            if not job:
-                return jsonify({"success": True, "status": "idle"}), 200
-
-            persisted = dict(job.result or {})
-            status_map = {
-                "queued": "running",
-                "retry_scheduled": "running",
-                "running": "running",
-                "completed": "completed",
-                "dead_lettered": "error",
-                "cancelled": "error",
-            }
-            api_status = status_map.get(job.status, job.status)
-            message = persisted.get("message")
-            if job.status == "queued":
-                message = message or "En attente du worker audio..."
-            elif job.status == "retry_scheduled":
-                message = job.last_error or message or "Nouvelle tentative planifiée..."
-            elif job.status in {"dead_lettered", "cancelled"}:
-                message = job.last_error or message or "Pipeline audio interrompue"
-            return jsonify({
-                "success": True,
-                **persisted,
-                "status": api_status,
-                "queue_status": job.status,
-                "work_item_id": job.id,
-                "run_id": job.run_id,
-                "attempt": job.attempt_count,
-                "max_attempts": job.max_attempts,
-                "message": message,
-                "last_error": job.last_error,
-            }), 200
-        except Exception as e:
-            logger.exception("HR_PLAYLIST_QUEUE_STATUS_FAILED folder_id=%s", folder_id)
             return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generated-audios", methods=["GET"])
@@ -5992,6 +5627,30 @@ def create_hr_blueprint():
             origin = resolve_folder_asset_origin(folder_id) or {}
             source_platform_id = int(origin.get("source_platform_id") or folder_row[1])
 
+            next_session = next(
+                (
+                    session_row
+                    for session_row in list_course_sessions(platform_id, limit=1000)
+                    if session_row.get("status") in {"planned", "active"}
+                    and not session_row.get("audio_generation_completed_at")
+                ),
+                None,
+            )
+            if not next_session:
+                return jsonify({
+                    "success": False,
+                    "error": "Aucune prochaine journée de formation n’est disponible.",
+                }), 409
+            target_session = get_audio_generation_session(
+                int(platform_id),
+                int(next_session["id"]),
+            )
+            if not target_session or not target_session.get("formation_job_id"):
+                return jsonify({
+                    "success": False,
+                    "error": "La prochaine séance n’est pas reliée à sa formation.",
+                }), 409
+
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
 
@@ -6185,6 +5844,31 @@ def create_hr_blueprint():
                     logger.error(f"   ❌ Échec copie playlist {filename}: {e}")
                     errors.append({"filename": filename, "error": str(e)})
 
+            occurrence_publish = None
+            if not errors:
+                occurrence_publish = publish_playlist_audio_to_platform(
+                    platform_id,
+                    folder_id,
+                    copied_files,
+                    source_platform_id=source_platform_id,
+                    destination_prefix=f"course-sessions/{int(next_session['id'])}",
+                    create_playback_manifest=schedule_schema_version == 2,
+                )
+                if occurrence_publish.get("publish_errors"):
+                    errors.extend(occurrence_publish["publish_errors"])
+                else:
+                    assigned = assign_existing_audio_to_session(
+                        int(next_session["id"]),
+                        job_id=int(target_session["formation_job_id"]),
+                        folder_id=folder_id,
+                        completed_at=datetime.now(FRANCE_TZ),
+                    )
+                    if not assigned:
+                        errors.append({
+                            "filename": "playback-manifest.json",
+                            "error": "La séance a changé pendant le remplissage.",
+                        })
+
             logger.info(f"✅ fill-from-folder P{platform_id}/F{folder_id}: {len(copied_files)} fichiers copiés, {len(errors)} erreur(s)")
 
             return jsonify({
@@ -6194,7 +5878,10 @@ def create_hr_blueprint():
                 "files": copied_files,
                 "error_details": errors,
                 "folder_name": folder_row[0],
+                "session_id": int(next_session["id"]),
+                "session_index": int(next_session["session_index"]),
                 "schedule_schema_version": schedule_schema_version,
+                "occurrence_publish": occurrence_publish,
                 "archive": archive_result,
             }), 200
 

@@ -16,7 +16,6 @@ const PIPELINE_STAGES = [
 const STEP_ALIASES = {
   start: 'reac',
   plan_adherence_review: 'review',
-  humanization_review: 'review',
   audio_word_calibration: 'review',
   word_budget_review: 'review',
   done: 'done',
@@ -66,13 +65,6 @@ function statusView(job, autoPilotState) {
       className: 'border-red-200 bg-red-50 text-red-700',
     }
   }
-  if (autoStatus === 'stopped') {
-    return {
-      label: 'Interrompue',
-      icon: 'pause_circle',
-      className: 'border-amber-200 bg-amber-50 text-amber-800',
-    }
-  }
   if (
     autoStatus === 'running'
     || autoStatus === 'starting'
@@ -81,7 +73,7 @@ function statusView(job, autoPilotState) {
     return {
       label: queueStatus === 'retry_scheduled' ? 'Nouvelle tentative planifiée' : 'En cours',
       icon: 'hourglass_top',
-      className: 'border-violet-200 bg-violet-50 text-violet-700',
+      className: 'border-zinc-300 bg-zinc-100 text-zinc-800',
     }
   }
   if (autoStatus === 'done' || autoPilotState?.step === 'done') {
@@ -113,7 +105,6 @@ function canResumePipeline(job, autoPilotState) {
   const queueStatus = autoPilotState.queue?.status
   return Boolean(
     autoPilotState.status === 'error'
-    || autoPilotState.status === 'stopped'
     || autoPilotState.lock_stale
     || JOB_FAILURE_STATUSES.has(job.status)
     || QUEUE_RECOVERABLE_STATUSES.has(queueStatus)
@@ -169,9 +160,9 @@ function PipelineList({ jobs, selectedJobId, onSelect, loading }) {
             type="button"
             onClick={() => onSelect(item.id)}
             aria-pressed={selected}
-            className={`w-full rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${
+            className={`w-full rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30 ${
               selected
-                ? 'border-violet-400 bg-violet-50'
+                ? 'border-zinc-900 bg-zinc-100'
                 : 'border-slate-200 bg-white hover:bg-slate-50'
             }`}
           >
@@ -220,7 +211,7 @@ function PipelineProgress({ autoPilotState, events }) {
                 : isFailed
                   ? 'border-red-200 bg-red-50'
                   : isCurrent
-                    ? 'border-violet-300 bg-violet-50'
+                    ? 'border-zinc-300 bg-zinc-100'
                     : 'border-slate-200 bg-white'
             }`}
           >
@@ -231,7 +222,7 @@ function PipelineProgress({ autoPilotState, events }) {
                   : isFailed
                     ? 'bg-red-100 text-red-700'
                     : isCurrent
-                      ? 'bg-violet-100 text-violet-700'
+                      ? 'bg-zinc-200 text-zinc-900'
                       : 'bg-slate-100 text-slate-500'
               }`}
             >
@@ -479,7 +470,7 @@ export default function FormationPipeline() {
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex min-h-16 max-w-[1480px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-violet-700">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-900">
               <Icon name="account_tree" className="text-xl" />
             </span>
             <div className="min-w-0">
@@ -489,7 +480,7 @@ export default function FormationPipeline() {
           </div>
           <a
             href="/dashboard-centre"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30"
           >
             <Icon name="arrow_back" className="text-lg" />
             <span className="hidden sm:inline">Retour aux professeurs IA</span>
@@ -586,7 +577,7 @@ export default function FormationPipeline() {
                       type="button"
                       onClick={resumePipeline}
                       disabled={resumeBusy}
-                      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+                      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
                     >
                       <Icon name={resumeBusy ? 'hourglass_top' : 'restart_alt'} className="text-lg" />
                       {resumeBusy ? 'Reprise en cours…' : 'Reprendre la pipeline'}
@@ -635,7 +626,7 @@ export default function FormationPipeline() {
               </section>
 
               <details className="rounded-xl border border-slate-200 bg-white">
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-sm font-semibold text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/40 sm:px-6">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-sm font-semibold text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-zinc-900/30 sm:px-6">
                   Journal technique récent
                   <Icon name="expand_more" className="text-lg text-slate-500" />
                 </summary>

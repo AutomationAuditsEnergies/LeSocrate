@@ -188,7 +188,6 @@ PIPELINE_REQUIRED_SCHEMA = {
         "text_content",
         "reviewed",
         "review_signature",
-        "humanized",
         "dirty",
         "structured_checkpoint_signature",
         "structured_checkpoint_json",

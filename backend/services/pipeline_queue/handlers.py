@@ -58,12 +58,8 @@ def _log_pipeline_completed(item: WorkItem, job: dict) -> None:
         step="done",
         status="completed",
         model=job.get("auto_pilot_model"),
-        message=(
-            "Auto-pilot texte et slides terminé"
-            if not job.get("auto_pilot_generate_audio")
-            else "Auto-pilot terminé"
-        ),
-        data={"generate_audio": bool(job.get("auto_pilot_generate_audio"))},
+        message="Auto-pilot texte et slides terminé",
+        data={"audio_generation": "scheduled_per_occurrence_h72"},
     )
 
 
@@ -204,7 +200,7 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
         message=f"Étape auto-pilot démarrée : {step}",
         data={
             "tts_mode": job.get("auto_pilot_tts_mode"),
-            "generate_audio": bool(job.get("auto_pilot_generate_audio")),
+            "audio_generation": "scheduled_per_occurrence_h72",
             "expected_step": expected_step,
         },
     )

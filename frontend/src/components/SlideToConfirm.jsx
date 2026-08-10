@@ -6,8 +6,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 // ouvert/fermé selon l'état `locked`. Cohérent DESIGN.md "Slide to Confirm =
 // signature interaction" avec une sortie franche, sans rebond décoratif.
 
-const Icon = ({ name, className = '' }) => (
-  <span className={`material-icons ${className}`}>{name}</span>
+const Icon = ({ name, className = '', ...props }) => (
+  <span className={`material-icons ${className}`} {...props}>{name}</span>
 )
 
 export default function SlideToConfirm({ locked, onConfirm, disabled, compact = false, onDark = false }) {
@@ -127,7 +127,7 @@ export default function SlideToConfirm({ locked, onConfirm, disabled, compact = 
     : compact
       ? '1px solid oklch(89.8% 0.014 260)'
       : 'none'
-  const fillColor = onDark ? 'rgba(255,255,255,0.3)' : '#8B5CF6'
+  const fillColor = onDark ? 'rgba(255,255,255,0.3)' : '#18181B'
   const thumbIconColor = confirmed ? '#10b981' : '#1e293b'
   const labelColor = confirmed
     ? (onDark ? '#ffffff' : '#10b981')
@@ -246,19 +246,19 @@ export function BackupPipeline({ job, colors, darkMode }) {
                 {i > 0 && (
                   <div
                     className="h-px flex-1 transition-colors duration-500"
-                    style={{ backgroundColor: getStepState(steps[i - 1].step) === 'done' ? (darkMode ? '#8B5CF6' : '#10b981') : colors.border }}
+                    style={{ backgroundColor: getStepState(steps[i - 1].step) === 'done' ? (darkMode ? '#CBD5E1' : '#10b981') : colors.border }}
                   />
                 )}
                 <div
                   className="relative flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all duration-500"
                   style={{
                     borderColor:
-                      state === 'done' ? (darkMode ? '#8B5CF6' : '#10b981') :
-                      state === 'running' ? '#8B5CF6' :
+                      state === 'done' ? (darkMode ? '#CBD5E1' : '#10b981') :
+                      state === 'running' ? (darkMode ? '#F4F4F5' : '#18181B') :
                       state === 'error' ? '#dc2626' :
                       (darkMode ? '#475569' : '#cbd5e1'),
                     backgroundColor:
-                      state === 'done' ? (darkMode ? '#8B5CF6' : '#10b981') :
+                      state === 'done' ? (darkMode ? '#CBD5E1' : '#10b981') :
                       state === 'running' ? colors.innerBg :
                       state === 'error' ? (darkMode ? '#450a0a' : '#fee2e2') :
                       colors.cardBg,
@@ -270,7 +270,7 @@ export function BackupPipeline({ job, colors, darkMode }) {
                   {state === 'running' && (
                     <div
                       className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-t-transparent"
-                      style={{ borderColor: darkMode ? '#a855f7' : '#10b981', borderTopColor: 'transparent' }}
+                      style={{ borderColor: darkMode ? '#F4F4F5' : '#10b981', borderTopColor: 'transparent' }}
                     />
                   )}
                   {state === 'error' && (
@@ -283,7 +283,7 @@ export function BackupPipeline({ job, colors, darkMode }) {
                 {i < steps.length - 1 && (
                   <div
                     className="h-px flex-1 transition-colors duration-500"
-                    style={{ backgroundColor: state === 'done' ? (darkMode ? '#8B5CF6' : '#10b981') : colors.border }}
+                    style={{ backgroundColor: state === 'done' ? (darkMode ? '#CBD5E1' : '#10b981') : colors.border }}
                   />
                 )}
               </div>
@@ -291,7 +291,7 @@ export function BackupPipeline({ job, colors, darkMode }) {
                 className="mt-2 text-center text-[10px] leading-tight transition-colors duration-300"
                 style={{
                   color:
-                    state === 'done' ? (darkMode ? '#c084fc' : '#0f172a') :
+                    state === 'done' ? (darkMode ? '#F4F4F5' : '#0f172a') :
                     state === 'running' ? colors.text :
                     state === 'error' ? (darkMode ? '#fca5a5' : '#dc2626') :
                     colors.textMuted,

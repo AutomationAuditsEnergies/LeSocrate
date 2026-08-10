@@ -53,14 +53,15 @@ export function validateRecruitmentAnswer(stepId, rawValue) {
     }
   }
 
-  if (stepId === 'trainingDays') {
-    const days = Number(normalized)
-    if (!Number.isInteger(days) || days < 1 || days > 365) {
+  if (stepId === 'durationValue') {
+    const duration = Number(normalized.replace(',', '.'))
+    if (!Number.isFinite(duration) || duration <= 0 || duration > 104) {
       return {
         valid: false,
-        message: 'Indiquez un nombre de journées compris entre 1 et 365.',
+        message: 'Indiquez une durée positive, par exemple « 12 semaines » ou « 6 mois ».',
       }
     }
+    return { valid: true, value: duration }
   }
 
   return { valid: true, value }

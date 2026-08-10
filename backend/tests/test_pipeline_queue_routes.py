@@ -20,7 +20,6 @@ def _job(**overrides):
         "auto_pilot_step": None,
         "auto_pilot_model": "pro",
         "auto_pilot_tts_mode": "gtts",
-        "auto_pilot_generate_audio": False,
         "auto_pilot_locked_at": None,
     }
     value.update(overrides)
@@ -61,8 +60,7 @@ class PipelineQueueRouteTest(unittest.TestCase):
     def test_manual_start_requires_a_teacher_order(self):
         response = self.client.post("/api/formation/42/run-auto", json={})
 
-        self.assertEqual(response.status_code, 410)
-        self.assertEqual(response.get_json()["code"], "teacher_order_required")
+        self.assertEqual(response.status_code, 404)
 
     def test_legacy_partial_resume_is_retired(self):
         response = self.client.post(
@@ -70,11 +68,7 @@ class PipelineQueueRouteTest(unittest.TestCase):
             json={"from_step": "slides"},
         )
 
-        self.assertEqual(response.status_code, 410)
-        self.assertEqual(
-            response.get_json()["code"],
-            "durable_pipeline_resume_required",
-        )
+        self.assertEqual(response.status_code, 404)
 
     def test_legacy_resume_content_cannot_bypass_the_durable_queue(self):
         with patch(
@@ -87,16 +81,7 @@ class PipelineQueueRouteTest(unittest.TestCase):
                 json={"model": "pro"},
             )
 
-        self.assertEqual(response.status_code, 410)
-        payload = response.get_json()
-        self.assertEqual(
-            payload["code"],
-            "durable_pipeline_resume_required",
-        )
-        self.assertEqual(
-            payload["resume_endpoint"],
-            "/api/formation/42/run-auto/resume",
-        )
+        self.assertEqual(response.status_code, 404)
         run_content.assert_not_called()
         get_job.assert_not_called()
 
@@ -159,9 +144,7 @@ class PipelineQueueRouteTest(unittest.TestCase):
         ) as cancel:
             response = self.client.post("/api/formation/42/run-auto/stop")
 
-        self.assertEqual(response.status_code, 410)
-        payload = response.get_json()
-        self.assertEqual(payload["code"], "durable_pipeline_only")
+        self.assertEqual(response.status_code, 404)
         get_job.assert_not_called()
         update_job.assert_not_called()
         cancel.assert_not_called()
@@ -193,17 +176,7 @@ class PipelineQueueRouteTest(unittest.TestCase):
         ) as create_aggregate:
             responses = [self.client.post(path, json={}) for path in paths]
 
-        self.assertTrue(all(response.status_code == 410 for response in responses))
-        self.assertEqual(
-            [response.get_json()["code"] for response in responses[:2]],
-            ["teacher_order_required", "teacher_order_required"],
-        )
-        self.assertTrue(
-            all(
-                response.get_json()["code"] == "durable_pipeline_only"
-                for response in responses[2:]
-            )
-        )
+        self.assertTrue(all(response.status_code == 404 for response in responses))
         get_job.assert_not_called()
         update_job.assert_not_called()
         create_aggregate.assert_not_called()
@@ -286,17 +259,14 @@ class PipelineQueueRouteTest(unittest.TestCase):
             error_message=None,
         )
 
-    def test_historical_claude_model_names_resume_on_deepseek_profiles(self):
-        self.assertEqual(_normalize_pipeline_model_choice("sonnet"), "pro")
-        self.assertEqual(
-            _normalize_pipeline_model_choice("claude-sonnet-4-20250514"),
-            "pro",
+    def test_only_deepseek_profiles_are_accepted(self):
+        self.assertEqual(_normalize_pipeline_model_choice("pro"), "pro")
+        self.assertEqual(_normalize_pipeline_model_choice("flash"), "flash")
+        self.assertIsNone(_normalize_pipeline_model_choice("sonnet"))
+        self.assertIsNone(
+            _normalize_pipeline_model_choice("claude-sonnet-4-20250514")
         )
-        self.assertEqual(_normalize_pipeline_model_choice("haiku"), "flash")
-        self.assertEqual(
-            _normalize_pipeline_model_choice("claude-haiku-4-5-20251001"),
-            "flash",
-        )
+        self.assertIsNone(_normalize_pipeline_model_choice("haiku"))
 
 
 if __name__ == "__main__":

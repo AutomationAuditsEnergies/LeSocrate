@@ -914,7 +914,7 @@ def init_database(_recovered_from_corruption: bool = False):
         except Exception:
             pass  # Colonne déjà présente
 
-        # Migration : colonne reviewed (reviewer conformité, cf. memoire/03-decisions/pipeline-dual-api-et-claude-code.md)
+        # Migration : état du reviewer de conformité.
         try:
             cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN reviewed INTEGER DEFAULT 0")
             logger.info("✅ Colonne reviewed ajoutée à content_generation_segments")
@@ -922,14 +922,14 @@ def init_database(_recovered_from_corruption: bool = False):
             pass
         # Compatibilité historique : conserve la provenance des artefacts déjà
         # produits avant le passage à DeepSeek uniquement. Le runtime n'écrit
-        # plus de nouvelles valeurs ``claude_code_*``.
+        # plus de nouvelles valeurs provenant de l'ancien exécuteur local.
         try:
             cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN generated_via TEXT")
             logger.info("✅ Colonne generated_via ajoutée à content_generation_segments")
         except Exception:
             pass
         # Migration : colonne review_error — message d'erreur quand l'appel
-        # reviewer Claude a échoué. NULL si jamais audité ou audit OK.
+        # reviewer de conformité a échoué. NULL si jamais audité ou audit OK.
         # Le polling frontend considère un segment comme "traité" si
         # reviewed=1 OU review_error IS NOT NULL (les deux comptent pour
         # arrêter la barre de progression sans mentir sur la conformité).
@@ -948,21 +948,29 @@ def init_database(_recovered_from_corruption: bool = False):
             logger.info("✅ Colonne review_signature ajoutée à content_generation_segments")
         except Exception:
             pass
-        try:
-            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0")
-            logger.info("✅ Colonne humanized ajoutée à content_generation_segments")
-        except Exception:
-            pass
-        try:
-            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT")
-            logger.info("✅ Colonne humanization_error ajoutée à content_generation_segments")
-        except Exception:
-            pass
-        try:
-            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT")
-            logger.info("✅ Colonne humanization_signature ajoutée à content_generation_segments")
-        except Exception:
-            pass
+        cursor.execute("PRAGMA table_info(content_generation_segments)")
+        content_segment_columns = {col[1] for col in cursor.fetchall()}
+        for obsolete_column in (
+            "humanized",
+            "humanization_error",
+            "humanization_signature",
+        ):
+            if obsolete_column not in content_segment_columns:
+                continue
+            try:
+                cursor.execute(
+                    f"ALTER TABLE content_generation_segments DROP COLUMN {obsolete_column}"
+                )
+                logger.info(
+                    "✅ Colonne obsolète %s supprimée de content_generation_segments",
+                    obsolete_column,
+                )
+            except Exception:
+                logger.warning(
+                    "⚠️ Colonne obsolète %s non supprimée de content_generation_segments",
+                    obsolete_column,
+                    exc_info=True,
+                )
         try:
             cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN structured_checkpoint_signature TEXT")
             logger.info("✅ Colonne structured_checkpoint_signature ajoutée à content_generation_segments")
@@ -1111,15 +1119,34 @@ def init_database(_recovered_from_corruption: bool = False):
         """)
         logger.info("✅ Table formation_pipeline_jobs créée/vérifiée")
 
-        # Migration : colonnes rc_text + rome_text
         cursor.execute("PRAGMA table_info(formation_pipeline_jobs)")
         fpj_cols = [col[1] for col in cursor.fetchall()]
-        if "rc_text" not in fpj_cols:
-            cursor.execute("ALTER TABLE formation_pipeline_jobs ADD COLUMN rc_text TEXT")
-            logger.info("✅ Colonne rc_text ajoutée à formation_pipeline_jobs")
-        if "rome_text" not in fpj_cols:
-            cursor.execute("ALTER TABLE formation_pipeline_jobs ADD COLUMN rome_text TEXT")
-            logger.info("✅ Colonne rome_text ajoutée à formation_pipeline_jobs")
+        for obsolete_column in (
+            "rc_text",
+            "rome_text",
+            "auto_pilot_use_cc",
+            "auto_pilot_volume_done",
+            "auto_pilot_generate_audio",
+            "auto_pilot_skip_vs",
+        ):
+            if obsolete_column not in fpj_cols:
+                continue
+            try:
+                cursor.execute(
+                    f"ALTER TABLE formation_pipeline_jobs DROP COLUMN {obsolete_column}"
+                )
+                logger.info(
+                    "✅ Colonne obsolète %s supprimée de formation_pipeline_jobs",
+                    obsolete_column,
+                )
+            except Exception:
+                logger.warning(
+                    "⚠️ Colonne obsolète %s non supprimée de formation_pipeline_jobs",
+                    obsolete_column,
+                    exc_info=True,
+                )
+        cursor.execute("PRAGMA table_info(formation_pipeline_jobs)")
+        fpj_cols = [col[1] for col in cursor.fetchall()]
         _schedule_job_cols = {
             "schedule_schema_version": "INTEGER NOT NULL DEFAULT 1",
             "schedule_snapshot_json": "TEXT",
@@ -1162,9 +1189,7 @@ def init_database(_recovered_from_corruption: bool = False):
                 ("newpiprod@gmail.com", "newpiprod@gmail.com"),
             )
 
-        # Compatibilité historique des provenances. Les valeurs
-        # ``claude_code_*`` existantes restent lisibles, mais ne sont plus
-        # produites depuis le passage à DeepSeek uniquement.
+        # Provenance des générations DeepSeek.
         for col in ("kb_generated_via", "global_program_generated_via", "daily_programs_generated_via"):
             if col not in fpj_cols:
                 cursor.execute(f"ALTER TABLE formation_pipeline_jobs ADD COLUMN {col} TEXT")
@@ -1176,10 +1201,6 @@ def init_database(_recovered_from_corruption: bool = False):
             "auto_pilot_step":    "TEXT",
             "auto_pilot_model":   "TEXT",
             "auto_pilot_tts_mode": "TEXT",
-            "auto_pilot_use_cc":  "INTEGER DEFAULT 0",
-            "auto_pilot_skip_vs": "INTEGER DEFAULT 0",
-            "auto_pilot_generate_audio": "INTEGER DEFAULT 0",
-            "auto_pilot_volume_done": "INTEGER DEFAULT 0",
             "auto_pilot_post_review_docs_done": "INTEGER DEFAULT 0",
             "auto_pilot_error":   "TEXT",
             "auto_pilot_locked_at": "TIMESTAMP",
@@ -1191,7 +1212,7 @@ def init_database(_recovered_from_corruption: bool = False):
                 logger.info(f"✅ Colonne {col} ajoutée à formation_pipeline_jobs")
 
         # ─── Couche 1 : Knowledge Base enrichie depuis REAC ──────────────────
-        # Chaque compétence du REAC est enrichie par Claude avec définition
+        # Chaque compétence du REAC est enrichie par DeepSeek avec définition
         # pédagogique, études de cas, pièges, vocabulaire, contexte terrain,
         # liens connexes. Objectif : passer le matériau source de ~15k mots
         # (REAC brut) à ~120-150k mots exploitables pour la génération du

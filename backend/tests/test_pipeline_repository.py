@@ -78,8 +78,6 @@ def _make_pipeline_db():
             total_hours INTEGER NOT NULL,
             nb_days INTEGER NOT NULL,
             reac_text TEXT,
-            rc_text TEXT,
-            rome_text TEXT,
             global_program TEXT,
             global_program_validated INTEGER DEFAULT 0,
             daily_programs TEXT DEFAULT '[]',
@@ -93,10 +91,6 @@ def _make_pipeline_db():
             auto_pilot_step TEXT,
             auto_pilot_model TEXT,
             auto_pilot_tts_mode TEXT,
-            auto_pilot_use_cc INTEGER DEFAULT 0,
-            auto_pilot_skip_vs INTEGER DEFAULT 0,
-            auto_pilot_generate_audio INTEGER DEFAULT 0,
-            auto_pilot_volume_done INTEGER DEFAULT 0,
             auto_pilot_post_review_docs_done INTEGER DEFAULT 0,
             auto_pilot_error TEXT,
             auto_pilot_locked_at TIMESTAMP,
@@ -159,9 +153,6 @@ def _make_pipeline_db():
             text_content TEXT DEFAULT '',
             word_count INTEGER DEFAULT 0,
             dirty INTEGER DEFAULT 0,
-            humanized INTEGER DEFAULT 0,
-            humanization_error TEXT,
-            humanization_signature TEXT,
             reviewed INTEGER DEFAULT 0,
             review_error TEXT,
             review_signature TEXT,
@@ -519,11 +510,10 @@ class PipelineRepositoryTest(unittest.TestCase):
             repo.update_pipeline_job(
                 42,
                 auto_pilot_enabled=1,
-                auto_pilot_use_cc=0,
-                auto_pilot_generate_audio="true",
+                auto_pilot_post_review_docs_done="true",
             )
 
-        self.assertEqual(cursor.calls[0][1], [True, False, True, 42])
+        self.assertEqual(cursor.calls[0][1], [True, True, 42])
 
     def test_postgres_volume_audit_rows_never_open_sqlite(self):
         expected = [{
@@ -1131,11 +1121,10 @@ class PipelineRepositoryTest(unittest.TestCase):
             segment_id=rows[0]["id"],
             text_content="<<<BLOC_AUDIO_1>>>\n\nTexte calibre",
             word_count=2,
-            humanization_signature="sig-audio",
         )
         calibrated = repo.list_completed_content_segment_rows(job["id"])[0]
         self.assertEqual(calibrated["text_content"], "<<<BLOC_AUDIO_1>>>\n\nTexte calibre")
-        self.assertTrue(calibrated["humanized"])
+        self.assertTrue(calibrated["dirty"])
         self.assertFalse(calibrated["reviewed"])
 
         repo.update_content_segment_plan_repair(
@@ -1145,7 +1134,7 @@ class PipelineRepositoryTest(unittest.TestCase):
         )
         repaired = repo.list_completed_content_segment_rows(job["id"])[0]
         self.assertEqual(repaired["text_content"], "Texte repare")
-        self.assertFalse(repaired["humanized"])
+        self.assertTrue(repaired["dirty"])
         self.assertFalse(repaired["reviewed"])
 
         repo.delete_content_segments_for_job(job["id"])
@@ -1274,33 +1263,31 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         repo.mark_content_segment_review_patched(
             segment_id=seg_id,
-            text_content="Texte humanise",
+            text_content="Texte revise",
             word_count=2,
-            reviewed_column="humanized",
-            error_column="humanization_error",
-            signature_column="humanization_signature",
-            review_signature="sig-human",
-            invalidate_compliance_on_change=True,
+            reviewed_column="reviewed",
+            error_column="review_error",
+            signature_column="review_signature",
+            review_signature="sig-review-2",
+            invalidate_compliance_on_change=False,
         )
         conn = sqlite3.connect(self.db_path)
         row = conn.execute(
             """
-            SELECT text_content, word_count, dirty, humanized, humanization_signature,
-                   reviewed, review_signature, text_content_pre_review
+            SELECT text_content, word_count, dirty, reviewed, review_signature,
+                   text_content_pre_review
             FROM content_generation_segments
             WHERE id = ?
             """,
             (seg_id,),
         ).fetchone()
         conn.close()
-        self.assertEqual(row[0], "Texte humanise")
+        self.assertEqual(row[0], "Texte revise")
         self.assertEqual(row[1], 2)
         self.assertEqual(row[2], 1)
         self.assertEqual(row[3], 1)
-        self.assertEqual(row[4], "sig-human")
-        self.assertEqual(row[5], 0)
-        self.assertIsNone(row[6])
-        self.assertEqual(row[7], "Texte a reviser")
+        self.assertEqual(row[4], "sig-review-2")
+        self.assertEqual(row[5], "Texte a reviser")
 
     def test_health_helpers_use_repository_storage(self):
         job_id = repo.create_pipeline_job(
@@ -1326,12 +1313,12 @@ class PipelineRepositoryTest(unittest.TestCase):
 
             INSERT INTO content_generation_segments
                 (job_id, sub_part_index, sub_part_name, passe, status, text_content,
-                 word_count, dirty, humanized, humanization_error, reviewed, review_error,
+                 word_count, dirty, reviewed, review_error,
                  text_content_pre_review)
             VALUES
-                (210, 0, 'Cours 1', 1, 'completed', 'Texte 1', 2, 1, 0, NULL, 1, NULL, 'Avant 1'),
-                (210, 0, 'Cours 1', 2, 'completed', 'Texte 2', 2, 0, 1, NULL, 0, NULL, NULL),
-                (211, 0, 'Cours 1', 1, 'pending', 'Texte 3', 2, 0, 0, NULL, 0, NULL, NULL);
+                (210, 0, 'Cours 1', 1, 'completed', 'Texte 1', 2, 1, 1, NULL, 'Avant 1'),
+                (210, 0, 'Cours 1', 2, 'completed', 'Texte 2', 2, 0, 0, NULL, NULL),
+                (211, 0, 'Cours 1', 1, 'pending', 'Texte 3', 2, 0, 0, NULL, NULL);
 
             INSERT INTO formation_modules
                 (source_pipeline_job_id, source_platform_id, tp_name, rncp_code, version, status)
@@ -1349,7 +1336,6 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         self.assertEqual(repo.count_completed_segments_for_folders([110, 111]), 2)
         self.assertEqual(repo.count_segments_with_pre_review_snapshot_for_folders([110, 111]), 1)
-        self.assertEqual(repo.count_unhumanized_segments_without_error_for_folders([110, 111]), 1)
         self.assertEqual(repo.count_unreviewed_segments_without_error_for_folders([110, 111]), 1)
         self.assertEqual(repo.count_dirty_completed_segments_for_folders([110, 111]), 1)
         completion_rows = repo.list_content_completion_rows_for_folders([110, 111])

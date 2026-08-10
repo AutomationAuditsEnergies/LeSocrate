@@ -1,4 +1,4 @@
-"""Run course scheduling, J-1 audio and reminder ticks outside the web process.
+"""Run course scheduling, H-72 audio and reminder ticks outside the web process.
 
 Use ``python -m workers.course_scheduler_worker`` for a dedicated singleton
 scheduler, or add ``--once`` for deployment smoke tests and cron-style runs.

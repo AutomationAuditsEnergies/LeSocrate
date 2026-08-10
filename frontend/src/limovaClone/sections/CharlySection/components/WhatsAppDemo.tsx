@@ -70,7 +70,14 @@ export const WhatsAppDemo = () => (
       <div className="cadrenza-phone-screen">
         <div className="cadrenza-phone-robot">
           <span className="cadrenza-phone-robot__glow" aria-hidden="true" />
-          <img src="/robot-blue.png" alt="" />
+          <img
+            src="/robot-blue-192.webp"
+            alt=""
+            width="192"
+            height="218"
+            loading="lazy"
+            decoding="async"
+          />
         </div>
 
         <section className="cadrenza-phone-calendar" aria-label="Calendrier de formation">

@@ -6448,7 +6448,6 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
     if not calibrated_blocks:
         return 0
 
-    review_signature = _current_humanization_review_signature()
     rows = list_completed_content_segment_rows(job["id"])
     if len(rows) < len(calibrated_blocks):
         raise ValueError(
@@ -6468,7 +6467,6 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
             segment_id=seg_id,
             text_content=stored_text,
             word_count=words,
-            humanization_signature=review_signature,
         )
 
     for row in rows[len(calibrated_blocks):]:
@@ -6476,7 +6474,6 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
             segment_id=row["id"],
             text_content="",
             word_count=0,
-            humanization_signature=review_signature,
         )
 
     update_content_generation_job(job["id"], total_words=total_words)
@@ -7443,9 +7440,7 @@ def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
         text = row["text_content"]
         word_count = row["word_count"]
         dirty = row["dirty"]
-        humanized = row["humanized"]
         reviewed = row["reviewed"]
-        humanization_error = row["humanization_error"]
         review_error = row["review_error"]
         marker_course_number = _extract_audio_block_number(text or "")
         course_number = marker_course_number or int(sub_idx or 0) + 1
@@ -7458,9 +7453,7 @@ def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
             "word_count": count_tts_spoken_words(clean_text),
             "stored_word_count": int(word_count or 0),
             "dirty": bool(dirty),
-            "humanized": bool(humanized),
             "reviewed": bool(reviewed),
-            "humanization_error": humanization_error or "",
             "review_error": review_error or "",
             "text": clean_text,
             "has_audio_marker": bool(marker_course_number),
@@ -10748,7 +10741,7 @@ def _run_plan_adherence_quality_loop(
     course_number = int(course_plan.get("course_number") or 0)
     if not review_timing:
         review_timing = (
-            "manual_before_humanization"
+            "manual_before_review"
             if include_budget_issues or allow_post_calibration
             else "after_section_generation_before_budget_calibration"
         )
@@ -13695,6 +13688,11 @@ def _build_contextual_break_audio(
             on_progress(message)
 
     def _fallback(reason: str):
+        if end_only_break:
+            raise RuntimeError(
+                f"{filename} doit être régénéré avec sa durée adaptative "
+                f"({reason}); un ancien audio ne peut pas être réutilisé."
+            )
         _emit(f"{filename} — audio pause réutilisable ({reason})...")
         try:
             return _get_recycled_qa_pause(filename), "audioqapause_fallback"
@@ -13829,6 +13827,9 @@ def _build_contextual_break_audio(
         if fixed_break:
             intro = fixed_break["intro"]
             outro = fixed_break["outro"]
+            if end_only_break:
+                outro = outro or intro
+                intro = ""
             _emit(f"{filename} — script fixe...")
             if basic_tts:
                 audio_bytes, final_duration = _build_timed_edge_break_audio(
@@ -14043,7 +14044,7 @@ def generate_audio_from_script(
         _measure_duration_ms,
     )
     from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
-    from services.azure_blob_service import blob_exists, upload_blob, CONTAINER_AUDIOS
+    from services.azure_blob_service import blob_exists, download_blob, upload_blob, CONTAINER_AUDIOS
 
     def _progress(step, total, msg):
         if on_progress:
@@ -14069,6 +14070,7 @@ def generate_audio_from_script(
         platform_id,
         folder_id=int(folder_id),
     )
+    dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_items)
     cours_durations_min = _course_durations_min_from_playlist(playlist_items)
     course_count = sum(1 for item in playlist_items if item[2] == "cours")
     if course_count <= 0:
@@ -14276,7 +14278,7 @@ def generate_audio_from_script(
     # ── 4. Générer la playlist : cours dirty + Q&A/pauses contextuels ──
     azure_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
     existing_playlist_files = set()
-    if preserve_existing:
+    if preserve_existing or dynamic_schedule:
         for item_filename, _duration_sec, _file_type, _bloc_num in playlist_items:
             blob_path = f"{azure_prefix}{item_filename}"
             try:
@@ -14291,7 +14293,7 @@ def generate_audio_from_script(
                     item_filename,
                     str(exc)[:220],
                 )
-        if existing_playlist_files:
+        if preserve_existing and existing_playlist_files:
             logger.info(
                 "PIPELINE_AUDIO_PRESERVE_EXISTING formation_job_id=%s content_job_id=%s folder_id=%s existing=%s",
                 formation_job_id,
@@ -14299,6 +14301,28 @@ def generate_audio_from_script(
                 folder_id,
                 sorted(existing_playlist_files),
             )
+    course_media_durations = {}
+    adaptive_manifest = None
+    effective_break_durations = {}
+    if dynamic_schedule:
+        for item_filename, _duration_sec, file_type, _bloc_num in playlist_items:
+            if file_type != "cours" or item_filename not in existing_playlist_files:
+                continue
+            try:
+                existing_bytes = download_blob(
+                    CONTAINER_AUDIOS,
+                    f"{azure_prefix}{item_filename}",
+                )
+                course_media_durations[item_filename] = _mp3_duration_seconds_no_ffprobe(
+                    existing_bytes
+                )
+            except Exception as exc:
+                logger.warning(
+                    "PIPELINE_AUDIO_EXISTING_DURATION_FAILED folder_id=%s filename=%s error=%s",
+                    folder_id,
+                    item_filename,
+                    str(exc)[:220],
+                )
     generated = []
     skipped = []
     slide_audio_timings = []
@@ -14662,6 +14686,7 @@ def generate_audio_from_script(
     break_workers = _break_audio_workers()
     parallel_breaks_enabled = (
         bool(parallel_breaks)
+        and not dynamic_schedule
         and include_breaks
         and force_all
         and not mock
@@ -14700,7 +14725,13 @@ def generate_audio_from_script(
         else:
             parallel_breaks_enabled = False
 
-    for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
+    indexed_playlist_items = list(enumerate(playlist_items))
+    if dynamic_schedule:
+        # Two-stage occurrence contract: every course MP3 is synthesized and
+        # measured before the first Q&A/pause MP3 is built.
+        indexed_playlist_items.sort(key=lambda entry: entry[1][2] != "cours")
+
+    for item_idx, (filename, duration_sec, file_type, bloc_num) in indexed_playlist_items:
         if target_filename and filename != target_filename:
             continue
         step = item_idx + 1
@@ -14719,7 +14750,11 @@ def generate_audio_from_script(
             duration_sec,
         )
 
-        if preserve_existing and filename in existing_playlist_files:
+        if (
+            preserve_existing
+            and filename in existing_playlist_files
+            and (file_type == "cours" or not dynamic_schedule)
+        ):
             logger.info(f"   ⏭️ {filename}: MP3 existant conservé")
             _progress(step, len(playlist_items), f"{filename} — conservé (déjà présent)")
             if file_type == "cours" and bloc:
@@ -14748,6 +14783,37 @@ def generate_audio_from_script(
             continue
 
         if file_type != "cours":
+            if dynamic_schedule and adaptive_manifest is None:
+                from services.adaptive_playback_service import build_occurrence_playback_manifest
+
+                missing_measures = [
+                    item[0]
+                    for item in playlist_items
+                    if item[2] == "cours" and item[0] not in course_media_durations
+                ]
+                if missing_measures:
+                    raise RuntimeError(
+                        "Durée réelle indisponible après la première passe audio : "
+                        + ", ".join(missing_measures)
+                    )
+                adaptive_manifest = build_occurrence_playback_manifest(
+                    playlist_items,
+                    course_media_durations,
+                    folder_id=int(folder_id),
+                )
+                effective_break_durations = {
+                    str(segment.get("filename") or ""): int(segment.get("effective_duration_sec") or 0)
+                    for segment in adaptive_manifest.get("segments") or []
+                    if segment.get("type") != "cours"
+                }
+                logger.info(
+                    "PIPELINE_AUDIO_ADAPTIVE_TIMELINE_READY folder_id=%s courses=%s breaks=%s",
+                    folder_id,
+                    len(course_media_durations),
+                    len(effective_break_durations),
+                )
+            if dynamic_schedule:
+                duration_sec = effective_break_durations.get(filename, duration_sec)
             if not include_breaks:
                 logger.info(f"   ⏭️ {filename}: break ignoré (génération cours uniquement)")
                 _progress(step, len(playlist_items), f"{filename} — ignoré")
@@ -14768,6 +14834,7 @@ def generate_audio_from_script(
             if (
                 not force_all
                 and dirty_count == 0
+                and not dynamic_schedule
                 and not (preserve_existing and filename not in existing_playlist_files)
             ):
                 logger.info(f"   ⏭️ {filename}: break conservé (aucun bloc cours dirty)")
@@ -14983,6 +15050,8 @@ def generate_audio_from_script(
             audio_bloc = parallel_result["audio_bloc"]
             voice_duration = float(parallel_result.get("voice_duration") or 0.0)
             final_duration = float(parallel_result.get("final_duration") or voice_duration)
+            if dynamic_schedule:
+                course_media_durations[filename] = final_duration
             fit_method = parallel_result.get("fit_method") or "fish_observe_parallel"
             attempts = parallel_result.get("attempts") or []
             actual_reading = parallel_result.get("actual_reading")
@@ -15332,6 +15401,8 @@ def generate_audio_from_script(
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 final_duration = target_sec
+        if dynamic_schedule:
+            course_media_durations[filename] = float(final_duration)
         if not mock and not bloc.get("dynamic_schedule"):
             _assert_audio_duration_within_slot(
                 filename,
@@ -15473,6 +15544,7 @@ def generate_audio_from_script(
         "mock": bool(mock),
         "course_blocs": course_script_plan,
         "planned_course_blocs": planned_course_script_plan,
+        "adaptive_playback_manifest": adaptive_manifest,
     }
     if saved_script_plan.get("course_bloc_overrides"):
         audio_plan_payload["course_bloc_overrides"] = saved_script_plan.get("course_bloc_overrides")
@@ -15503,6 +15575,7 @@ def generate_audio_from_script(
         "runtime_carryover_words": len(runtime_carryover_text.split()) if runtime_carryover_text else 0,
         "fast_tts_pipeline": bool(fast_tts_pipeline),
         "fast_tts_workers": _edge_tts_fast_workers() if fast_tts_pipeline else 1,
+        "adaptive_playback_manifest": adaptive_manifest,
     }
 
 
@@ -16367,7 +16440,6 @@ import json as _json
 import re as _re
 
 _REVIEW_MAX_PATCHES = 5
-_HUMANIZATION_MAX_PATCHES = 3
 _REVIEW_MAX_TOKENS = 2000
 
 
@@ -16382,7 +16454,6 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_RULESET_VERSION = "2026-05-31-compliance-v8-minimal"
-_HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v9-polish-only"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -16406,15 +16477,6 @@ _COMPLIANCE_REVIEW_RULE_GROUPS = [
     },
 ]
 
-_HUMANIZATION_REVIEW_RULE_GROUPS = [
-    {
-        "id": "humanisation_polish",
-        "label": "Finition orale légère",
-        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 113, 118],
-        "description": "Polish oral : rythme, respirations, transitions locales, densité, présence du formateur, anti-redondance. Ne restructure pas le cours.",
-    },
-]
-
 _REVIEW_RULE_GROUPS = _COMPLIANCE_REVIEW_RULE_GROUPS
 
 _RULES_CACHE = {"mtime": 0, "text": ""}
@@ -16432,11 +16494,10 @@ def _load_review_rules() -> str:
     """
     try:
         compliance_text, compliance_mtime = _load_structured_rule_file("compliance-rules.json")
-        humanization_text, humanization_mtime = _load_structured_rule_file("humanization-rules.json")
-        cache_key = ("modular", compliance_mtime, humanization_mtime)
+        cache_key = ("modular", compliance_mtime)
         if _RULES_CACHE["mtime"] == cache_key and _RULES_CACHE["text"]:
             return _RULES_CACHE["text"]
-        rules_text = compliance_text.rstrip() + "\n\n" + humanization_text.strip()
+        rules_text = compliance_text.rstrip()
         _RULES_CACHE["mtime"] = cache_key
         _RULES_CACHE["text"] = rules_text
         return rules_text
@@ -16504,14 +16565,6 @@ def _current_compliance_review_signature() -> str:
     )
 
 
-def _current_humanization_review_signature() -> str:
-    return _review_rules_signature(
-        _load_review_rules(),
-        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
-        version=_HUMANIZATION_RULESET_VERSION,
-    )
-
-
 def _ensure_review_state_columns() -> None:
     """Migrations légères pour tracer les deux passes de review."""
     global _REVIEW_SIGNATURE_COLUMNS_READY
@@ -16541,37 +16594,11 @@ def _build_review_prompt_focused(
     chunk_index: int = 1, chunk_total: int = 1, review_context: str = "",
 ) -> str:
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
-    is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
-    review_contract = _load_prompt_file(
-        "reviews",
-        "humanization-polish.md" if is_humanization_scope else "compliance-review.md",
-    )
-    max_patches = _HUMANIZATION_MAX_PATCHES if is_humanization_scope else _REVIEW_MAX_PATCHES
-    review_mode = (
-        "Pour les règles d'humanisation, tu fais une finition orale légère. "
-        "Tu corriges seulement ce qui sonne trop récité, trop dense, trop sec, "
-        "trop mécanique, redondant ou mal relié localement. Tu ne restructures "
-        "pas le cours et tu ne compenses pas un problème de plan."
-        if is_humanization_scope
-        else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
-    )
-    replacement_constraint = (
-        "- Pour l'humanisation, `replacement` peut ajouter une courte phrase orale, "
-        "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
-        "le rythme, sans changer le fond pédagogique ni le plan verrouillé. "
-        "Si la correction exigerait de réécrire toute une section ou de changer "
-        "l'architecture, renvoie plutôt {\"patches\": []}. Dans tous les cas, "
-        "respecte le budget audio : substitue et condense autant que possible, "
-        "ne gonfle pas le segment hors budget mots."
-        if is_humanization_scope
-        else "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
-    )
-    preference_constraint = (
-        "- Ne corrige QUE les non-conformités de rythme/humanisation du scope. "
-        "Pas de réécriture complète, pas de préférence personnelle hors règles."
-        if is_humanization_scope
-        else f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
-    )
+    review_contract = _load_prompt_file("reviews", "compliance-review.md")
+    max_patches = _REVIEW_MAX_PATCHES
+    review_mode = "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
+    replacement_constraint = "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
+    preference_constraint = f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
     return f"""Tu es un reviewer éditorial SPÉCIALISÉ. Tu reçois un extrait de cours oral et un sous-ensemble de règles à vérifier.
 
 CONTRAT DE REVIEW :
@@ -16871,13 +16898,8 @@ def _review_budget_guard_limit(original_word_count: int, review_kind: str) -> in
     marge, puis on rejette toute salve qui gonfle trop le segment.
     """
     original_word_count = max(0, int(original_word_count or 0))
-    is_humanization = (review_kind or "").strip().lower() == "humanization"
-    if is_humanization:
-        ratio = _env_float("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_RATIO", 0.03, min_value=0.0, max_value=0.20)
-        absolute = _env_int("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_WORDS", 120, min_value=1)
-    else:
-        ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
-        absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
+    ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
+    absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
     allowed_extra = max(absolute, int(original_word_count * ratio))
     return original_word_count + allowed_extra
 
@@ -16956,10 +16978,7 @@ def _run_content_review_pass(
         if on_progress:
             on_progress(step, total, msg)
 
-    allowed_columns = {
-        "reviewed", "review_error", "review_signature",
-        "humanized", "humanization_error", "humanization_signature",
-    }
+    allowed_columns = {"reviewed", "review_error", "review_signature"}
     for col in (reviewed_column, error_column, signature_column):
         if col not in allowed_columns:
             raise ValueError(f"Colonne review non autorisée : {col}")
@@ -17416,24 +17435,6 @@ def _run_content_review_pass(
         summary=summary,
     )
     return summary
-
-
-def run_humanization_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Passe 1 : finition orale légère avant la conformité stricte."""
-    return _run_content_review_pass(
-        folder_id,
-        on_progress=on_progress,
-        model=model,
-        force=force,
-        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
-        signature_version=_HUMANIZATION_RULESET_VERSION,
-        reviewed_column="humanized",
-        error_column="humanization_error",
-        signature_column="humanization_signature",
-        review_kind="humanization",
-        review_label="Humanisation",
-        invalidate_compliance_on_change=True,
-    )
 
 
 def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):

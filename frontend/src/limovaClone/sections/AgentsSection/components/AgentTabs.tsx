@@ -4,7 +4,7 @@ export const AgentTabs = () => {
       <div className="bg-[color(srgb_1_1_1_/_0.08)] shadow-[rgba(255,255,255,0.05)_0px_0px_32px_0px_inset,rgba(255,255,255,0.04)_0px_0px_6px_0px_inset] box-border caret-transparent text-[13.4615px] h-[37px] tracking-[-0.107692px] leading-[18.8462px] outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 pointer-events-none absolute no-underline translate-y-[47px] w-[163px] rounded-[15.1442px] inset-[0%] md:text-[14.2222px] md:h-[39px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:translate-x-[394px] md:w-[143px] md:rounded-2xl"></div>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] opacity-70 outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a1004dfefed3a5ef7ee37ab_TOM.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"
@@ -19,7 +19,7 @@ export const AgentTabs = () => {
       </button>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] opacity-70 outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a1004df3266658042972794_John.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"
@@ -34,7 +34,7 @@ export const AgentTabs = () => {
       </button>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] outline-transparent -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a1004df67fe551a2fefdc84_Charly.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"
@@ -49,7 +49,7 @@ export const AgentTabs = () => {
       </button>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] opacity-70 outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00be1cc782268ef26feaee_Lou.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"
@@ -64,7 +64,7 @@ export const AgentTabs = () => {
       </button>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] opacity-70 outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a1004df868518285571bf9e_Elio.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"
@@ -79,7 +79,7 @@ export const AgentTabs = () => {
       </button>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] opacity-70 outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a1004dfe987afc3fd000d6b_Manue.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"
@@ -94,7 +94,7 @@ export const AgentTabs = () => {
       </button>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] opacity-70 outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a1004df5bb681ec04cb1f59_Julia.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"
@@ -109,7 +109,7 @@ export const AgentTabs = () => {
       </button>
       <button className="items-center bg-transparent caret-transparent gap-x-[8.41346px] flex text-[13.4615px] justify-start tracking-[normal] leading-[18.8462px] min-h-[auto] min-w-[auto] opacity-70 outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 relative gap-y-[8.41346px] text-left no-underline text-nowrap pl-[5.04808px] pr-[16.8269px] py-[5.04808px] rounded-[15.1442px] md:gap-x-[8.88889px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[8.88889px] md:pl-[5.33333px] md:pr-[17.7778px] md:py-[5.33333px] md:rounded-2xl">
         <div className="items-center bg-[color(srgb_1_1_1_/_0.06)] box-border caret-transparent flex shrink-0 text-[13.4615px] h-[26.9231px] justify-center leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 relative no-underline text-nowrap w-[26.9231px] z-[1] overflow-hidden pt-[3.36538px] px-[1.68269px] rounded-[10.0962px] md:text-[14.2222px] md:h-[28.4444px] md:leading-[19.9111px] md:w-[28.4444px] md:pt-[3.55556px] md:px-[1.77778px] md:rounded-[10.6667px]">
-          <img
+          <img loading="lazy" decoding="async"
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a1004df239e99552b767018_Rony.avif"
             alt=""
             className="box-border caret-transparent text-[13.4615px] h-full leading-[18.8462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline text-nowrap w-full md:text-[14.2222px] md:leading-[19.9111px]"

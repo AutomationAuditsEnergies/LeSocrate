@@ -36,8 +36,6 @@ PIPELINE_JOB_COLUMNS = [
     "schedule_hash",
     "schedule_locked_at",
     "reac_text",
-    "rc_text",
-    "rome_text",
     "global_program",
     "global_program_validated",
     "daily_programs",
@@ -51,10 +49,6 @@ PIPELINE_JOB_COLUMNS = [
     "auto_pilot_step",
     "auto_pilot_model",
     "auto_pilot_tts_mode",
-    "auto_pilot_use_cc",
-    "auto_pilot_skip_vs",
-    "auto_pilot_generate_audio",
-    "auto_pilot_volume_done",
     "auto_pilot_post_review_docs_done",
     "auto_pilot_error",
     "auto_pilot_locked_at",
@@ -67,8 +61,6 @@ PIPELINE_JOB_UPDATE_COLUMNS = {
     "status",
     "rncp_code",
     "reac_text",
-    "rc_text",
-    "rome_text",
     "global_program",
     "global_program_validated",
     "daily_programs",
@@ -81,10 +73,6 @@ PIPELINE_JOB_UPDATE_COLUMNS = {
     "auto_pilot_step",
     "auto_pilot_model",
     "auto_pilot_tts_mode",
-    "auto_pilot_use_cc",
-    "auto_pilot_skip_vs",
-    "auto_pilot_generate_audio",
-    "auto_pilot_volume_done",
     "auto_pilot_post_review_docs_done",
     "auto_pilot_error",
     "auto_pilot_locked_at",
@@ -95,10 +83,6 @@ PIPELINE_JOB_BOOL_COLUMNS = {
     "global_program_validated",
     "daily_programs_validated",
     "auto_pilot_enabled",
-    "auto_pilot_use_cc",
-    "auto_pilot_skip_vs",
-    "auto_pilot_generate_audio",
-    "auto_pilot_volume_done",
     "auto_pilot_post_review_docs_done",
 }
 
@@ -106,9 +90,6 @@ CONTENT_REVIEW_STATE_COLUMNS = {
     "reviewed",
     "review_error",
     "review_signature",
-    "humanized",
-    "humanization_error",
-    "humanization_signature",
 }
 
 POSTGRES_TRANSIENT_ERROR_MARKERS = (
@@ -1197,15 +1178,13 @@ def get_latest_review_report_row(
     *,
     job_id: int,
     folder_id: int,
-    kind: str = "compliance",
 ) -> dict[str, Any] | None:
     ensure_pipeline_observability_tables()
     ph = _placeholder()
-    source_filter = "source LIKE '%%humanization%%'" if kind == "humanization" else "source NOT LIKE '%%humanization%%'"
     query = f"""
         SELECT id, source, generated_via, report_json, created_at
         FROM content_review_reports
-        WHERE job_id = {ph} AND folder_id = {ph} AND {source_filter}
+        WHERE job_id = {ph} AND folder_id = {ph}
         ORDER BY created_at DESC, id DESC
         LIMIT 1
     """
@@ -1857,18 +1836,14 @@ def save_completed_content_segment(
                     INSERT INTO content_generation_segments
                         (job_id, sub_part_index, sub_part_name, passe, status,
                          text_content, word_count, dirty,
-                         humanized, humanization_error, humanization_signature,
                          reviewed, review_error, review_signature)
-                    VALUES (%s, %s, %s, %s, 'completed', %s, %s, TRUE, FALSE, NULL, NULL, FALSE, NULL, NULL)
+                    VALUES (%s, %s, %s, %s, 'completed', %s, %s, TRUE, FALSE, NULL, NULL)
                     ON CONFLICT (job_id, sub_part_index, passe) DO UPDATE SET
                          sub_part_name = EXCLUDED.sub_part_name,
                          status = 'completed',
                          text_content = EXCLUDED.text_content,
                          word_count = EXCLUDED.word_count,
                          dirty = TRUE,
-                         humanized = FALSE,
-                         humanization_error = NULL,
-                         humanization_signature = NULL,
                          reviewed = FALSE,
                          review_error = NULL,
                          review_signature = NULL
@@ -1885,9 +1860,8 @@ def save_completed_content_segment(
             INSERT OR REPLACE INTO content_generation_segments
                 (job_id, sub_part_index, sub_part_name, passe, status,
                  text_content, word_count, dirty,
-                 humanized, humanization_error, humanization_signature,
                  reviewed, review_error, review_signature)
-            VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
+            VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL)
             """,
             (job_id, sub_part_index, sub_part_name, passe, text_content, word_count),
         )
@@ -1924,19 +1898,15 @@ def save_completed_content_segments(segments: list[dict[str, Any]]) -> None:
                     INSERT INTO content_generation_segments
                         (job_id, sub_part_index, sub_part_name, passe, status,
                          text_content, word_count, dirty,
-                         humanized, humanization_error, humanization_signature,
                          reviewed, review_error, review_signature)
                     VALUES (%s, %s, %s, %s, 'completed', %s, %s,
-                            TRUE, FALSE, NULL, NULL, FALSE, NULL, NULL)
+                            TRUE, FALSE, NULL, NULL)
                     ON CONFLICT (job_id, sub_part_index, passe) DO UPDATE SET
                         sub_part_name = EXCLUDED.sub_part_name,
                         status = 'completed',
                         text_content = EXCLUDED.text_content,
                         word_count = EXCLUDED.word_count,
                         dirty = TRUE,
-                        humanized = FALSE,
-                        humanization_error = NULL,
-                        humanization_signature = NULL,
                         reviewed = FALSE,
                         review_error = NULL,
                         review_signature = NULL
@@ -1952,9 +1922,8 @@ def save_completed_content_segments(segments: list[dict[str, Any]]) -> None:
             INSERT OR REPLACE INTO content_generation_segments
                 (job_id, sub_part_index, sub_part_name, passe, status,
                  text_content, word_count, dirty,
-                 humanized, humanization_error, humanization_signature,
                  reviewed, review_error, review_signature)
-            VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
+            VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL)
             """,
             rows,
         )
@@ -2092,20 +2061,16 @@ def save_structured_content_checkpoint(
                     INSERT INTO content_generation_segments
                         (job_id, sub_part_index, sub_part_name, passe, status,
                          text_content, word_count, dirty,
-                         humanized, humanization_error, humanization_signature,
                          reviewed, review_error, review_signature,
                          structured_checkpoint_signature, structured_checkpoint_json)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
-                            FALSE, NULL, NULL, FALSE, NULL, NULL, %s, %s::jsonb)
+                            FALSE, NULL, NULL, %s, %s::jsonb)
                     ON CONFLICT (job_id, sub_part_index, passe) DO UPDATE SET
                          sub_part_name = EXCLUDED.sub_part_name,
                          status = EXCLUDED.status,
                          text_content = EXCLUDED.text_content,
                          word_count = EXCLUDED.word_count,
                          dirty = EXCLUDED.dirty,
-                         humanized = FALSE,
-                         humanization_error = NULL,
-                         humanization_signature = NULL,
                          reviewed = FALSE,
                          review_error = NULL,
                          review_signature = NULL,
@@ -2134,19 +2099,15 @@ def save_structured_content_checkpoint(
             INSERT INTO content_generation_segments
                 (job_id, sub_part_index, sub_part_name, passe, status,
                  text_content, word_count, dirty,
-                 humanized, humanization_error, humanization_signature,
                  reviewed, review_error, review_signature,
                  structured_checkpoint_signature, structured_checkpoint_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 0, NULL, NULL, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)
             ON CONFLICT(job_id, sub_part_index, passe) DO UPDATE SET
                 sub_part_name = excluded.sub_part_name,
                 status = excluded.status,
                 text_content = excluded.text_content,
                 word_count = excluded.word_count,
                 dirty = excluded.dirty,
-                humanized = 0,
-                humanization_error = NULL,
-                humanization_signature = NULL,
                 reviewed = 0,
                 review_error = NULL,
                 review_signature = NULL,
@@ -2256,19 +2217,17 @@ def mark_content_segment_modified(job_id: int, sub_part_index: int, passe: int) 
     ph = _placeholder()
     query = f"""
         UPDATE content_generation_segments
-        SET dirty = {ph},
-            humanized = {ph}, humanization_error = NULL, humanization_signature = NULL,
-            reviewed = {ph}, review_error = NULL, review_signature = NULL
+        SET dirty = {ph}, reviewed = {ph}, review_error = NULL, review_signature = NULL
         WHERE job_id = {ph} AND sub_part_index = {ph} AND passe = {ph}
     """
     if _pipeline_primary_backend() == "postgres":
-        params = (True, False, False, job_id, sub_part_index, passe)
+        params = (True, False, job_id, sub_part_index, passe)
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
         return
 
-    params = (1, 0, 0, job_id, sub_part_index, passe)
+    params = (1, 0, job_id, sub_part_index, passe)
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -2307,10 +2266,8 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
     if _pipeline_primary_backend() == "postgres":
         query = f"""
             SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
-                   text_content_pre_review,
-                   COALESCE(humanized, FALSE) AS humanized,
-                   COALESCE(reviewed, FALSE) AS reviewed,
-                   humanization_error, review_error
+                   text_content_pre_review, COALESCE(reviewed, FALSE) AS reviewed,
+                   review_error
             FROM content_generation_segments
             WHERE job_id = {ph} AND status = 'completed'
             ORDER BY sub_part_index ASC, passe ASC
@@ -2322,9 +2279,8 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
 
     query = f"""
         SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
-               text_content_pre_review,
-               COALESCE(humanized, 0) AS humanized, COALESCE(reviewed, 0) AS reviewed,
-               humanization_error, review_error
+               text_content_pre_review, COALESCE(reviewed, 0) AS reviewed,
+               review_error
         FROM content_generation_segments
         WHERE job_id = {ph} AND status = 'completed'
         ORDER BY sub_part_index ASC, passe ASC
@@ -2431,13 +2387,11 @@ def update_content_segment_audio_calibration(
     segment_id: int,
     text_content: str,
     word_count: int,
-    humanization_signature: str,
 ) -> None:
     ph = _placeholder()
     query = f"""
         UPDATE content_generation_segments
         SET text_content = {ph}, word_count = {ph}, dirty = {ph},
-            humanized = {ph}, humanization_error = NULL, humanization_signature = {ph},
             reviewed = {ph}, review_error = NULL, review_signature = NULL
         WHERE id = {ph}
     """
@@ -2446,8 +2400,6 @@ def update_content_segment_audio_calibration(
             text_content,
             word_count,
             True,
-            True,
-            humanization_signature,
             False,
             segment_id,
         )
@@ -2456,7 +2408,7 @@ def update_content_segment_audio_calibration(
                 cur.execute(query, params)
         return
 
-    params = (text_content, word_count, 1, 1, humanization_signature, 0, segment_id)
+    params = (text_content, word_count, 1, 0, segment_id)
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -2476,18 +2428,17 @@ def update_content_segment_plan_repair(
     query = f"""
         UPDATE content_generation_segments
         SET text_content = {ph}, word_count = {ph}, dirty = {ph},
-            humanized = {ph}, humanization_error = NULL, humanization_signature = NULL,
             reviewed = {ph}, review_error = NULL, review_signature = NULL
         WHERE id = {ph}
     """
     if _pipeline_primary_backend() == "postgres":
-        params = (text_content, word_count, True, False, False, segment_id)
+        params = (text_content, word_count, True, False, segment_id)
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
         return
 
-    params = (text_content, word_count, 1, 0, 0, segment_id)
+    params = (text_content, word_count, 1, 0, segment_id)
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -2507,9 +2458,6 @@ def ensure_content_review_state_columns() -> None:
     try:
         for sql in (
             "ALTER TABLE content_generation_segments ADD COLUMN review_signature TEXT",
-            "ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0",
-            "ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT",
-            "ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT",
         ):
             try:
                 cursor.execute(sql)
@@ -3221,18 +3169,6 @@ def count_segments_with_pre_review_snapshot_for_folders(folder_ids: list[int]) -
     )
 
 
-def count_unhumanized_segments_without_error_for_folders(folder_ids: list[int]) -> int:
-    if _pipeline_primary_backend() == "postgres":
-        return _count_completed_segments_for_folder_filter(
-            folder_ids,
-            "AND COALESCE(s.humanized, FALSE) = FALSE AND s.humanization_error IS NULL",
-        )
-    return _count_completed_segments_for_folder_filter(
-        folder_ids,
-        "AND COALESCE(s.humanized, 0) = 0 AND s.humanization_error IS NULL",
-    )
-
-
 def count_unreviewed_segments_without_error_for_folders(folder_ids: list[int]) -> int:
     if _pipeline_primary_backend() == "postgres":
         return _count_completed_segments_for_folder_filter(
@@ -3258,12 +3194,10 @@ def list_content_completion_rows_for_folders(folder_ids: list[int]) -> list[dict
     if _pipeline_primary_backend() == "postgres":
         reviewed_true = "COALESCE(cgs.reviewed, FALSE) = TRUE"
         reviewed_false = "COALESCE(cgs.reviewed, FALSE) = FALSE"
-        humanized_true = "COALESCE(cgs.humanized, FALSE) = TRUE"
         dirty_true = "COALESCE(cgs.dirty, FALSE) = TRUE"
     else:
         reviewed_true = "COALESCE(cgs.reviewed, 0) = 1"
         reviewed_false = "COALESCE(cgs.reviewed, 0) = 0"
-        humanized_true = "COALESCE(cgs.humanized, 0) = 1"
         dirty_true = "COALESCE(cgs.dirty, 0) = 1"
     query = f"""
         SELECT
@@ -3277,7 +3211,6 @@ def list_content_completion_rows_for_folders(folder_ids: list[int]) -> list[dict
             COUNT(cgs.id) AS segments_total,
             COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segments,
             COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {reviewed_true} THEN 1 ELSE 0 END), 0) AS reviewed_segments,
-            COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {humanized_true} THEN 1 ELSE 0 END), 0) AS humanized_segments,
             COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {reviewed_false} AND cgs.review_error IS NOT NULL THEN 1 ELSE 0 END), 0) AS review_error_segments,
             COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {dirty_true} THEN 1 ELSE 0 END), 0) AS dirty_segments
         FROM cours_folders cf
@@ -5294,8 +5227,6 @@ def _job_result(row: dict[str, Any] | sqlite3.Row | None) -> dict[str, Any] | No
         "schedule_hash": data.get("schedule_hash"),
         "schedule_locked_at": data.get("schedule_locked_at"),
         "reac_text": data.get("reac_text"),
-        "rc_text": data.get("rc_text"),
-        "rome_text": data.get("rome_text"),
         "global_program": data.get("global_program"),
         "global_program_validated": bool(data.get("global_program_validated")),
         "daily_programs": data.get("daily_programs"),
@@ -5312,10 +5243,6 @@ def _job_result(row: dict[str, Any] | sqlite3.Row | None) -> dict[str, Any] | No
         "auto_pilot_step": data.get("auto_pilot_step"),
         "auto_pilot_model": data.get("auto_pilot_model"),
         "auto_pilot_tts_mode": data.get("auto_pilot_tts_mode"),
-        "auto_pilot_use_cc": bool(data.get("auto_pilot_use_cc")),
-        "auto_pilot_skip_vs": bool(data.get("auto_pilot_skip_vs")),
-        "auto_pilot_generate_audio": bool(data.get("auto_pilot_generate_audio")),
-        "auto_pilot_volume_done": bool(data.get("auto_pilot_volume_done")),
         "auto_pilot_post_review_docs_done": bool(data.get("auto_pilot_post_review_docs_done")),
         "auto_pilot_error": data.get("auto_pilot_error"),
         "auto_pilot_locked_at": data.get("auto_pilot_locked_at"),

@@ -1,13 +1,19 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ArrowLeft,
   ArrowUp,
   CalendarDays,
+  CalendarClock,
   ChevronLeft,
+  ChevronRight,
   ChevronsUpDown,
   Copy,
   CreditCard,
+  Download,
   ExternalLink,
+  FileSpreadsheet,
+  FolderOpen,
   Globe2,
   KeyRound,
   LogIn,
@@ -15,20 +21,19 @@ import {
   Mail,
   PanelLeft,
   PenLine,
+  RefreshCw,
   ReceiptText,
   Settings,
   ShieldCheck,
   Trash2,
   UserPlus,
+  UserRoundCheck,
   UsersRound,
   X,
 } from 'lucide-react'
 import { apiFetch } from '../api'
 import { clearSupabaseSession, getSupabaseClient } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
-import CoursFoldersModal from '../components/CoursFolders'
-import DayScheduleTemplates from './DayScheduleTemplates.jsx'
-import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
 import './CreatePlatformView.css'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
@@ -38,26 +43,48 @@ import {
   shouldShowCenterOnboarding,
 } from '../centerWorkspace'
 import { applyKnownRncpTraining, validateRecruitmentAnswer } from '../recruitmentConversation'
+import {
+  createRecruitmentDraft,
+  deleteActiveRecruitmentDraft,
+  isNewRecruitmentRequest,
+  loadActiveRecruitmentDraft,
+  recruitmentApproximateDayCount,
+  recruitmentMissingFields,
+  saveActiveRecruitmentDraft,
+} from '../recruitmentDraft'
 import { buildTeacherDescription } from '../teacherIdentity'
-import { classifyFormationAudios } from '../audioLibrary'
+
+const CoursFoldersModal = lazy(() => import('../components/CoursFolders'))
+const DayScheduleTemplates = lazy(() => import('./DayScheduleTemplates.jsx'))
+const FormationSchedulePlanner = lazy(() => import('./FormationSchedulePlanner.jsx'))
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
-const Icon = ({ name, className = '' }) => (
-  <span className={`material-icons ${className}`}>{name}</span>
+const Icon = ({ name, className = '', ...props }) => (
+  <span className={`material-icons ${className}`} {...props}>{name}</span>
+)
+
+const DeferredPanelFallback = ({ label }) => (
+  <div
+    className="flex min-h-[220px] items-center justify-center px-6 text-sm opacity-65"
+    role="status"
+    aria-live="polite"
+  >
+    {label}
+  </div>
 )
 
 // Chaque plateforme a son robot prof IA attitré : un PNG transparent pré-coloré
 // (variantes de teinte cuites depuis l'asset rose détouré) + une couleur de halo
 // assortie. Déterministe sur platform_id → P1 garde toujours le même robot.
 const ROBOT_THEMES = [
-  { src: '/robot-blue.png', glow: '#3b82f6' },   // bleu
-  { src: '/robot-violet.png', glow: '#8b5cf6' }, // violet
-  { src: '/robot-pink.png', glow: '#ec4899' },   // rose
-  { src: '/robot-green.png', glow: '#10b981' },  // vert
-  { src: '/robot-amber.png', glow: '#f59e0b' },  // ambre
+  { src: '/robot-blue.webp', glow: '#3b82f6' },   // bleu
+  { src: '/robot-violet.webp', glow: '#71717a', filter: 'grayscale(1) contrast(0.96)' }, // graphite (compatibilité id « violet »)
+  { src: '/robot-pink.webp', glow: '#ec4899' },   // rose
+  { src: '/robot-green.webp', glow: '#10b981' },  // vert
+  { src: '/robot-amber.webp', glow: '#f59e0b' },  // ambre
 ]
 const ROBOT_THEME_BY_COLOR = Object.fromEntries(
-  ROBOT_THEMES.map((theme) => [theme.src.match(/robot-([a-z]+)\.png/)?.[1], theme]),
+  ROBOT_THEMES.map((theme) => [theme.src.match(/robot-([a-z]+)\.(?:png|webp)/)?.[1], theme]),
 )
 const getRobotTheme = (id = 0, color = '') => (
   ROBOT_THEME_BY_COLOR[color] || ROBOT_THEMES[((Number(id) || 1) - 1) % ROBOT_THEMES.length]
@@ -81,15 +108,12 @@ export default function HRDashboard() {
   const [loading, setLoading] = useState(true)
   const [platformsError, setPlatformsError] = useState('')
   const [platformsErrorTone, setPlatformsErrorTone] = useState('error')
-  const [expandedPlatform, setExpandedPlatform] = useState(null)
-  const [platformAudios, setPlatformAudios] = useState({})
   const [studentEmailsByPlatform, setStudentEmailsByPlatform] = useState({})
   const [studentEmailsLoading, setStudentEmailsLoading] = useState(null)
   const [studentEmailsSaving, setStudentEmailsSaving] = useState(null)
   const [studentEmailDrafts, setStudentEmailDrafts] = useState({})
   const [expandedStudentsPlatform, setExpandedStudentsPlatform] = useState(null)
-  const [audiosLoading, setAudiosLoading] = useState(null)
-  const [darkMode, setDarkMode] = useState(false)
+  const darkMode = false
   const [currentCourseTime, setCurrentCourseTime] = useState(null)
   const [courseTimePlatformId, setCourseTimePlatformId] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -126,6 +150,7 @@ export default function HRDashboard() {
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
   const [initialScheduleV2, setInitialScheduleV2] = useState(null)
+  const [activeRecruitmentDraft, setActiveRecruitmentDraft] = useState(loadActiveRecruitmentDraft)
   const creatingRef = useRef(false)
   const creationRequestRef = useRef({ fingerprint: '', id: '' })
   const [cardPage, setCardPage] = useState(0)
@@ -205,21 +230,6 @@ export default function HRDashboard() {
     }
   }
 
-  const fetchAudios = async (platformId) => {
-    setAudiosLoading(platformId)
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/audios`)
-      const data = await resp.json()
-      if (data.success) {
-        setPlatformAudios(prev => ({ ...prev, [platformId]: data.audios }))
-      }
-    } catch (e) {
-      console.error('Erreur chargement audios:', e)
-    } finally {
-      setAudiosLoading(null)
-    }
-  }
-
   const fetchStudentEmails = async (platformId) => {
     setStudentEmailsLoading(platformId)
     try {
@@ -236,14 +246,12 @@ export default function HRDashboard() {
   }
 
   const closeCardPanels = () => {
-    setExpandedPlatform(null)
     setExpandedStudentsPlatform(null)
     setExpandedAttendancePlatform(null)
   }
 
   const handleToggleStudentEmails = (platformId) => {
     const next = expandedStudentsPlatform === platformId ? null : platformId
-    setExpandedPlatform(null)
     setExpandedAttendancePlatform(null)
     setExpandedStudentsPlatform(next)
     if (next && !studentEmailsByPlatform[platformId]) fetchStudentEmails(platformId)
@@ -251,7 +259,6 @@ export default function HRDashboard() {
 
   const handleToggleAttendance = (platformId) => {
     const next = expandedAttendancePlatform === platformId ? null : platformId
-    setExpandedPlatform(null)
     setExpandedStudentsPlatform(null)
     setExpandedAttendancePlatform(next)
     if (next) {
@@ -308,9 +315,8 @@ export default function HRDashboard() {
     }
   }
 
-  const handleAudiosPublished = (platformId) => {
-    fetchAudios(platformId)
-    fetchPlatforms(platformId)
+  const handleAudiosPublished = () => {
+    fetchPlatforms()
   }
 
   useEffect(() => {
@@ -456,6 +462,9 @@ export default function HRDashboard() {
           setActiveTeacherOrderId(null)
           setShowCreateModal(false)
           setShowModulesModal(false)
+          deleteActiveRecruitmentDraft()
+          setActiveRecruitmentDraft(null)
+          resetCreateForm()
           await fetchPlatforms()
         } else if (order.fulfillment_status === 'failed') {
           setFailedTeacherOrderId(order.id || activeTeacherOrderId)
@@ -546,29 +555,13 @@ export default function HRDashboard() {
   }, [darkMode])
 
   // ─── Actions ─────────────────────────────────────────────────────────
-  const handleExpandPlatform = (platformId) => {
-    closeCardPanels()
-    setExpandedPlatform(platformId)
-    if (!platformAudios[platformId]) fetchAudios(platformId)
-  }
-
   const confirmDelete = async () => {
     if (!deleteConfirm || deletingItem) return
 
     setDeletingItem(true)
 
     try {
-      if (deleteConfirm.type === 'audio') {
-        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}/audios/${encodeURIComponent(deleteConfirm.filename)}`, {
-          method: 'DELETE',
-        })
-        const data = await resp.json()
-        if (data.success) {
-          fetchAudios(deleteConfirm.platformId)
-          fetchPlatforms()
-          setDeleteConfirm(null)
-        }
-      } else if (deleteConfirm.type === 'module') {
+      if (deleteConfirm.type === 'module') {
         if (deleteConfirmTypedName !== deleteConfirm.confirmKey) return
         const resp = await apiFetch(`/api/hr/formation-modules/${deleteConfirm.moduleId}`, {
           method: 'DELETE',
@@ -592,7 +585,6 @@ export default function HRDashboard() {
           fetchModules()  // les modules "fait main" associés ont aussi été supprimés
           setDeleteConfirm(null)
           setDeleteConfirmTypedName('')
-          if (expandedPlatform === deleteConfirm.platformId) setExpandedPlatform(null)
         } else {
           alert(data.error || 'Erreur lors de la suppression de la plateforme')
         }
@@ -844,8 +836,33 @@ export default function HRDashboard() {
     setRecruitmentPrefilled(false)
   }
 
+  const applyRecruitmentDraftToForm = (draft) => {
+    if (!draft) return
+    setTeacherFirstName(draft.teacherName || 'Professeur IA')
+    setTeacherColor(draft.teacherColor || 'violet')
+    setNewFormTpName(draft.trainingName || '')
+    setNewFormRncp(draft.rncpCode || '')
+    setNewFormHours(String(recruitmentApproximateDayCount(draft)))
+    setWeeklyCourseCount(String(draft.weeklyCourseCount || 2))
+    setTeachingDays(draft.teachingDays?.length ? draft.teachingDays : ['mardi', 'jeudi'])
+    setScheduleStartDate(draft.startDate || todayDateInput())
+    setInitialScheduleV2(draft.selectedDates?.length ? {
+      selected_dates: draft.selectedDates,
+      template_assignments: draft.templateAssignments || {},
+    } : null)
+    setFormationMode('new')
+  }
+
+  const updateRecruitmentDraft = (nextDraft) => {
+    const saved = saveActiveRecruitmentDraft(nextDraft)
+    setActiveRecruitmentDraft(saved)
+    return saved
+  }
+
   const openCreateModal = () => {
+    const draft = activeRecruitmentDraft || updateRecruitmentDraft(createRecruitmentDraft())
     resetCreateForm()
+    applyRecruitmentDraftToForm(draft)
     fetchModules()
     setShowModulesModal(false)
     setShowCreateModal(true)
@@ -882,16 +899,9 @@ export default function HRDashboard() {
   }, [workspaceSection])
 
   const handleAssistantComplete = (draft) => {
+    const savedDraft = updateRecruitmentDraft({ ...draft, progress: 'calendar' })
     resetCreateForm()
-    setTeacherFirstName(draft.teacherName)
-    setTeacherColor(draft.teacherColor)
-    setNewFormTpName(draft.trainingName)
-    setNewFormRncp(draft.rncpCode)
-    setNewFormHours(String(draft.trainingDays))
-    setWeeklyCourseCount(String(draft.weeklyCourseCount))
-    setTeachingDays(draft.teachingDays)
-    setScheduleStartDate(draft.startDate)
-    setFormationMode('new')
+    applyRecruitmentDraftToForm(savedDraft)
     fetchModules()
     setShowModulesModal(false)
     setShowCreateModal(true)
@@ -927,6 +937,16 @@ export default function HRDashboard() {
       teacher_name: teacherName,
       teacher_color: teacherColor || 'violet',
       teacher_description: String(teacherDescription || '').trim(),
+      recruitment: activeRecruitmentDraft ? {
+        draft_id: activeRecruitmentDraft.id,
+        training_name: activeRecruitmentDraft.trainingName,
+        rncp_code: activeRecruitmentDraft.rncpCode,
+        start_date: activeRecruitmentDraft.startDate,
+        duration_value: Number(activeRecruitmentDraft.durationValue || 0),
+        duration_unit: activeRecruitmentDraft.durationUnit,
+        weekly_course_count: Number(activeRecruitmentDraft.weeklyCourseCount || 0),
+        teaching_days: activeRecruitmentDraft.teachingDays || [],
+      } : undefined,
     }
     let operationType = 'new_teacher'
     const scheduleVersion = Number(
@@ -1028,6 +1048,8 @@ export default function HRDashboard() {
           message: 'Votre professeur IA va apparaître dans Mes professeurs IA et se préparer en arrière-plan.',
         })
         setShowCreateModal(false)
+        deleteActiveRecruitmentDraft()
+        setActiveRecruitmentDraft(null)
         resetCreateForm()
         setShowModulesModal(false)
       } else {
@@ -1195,8 +1217,8 @@ export default function HRDashboard() {
             <div
               className="mb-6 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm"
               style={{
-                backgroundColor: orderNotice.tone === 'success' ? (darkMode ? 'rgba(6,78,59,.24)' : '#ecfdf5') : orderNotice.tone === 'error' ? (darkMode ? 'rgba(127,29,29,.2)' : '#fef2f2') : (darkMode ? 'rgba(76,29,149,.18)' : '#f5f3ff'),
-                borderColor: orderNotice.tone === 'success' ? '#a7f3d0' : orderNotice.tone === 'error' ? '#fecaca' : '#ddd6fe',
+                backgroundColor: orderNotice.tone === 'success' ? (darkMode ? 'rgba(6,78,59,.24)' : '#ecfdf5') : orderNotice.tone === 'error' ? (darkMode ? 'rgba(127,29,29,.2)' : '#fef2f2') : '#f4f4f5',
+                borderColor: orderNotice.tone === 'success' ? '#a7f3d0' : orderNotice.tone === 'error' ? '#fecaca' : '#d4d4d8',
                 color: colors.text,
               }}
             >
@@ -1311,6 +1333,9 @@ export default function HRDashboard() {
               newFormHours={newFormHours}
               setNewFormHours={setNewFormHours}
               initialScheduleV2={initialScheduleV2}
+              recruitmentDraft={activeRecruitmentDraft}
+              onRecruitmentDraftChange={updateRecruitmentDraft}
+              onCreateTemplate={showScheduleTemplatesView}
               creating={creating}
               billing={billing}
               billingLoading={billingLoading}
@@ -1320,14 +1345,22 @@ export default function HRDashboard() {
               onCancel={() => { setShowCreateModal(false); setRecruitmentPrefilled(false); resetCreateForm() }}
             />
           ) : workspaceSection === 'recruit' ? (
-            <RecruitmentAssistant
+            <RecruitmentAssistantV2
               colors={colors}
               modules={modules}
+              activeDraft={activeRecruitmentDraft}
+              onDraftChange={updateRecruitmentDraft}
+              onDraftDelete={() => {
+                deleteActiveRecruitmentDraft()
+                setActiveRecruitmentDraft(null)
+              }}
               onComplete={handleAssistantComplete}
               onManualCreate={openCreateModal}
             />
           ) : workspaceSection === 'schedule-templates' ? (
-            <DayScheduleTemplates />
+            <Suspense fallback={<DeferredPanelFallback label="Chargement des templates…" />}>
+              <DayScheduleTemplates onUseTemplate={() => openCreateModal()} />
+            </Suspense>
           ) : (
             <PlatformCardsView
               platforms={platforms}
@@ -1339,9 +1372,6 @@ export default function HRDashboard() {
                 setTeacherRosterFilter(value)
                 setCardPage(0)
               }}
-              expandedPlatform={expandedPlatform}
-              platformAudios={platformAudios}
-              audiosLoading={audiosLoading}
               colors={colors}
               darkMode={darkMode}
               studentEmailsByPlatform={studentEmailsByPlatform}
@@ -1354,8 +1384,6 @@ export default function HRDashboard() {
               attendanceData={attendanceData}
               attendanceLoading={attendanceLoading}
               attendanceError={attendanceError}
-              onExpand={handleExpandPlatform}
-              onRefreshAudios={fetchAudios}
               onToggleStudentEmails={handleToggleStudentEmails}
               onToggleAttendance={handleToggleAttendance}
               onStudentEmailDraftChange={handleStudentEmailDraftChange}
@@ -1391,55 +1419,6 @@ export default function HRDashboard() {
         </main>
       </div>
 
-      {/* Modal confirmation suppression — branche par type :
-          - audio : confirmation simple (atomique, peu d'impact)
-          - platform : confirmation enrichie + type-to-confirm (cascade,
-            irréversibilité, registre Examiner's Desk per DESIGN.md). */}
-      {deleteConfirm && deleteConfirm.type === 'audio' && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
-          onClick={() => {
-            if (!deletingItem) setDeleteConfirm(null)
-          }}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-2xl overflow-hidden"
-            style={{ width: '100%', maxWidth: '400px' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6 text-center">
-              <h3 className="text-lg font-bold mb-2" style={{ color: '#0f172a' }}>
-                Supprimer cet audio ?
-              </h3>
-              <p className="text-sm mb-6" style={{ color: '#64748b' }}>
-                Voulez-vous vraiment supprimer <strong>"{deleteConfirm.filename}"</strong> ? Cette action est irréversible.
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setDeleteConfirm(null)}
-                  disabled={deletingItem}
-                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
-                  style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}
-                >
-                  Annuler
-                </button>
-                <button
-                  onClick={confirmDelete}
-                  disabled={deletingItem}
-                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                  style={{ backgroundColor: '#dc2626' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#b91c1c' }}
-                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#dc2626' }}
-                >
-                  {deletingItem ? 'Suppression...' : 'Supprimer'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Modal de suppression plateforme — registre Examiner's Desk ─────
           Cascade : tout le contenu pédagogique (cours, segments, KB, jobs
           pipeline) + les modules "fait main" liés (la plateforme = le module).
@@ -1450,7 +1429,7 @@ export default function HRDashboard() {
         return (
           <div
             className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-            style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+            style={{ backgroundColor: 'rgba(9, 9, 11, 0.55)' }}
             onClick={() => {
               if (!deletingItem) {
                 setDeleteConfirm(null)
@@ -1459,9 +1438,12 @@ export default function HRDashboard() {
             }}
           >
             <div
-              className="bg-white rounded-2xl shadow-2xl overflow-hidden"
+              className="overflow-hidden rounded-[14px] border border-[#D4D4D8] bg-white shadow-[0_24px_72px_rgba(9,9,11,0.24)]"
               style={{ width: '100%', maxWidth: '480px' }}
               onClick={(e) => e.stopPropagation()}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="delete-platform-title"
             >
               <div
                 className="flex items-start gap-3 px-6 py-5"
@@ -1474,7 +1456,7 @@ export default function HRDashboard() {
                   <Icon name="delete_forever" style={{ color: '#dc2626', fontSize: '20px' }} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-semibold leading-snug tracking-tight" style={{ color: '#0f172a' }}>
+                  <h3 id="delete-platform-title" className="text-base font-semibold leading-snug tracking-tight" style={{ color: '#18181b' }}>
                     Supprimer la plateforme
                   </h3>
                   <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
@@ -1611,7 +1593,7 @@ export default function HRDashboard() {
         return (
           <div
             className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-            style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+            style={{ backgroundColor: 'rgba(9, 9, 11, 0.55)' }}
             onClick={() => {
               if (!deletingItem) {
                 setDeleteConfirm(null)
@@ -1620,9 +1602,12 @@ export default function HRDashboard() {
             }}
           >
             <div
-              className="bg-white rounded-2xl shadow-2xl overflow-hidden"
+              className="overflow-hidden rounded-[14px] border border-[#D4D4D8] bg-white shadow-[0_24px_72px_rgba(9,9,11,0.24)]"
               style={{ width: '100%', maxWidth: '480px' }}
               onClick={(e) => e.stopPropagation()}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="delete-module-title"
             >
               {/* Header */}
               <div
@@ -1636,7 +1621,7 @@ export default function HRDashboard() {
                   <Icon name="delete_forever" style={{ color: '#dc2626', fontSize: '20px' }} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-semibold leading-snug tracking-tight" style={{ color: '#0f172a' }}>
+                  <h3 id="delete-module-title" className="text-base font-semibold leading-snug tracking-tight" style={{ color: '#18181b' }}>
                     Retirer ce module du catalogue
                   </h3>
                   <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
@@ -2161,7 +2146,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-[#111827]/45 p-0 md:p-4"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-[#09090B]/55 p-0 sm:p-3"
       style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif' }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !deletingAccount && !passwordSaving) onClose()
@@ -2171,16 +2156,14 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="flex h-dvh w-full overflow-hidden bg-white md:h-[min(760px,calc(100dvh-32px))] md:max-w-[1120px] md:rounded-2xl md:shadow-[0_24px_48px_rgba(15,23,42,0.22)]"
+        className="flex h-dvh w-full overflow-hidden bg-white sm:h-[min(720px,calc(100dvh-24px))] sm:max-w-[980px] sm:rounded-[14px] sm:shadow-[0_24px_72px_rgba(9,9,11,0.28)]"
       >
-        <aside className="flex w-[230px] shrink-0 flex-col border-r border-[#E2E8F0] bg-[#F8FAFC] px-3 py-4 max-md:w-[92px] max-md:px-2">
+        <aside className="flex w-[210px] shrink-0 flex-col border-r border-[#E4E4E7] bg-[#F4F4F5] px-3 py-4 max-md:w-[82px] max-md:px-2">
           <div className="mb-7 flex items-center gap-3 px-2 max-md:justify-center max-md:px-0">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] bg-white text-sm font-semibold text-[#334155]">
-              {accountName.slice(0, 1).toUpperCase() || 'C'}
-            </span>
+            <img src="/socrate-mark.svg" alt="" className="h-8 w-8 shrink-0" />
             <span className="min-w-0 max-md:hidden">
-              <span className="block truncate text-sm font-semibold text-[#0F172A]">{accountName}</span>
-              <span className="mt-0.5 block truncate text-xs text-[#64748B]">Espace de travail</span>
+              <span className="block truncate text-sm font-semibold text-[#18181B]">{accountName}</span>
+              <span className="mt-0.5 block truncate text-xs text-[#71717A]">Espace de travail</span>
             </span>
           </div>
           <nav className="space-y-1" aria-label="Rubriques des paramètres">
@@ -2193,7 +2176,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
                   aria-current={selected ? 'page' : undefined}
-                  className={`flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#475569]/30 max-md:flex-col max-md:justify-center max-md:gap-1 max-md:px-1 max-md:text-[11px] ${selected ? 'bg-white text-[#0F172A] shadow-[inset_0_0_0_1px_#E2E8F0]' : 'text-[#64748B] hover:bg-[#EEF2F6] hover:text-[#0F172A]'}`}
+                  className={`flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30 max-md:flex-col max-md:justify-center max-md:gap-1 max-md:px-1 max-md:text-[11px] ${selected ? 'bg-[#E4E4E7] text-[#18181B]' : 'text-[#71717A] hover:bg-[#EAEAEC] hover:text-[#18181B]'}`}
                 >
                   <TabIcon size={17} strokeWidth={selected ? 2 : 1.7} aria-hidden="true" />
                   <span>{tab.label}</span>
@@ -2208,66 +2191,66 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
             ref={closeButtonRef}
             type="button"
             onClick={onClose}
-            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-lg text-[#64748B] transition-colors hover:bg-[#F1F5F9] hover:text-[#0F172A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#475569]/30"
+            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-lg text-[#71717A] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30"
             aria-label="Fermer les paramètres"
           >
             <X size={19} strokeWidth={1.8} aria-hidden="true" />
           </button>
 
-          <div className="mx-auto w-full max-w-[760px] px-5 py-8 sm:px-8 md:px-10 md:py-10">
+          <div className="mx-auto w-full max-w-[720px] px-5 py-7 sm:px-8 md:px-9 md:py-9">
             {activeTab === 'account' ? (
               <div>
                 <header className="pr-12">
-                  <h2 id="settings-title" className="text-2xl font-semibold tracking-[-0.01em] text-[#0F172A]">Compte</h2>
-                  <p className="mt-1.5 text-sm text-[#475569]">Sécurité et gestion de votre compte centre.</p>
+                  <h2 id="settings-title" className="text-xl font-semibold tracking-[-0.02em] text-[#18181B]">Compte</h2>
+                  <p className="mt-1.5 text-sm text-[#52525B]">Connexion, mot de passe et suppression du compte.</p>
                 </header>
 
                 <section className="mt-8">
-                  <h3 className="text-sm font-semibold text-[#334155]">Méthode de connexion</h3>
-                  <div className="mt-3 rounded-xl border border-[#E2E8F0]">
+                  <h3 className="text-sm font-semibold text-[#27272A]">Méthode de connexion</h3>
+                  <div className="mt-3 border-y border-[#E4E4E7]">
                     <div className="flex min-h-[76px] items-center gap-3 px-4 py-3">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F1F5F9] text-[#475569]">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#F4F4F5] text-[#52525B]">
                         {usesGoogle ? <span className="text-base font-semibold text-[#4285F4]">G</span> : <Mail size={18} strokeWidth={1.7} aria-hidden="true" />}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#0F172A]">
+                        <span className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#18181B]">
                           {authLoading ? 'Vérification…' : usesGoogle ? 'Google' : 'Email et mot de passe'}
                           {!authLoading && <span className="rounded-full bg-[#ECFDF3] px-2 py-0.5 text-[11px] font-medium text-[#027A48]">Lié</span>}
                         </span>
-                        <span className="mt-1 block truncate text-sm text-[#64748B]">{accountEmail}</span>
+                        <span className="mt-1 block truncate text-sm text-[#71717A]">{accountEmail}</span>
                       </span>
                     </div>
                   </div>
                 </section>
 
                 <section className="mt-8">
-                  <h3 className="text-sm font-semibold text-[#334155]">Mot de passe</h3>
+                  <h3 className="text-sm font-semibold text-[#27272A]">Mot de passe</h3>
                   {usesGoogle && !usesEmailPassword ? (
                     <div className="mt-3 rounded-xl bg-[#F8FAFC] px-4 py-4 text-sm leading-6 text-[#475569]">
                       Votre connexion est gérée par Google. Modifiez votre mot de passe depuis votre compte Google.
                     </div>
                   ) : (
-                    <form onSubmit={updatePassword} className="mt-3 rounded-xl border border-[#E2E8F0] p-4 sm:p-5">
+                    <form onSubmit={updatePassword} className="mt-3 border-y border-[#E4E4E7] py-5">
                       <div className="grid gap-4 sm:grid-cols-2">
-                        <label className="text-sm font-medium text-[#334155]">
+                        <label className="text-sm font-medium text-[#3F3F46]">
                           Nouveau mot de passe
                           <input
                             type="password"
                             autoComplete="new-password"
                             value={newPassword}
                             onChange={(event) => setNewPassword(event.target.value)}
-                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#64748B] focus:ring-2 focus:ring-[#64748B]/15"
+                            className="mt-2 h-11 w-full rounded-lg border border-[#D4D4D8] bg-white px-3 text-sm text-[#18181B] outline-none transition focus:border-[#71717A] focus:ring-2 focus:ring-[#18181B]/10"
                             placeholder="8 caractères minimum"
                           />
                         </label>
-                        <label className="text-sm font-medium text-[#334155]">
+                        <label className="text-sm font-medium text-[#3F3F46]">
                           Confirmer le mot de passe
                           <input
                             type="password"
                             autoComplete="new-password"
                             value={confirmPassword}
                             onChange={(event) => setConfirmPassword(event.target.value)}
-                            className="mt-2 h-11 w-full rounded-lg border border-[#CBD5E1] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#64748B] focus:ring-2 focus:ring-[#64748B]/15"
+                            className="mt-2 h-11 w-full rounded-lg border border-[#D4D4D8] bg-white px-3 text-sm text-[#18181B] outline-none transition focus:border-[#71717A] focus:ring-2 focus:ring-[#18181B]/10"
                             placeholder="Saisissez-le à nouveau"
                           />
                         </label>
@@ -2277,11 +2260,11 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                           <p className={`text-sm ${passwordMessage.tone === 'success' ? 'text-[#027A48]' : 'text-[#B42318]'}`} role="status">
                             {passwordMessage.text}
                           </p>
-                        ) : <p className="text-xs text-[#64748B]">Utilisez un mot de passe unique.</p>}
+                        ) : <p className="text-xs text-[#71717A]">Utilisez un mot de passe unique.</p>}
                         <button
                           type="submit"
                           disabled={passwordSaving || !newPassword || !confirmPassword}
-                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#0F172A] px-4 text-sm font-medium text-white transition-colors hover:bg-[#1E293B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#475569]/35 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
+                          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#18181B] px-4 text-sm font-medium text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/35 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <KeyRound size={16} strokeWidth={1.8} aria-hidden="true" />
                           {passwordSaving ? 'Modification…' : 'Modifier le mot de passe'}
@@ -2291,9 +2274,9 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                   )}
                 </section>
 
-                <section className="mt-10 border-t border-[#E2E8F0] pt-8">
+                <section className="mt-9 border-t border-[#E4E4E7] pt-7">
                   <h3 className="text-sm font-semibold text-[#B42318]">Zone dangereuse</h3>
-                  <div className="mt-3 rounded-xl border border-[#FECDCA] bg-[#FFF7F6] p-4 sm:flex sm:items-center sm:justify-between sm:gap-5">
+                  <div className="mt-3 border-y border-[#FECDCA] py-4 sm:flex sm:items-center sm:justify-between sm:gap-5">
                     <div>
                       <p className="text-sm font-semibold text-[#7A271A]">Supprimer le compte</p>
                       <p className="mt-1 max-w-[56ch] text-sm leading-5 text-[#912018]">Cette action supprime l’espace centre, ses professeurs, ses formations et ses données. Elle est irréversible.</p>
@@ -2301,7 +2284,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                     <button
                       type="button"
                       onClick={() => setShowDeleteConfirmation(true)}
-                      className="mt-4 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-[#FDA29B] bg-white px-4 text-sm font-medium text-[#B42318] transition-colors hover:bg-[#FFF1F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D92D20]/30 sm:mt-0"
+                      className="mt-4 inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-[#FDA29B] bg-white px-4 text-sm font-medium text-[#B42318] transition-colors hover:bg-[#FFF1F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D92D20]/30 sm:mt-0"
                     >
                       <Trash2 size={16} strokeWidth={1.8} aria-hidden="true" />
                       Supprimer le compte
@@ -2312,24 +2295,24 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
             ) : (
               <div>
                 <header className="pr-12">
-                  <h2 id="settings-title" className="text-2xl font-semibold tracking-[-0.01em] text-[#0F172A]">Facturation</h2>
-                  <p className="mt-1.5 text-sm text-[#475569]">Suivez vos dépenses et téléchargez les documents associés.</p>
+                  <h2 id="settings-title" className="text-xl font-semibold tracking-[-0.02em] text-[#18181B]">Facturation</h2>
+                  <p className="mt-1.5 text-sm text-[#52525B]">Dépenses et factures associées au compte centre.</p>
                 </header>
 
-                <section className="mt-8 border-y border-[#E2E8F0] py-4">
+                <section className="mt-8 border-y border-[#E4E4E7] py-4">
                   <div className="flex flex-wrap items-end justify-between gap-4">
                     <div>
-                      <p className="text-sm font-medium text-[#475569]">Total payé</p>
-                      <p className="mt-1 text-2xl font-semibold tracking-[-0.01em] text-[#0F172A]">{formatPrice(totalPaidCents, 'eur')}</p>
+                      <p className="text-sm font-medium text-[#52525B]">Total payé</p>
+                      <p className="mt-1 text-xl font-semibold tracking-[-0.02em] text-[#18181B]">{formatPrice(totalPaidCents, 'eur')}</p>
                     </div>
-                    <p className="text-sm text-[#64748B]">{billingOrders.length} opération{billingOrders.length > 1 ? 's' : ''}</p>
+                    <p className="text-sm text-[#71717A]">{billingOrders.length} opération{billingOrders.length > 1 ? 's' : ''}</p>
                   </div>
                 </section>
 
                 <section className="mt-8">
                   <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-semibold text-[#334155]">Historique des dépenses</h3>
-                    <span className="text-xs text-[#64748B]">Factures Stripe</span>
+                    <h3 className="text-sm font-semibold text-[#27272A]">Historique des dépenses</h3>
+                    <span className="text-xs text-[#71717A]">Factures Stripe</span>
                   </div>
 
                   {billingHistoryLoading ? (
@@ -2337,10 +2320,10 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
                       {[0, 1, 2].map((item) => <div key={item} className="h-[74px] animate-pulse rounded-xl bg-[#F1F5F9]" />)}
                     </div>
                   ) : billingOrders.length === 0 ? (
-                    <div className="mt-3 flex min-h-[190px] flex-col items-center justify-center rounded-xl border border-dashed border-[#CBD5E1] px-5 text-center">
-                      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#F1F5F9] text-[#64748B]"><ReceiptText size={19} strokeWidth={1.7} aria-hidden="true" /></span>
-                      <p className="mt-4 text-sm font-semibold text-[#334155]">Aucune dépense à ce jour</p>
-                      <p className="mt-1 max-w-[44ch] text-sm leading-5 text-[#64748B]">Les paiements apparaîtront ici après votre première commande.</p>
+                    <div className="mt-3 flex min-h-[170px] flex-col items-center justify-center border-y border-[#E4E4E7] px-5 text-center">
+                      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#F4F4F5] text-[#71717A]"><ReceiptText size={18} strokeWidth={1.7} aria-hidden="true" /></span>
+                      <p className="mt-3 text-sm font-semibold text-[#27272A]">Aucune dépense à ce jour</p>
+                      <p className="mt-1 max-w-[44ch] text-sm leading-5 text-[#71717A]">Les paiements apparaîtront ici après votre première commande.</p>
                     </div>
                   ) : (
                     <div className="mt-3 overflow-hidden rounded-xl border border-[#E2E8F0]">
@@ -2383,13 +2366,13 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
 
       {showDeleteConfirmation && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0F172A]/50 p-4">
-          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" className="w-full max-w-[460px] rounded-2xl bg-white p-6 shadow-[0_24px_48px_rgba(15,23,42,0.25)]">
+          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" className="w-full max-w-[460px] rounded-[14px] border border-[#D4D4D8] bg-white p-6 shadow-[0_24px_72px_rgba(9,9,11,0.24)]">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 id="delete-account-title" className="text-lg font-semibold text-[#7A271A]">Supprimer définitivement le compte ?</h3>
                 <p className="mt-2 text-sm leading-6 text-[#475569]">Saisissez <strong className="font-semibold text-[#0F172A]">{accountName}</strong> pour confirmer la suppression de toutes les données du centre.</p>
               </div>
-              <button type="button" onClick={() => setShowDeleteConfirmation(false)} disabled={deletingAccount} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#64748B] hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40" aria-label="Annuler la suppression"><X size={18} aria-hidden="true" /></button>
+              <button type="button" onClick={() => setShowDeleteConfirmation(false)} disabled={deletingAccount} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#71717A] hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30" aria-label="Annuler la suppression"><X size={18} aria-hidden="true" /></button>
             </div>
             <label className="mt-5 block text-sm font-medium text-[#334155]">
               Nom du centre
@@ -2403,7 +2386,7 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
             </label>
             {deleteError && <p className="mt-3 text-sm text-[#B42318]" role="alert">{deleteError}</p>}
             <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setShowDeleteConfirmation(false)} disabled={deletingAccount} className="min-h-11 rounded-lg border border-[#CBD5E1] px-4 text-sm font-medium text-[#334155] hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/35 disabled:opacity-50">Annuler</button>
+              <button type="button" onClick={() => setShowDeleteConfirmation(false)} disabled={deletingAccount} className="min-h-11 rounded-lg border border-[#D4D4D8] px-4 text-sm font-medium text-[#3F3F46] hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30 disabled:opacity-50">Annuler</button>
               <button type="button" onClick={deleteAccount} disabled={deleteConfirmation !== accountName || deletingAccount} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#D92D20] px-4 text-sm font-medium text-white hover:bg-[#B42318] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D92D20]/35 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"><Trash2 size={16} aria-hidden="true" />{deletingAccount ? 'Suppression…' : 'Supprimer définitivement'}</button>
             </div>
           </section>
@@ -2413,18 +2396,6 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
   )
 }
 
-const RECRUITMENT_STEPS = [
-  { id: 'teacherName', question: 'Comment souhaitez-vous appeler ce professeur IA ?', placeholder: 'Ex. Pierre, Lina, Sofia…', type: 'text' },
-  { id: 'trainingName', question: 'Quelle formation va-t-il délivrer ?', placeholder: 'Ex. TP Conseiller relation client à distance', type: 'text' },
-  { id: 'rncpCode', question: 'Quel est le code RNCP de cette formation ?', placeholder: 'Ex. 35304', type: 'number' },
-  { id: 'rncpConfirm', question: 'S’agit-il bien de cette formation ?', type: 'confirm' },
-  { id: 'trainingDays', question: 'Combien de journées de formation faut-il prévoir au total ?', placeholder: 'Ex. 52', type: 'number' },
-  { id: 'weeklyCourseCount', question: 'Combien de journées de cours auront lieu chaque semaine ?', type: 'frequency' },
-  { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous programmer ?', type: 'days' },
-  { id: 'startDate', question: 'À quelle date la formation doit-elle commencer ?', type: 'date' },
-  { id: 'teacherColor', question: 'Quelle couleur souhaitez-vous pour le robot professeur ?', type: 'color' },
-]
-
 const RECRUITMENT_DAY_OPTIONS = [
   { id: 'lundi', label: 'Lundi' },
   { id: 'mardi', label: 'Mardi' },
@@ -2433,22 +2404,13 @@ const RECRUITMENT_DAY_OPTIONS = [
   { id: 'vendredi', label: 'Vendredi' },
 ]
 
-const RECRUITMENT_COLOR_OPTIONS = [
-  { id: 'violet', label: 'Violet', value: '#8B5CF6', image: '/robot-violet.png' },
-  { id: 'blue', label: 'Bleu', value: '#3B82F6', image: '/robot-blue.png' },
-  { id: 'pink', label: 'Rose', value: '#EC4899', image: '/robot-pink.png' },
-  { id: 'green', label: 'Vert', value: '#10B981', image: '/robot-green.png' },
-  { id: 'amber', label: 'Ambre', value: '#F59E0B', image: '/robot-amber.png' },
-]
-
-const RECRUITMENT_CHOICE_TYPES = new Set(['confirm', 'frequency', 'days', 'color'])
 const RECRUITMENT_PLACEHOLDER_EXAMPLES = [
   'Recruter un professeur pour le TP Conseiller relation client à distance',
   'Préparer un professeur pour une nouvelle promotion en septembre',
   'Réutiliser un professeur et ses cours pour un nouveau groupe',
 ]
 
-function useAnimatedPlaceholder(examples) {
+function useAnimatedPlaceholder(examples, enabled = true) {
   const [reducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [exampleIndex, setExampleIndex] = useState(0)
   const [characterCount, setCharacterCount] = useState(() => reducedMotion ? examples[0].length : 0)
@@ -2456,7 +2418,7 @@ function useAnimatedPlaceholder(examples) {
 
   useEffect(() => {
     const example = examples[exampleIndex]
-    if (reducedMotion) return undefined
+    if (reducedMotion || !enabled) return undefined
 
     let delay = deleting ? 24 : 48
     if (!deleting && characterCount === example.length) delay = 1500
@@ -2476,299 +2438,186 @@ function useAnimatedPlaceholder(examples) {
     }, delay)
 
     return () => window.clearTimeout(timeoutId)
-  }, [characterCount, deleting, exampleIndex, examples, reducedMotion])
+  }, [characterCount, deleting, enabled, exampleIndex, examples, reducedMotion])
 
   return examples[exampleIndex].slice(0, characterCount)
 }
 
-function getRecruitmentAssistantText(step, draft, matchingModule) {
-  if (!step) return ''
-  if (step.id === 'rncpConfirm') {
-    const reference = matchingModule
-      ? `${matchingModule.tp_name}, RNCP ${matchingModule.rncp_code}`
-      : `${draft.trainingName}, RNCP ${draft.rncpCode}`
-    return `Je vérifie la référence avant de continuer : ${reference}.`
+const RECRUITMENT_V2_STEPS = Object.freeze({
+  trainingName: {
+    question: 'Quel est le nom de la formation ?',
+    placeholder: 'Ex. TP Conseiller relation client à distance',
+  },
+  rncpCode: {
+    question: 'Quel est le code RNCP associé ?',
+    placeholder: 'Ex. 35304',
+  },
+  startDate: { question: 'À quelle date commence la première journée ?' },
+  durationValue: {
+    question: 'Quelle est la durée moyenne de la formation, en semaines ou en mois ?',
+    placeholder: 'Ex. 12',
+  },
+  durationUnit: { question: 'Cette durée est-elle exprimée en semaines ou en mois ?' },
+  weeklyCourseCount: {
+    question: 'Quel est le nombre moyen de jours de formation par semaine ?',
+  },
+  teachingDays: {
+    question: 'Quels sont les jours habituels de formation ?',
+  },
+})
+
+function extractRecruitmentBrief(message, draft) {
+  const text = String(message || '').trim()
+  const normalized = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const next = { ...draft }
+  const rncp = text.match(/\bRNCP\s*[-:]?\s*(\d{4,6})\b/i)
+  const duration = normalized.match(/\b(\d+(?:[.,]\d+)?)\s*(semaines?|mois)\b/)
+  const isoDate = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/)
+  const weekly = normalized.match(/\b([1-7])\s*(?:jours?|journees?)\s*(?:par|\/)\s*semaine\b/)
+  const mentionedDays = RECRUITMENT_DAY_OPTIONS
+    .filter((day) => new RegExp(`\\b${day.id}\\b`).test(normalized))
+    .map((day) => day.id)
+  if (rncp) next.rncpCode = rncp[1]
+  if (duration) {
+    next.durationValue = duration[1].replace(',', '.')
+    next.durationUnit = duration[2].startsWith('mois') ? 'mois' : 'semaines'
   }
-  if (step.id === 'weeklyCourseCount') return 'Définissons maintenant le rythme hebdomadaire de la formation.'
-  if (step.id === 'teachingDays') return 'Choisissez les jours qui correspondent à ce rythme.'
-  if (step.id === 'startDate') return 'Il reste à fixer la date de démarrage de la formation.'
-  if (step.id === 'teacherColor') return 'Dernier choix : l’identité visuelle du professeur IA.'
-  return step.question
+  if (isoDate) next.startDate = isoDate[1]
+  if (weekly) next.weeklyCourseCount = Number(weekly[1])
+  if (mentionedDays.length) {
+    next.teachingDays = mentionedDays
+    if (!weekly) next.weeklyCourseCount = mentionedDays.length
+  }
+  return next
 }
 
-function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
+function RecruitmentAssistantV2({
+  colors,
+  modules,
+  activeDraft,
+  onDraftChange,
+  onDraftDelete,
+  onComplete,
+  onManualCreate,
+}) {
   const [started, setStarted] = useState(false)
   const [brief, setBrief] = useState('')
-  const [stepIndex, setStepIndex] = useState(0)
   const [answer, setAnswer] = useState('')
-  const [draft, setDraft] = useState({
-    teacherName: '',
-    trainingName: '',
-    rncpCode: '',
-    trainingDays: '',
-    weeklyCourseCount: 2,
-    teachingDays: ['mardi', 'jeudi'],
-    startDate: todayDateInput(),
-    teacherColor: 'violet',
-  })
   const [history, setHistory] = useState([])
-  const [isThinking, setIsThinking] = useState(false)
-  const [pendingConfirmation, setPendingConfirmation] = useState(null)
-  const [clarificationAttempts, setClarificationAttempts] = useState({})
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const [draft, setDraft] = useState(() => activeDraft || null)
   const chatScrollRef = useRef(null)
-  const responseTimeoutRef = useRef(null)
-  const animatedPlaceholder = useAnimatedPlaceholder(RECRUITMENT_PLACEHOLDER_EXAMPLES)
-  const currentStep = RECRUITMENT_STEPS[stepIndex]
-  const matchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(draft.rncpCode || '').replace(/\D/g, ''))
-  const completed = stepIndex >= RECRUITMENT_STEPS.length
-  const currentIsChoice = Boolean(currentStep && RECRUITMENT_CHOICE_TYPES.has(currentStep.type))
-
-  useEffect(() => () => window.clearTimeout(responseTimeoutRef.current), [])
+  const animatedPlaceholder = useAnimatedPlaceholder(RECRUITMENT_PLACEHOLDER_EXAMPLES, !started && !brief)
+  const missingFields = draft ? recruitmentMissingFields(draft) : []
+  const currentField = missingFields[0]
+  const currentStep = RECRUITMENT_V2_STEPS[currentField]
+  const completed = Boolean(draft && missingFields.length === 0)
 
   useEffect(() => {
-    const scrollArea = chatScrollRef.current
-    if (!scrollArea) return
-    const frameId = window.requestAnimationFrame(() => {
-      scrollArea.scrollTop = scrollArea.scrollHeight
-    })
-    return () => window.cancelAnimationFrame(frameId)
-  }, [history, isThinking, stepIndex])
+    if (activeDraft?.id && activeDraft.id !== draft?.id) setDraft(activeDraft)
+  }, [activeDraft, draft?.id])
 
-  const revealAssistantMessages = (messages) => {
-    window.clearTimeout(responseTimeoutRef.current)
-    setIsThinking(true)
-    responseTimeoutRef.current = window.setTimeout(() => {
-      setHistory((current) => [...current, ...messages])
-      setIsThinking(false)
-    }, 620)
+  useEffect(() => {
+    if (!chatScrollRef.current) return
+    chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight
+  }, [history, currentField])
+
+  const persist = (next) => {
+    const saved = onDraftChange(next) || next
+    setDraft(saved)
+    return saved
   }
 
-  const displayAnswer = (step, value) => {
-    if (step.id === 'teachingDays') return value.map((day) => RECRUITMENT_DAY_OPTIONS.find((option) => option.id === day)?.label || day).join(', ')
-    if (step.id === 'teacherColor') return RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === value)?.label || value
-    if (step.id === 'weeklyCourseCount') return `${value} jour${Number(value) > 1 ? 's' : ''} par semaine`
-    if (step.id === 'trainingDays') return `${value} journées`
-    if (step.id === 'rncpCode') return `RNCP ${String(value).replace(/\D/g, '')}`
-    return String(value)
+  const nextQuestionFor = (next) => {
+    const field = recruitmentMissingFields(next)[0]
+    return field ? RECRUITMENT_V2_STEPS[field]?.question : 'Toutes les informations principales sont réunies. Vérifiez le récapitulatif avant d’ouvrir le calendrier.'
   }
 
-  const advance = (value, { recordUser = true } = {}) => {
-    if (!currentStep) return
-    if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
-      const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
-      setDraft(correctedDraft)
-      setHistory((current) => [...current, { role: 'user', text: value }])
-      setStepIndex(1)
-      setAnswer('')
-      revealAssistantMessages([
-        { role: 'assistant', text: 'D’accord, reprenons le nom de la formation. Quelle formation va-t-il délivrer ?' },
-      ])
-      return
-    }
-    const normalizedValue = currentStep.id === 'rncpCode' ? String(value).replace(/\D/g, '') : value
-    let nextDraft = currentStep.id === 'rncpConfirm'
-      ? draft
-      : { ...draft, [currentStep.id]: normalizedValue }
-    let knownRncpModule = null
-    if (currentStep.id === 'rncpCode') {
-      const knownRncp = applyKnownRncpTraining(nextDraft, modules, normalizedValue)
-      nextDraft = knownRncp.draft
-      knownRncpModule = knownRncp.matchingModule
-    }
-    const nextIndex = stepIndex + 1
-    const nextStep = RECRUITMENT_STEPS[nextIndex]
-    const nextMatchingModule = knownRncpModule || modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
-    setDraft(nextDraft)
-    if (recordUser) {
-      setHistory((current) => [...current, {
-        role: 'user',
-        text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue),
-      }])
-    }
-    setStepIndex(nextIndex)
-    setAnswer('')
-    revealAssistantMessages([
+  const startConversation = (message, existing = draft) => {
+    const base = existing || createRecruitmentDraft()
+    const next = extractRecruitmentBrief(message, base)
+    persist(next)
+    setStarted(true)
+    setBrief('')
+    setHistory([
+      ...(message ? [{ role: 'user', text: message }] : []),
       {
         role: 'assistant',
-        text: nextStep
-          ? getRecruitmentAssistantText(nextStep, nextDraft, nextMatchingModule)
-          : 'La configuration est prête. Vérifiez les informations avant de poursuivre.',
+        text: 'Bonjour, je vais vous aider à préparer le recrutement du professeur et le calendrier de sa formation. Les informations sont enregistrées dans un brouillon que vous pourrez reprendre.',
       },
+      { role: 'assistant', text: nextQuestionFor(next) },
     ])
   }
 
-  const interpretFreeTextAnswer = async (field, value, { initialBrief = false } = {}) => {
-    setIsThinking(true)
-
-    let interpretation
-    try {
-      const response = await apiFetch('/api/hr/recruitment/interpret', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          field,
-          message: value,
-          draft,
-          attempt: clarificationAttempts[field] || 0,
-        }),
-        timeoutMs: 25000,
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok || !payload.success) throw new Error(payload.error || 'Analyse indisponible')
-      interpretation = payload
-    } catch {
-      const fallback = validateRecruitmentAnswer(field, value)
-      interpretation = fallback.valid
-        ? { answered: true, value: fallback.value || value }
-        : { answered: false, value: null, reply: fallback.message }
-    }
-
-    if (!interpretation.answered) {
-      setClarificationAttempts((current) => ({
-        ...current,
-        [field]: (current[field] || 0) + 1,
-      }))
-      revealAssistantMessages([{
-        role: 'assistant',
-        text: initialBrief
-          ? 'Très bien. Quel nom souhaitez-vous donner à ce professeur IA ?'
-          : interpretation.reply,
-      }])
-      return
-    }
-
-    setClarificationAttempts((current) => ({ ...current, [field]: 0 }))
-    const interpretedValue = interpretation.value
-    if (field === 'teacherName' || field === 'trainingName') {
-      setPendingConfirmation({ field, value: interpretedValue })
-      revealAssistantMessages([{
-        role: 'assistant',
-        text: field === 'teacherName'
-          ? `J’ai compris « ${interpretedValue} ». Est-ce bien le nom que vous souhaitez donner au professeur IA ?`
-          : `J’ai compris « ${interpretedValue} ». Est-ce bien l’intitulé de la formation qu’il devra assurer ?`,
-      }])
-      return
-    }
-
-    advance(interpretedValue, { recordUser: false })
+  const abandonAndRestart = () => {
+    onDraftDelete?.()
+    const next = persist(createRecruitmentDraft())
+    setConfirmRestart(false)
+    setAnswer('')
+    setHistory([
+      { role: 'assistant', text: 'Un nouveau brouillon a été créé. Commençons avec une configuration vide.' },
+      { role: 'assistant', text: nextQuestionFor(next) },
+    ])
+    setStarted(true)
   }
 
   const submitInitialBrief = (event) => {
     event.preventDefault()
     const value = brief.trim()
     if (!value) return
-    setStarted(true)
-    setHistory([{ role: 'user', text: value }])
-    setBrief('')
-    interpretFreeTextAnswer('teacherName', value, { initialBrief: true })
-  }
-
-  const submitAnswer = (event) => {
-    event.preventDefault()
-    const value = answer.trim()
-    if (!value) return
-    const field = currentStep?.id
-    setHistory((current) => [...current, { role: 'user', text: value }])
-    setAnswer('')
-    interpretFreeTextAnswer(field, value)
-  }
-
-  const resolvePendingConfirmation = (confirmed) => {
-    if (!pendingConfirmation) return
-    const { field, value } = pendingConfirmation
-    setPendingConfirmation(null)
-    if (confirmed) {
-      setHistory((current) => [...current, { role: 'user', text: 'Oui, c’est bien cela' }])
-      advance(value, { recordUser: false })
+    if (activeDraft && isNewRecruitmentRequest(value) && recruitmentMissingFields(activeDraft).length < 7) {
+      setStarted(true)
+      setHistory([{ role: 'user', text: value }])
+      setConfirmRestart(true)
       return
     }
-
-    setHistory((current) => [...current, { role: 'user', text: 'Non, je veux le corriger' }])
-    const step = RECRUITMENT_STEPS.find((item) => item.id === field)
-    revealAssistantMessages([{
-      role: 'assistant',
-      text: field === 'teacherName'
-        ? 'D’accord. Quel prénom ou quel nom voulez-vous précisément donner au professeur IA ? Par exemple « Pierre » ou « Sofia ».'
-        : `D’accord. Quel est l’intitulé précis de la formation ? Par exemple « ${step?.placeholder?.replace('Ex. ', '') || 'Développeur web'} ».`,
-    }])
+    startConversation(value, activeDraft)
   }
 
-  const toggleDay = (day) => {
-    setDraft((current) => {
-      const selected = current.teachingDays.includes(day)
-      const teachingDays = selected
-        ? current.teachingDays.filter((item) => item !== day)
-        : current.teachingDays.length < Number(current.weeklyCourseCount)
-          ? [...current.teachingDays, day]
-          : current.teachingDays
-      return { ...current, teachingDays }
-    })
+  const submitValue = (value) => {
+    if (!currentField) return
+    let normalizedValue = value
+    if (currentField === 'rncpCode') normalizedValue = String(value).replace(/\D/g, '')
+    if (currentField === 'durationValue') normalizedValue = Number(String(value).replace(',', '.'))
+    if (currentField === 'weeklyCourseCount') normalizedValue = Number(value)
+    const validation = validateRecruitmentAnswer(currentField, normalizedValue)
+    if (!validation.valid) {
+      setHistory((current) => [...current, { role: 'user', text: String(value) }, { role: 'assistant', text: validation.message }])
+      setAnswer('')
+      return
+    }
+    let next = { ...draft, [currentField]: validation.value ?? normalizedValue }
+    if (currentField === 'rncpCode') next = applyKnownRncpTraining(next, modules, normalizedValue).draft
+    next = persist(next)
+    const label = currentField === 'teachingDays'
+      ? normalizedValue.map((day) => RECRUITMENT_DAY_OPTIONS.find((item) => item.id === day)?.label || day).join(', ')
+      : String(normalizedValue)
+    setHistory((current) => [
+      ...current,
+      { role: 'user', text: label },
+      { role: 'assistant', text: nextQuestionFor(next) },
+    ])
+    setAnswer('')
   }
 
   if (!started) {
-    const suggestions = [
-      { icon: ShieldCheck, text: 'Recruter un professeur pour un titre professionnel RNCP' },
-      { icon: UserPlus, text: 'Préparer un professeur pour une nouvelle promotion' },
-      { icon: Copy, text: 'Réutiliser un professeur et ses cours existants' },
-      { icon: CalendarDays, text: 'Planifier une formation dès le mois prochain' },
-    ]
     return (
       <section className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-start pt-16 sm:pt-20 lg:pt-24">
         <div className="mx-auto w-full max-w-[800px]">
           <div className="mb-7 text-center">
-            <h1 className="workspace-display-title text-[2rem] font-semibold leading-tight tracking-[-0.025em] sm:text-[2.4rem]" style={{ color: colors.text }}>
-              Quel professeur recruterez-vous&nbsp;?
-            </h1>
-            <p className="mx-auto mt-2.5 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Décrivez votre besoin, puis précisez la formation et son calendrier.</p>
+            <h1 className="workspace-display-title text-[2rem] font-semibold tracking-[-0.025em] sm:text-[2.4rem]" style={{ color: colors.text }}>Quel professeur recruterez-vous&nbsp;?</h1>
+            <p className="mx-auto mt-2.5 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Je peux préparer avec vous le recrutement et tout son calendrier de formation.</p>
           </div>
-
-          <form onSubmit={submitInitialBrief} className="mx-auto max-w-[760px] rounded-xl border bg-white p-3" style={{ borderColor: '#DFDCD9' }}>
-            <label htmlFor="recruitment-brief" className="sr-only">Décrire le professeur recherché</label>
-            <textarea
-              id="recruitment-brief"
-              value={brief}
-              onChange={(event) => setBrief(event.target.value)}
-              placeholder={animatedPlaceholder}
-              rows={3}
-              className="min-h-[82px] w-full resize-none bg-transparent px-2 py-1 text-[15px] leading-6 outline-none placeholder:text-[#73736F]"
-              style={{ color: colors.text }}
-              autoFocus
-            />
-            <div className="mt-1 flex items-center justify-between pt-1">
-              <span className="inline-flex items-center gap-1.5 px-2 text-xs font-medium text-[#73736F]">
-                <Globe2 size={15} strokeWidth={1.6} aria-hidden="true" />
-                FR
-              </span>
-              <button type="submit" disabled={!brief.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#097FE8] text-white transition-colors duration-150 hover:bg-[#0075DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C7C5C1]" aria-label="Commencer la configuration">
-                <ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" />
-              </button>
-            </div>
-          </form>
-
-          <div className="mx-auto mt-3 flex max-w-[760px] flex-col gap-3 rounded-lg bg-[#F7F7F5] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-[13px] font-medium text-[#191918]">Vous préférez renseigner les informations vous-même ?</p>
-              <p className="mt-0.5 text-xs text-[#73736F]">Ouvrez directement le formulaire complet.</p>
-            </div>
-            <button type="button" onClick={onManualCreate} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-3 text-[13px] font-medium text-[#191918] transition-colors duration-150 hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
-              <PenLine size={15} strokeWidth={1.6} aria-hidden="true" />
-              <span>Recruter manuellement</span>
+          {activeDraft && (
+            <button type="button" onClick={() => startConversation('', activeDraft)} className="mx-auto mb-3 flex min-h-11 w-full max-w-[760px] items-center justify-center rounded-lg border border-[#18181B] bg-[#F4F4F5] px-4 text-sm font-semibold text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/35">
+              Reprendre mon recrutement
             </button>
-          </div>
-
-          <div className="mx-auto mt-5 max-w-[760px]">
-            <div className="space-y-0.5">
-              {suggestions.map((suggestion) => {
-                const SuggestionIcon = suggestion.icon
-                return (
-                  <button key={suggestion.text} type="button" onClick={() => setBrief(suggestion.text)} className="flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left text-sm leading-5 text-[#5F5E5A] transition-colors duration-150 hover:bg-[#F7F7F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
-                    <SuggestionIcon size={17} strokeWidth={1.6} aria-hidden="true" />
-                    <span>{suggestion.text}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          )}
+          <form onSubmit={submitInitialBrief} className="mx-auto max-w-[760px] rounded-xl border bg-white p-3" style={{ borderColor: '#DFDCD9' }}>
+            <textarea value={brief} onChange={(event) => setBrief(event.target.value)} placeholder={animatedPlaceholder} rows={3} aria-label="Décrire le recrutement" className="min-h-[82px] w-full resize-none bg-transparent px-2 py-1 text-[15px] leading-6 outline-none placeholder:text-[#73736F]" autoFocus />
+            <div className="mt-1 flex items-center justify-between"><span className="px-2 text-xs text-[#73736F]">FR</span><button type="submit" disabled={!brief.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#18181B] text-white disabled:bg-[#C7C5C1]" aria-label="Commencer"><ArrowUp size={17} /></button></div>
+          </form>
+          <button type="button" onClick={onManualCreate} className="mx-auto mt-3 flex min-h-11 w-full max-w-[760px] items-center justify-center gap-2 rounded-lg border border-[#D4D4D8] bg-white px-4 text-sm font-medium text-[#27272A]"><PenLine size={15} />Recruter manuellement</button>
         </div>
       </section>
     )
@@ -2776,164 +2625,43 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
 
   return (
     <section className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
-      <div className="flex h-14 shrink-0 items-center justify-between gap-4 border-b" style={{ borderColor: colors.borderLight }}>
-        <div>
-          <h1 className="text-sm font-semibold" style={{ color: colors.text }}>Nouveau professeur IA</h1>
-          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>{completed ? 'Configuration prête à vérifier' : `Question ${Math.min(stepIndex + 1, RECRUITMENT_STEPS.length)} sur ${RECRUITMENT_STEPS.length}`}</p>
-        </div>
+      <header className="flex h-14 shrink-0 items-center justify-between border-b" style={{ borderColor: colors.borderLight }}>
+        <div><h1 className="text-sm font-semibold" style={{ color: colors.text }}>Brouillon de recrutement</h1><p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>Brouillon {draft?.id}</p></div>
+      </header>
+      <div ref={chatScrollRef} className="mx-auto min-h-0 w-full max-w-3xl flex-1 overflow-y-auto py-5" aria-live="polite">
+        {history.map((message, index) => <div key={`${message.role}-${index}`} className={`mb-4 flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}><p className={message.role === 'user' ? 'max-w-[82%] rounded-2xl bg-[#F1F1EF] px-4 py-2.5 text-sm leading-6' : 'max-w-[68ch] text-sm leading-6'} style={{ color: colors.text }}>{message.text}</p></div>)}
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-1 sm:px-3">
-        <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" aria-live="polite">
-          <div className="flex min-h-full flex-col justify-end py-5 sm:py-6">
-          {history.map((message, index) => (
-            <div
-              key={`${message.role}-${index}`}
-              className={`group relative flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${index === 0 ? '' : history[index - 1]?.role === message.role ? 'mt-2' : 'mt-6'}`}
-            >
-              {message.role === 'user' ? (
-                <div className="max-w-[82%] rounded-2xl bg-[#F1F1EF] px-4 py-2.5 text-sm leading-6" style={{ color: colors.text }}>
-                  {message.text}
-                </div>
-              ) : (
-                <p className="max-w-[68ch] text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
-              )}
-              <button
-                type="button"
-                onClick={() => navigator.clipboard?.writeText(message.text)}
-                className={`absolute top-full mt-0.5 flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-opacity duration-150 hover:bg-[#F3F3F1] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/40 ${message.role === 'user' ? 'right-0' : 'left-0'}`}
-                style={{ color: colors.textMuted }}
-                aria-label="Copier le message"
-              >
-                <Copy size={14} strokeWidth={1.6} aria-hidden="true" />
-              </button>
-            </div>
-          ))}
-          {isThinking && (
-            <div className="mt-6 flex items-center gap-2 py-1 text-sm" style={{ color: colors.textMuted }}>
-              <span className="recruitment-thinking-dot h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
-              <span>Réflexion…</span>
-            </div>
-          )}
+      <div className="mx-auto w-full max-w-3xl shrink-0 border-t bg-white py-4" style={{ borderColor: colors.borderLight }}>
+        {confirmRestart ? (
+          <div className="rounded-xl border border-[#F59E0B] bg-[#FFFBEB] p-4">
+            <p className="text-sm font-semibold text-[#78350F]">Vous souhaitez abandonner la configuration actuelle et commencer un nouveau recrutement ? Les informations non validées seront supprimées.</p>
+            <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={abandonAndRestart} className="min-h-11 rounded-lg bg-[#B45309] px-4 text-sm font-semibold text-white">Abandonner et commencer un nouveau recrutement</button><button type="button" onClick={() => { setConfirmRestart(false); startConversation('', draft) }} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 text-sm font-semibold text-[#27272A]">Continuer la configuration actuelle</button></div>
           </div>
-        </div>
-
-        {completed && !isThinking ? (
-          <div className="recruitment-review-enter mt-4 max-h-[48vh] shrink-0 overflow-y-auto rounded-xl border bg-white p-5 sm:p-6" style={{ borderColor: colors.borderLight }}>
-            <div className="flex items-start gap-5">
-              <img src={RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === draft.teacherColor)?.image} alt="" className="teacher-robot-float h-24 w-24 shrink-0 object-contain" />
-              <div className="min-w-0 flex-1">
-                <p className="text-lg font-semibold" style={{ color: colors.text }}>Vérifiez la configuration proposée</p>
-                <p className="mt-1 text-sm leading-6" style={{ color: colors.textMuted }}>Le formulaire de recrutement sera déjà complété. Vous pourrez encore tout modifier avant de lancer la préparation.</p>
-              </div>
-            </div>
-            <dl className="mt-5 grid gap-x-6 gap-y-3 border-t pt-5 text-sm sm:grid-cols-2" style={{ borderColor: colors.borderLight }}>
-              <div><dt style={{ color: colors.textMuted }}>Professeur</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.teacherName}</dd></div>
-              <div><dt style={{ color: colors.textMuted }}>Formation</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingName}</dd></div>
-              <div><dt style={{ color: colors.textMuted }}>Référence</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>RNCP {draft.rncpCode}</dd></div>
-              <div><dt style={{ color: colors.textMuted }}>Calendrier</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingDays} journées, {draft.weeklyCourseCount}/semaine</dd></div>
+        ) : completed ? (
+          <div className="rounded-xl border bg-white p-5" style={{ borderColor: colors.borderLight }}>
+            <h2 className="text-lg font-semibold" style={{ color: colors.text }}>Récapitulatif du recrutement</h2>
+            <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+              <div><dt style={{ color: colors.textMuted }}>Formation</dt><dd className="font-medium">{draft.trainingName}</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Référence</dt><dd className="font-medium">RNCP {draft.rncpCode}</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Première journée</dt><dd className="font-medium">{draft.startDate}</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Durée moyenne</dt><dd className="font-medium">{draft.durationValue} {draft.durationUnit}</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Rythme général</dt><dd className="font-medium">{draft.weeklyCourseCount} jour{Number(draft.weeklyCourseCount) > 1 ? 's' : ''} par semaine</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Jours habituels</dt><dd className="font-medium">{draft.teachingDays.join(', ')}</dd></div>
             </dl>
-            <button type="button" onClick={() => onComplete(draft)} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#191714] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#302D28]">
-              Vérifier le professeur
-              <Icon name="arrow_forward" className="text-base" />
-            </button>
+            <button type="button" onClick={() => onComplete(draft)} className="mt-5 min-h-11 w-full rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white">Ouvrir le calendrier et le déroulé</button>
           </div>
-        ) : !completed ? (
-          <div className="shrink-0 border-t bg-white py-3 sm:py-4" style={{ borderColor: colors.borderLight }}>
-            {!isThinking && pendingConfirmation && (
-              <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
-                <div className="px-4 py-3.5 sm:px-5">
-                  <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>
-                    {pendingConfirmation.field === 'teacherName' ? 'Confirmer le nom du professeur' : 'Confirmer la formation'}
-                  </p>
-                  <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>{pendingConfirmation.value}</p>
-                </div>
-                <button type="button" onClick={() => resolvePendingConfirmation(true)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>1</span>
-                  Oui, confirmer
-                </button>
-                <button type="button" onClick={() => resolvePendingConfirmation(false)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>2</span>
-                  Non, modifier
-                </button>
-              </div>
-            )}
-            {!pendingConfirmation && (currentStep.type === 'text' || currentStep.type === 'number') && (
-              <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl border bg-white p-2 pl-4" style={{ borderColor: colors.borderLight }}>
-                <input type="text" inputMode={currentStep.type === 'number' ? 'numeric' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={isThinking ? 'Réflexion en cours…' : currentStep.placeholder} disabled={isThinking} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B] disabled:cursor-wait disabled:text-[#73736F]" style={{ color: colors.text }} autoFocus={!isThinking} />
-                <button type="submit" disabled={isThinking || !answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#191918] text-white transition-colors hover:bg-[#30302E] disabled:cursor-not-allowed disabled:bg-[#C7C7C4]" aria-label="Valider la réponse"><ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" /></button>
-              </form>
-            )}
-            {!isThinking && !pendingConfirmation && currentIsChoice && (
-              <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
-                <div className="flex items-start justify-between gap-4 px-4 py-3.5 sm:px-5">
-                  <div>
-                    <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>{currentStep.question}</p>
-                    {currentStep.id === 'rncpConfirm' && (
-                      <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-                        {matchingModule ? `${matchingModule.tp_name} · RNCP ${matchingModule.rncp_code}` : `${draft.trainingName} · RNCP ${draft.rncpCode}`}
-                      </p>
-                    )}
-                  </div>
-                  <span className="shrink-0 text-xs tabular-nums" style={{ color: colors.textMuted }}>{stepIndex + 1} / {RECRUITMENT_STEPS.length}</span>
-                </div>
-
-                {currentStep.type === 'confirm' && [
-                  { label: 'Oui, continuer', value: 'Oui, continuer' },
-                  { label: 'Corriger la formation ou le RNCP', value: 'Corriger' },
-                ].map((option, index) => (
-                  <button key={option.value} type="button" onClick={() => advance(option.value)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>{index + 1}</span>
-                    {option.label}
-                  </button>
-                ))}
-
-                {currentStep.type === 'frequency' && [1, 2, 3, 4, 5].map((count) => (
-                  <button key={count} type="button" onClick={() => advance(count)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>{count}</span>
-                    {count} journée{count > 1 ? 's' : ''} par semaine
-                  </button>
-                ))}
-
-                {currentStep.type === 'days' && RECRUITMENT_DAY_OPTIONS.map((day, index) => {
-                  const selected = draft.teachingDays.includes(day.id)
-                  return (
-                    <button key={day.id} type="button" onClick={() => toggleDay(day.id)} aria-pressed={selected} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: selected ? '#6D4AC7' : colors.innerBg, color: selected ? '#fff' : colors.textMuted }}>{selected ? <Icon name="check" className="text-sm" /> : index + 1}</span>
-                      {day.label}
-                    </button>
-                  )
-                })}
-
-                {currentStep.type === 'color' && RECRUITMENT_COLOR_OPTIONS.map((color, index) => {
-                  const selected = draft.teacherColor === color.id
-                  return (
-                    <button key={color.id} type="button" onClick={() => setDraft((current) => ({ ...current, teacherColor: color.id }))} aria-pressed={selected} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: selected ? `${color.value}22` : colors.innerBg, color: colors.textMuted }}>{index + 1}</span>
-                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.value }} />
-                      <span className="flex-1">{color.label}</span>
-                      {selected && <Icon name="check" className="text-base" style={{ color: color.value }} />}
-                    </button>
-                  )
-                })}
-
-                {(currentStep.type === 'days' || currentStep.type === 'color') && (
-                  <div className="flex items-center justify-between gap-3 border-t px-4 py-3 sm:px-5" style={{ borderColor: colors.borderLight }}>
-                    <span className="text-xs" style={{ color: colors.textMuted }}>
-                      {currentStep.type === 'days' ? `${draft.teachingDays.length} jour${draft.teachingDays.length > 1 ? 's' : ''} sélectionné${draft.teachingDays.length > 1 ? 's' : ''}` : RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === draft.teacherColor)?.label}
-                    </span>
-                    <button type="button" disabled={currentStep.type === 'days' && draft.teachingDays.length !== Number(draft.weeklyCourseCount)} onClick={() => advance(currentStep.type === 'days' ? draft.teachingDays : draft.teacherColor)} className="rounded-lg bg-[#191714] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">
-                      Valider ce choix
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-            {!isThinking && !pendingConfirmation && currentStep.type === 'date' && (
-              <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
-            )}
-          </div>
-        ) : null}
+        ) : currentField === 'durationUnit' ? (
+          <div className="grid grid-cols-2 gap-2">{['semaines', 'mois'].map((unit) => <button type="button" key={unit} onClick={() => submitValue(unit)} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white text-sm font-semibold capitalize">{unit}</button>)}</div>
+        ) : currentField === 'weeklyCourseCount' ? (
+          <div><p className="mb-3 text-sm text-[#52525B]">Indiquez le nombre moyen de jours par semaine. Ce rythme reste une règle générale : vous pourrez prévoir des exceptions ponctuelles dans le calendrier.</p><div className="grid grid-cols-5 gap-2">{[1, 2, 3, 4, 5].map((count) => <button type="button" key={count} onClick={() => submitValue(count)} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white text-sm font-semibold">{count}</button>)}</div></div>
+        ) : currentField === 'teachingDays' ? (
+          <div><p className="mb-3 text-sm leading-6 text-[#52525B]">Choisissez les jours habituels. Par exemple, un rythme lundi-mercredi peut exceptionnellement devenir mardi-jeudi ou mardi-vendredi lors d’un jour férié ou d’une contrainte particulière, sans modifier la règle générale.</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-5">{RECRUITMENT_DAY_OPTIONS.map((day) => { const selected = draft.teachingDays.includes(day.id); return <button type="button" key={day.id} aria-pressed={selected} onClick={() => persist({ ...draft, teachingDays: selected ? draft.teachingDays.filter((item) => item !== day.id) : [...draft.teachingDays, day.id] })} className={`min-h-11 rounded-lg border px-2 text-sm font-semibold ${selected ? 'border-[#18181B] bg-[#18181B] text-white' : 'border-[#D4D4D8] bg-white text-[#3F3F46]'}`}>{day.label}</button> })}</div><button type="button" disabled={draft.teachingDays.length !== Number(draft.weeklyCourseCount)} onClick={() => submitValue(draft.teachingDays)} className="mt-3 min-h-11 w-full rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white disabled:opacity-35">Valider les jours habituels</button></div>
+        ) : currentField === 'startDate' ? (
+          <div className="flex gap-2"><input type="date" min={todayDateInput()} value={draft.startDate || ''} onChange={(event) => persist({ ...draft, startDate: event.target.value })} className="min-h-11 flex-1 rounded-lg border border-[#D4D4D8] px-3 text-sm" /><button type="button" disabled={!draft.startDate} onClick={() => submitValue(draft.startDate)} className="min-h-11 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white disabled:opacity-35">Valider</button></div>
+        ) : (
+          <form onSubmit={(event) => { event.preventDefault(); if (answer.trim()) submitValue(answer.trim()) }} className="flex gap-2 rounded-xl border bg-white p-2 pl-4" style={{ borderColor: colors.borderLight }}><input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={currentStep?.placeholder} className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none" autoFocus /><button type="submit" disabled={!answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#18181B] text-white disabled:bg-[#C7C7C4]" aria-label="Valider"><ArrowUp size={17} /></button></form>
+        )}
       </div>
     </section>
   )
@@ -2945,7 +2673,7 @@ const CENTER_ONBOARDING_STEPS = [
     eyebrow: 'Votre espace actif',
     title: 'Suivez vos professeurs IA en cours',
     description: 'Mes professeurs IA regroupe les professeurs en préparation et les promotions actives. La préparation continue en arrière-plan : vous pouvez quitter la page sans l’interrompre.',
-    detail: 'Chaque carte donne accès au planning, aux cours, aux audios, aux élèves et aux présences.',
+    detail: 'Chaque carte donne accès au planning, aux cours, aux élèves et aux présences. Le suivi audio est intégré à chaque journée de cours.',
   },
   {
     icon: 'person_add',
@@ -2964,36 +2692,31 @@ const CENTER_ONBOARDING_STEPS = [
   {
     icon: 'event_available',
     eyebrow: 'Exploitation',
-    title: 'Planifiez et générez les supports à J-1',
-    description: 'Le planning pilote les séances et la génération audio à J-1. À la fin d’une promotion, le professeur, ses cours et ses audios restent disponibles dans votre bibliothèque.',
+    title: 'Planifiez les supports à H-72',
+    description: 'Le planning pilote chaque séance et lance sa génération audio 72 heures avant le début. À la fin d’une promotion, le professeur, ses cours et ses audios restent disponibles dans votre bibliothèque.',
     detail: 'Les ressources durables restent conservées pour les prochaines promotions.',
   },
 ]
 
-function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onComplete, saving }) {
+function CenterOnboarding({ colors, step, onStepChange, onClose, onComplete, saving }) {
   const current = CENTER_ONBOARDING_STEPS[step] || CENTER_ONBOARDING_STEPS[0]
   const isLast = step === CENTER_ONBOARDING_STEPS.length - 1
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(15, 23, 42, 0.66)' }}
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-[#09090B]/55 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="center-onboarding-title"
     >
       <div
-        className="w-full max-w-xl overflow-hidden rounded-2xl shadow-2xl"
-        style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+        className="w-full max-w-[560px] overflow-hidden rounded-[14px] shadow-[0_24px_72px_rgba(9,9,11,0.28)]"
+        style={{ backgroundColor: colors.cardBg }}
       >
         <div className="flex items-center justify-between gap-4 px-5 py-4 sm:px-6" style={{ borderBottom: `1px solid ${colors.border}` }}>
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
-              Guide de l’espace centre
-            </p>
-            <p className="mt-1 text-xs tabular-nums" style={{ color: colors.textSecondary }}>
-              Étape {step + 1} sur {CENTER_ONBOARDING_STEPS.length}
-            </p>
+            <p className="text-sm font-semibold" style={{ color: colors.text }}>Guide de l’espace centre</p>
+            <p className="mt-0.5 text-xs tabular-nums" style={{ color: colors.textMuted }}>Étape {step + 1} sur {CENTER_ONBOARDING_STEPS.length}</p>
           </div>
           <button
             type="button"
@@ -3011,18 +2734,17 @@ function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onCom
             {CENTER_ONBOARDING_STEPS.map((_, index) => (
               <span
                 key={index}
-                className="h-1.5 flex-1 rounded-full"
-                style={{ backgroundColor: index <= step ? '#8B5CF6' : colors.border }}
+                className="h-1 flex-1 rounded-full"
+                style={{ backgroundColor: index <= step ? '#18181B' : colors.borderLight }}
               />
             ))}
           </div>
           <div
-            className="flex h-12 w-12 items-center justify-center rounded-xl"
-            style={{ backgroundColor: darkMode ? 'rgba(139, 92, 246, 0.15)' : '#f5f3ff', color: darkMode ? '#c4b5fd' : '#7c3aed' }}
+            className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#F4F4F5] text-[#52525B]"
           >
             <Icon name={current.icon} className="text-2xl" />
           </div>
-          <p className="mt-5 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: '#8B5CF6' }}>
+          <p className="mt-5 text-xs font-medium" style={{ color: colors.textMuted }}>
             {current.eyebrow}
           </p>
           <h2 id="center-onboarding-title" className="mt-2 text-2xl font-semibold tracking-tight" style={{ color: colors.text }}>
@@ -3031,7 +2753,7 @@ function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onCom
           <p className="mt-4 text-sm leading-6" style={{ color: colors.textSecondary }}>
             {current.description}
           </p>
-          <div className="mt-5 flex items-start gap-3 rounded-xl px-4 py-3" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
+          <div className="mt-5 flex items-start gap-3 border-t pt-4" style={{ borderColor: colors.borderLight }}>
             <Icon name="info_outline" className="mt-0.5 text-base" style={{ color: colors.textMuted }} />
             <p className="text-xs leading-5" style={{ color: colors.textMuted }}>{current.detail}</p>
           </div>
@@ -3052,7 +2774,7 @@ function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onCom
             onClick={() => (isLast ? onComplete() : onStepChange(step + 1))}
             disabled={saving}
             className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-wait disabled:opacity-60"
-            style={{ backgroundColor: '#8B5CF6' }}
+            style={{ backgroundColor: '#18181B' }}
           >
             {saving ? 'Enregistrement…' : isLast ? 'Terminer le guide' : 'Continuer'}
             {!saving && <Icon name={isLast ? 'check' : 'arrow_forward'} className="text-base" />}
@@ -3099,9 +2821,6 @@ function PlatformCardsView({
   cardsPerPage,
   rosterFilter,
   onRosterFilterChange,
-  expandedPlatform,
-  platformAudios,
-  audiosLoading,
   colors,
   darkMode,
   studentEmailsByPlatform,
@@ -3114,8 +2833,6 @@ function PlatformCardsView({
   attendanceData,
   attendanceLoading,
   attendanceError,
-  onExpand,
-  onRefreshAudios,
   onToggleStudentEmails,
   onToggleAttendance,
   onStudentEmailDraftChange,
@@ -3290,9 +3007,6 @@ function PlatformCardsView({
           <PlatformCard
             key={p.id}
             platform={p}
-            expanded={expandedPlatform === p.id}
-            audios={platformAudios[p.id] || []}
-            audiosLoading={audiosLoading === p.id}
             colors={colors}
             darkMode={darkMode}
             studentEmails={studentEmailsByPlatform[p.id] || []}
@@ -3305,8 +3019,6 @@ function PlatformCardsView({
             studentEmailsLoading={studentEmailsLoading === p.id}
             studentEmailsSaving={studentEmailsSaving === p.id}
             studentEmailDraft={studentEmailDrafts[p.id] || ''}
-            onExpand={() => onExpand(p.id)}
-            onRefreshAudios={() => onRefreshAudios(p.id)}
             onToggleStudentEmails={() => onToggleStudentEmails(p.id)}
             onToggleAttendance={() => onToggleAttendance(p.id)}
             onStudentEmailDraftChange={(value) => onStudentEmailDraftChange(p.id, value)}
@@ -3477,9 +3189,9 @@ function AttendanceRegisterView({
             type="button"
             onClick={onExport}
             className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition-colors"
-            style={{ backgroundColor: '#8B5CF6' }}
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
+            style={{ backgroundColor: '#18181B' }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#27272A' }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#18181B' }}
           >
             <Icon name="download" className="text-base" />
             <span>Exporter Excel</span>
@@ -3639,7 +3351,7 @@ function AttendanceRegisterView({
                         onClick={() => onSaveStudent(student)}
                         disabled={savingStudentId === student.id}
                         className="hidden"
-                        style={{ backgroundColor: '#8B5CF6' }}
+                        style={{ backgroundColor: '#18181B' }}
                       >
                         {savingStudentId === student.id ? 'Enregistrement...' : 'Enregistrer'}
                       </button>
@@ -3701,10 +3413,8 @@ function AttendanceCardPanel({
   }
 
   return (
-    <div
-      className="p-1 sm:p-2"
-    >
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+    <div className="p-4 sm:p-5">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Présence de la journée</h4>
           <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
@@ -3723,22 +3433,25 @@ function AttendanceCardPanel({
         <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
           Journée consultée
           <span className="mt-2 flex items-center gap-2">
-            <input
-              type="date"
-              value={courseDate}
-              onChange={(e) => onCourseDateChange(e.target.value)}
-              className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm font-normal outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
-              style={inputStyle}
-            />
+            <span className="relative min-w-0 flex-1">
+              <CalendarDays size={16} strokeWidth={1.7} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#71717A]" aria-hidden="true" />
+              <input
+                type="date"
+                value={courseDate}
+                onChange={(e) => onCourseDateChange(e.target.value)}
+                className="h-11 w-full min-w-0 rounded-lg px-3 pl-10 text-sm font-normal outline-none transition-shadow focus:ring-2 focus:ring-[#18181B]/15"
+                style={inputStyle}
+              />
+            </span>
             <button
               type="button"
               onClick={onRefresh}
-              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+              className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30"
               style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
               title="Actualiser les présences"
               aria-label="Actualiser les présences"
             >
-              <Icon name="refresh" className="text-base" />
+              <RefreshCw size={17} strokeWidth={1.8} aria-hidden="true" />
             </button>
           </span>
         </label>
@@ -3767,15 +3480,15 @@ function AttendanceCardPanel({
             type="button"
             onClick={() => onExport(selectedExport || null)}
             disabled={!selectedExport}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30 disabled:cursor-not-allowed disabled:opacity-45"
             style={{
-              backgroundColor: selectedExport ? '#8B5CF6' : colors.cardBg,
+              backgroundColor: selectedExport ? '#18181B' : colors.cardBg,
               color: selectedExport ? 'white' : colors.textMuted,
-              border: selectedExport ? '1px solid #8B5CF6' : `1px solid ${colors.border}`,
+              border: selectedExport ? '1px solid #18181B' : `1px solid ${colors.border}`,
             }}
             title={selectedExport ? 'Télécharger le relevé de cette journée' : 'Disponible automatiquement le lendemain matin'}
           >
-            <Icon name="download" className="text-sm" />
+            <Download size={14} strokeWidth={1.8} aria-hidden="true" />
             Télécharger l’Excel
           </button>
         </div>
@@ -3791,10 +3504,10 @@ function AttendanceCardPanel({
                 type="button"
                 onClick={() => dailyExport.status === 'ready' && onExport(dailyExport)}
                 disabled={dailyExport.status !== 'ready'}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/5 disabled:cursor-default disabled:opacity-60 dark:hover:bg-white/5"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[#F4F4F5] disabled:cursor-default disabled:opacity-60"
                 style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
               >
-                <Icon name="table_chart" className="text-sm" style={{ color: colors.textMuted }} />
+                <FileSpreadsheet size={15} strokeWidth={1.7} className="shrink-0 text-[#71717A]" aria-hidden="true" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs">Journée du {formatDate(dailyExport.course_date)}</span>
                   <span className="block text-[10px]" style={{ color: colors.textMuted }}>
@@ -3803,7 +3516,9 @@ function AttendanceCardPanel({
                       : 'Préparation automatique en attente'}
                   </span>
                 </span>
-                <Icon name={dailyExport.status === 'ready' ? 'download' : 'schedule'} className="text-sm" style={{ color: colors.textMuted }} />
+                {dailyExport.status === 'ready'
+                  ? <Download size={14} strokeWidth={1.7} className="shrink-0 text-[#71717A]" aria-hidden="true" />
+                  : <CalendarClock size={14} strokeWidth={1.7} className="shrink-0 text-[#71717A]" aria-hidden="true" />}
               </button>
             ))}
           </div>
@@ -3812,12 +3527,16 @@ function AttendanceCardPanel({
 
       {loading ? (
         <div className="flex items-center justify-center py-5">
-          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
+          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#18181B' }} />
         </div>
       ) : students.length === 0 ? (
-        <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
-          Aucune entrée dans la salle n’a été enregistrée pour cette journée.
-        </p>
+        <div className="flex min-h-[150px] flex-col items-center justify-center border-y px-5 text-center" style={{ borderColor: colors.borderLight }}>
+          <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#F4F4F5] text-[#71717A]">
+            <UserRoundCheck size={18} strokeWidth={1.7} aria-hidden="true" />
+          </span>
+          <p className="mt-3 text-sm font-semibold" style={{ color: colors.text }}>Aucune présence enregistrée</p>
+          <p className="mt-1 max-w-[42ch] text-xs leading-5" style={{ color: colors.textMuted }}>Les entrées et sorties apparaîtront ici après l’ouverture de la salle.</p>
+        </div>
       ) : (
         <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
           {students.map((student) => {
@@ -3875,38 +3594,37 @@ function TeacherToolPanel({
   icon,
   onBack,
   colors,
-  darkMode,
   children,
 }) {
+  const ToolIcon = icon
   return (
     <section
       className="flex h-full min-h-0 flex-col"
       aria-label={title}
       style={{ backgroundColor: colors.cardBg }}
     >
-      <header className="flex flex-shrink-0 items-center gap-2 border-b px-3 py-2 pr-10" style={{ borderColor: colors.border }}>
+      <header className="flex min-h-16 flex-shrink-0 items-center gap-3 border-b px-4 pr-14" style={{ borderColor: colors.borderLight }}>
         <button
           type="button"
           onClick={onBack}
           autoFocus
           aria-label="Revenir aux outils du professeur"
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30"
           style={{ color: colors.textMuted }}
         >
-          <Icon name="arrow_back" className="text-lg" />
+          <ArrowLeft size={18} strokeWidth={1.8} aria-hidden="true" />
         </button>
         <span
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
-          style={{ backgroundColor: colors.innerBg, color: darkMode ? '#c4b5fd' : '#7c3aed' }}
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#F4F4F5] text-[#52525B]"
           aria-hidden="true"
         >
-          <Icon name={icon} className="text-base" />
+          <ToolIcon size={17} strokeWidth={1.7} />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold tracking-tight" style={{ color: colors.text }}>
+          <h2 className="truncate text-[15px] font-semibold tracking-[-0.01em]" style={{ color: colors.text }}>
             {title}
           </h2>
-          <p className="truncate text-[11px]" style={{ color: colors.textMuted }}>{subtitle}</p>
+          <p className="mt-0.5 truncate text-[11px]" style={{ color: colors.textMuted }}>{subtitle}</p>
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -4203,6 +3921,9 @@ export function CreatePlatformView({
   newFormHours,
   setNewFormHours,
   initialScheduleV2,
+  recruitmentDraft,
+  onRecruitmentDraftChange,
+  onCreateTemplate,
   creating,
   billing,
   billingLoading,
@@ -4212,11 +3933,11 @@ export function CreatePlatformView({
   onCancel,
 }) {
   const teacherColors = [
-    { id: 'violet', label: 'Violet', swatch: '#8B5CF6', image: '/robot-violet.png' },
-    { id: 'blue', label: 'Bleu', swatch: '#3B82F6', image: '/robot-blue.png' },
-    { id: 'pink', label: 'Rose', swatch: '#EC4899', image: '/robot-pink.png' },
-    { id: 'green', label: 'Vert', swatch: '#10B981', image: '/robot-green.png' },
-    { id: 'amber', label: 'Ambre', swatch: '#F59E0B', image: '/robot-amber.png' },
+    { id: 'violet', label: 'Graphite', swatch: '#71717A', image: '/robot-violet.webp', filter: 'grayscale(1) contrast(0.96)' },
+    { id: 'blue', label: 'Bleu', swatch: '#3B82F6', image: '/robot-blue.webp' },
+    { id: 'pink', label: 'Rose', swatch: '#EC4899', image: '/robot-pink.webp' },
+    { id: 'green', label: 'Vert', swatch: '#10B981', image: '/robot-green.webp' },
+    { id: 'amber', label: 'Ambre', swatch: '#F59E0B', image: '/robot-amber.webp' },
   ]
   const weekDays = [
     { id: 'lundi', label: 'Lun.' },
@@ -4286,7 +4007,33 @@ export function CreatePlatformView({
   const handleSchedulePlanChange = useCallback((nextPlan) => {
     setSchedulePlan(nextPlan)
     setScheduleAttemptErrors([])
-  }, [])
+    if (nextPlan?.payload && onRecruitmentDraftChange) {
+      onRecruitmentDraftChange({
+        ...recruitmentDraft,
+        trainingName: newFormTpName.trim(),
+        rncpCode: newFormRncp.trim(),
+        startDate: nextPlan.payload.selected_dates?.[0] || scheduleStartDate,
+        weeklyCourseCount: Number(weeklyCourseCount || 0),
+        teachingDays,
+        selectedDates: nextPlan.payload.selected_dates || [],
+        templateAssignments: Object.fromEntries(
+          (nextPlan.payload.template_assignments || []).map((assignment) => [
+            assignment.date,
+            String(assignment.template_id ?? assignment.template_key ?? ''),
+          ]),
+        ),
+        progress: 'calendar',
+      })
+    }
+  }, [
+    newFormRncp,
+    newFormTpName,
+    onRecruitmentDraftChange,
+    recruitmentDraft,
+    scheduleStartDate,
+    teachingDays,
+    weeklyCourseCount,
+  ])
 
   const handleLaunchRequest = () => {
     if (usesLegacyReuseSchedule) {
@@ -4307,8 +4054,8 @@ export function CreatePlatformView({
     }
     for (const error of schedulePlan.validation?.errors || []) {
       if (missingDays.length && error.startsWith('Affectez un template')) continue
-      if (error.includes('48 h')) {
-        errors.push('La première date doit être au minimum à J+2.')
+      if (error.includes('72 h')) {
+        errors.push('La première date doit être au minimum à J+3.')
       } else {
         errors.push(error)
       }
@@ -4357,6 +4104,31 @@ export function CreatePlatformView({
     weekdays: teachingDays,
     start_date: scheduleStartDate,
     start_time: scheduleStartTime,
+  }
+  const finalRecruitmentDraft = {
+    ...(recruitmentDraft || {}),
+    trainingName: trainingTitle,
+    rncpCode: formationMode === 'existing'
+      ? String(selectedModule?.rncp_code || '')
+      : newFormRncp.trim(),
+    startDate: schedulePlan.payload?.selected_dates?.[0] || scheduleStartDate,
+    weeklyCourseCount: Number(recruitmentDraft?.weeklyCourseCount || weeklyCourseCount || 0),
+    teachingDays: recruitmentDraft?.teachingDays?.length
+      ? recruitmentDraft.teachingDays
+      : teachingDays,
+  }
+  const finalRecruitmentMissing = formationMode === 'existing'
+    ? []
+    : recruitmentMissingFields(finalRecruitmentDraft)
+  const selectedTemplateNames = [...new Set(
+    (schedulePlan.days || []).map((day) => day.templateName).filter(Boolean),
+  )]
+  const persistFinalRecruitment = (updates) => {
+    onRecruitmentDraftChange?.({
+      ...finalRecruitmentDraft,
+      ...updates,
+      progress: 'validation',
+    })
   }
   const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#E1E5EA] bg-white px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
@@ -4418,6 +4190,7 @@ export function CreatePlatformView({
               alt={`Aperçu du professeur en ${selectedColor.label.toLowerCase()}`}
               className="teacher-identity-avatar create-platform-workspace__avatar"
               draggable="false"
+              style={{ filter: selectedColor.filter }}
             />
           </div>
 
@@ -4537,17 +4310,33 @@ export function CreatePlatformView({
                 </div>
               </section>
             ) : (
-              <FormationSchedulePlanner
-                key={`${formationMode}:${selectedModuleId || 'new'}`}
-                reuse={formationMode === 'existing'}
-                expectedDayCount={formationMode === 'existing' ? trainingDays : null}
-                initialSchedule={initialScheduleV2}
-                startDateHint={scheduleStartDate}
-                approximateDayCount={formationMode === 'existing' ? trainingDays : newFormHours}
-                daysPerWeekHint={weeklyCourseCount}
-                preferredWeekdaysHint={teachingDays}
-                onChange={handleSchedulePlanChange}
-              />
+              <Suspense fallback={<DeferredPanelFallback label="Chargement du calendrier…" />}>
+                <FormationSchedulePlanner
+                  key={`${formationMode}:${selectedModuleId || 'new'}`}
+                  reuse={formationMode === 'existing'}
+                  expectedDayCount={formationMode === 'existing' ? trainingDays : null}
+                  initialSchedule={initialScheduleV2}
+                  startDateHint={scheduleStartDate}
+                  approximateDayCount={formationMode === 'existing' ? trainingDays : newFormHours}
+                  daysPerWeekHint={weeklyCourseCount}
+                  preferredWeekdaysHint={teachingDays}
+                  onCreateTemplate={(calendarState) => {
+                    onRecruitmentDraftChange?.({
+                      ...recruitmentDraft,
+                      trainingName: newFormTpName.trim(),
+                      rncpCode: newFormRncp.trim(),
+                      startDate: calendarState.start_date || scheduleStartDate,
+                      weeklyCourseCount: Number(calendarState.days_per_week || weeklyCourseCount),
+                      teachingDays,
+                      selectedDates: calendarState.selected_dates || [],
+                      templateAssignments: calendarState.template_assignments || {},
+                      progress: 'template',
+                    })
+                    onCreateTemplate?.()
+                  }}
+                  onChange={handleSchedulePlanChange}
+                />
+              </Suspense>
             )}
           </div>
 
@@ -4643,40 +4432,122 @@ export function CreatePlatformView({
       )}
 
       {scheduleReviewOpen && createPortal(
-        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/45 sm:items-center sm:p-5">
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-[#09090B]/55 sm:items-center sm:p-5">
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby="schedule-review-title"
-            className="flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white text-[#18181B] sm:max-w-[640px] sm:rounded-2xl"
+            className="flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-[14px] border border-[#D4D4D8] bg-white text-[#18181B] shadow-[0_24px_72px_rgba(9,9,11,0.24)] sm:max-w-[640px] sm:rounded-[14px]"
           >
             <header className="border-b border-[#E4E4E7] px-5 py-4 sm:px-6">
               <p className="m-0 text-xs font-semibold text-[#71717A]">
                 {schedulePlan.dayCount} journée{schedulePlan.dayCount > 1 ? 's' : ''}
               </p>
               <h2 id="schedule-review-title" className="mt-1 text-xl font-bold tracking-[-0.025em]">
-                Confirmer le planning définitif
+                Valider le recrutement
               </h2>
               <p className="mt-2 max-w-[58ch] text-sm leading-6 text-[#52525B]">
-                Vérifiez les dates et leurs templates. Après confirmation, cette organisation ne pourra plus être modifiée.
+                Vérifiez et modifiez les informations avant leur enregistrement définitif.
               </p>
             </header>
 
-            <ol className="m-0 min-h-0 flex-1 list-none overflow-y-auto p-0">
-              {(schedulePlan.days || []).map((day) => (
-                <li key={day.date} className="grid grid-cols-[32px_minmax(0,1fr)] items-center gap-3 border-b border-[#E4E4E7] px-5 py-3 last:border-b-0 sm:px-6">
-                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#E4E4E7] text-xs font-bold text-[#3F3F46]">
-                    {day.dayNumber}
-                  </span>
-                  <div className="min-w-0">
-                    <strong className="block text-sm capitalize">{day.label}</strong>
-                    <span className="mt-0.5 block truncate text-xs text-[#71717A]">
-                      {day.templateName}
-                    </span>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <section className="grid gap-4 border-b border-[#E4E4E7] px-5 py-5 sm:grid-cols-2 sm:px-6" aria-label="Informations du recrutement">
+                <label className="text-xs font-semibold text-[#52525B]">
+                  Formation
+                  <input
+                    type="text"
+                    value={finalRecruitmentDraft.trainingName || ''}
+                    disabled={formationMode === 'existing'}
+                    onChange={(event) => {
+                      setNewFormTpName(event.target.value)
+                      persistFinalRecruitment({ trainingName: event.target.value })
+                    }}
+                    className="mt-1.5 min-h-11 w-full rounded-lg border border-[#D4D4D8] px-3 text-sm font-normal text-[#18181B] disabled:bg-[#F4F4F5]"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-[#52525B]">
+                  Code RNCP
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={finalRecruitmentDraft.rncpCode || ''}
+                    disabled={formationMode === 'existing'}
+                    onChange={(event) => {
+                      const value = event.target.value.replace(/\D/g, '')
+                      setNewFormRncp(value)
+                      persistFinalRecruitment({ rncpCode: value })
+                    }}
+                    className="mt-1.5 min-h-11 w-full rounded-lg border border-[#D4D4D8] px-3 text-sm font-normal text-[#18181B] disabled:bg-[#F4F4F5]"
+                  />
+                </label>
+                <div className="text-xs font-semibold text-[#52525B]">
+                  Date de début
+                  <p className="mt-1.5 flex min-h-11 items-center rounded-lg bg-[#F4F4F5] px-3 text-sm font-normal text-[#18181B]">
+                    {finalRecruitmentDraft.startDate || 'À définir'}
+                  </p>
+                </div>
+                {formationMode !== 'existing' && (
+                  <div className="text-xs font-semibold text-[#52525B]">
+                    Durée moyenne
+                    <div className="mt-1.5 grid grid-cols-[1fr_1.35fr] gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={finalRecruitmentDraft.durationValue || ''}
+                        onChange={(event) => persistFinalRecruitment({ durationValue: event.target.value })}
+                        className="min-h-11 rounded-lg border border-[#D4D4D8] px-3 text-sm font-normal text-[#18181B]"
+                      />
+                      <select
+                        value={finalRecruitmentDraft.durationUnit || ''}
+                        onChange={(event) => persistFinalRecruitment({ durationUnit: event.target.value })}
+                        className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-3 text-sm font-normal text-[#18181B]"
+                      >
+                        <option value="">Unité</option>
+                        <option value="semaines">Semaines</option>
+                        <option value="mois">Mois</option>
+                      </select>
+                    </div>
                   </div>
-                </li>
-              ))}
-            </ol>
+                )}
+                <div className="text-xs font-semibold text-[#52525B]">
+                  Rythme hebdomadaire
+                  <p className="mt-1.5 flex min-h-11 items-center rounded-lg bg-[#F4F4F5] px-3 text-sm font-normal text-[#18181B]">
+                    {finalRecruitmentDraft.weeklyCourseCount || 0} jour{Number(finalRecruitmentDraft.weeklyCourseCount) > 1 ? 's' : ''} par semaine
+                  </p>
+                </div>
+                <div className="text-xs font-semibold text-[#52525B]">
+                  Jours habituels
+                  <p className="mt-1.5 flex min-h-11 items-center rounded-lg bg-[#F4F4F5] px-3 text-sm font-normal capitalize text-[#18181B]">
+                    {(finalRecruitmentDraft.teachingDays || []).join(', ') || 'À définir'}
+                  </p>
+                </div>
+                <div className="text-xs font-semibold text-[#52525B] sm:col-span-2">
+                  Template sélectionné
+                  <p className="mt-1.5 flex min-h-11 items-center rounded-lg bg-[#F4F4F5] px-3 text-sm font-normal text-[#18181B]">
+                    {selectedTemplateNames.join(', ') || 'Aucun template sélectionné'}
+                  </p>
+                </div>
+              </section>
+
+              <div className="px-5 pb-2 pt-4 sm:px-6">
+                <h3 className="text-sm font-semibold text-[#18181B]">Calendrier détaillé</h3>
+              </div>
+              <ol className="m-0 list-none p-0">
+                {(schedulePlan.days || []).map((day) => (
+                  <li key={day.date} className="grid grid-cols-[32px_minmax(0,1fr)] items-center gap-3 border-b border-[#E4E4E7] px-5 py-3 last:border-b-0 sm:px-6">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#E4E4E7] text-xs font-bold text-[#3F3F46]">
+                      {day.dayNumber}
+                    </span>
+                    <div className="min-w-0">
+                      <strong className="block text-sm capitalize">{day.label}</strong>
+                      <span className="mt-0.5 block truncate text-xs text-[#71717A]">{day.templateName}</span>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
 
             <footer className="flex flex-col-reverse gap-2 border-t border-[#E4E4E7] bg-[#FAFAFA] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
               <button
@@ -4686,15 +4557,15 @@ export function CreatePlatformView({
                 autoFocus
                 className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-50"
               >
-                Revenir au planning
+                Modifier le calendrier
               </button>
               <button
                 type="button"
                 onClick={confirmScheduleAndCreate}
-                disabled={creating}
+                disabled={creating || finalRecruitmentMissing.length > 0}
                 className="min-h-11 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white hover:bg-[#27272A] disabled:bg-[#A1A1AA]"
               >
-                {creating ? 'Préparation en cours…' : 'Confirmer et lancer'}
+                {creating ? 'Préparation en cours…' : 'Valider le recrutement'}
               </button>
             </footer>
           </section>
@@ -4702,293 +4573,6 @@ export function CreatePlatformView({
         document.body,
       )}
     </section>
-  )
-}
-
-// ─── Audios Modal ────────────────────────────────────────────────────────────
-function AudiosModal({
-  platformId,
-  audios,
-  loading,
-  onClose,
-  onRefreshAudios,
-  embedded = false,
-}) {
-  const audioGroups = classifyFormationAudios(audios)
-  const audioCount = Object.values(audioGroups).reduce((total, group) => total + group.length, 0)
-
-  // ─── Remplir avec les audios ─────────────────────────────────────────
-  const [showFillModal, setShowFillModal] = useState(false)
-  const [folders, setFolders] = useState([])
-  const [loadingFolders, setLoadingFolders] = useState(false)
-  const [selectedFillFolderId, setSelectedFillFolderId] = useState('')
-  const [filling, setFilling] = useState(false)
-  const [fillResult, setFillResult] = useState(null)
-
-  const handleOpenFillModal = async () => {
-    setShowFillModal(true)
-    setFillResult(null)
-    setSelectedFillFolderId('')
-    setLoadingFolders(true)
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`)
-      const data = await resp.json().catch(() => ({}))
-      if (!resp.ok || !data.success) {
-        throw new Error(data.error || data.message || 'Impossible de charger les dossiers audio.')
-      }
-      setFolders(Array.isArray(data.folders) ? data.folders : [])
-    } catch (e) {
-      console.error('Erreur chargement dossiers:', e)
-      setFolders([])
-      setFillResult({ success: false, error: e.message || 'Impossible de charger les dossiers audio.' })
-    } finally {
-      setLoadingFolders(false)
-    }
-  }
-
-  const handleFill = async () => {
-    if (!selectedFillFolderId) return
-    setFilling(true)
-    setFillResult(null)
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/fill-from-folder`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_id: Number.parseInt(selectedFillFolderId, 10) }),
-      })
-      const data = await resp.json().catch(() => ({}))
-      if (!resp.ok || !data.success) {
-        throw new Error(data.error || data.message || 'Impossible de copier les audios.')
-      }
-      setFillResult(data)
-      if (onRefreshAudios) {
-        onRefreshAudios()
-      }
-    } catch (e) {
-      console.error('Erreur remplissage:', e)
-      setFillResult({ success: false, error: e.message || 'Impossible de copier les audios.' })
-    } finally {
-      setFilling(false)
-    }
-  }
-  return (
-    <div
-      className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-4'}
-      style={embedded ? undefined : { backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
-      onClick={embedded ? undefined : onClose}
-      role={embedded ? 'region' : 'dialog'}
-      aria-modal={embedded ? undefined : 'true'}
-      aria-labelledby="formation-audios-title"
-    >
-      <div
-        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-white' : 'w-full overflow-hidden rounded-2xl bg-white shadow-2xl'}
-        style={embedded ? undefined : { maxWidth: '1400px', maxHeight: '90vh' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Modal Header */}
-        <div className={`flex items-center justify-between border-b border-[#E4E4E7] bg-white ${embedded ? 'gap-2 px-3 py-2' : 'flex-wrap gap-3 px-4 py-4 sm:px-6'}`}>
-          {embedded ? (
-            <p className="text-[11px] font-medium text-[#71717A]">
-              {audioCount} fichier{audioCount > 1 ? 's' : ''}
-            </p>
-          ) : (
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#18181B] text-white">
-              <Icon name="audiotrack" className="text-xl" />
-            </div>
-            <div>
-              <h3 id="formation-audios-title" className="text-base font-semibold text-[#18181B]">
-                {embedded ? 'Playlist de la formation' : 'Audios de la formation'}
-              </h3>
-              <p className="text-sm text-[#71717A]">
-                {audioCount} fichier{audioCount > 1 ? 's' : ''} dans la playlist
-              </p>
-            </div>
-          </div>
-          )}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenFillModal}
-              className={`flex items-center gap-1.5 rounded-lg bg-[#18181B] font-medium text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 ${embedded ? 'min-h-8 px-2.5 py-1 text-xs' : 'min-h-11 px-3 py-2 text-sm sm:px-4'}`}
-            >
-              <Icon name="drive_folder_upload" className="text-base" />
-              <span>{embedded ? 'Remplir' : 'Remplir avec les audios'}</span>
-            </button>
-            {!embedded && (
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Fermer"
-                className="flex h-11 w-11 items-center justify-center rounded-lg text-[#71717A] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 active:scale-[0.98]"
-              >
-                <Icon name="close" className="text-xl" />
-              </button>
-            )}
-          </div>
-
-          {/* Modal sélection dossier */}
-          {showFillModal && (
-            <div
-              className="fixed inset-0 z-60 flex items-center justify-center p-4"
-              style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-              onClick={() => setShowFillModal(false)}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="fill-formation-audios-title"
-            >
-              <div
-                className="w-full rounded-2xl bg-white p-5 shadow-2xl sm:p-6"
-                style={{ maxWidth: '460px' }}
-                onClick={e => e.stopPropagation()}
-              >
-                <div className="mb-5 flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#18181B]">
-                    <Icon name="drive_folder_upload" className="text-white text-xl" />
-                  </div>
-                  <h4 id="fill-formation-audios-title" className="text-base font-bold text-[#18181B]">Remplir avec les audios</h4>
-                </div>
-
-                <p className="mb-4 text-sm leading-6 text-[#71717A]">
-                  Choisissez le dossier de cours à utiliser. Tous les fichiers audio réellement présents dans ce dossier seront copiés.
-                </p>
-
-                {loadingFolders ? (
-                  <div className="flex justify-center py-4">
-                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#D4D4D8] border-t-[#18181B]" />
-                  </div>
-                ) : (
-                  <select
-                    value={selectedFillFolderId}
-                    onChange={e => setSelectedFillFolderId(e.target.value)}
-                    className="mb-4 min-h-11 w-full rounded-lg px-3 py-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
-                    style={{ border: '1px solid #D4D4D8', color: '#18181B', backgroundColor: '#F4F4F5' }}
-                  >
-                    <option value="">— Sélectionner un dossier —</option>
-                    {folders.map(f => (
-                      <option key={f.id} value={f.id}>{f.name}</option>
-                    ))}
-                  </select>
-                )}
-
-                {fillResult && (
-                  <div
-                    className="mb-4 rounded-xl border border-[#D4D4D8] bg-[#F4F4F5] p-3 text-sm text-[#3F3F46]"
-                    role={fillResult.success ? 'status' : 'alert'}
-                    style={{
-                      borderStyle: fillResult.success ? 'solid' : 'dashed',
-                    }}
-                  >
-                    {fillResult.success
-                      ? `✓ ${fillResult.copied} fichiers copiés${fillResult.errors > 0 ? ` (${fillResult.errors} erreur(s))` : ''} depuis "${fillResult.folder_name}"`
-                      : `✗ ${fillResult.error}`}
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowFillModal(false)}
-                    className="min-h-11 rounded-lg bg-[#F4F4F5] px-4 py-2 text-sm font-medium text-[#52525B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
-                  >
-                    {fillResult?.success ? 'Fermer' : 'Annuler'}
-                  </button>
-                  {!fillResult?.success && (
-                    <button
-                      type="button"
-                      onClick={handleFill}
-                      disabled={!selectedFillFolderId || filling}
-                      className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#A1A1AA]"
-                    >
-                      {filling ? 'Copie en cours...' : 'Remplir'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Modal Body */}
-        <div className={`min-h-0 flex-1 overflow-y-auto ${embedded ? 'p-3' : 'p-4 sm:p-5'}`} style={embedded ? undefined : { maxHeight: 'calc(90vh - 80px)' }}>
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#D4D4D8] border-t-[#18181B]" />
-            </div>
-          ) : audioCount === 0 ? (
-            <div className="rounded-xl border border-dashed border-[#D4D4D8] bg-[#FAFAFA] px-5 py-10 text-center">
-              <Icon name="graphic_eq" className="text-3xl text-[#71717A]" />
-              <p className="mt-3 text-sm font-semibold text-[#18181B]">Aucun audio disponible</p>
-              <p className="mt-1 text-sm text-[#71717A]">
-                Remplissez la plateforme depuis un dossier généré pour afficher sa playlist.
-              </p>
-            </div>
-          ) : (
-            embedded ? (
-              <div className="space-y-3">
-                {[
-                  ['Cours', audioGroups.courses],
-                  ['Pauses', audioGroups.pauses],
-                  ['Questions-réponses', audioGroups.questions],
-                  ...(audioGroups.other.length ? [['Autres audios', audioGroups.other]] : []),
-                ].map(([title, audios]) => (
-                  <section key={title}>
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <h3 className="text-xs font-semibold text-[#18181B]">{title}</h3>
-                      <span className="text-[10px] tabular-nums text-[#71717A]">{audios.length}</span>
-                    </div>
-                    {audios.length ? (
-                      <div className="divide-y divide-[#E4E4E7] overflow-hidden rounded-lg border border-[#E4E4E7]">
-                        {audios.map((audio) => (
-                          <div key={audio.name} className="flex items-center gap-2 bg-white px-2.5 py-2">
-                            <Icon name="check_circle" className="text-sm text-[#71717A]" />
-                            <span className="min-w-0 flex-1 truncate text-[11px] text-[#3F3F46]" title={audio.name}>
-                              {audio.displayName}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="rounded-lg bg-[#FAFAFA] px-2.5 py-2 text-[11px] text-[#A1A1AA]">Aucun fichier</p>
-                    )}
-                  </section>
-                ))}
-              </div>
-            ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {/* Carte COURS */}
-              <AudioCard
-                title="Cours"
-                icon="/cours.jpg"
-                audios={audioGroups.courses}
-              />
-
-              {/* Carte PAUSES */}
-              <AudioCard
-                title="Pauses"
-                icon="/break-time.jpg"
-                audios={audioGroups.pauses}
-              />
-
-              {/* Carte Q&A */}
-              <AudioCard
-                title="Questions-réponses"
-                icon="/qa.jpg"
-                audios={audioGroups.questions}
-              />
-              {audioGroups.other.length > 0 && (
-                <AudioCard
-                  title="Autres audios"
-                  icon="/cours.jpg"
-                  audios={audioGroups.other}
-                />
-              )}
-            </div>
-            )
-          )}
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -5057,13 +4641,16 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
   return (
     <div
       className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-4'}
-      style={embedded ? undefined : { backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
+      style={embedded ? undefined : { backgroundColor: 'rgba(9, 9, 11, 0.55)' }}
       onClick={embedded ? undefined : onClose}
     >
       <div
-        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-white' : 'w-full overflow-hidden rounded-2xl bg-white shadow-2xl'}
+        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-white' : 'w-full overflow-hidden rounded-[14px] border border-[#D4D4D8] bg-white shadow-[0_24px_72px_rgba(9,9,11,0.24)]'}
         style={embedded ? undefined : { maxWidth: '1200px', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
+        role={embedded ? undefined : 'dialog'}
+        aria-modal={embedded ? undefined : 'true'}
+        aria-label={embedded ? undefined : 'Gestion du PDF'}
       >
         {/* Modal Header */}
         {!embedded && (
@@ -5112,7 +4699,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                 <button
                   type="button"
                   onClick={() => setCourseMaterialsReloadKey((key) => key + 1)}
-                  className="flex min-h-9 items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                  className="flex min-h-9 items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30"
                 >
                   <Icon name="refresh" className="text-base" />
                   <span>Réessayer</span>
@@ -5128,7 +4715,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                     href={material.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2.5 text-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                    className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2.5 text-sm transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30"
                     style={{ border: '1px solid #e2e8f0', color: '#334155', textDecoration: 'none' }}
                   >
                     <span className="min-w-0">
@@ -5220,8 +4807,8 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                 onClick={() => !uploading && fileInputRef.current?.click()}
                 className="flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-lg cursor-pointer transition-all"
                 style={{
-                  borderColor: dragOver ? '#8B5CF6' : '#e2e8f0',
-                  backgroundColor: dragOver ? 'rgba(139, 92, 246, 0.06)' : 'transparent',
+                  borderColor: dragOver ? '#18181B' : '#e4e4e7',
+                  backgroundColor: dragOver ? '#f4f4f5' : 'transparent',
                   minHeight: embedded ? '120px' : '500px',
                   cursor: uploading ? 'not-allowed' : 'pointer',
                   opacity: uploading ? 0.6 : 1
@@ -5238,7 +4825,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                 <div className={`flex flex-col items-center text-center ${embedded ? 'gap-2 px-3' : 'gap-4 px-6'}`}>
                   {uploading ? (
                     <>
-                      <div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-200 border-t-violet-500" />
+                      <div className="h-16 w-16 animate-spin rounded-full border-4 border-[#E4E4E7] border-t-[#18181B]" />
                       <p className="text-sm font-medium" style={{ color: '#64748b' }}>Upload en cours...</p>
                     </>
                   ) : justUploaded ? (
@@ -5249,14 +4836,14 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                         className="w-24 h-20 flex-shrink-0 object-contain"
                         style={{ transform: 'scaleX(-1)' }}
                       />
-                      <p className="text-left text-base font-semibold leading-snug" style={{ color: '#6d28d9' }}>
+                      <p className="text-left text-base font-semibold leading-snug" style={{ color: '#3F3F46' }}>
                         Le chatbot a bien été alimenté à partir du contenu du cours de cette semaine !
                       </p>
                     </div>
                   ) : (
                     <>
-                      <div className={`flex items-center justify-center rounded-full ${embedded ? 'size-10' : 'size-20'}`} style={{ backgroundColor: 'rgba(139, 92, 246, 0.10)' }}>
-                        <Icon name="cloud_upload" className={embedded ? 'text-2xl' : 'text-5xl'} style={{ color: '#7c3aed' }} />
+                      <div className={`flex items-center justify-center rounded-full ${embedded ? 'size-10' : 'size-20'}`} style={{ backgroundColor: '#F4F4F5' }}>
+                        <Icon name="cloud_upload" className={embedded ? 'text-2xl' : 'text-5xl'} style={{ color: '#52525B' }} />
                       </div>
                       <div>
                         <h3 className={`${embedded ? 'text-xs font-semibold' : 'mb-2 text-lg font-bold'}`} style={{ color: '#111418' }}>
@@ -5274,45 +4861,6 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
         </div>
       </div>
     </div>
-  )
-}
-
-// ─── Audio Card Component ────────────────────────────────────────────────────
-function AudioCard({ title, icon, audios }) {
-  return (
-    <section className="flex flex-col rounded-2xl border border-[#E4E4E7] bg-white p-5 shadow-sm sm:p-6">
-      <div className="mb-4 flex items-center gap-3 border-b border-[#E4E4E7] pb-4">
-        <div className="flex size-12 items-center justify-center overflow-hidden rounded-xl border border-[#A1A1AA] bg-[#F4F4F5]">
-          <img src={icon} alt="" className="h-full w-full object-cover grayscale" />
-        </div>
-        <div>
-          <h3 className="text-lg font-bold text-[#18181B]">{title}</h3>
-          <p className="text-xs text-[#71717A]">
-            {audios.length} fichier{audios.length > 1 ? 's' : ''}
-          </p>
-        </div>
-      </div>
-      <div className="flex-1 space-y-2">
-        {audios.length === 0 ? (
-          <p className="rounded-lg bg-[#FAFAFA] px-3 py-4 text-xs text-[#71717A]">
-            Aucun fichier de ce type.
-          </p>
-        ) : audios.map((audio) => (
-          <div key={audio.name} className="rounded-lg bg-[#FAFAFA] p-3">
-            <div className="flex items-center gap-2">
-              <div className="flex size-7 flex-shrink-0 items-center justify-center rounded-full bg-[#18181B] text-white">
-                <Icon name="check" className="text-sm" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium text-[#18181B]" title={audio.name}>
-                  {audio.displayName}
-                </p>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
   )
 }
 
@@ -5467,8 +5015,8 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
           <button
             type="button"
             onClick={() => setEditingId('new')}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
-            style={{ backgroundColor: colors.cardBg, color: darkMode ? '#c4b5fd' : '#7c3aed', border: `1px solid ${colors.border}` }}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#18181B]"
+            style={{ backgroundColor: colors.cardBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
           >
             <Icon name="add" className="text-sm" /> Créer un rappel
           </button>
@@ -5496,7 +5044,7 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
                 checked={Boolean(rule.is_active)}
                 onChange={() => toggleRule(rule)}
                 aria-label={`${rule.is_active ? 'Désactiver' : 'Activer'} ${rule.name}`}
-                className="h-4 w-4 accent-violet-600"
+                className="h-4 w-4 accent-[#18181B]"
               />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-semibold" style={{ color: colors.text }}>{rule.name}</p>
@@ -5520,11 +5068,11 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
               Nom du rappel
-              <input required maxLength={120} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+              <input required maxLength={120} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle} />
             </label>
             <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
               Déclenchement
-              <select value={form.trigger_mode} onChange={(e) => setForm({ ...form, trigger_mode: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle}>
+              <select value={form.trigger_mode} onChange={(e) => setForm({ ...form, trigger_mode: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle}>
                 <option value="relative_minutes">Délai avant le cours</option>
                 <option value="local_day_time">Jour et heure précis</option>
               </select>
@@ -5535,32 +5083,32 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
                 Jours avant
-                <input type="number" min="0" max="365" required value={form.days_before} onChange={(e) => setForm({ ...form, days_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+                <input type="number" min="0" max="365" required value={form.days_before} onChange={(e) => setForm({ ...form, days_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle} />
               </label>
               <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
                 Heure d’envoi
-                <input type="time" required max={Number(form.days_before) === 0 ? '08:59' : undefined} value={form.local_time} onChange={(e) => setForm({ ...form, local_time: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+                <input type="time" required max={Number(form.days_before) === 0 ? '08:59' : undefined} value={form.local_time} onChange={(e) => setForm({ ...form, local_time: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle} />
               </label>
             </div>
           ) : (
             <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
               Minutes avant le cours
-              <input type="number" min="1" max="525600" required value={form.minutes_before} onChange={(e) => setForm({ ...form, minutes_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+              <input type="number" min="1" max="525600" required value={form.minutes_before} onChange={(e) => setForm({ ...form, minutes_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle} />
             </label>
           )}
 
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Objet de l’e-mail
-            <input required maxLength={200} value={form.subject_template} onChange={(e) => setForm({ ...form, subject_template: e.target.value })} placeholder="Votre formation commence bientôt" className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+            <input required maxLength={200} value={form.subject_template} onChange={(e) => setForm({ ...form, subject_template: e.target.value })} placeholder="Votre formation commence bientôt" className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle} />
           </label>
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Message
-            <textarea required maxLength={5000} rows={3} value={form.content_template} onChange={(e) => setForm({ ...form, content_template: e.target.value })} placeholder="Rendez-vous le {date} à {time}." className="mt-1 w-full resize-y rounded-lg px-2.5 py-2 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+            <textarea required maxLength={5000} rows={3} value={form.content_template} onChange={(e) => setForm({ ...form, content_template: e.target.value })} placeholder="Rendez-vous le {date} à {time}." className="mt-1 w-full resize-y rounded-lg px-2.5 py-2 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle} />
           </label>
 
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Destinataires
-            <select value={form.recipient_scope} onChange={(e) => setForm({ ...form, recipient_scope: e.target.value, recipient_ids: e.target.value === 'all' ? [] : form.recipient_ids })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle}>
+            <select value={form.recipient_scope} onChange={(e) => setForm({ ...form, recipient_scope: e.target.value, recipient_ids: e.target.value === 'all' ? [] : form.recipient_ids })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-[#18181B]/15" style={inputStyle}>
               <option value="all">Tous les e-mails élèves</option>
               <option value="selected_explicit">Une sélection d’élèves</option>
             </select>
@@ -5582,7 +5130,7 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
                         ? [...form.recipient_ids, recipient.id]
                         : form.recipient_ids.filter((id) => id !== recipient.id),
                     })}
-                    className="h-4 w-4 accent-violet-600"
+                    className="h-4 w-4 accent-[#18181B]"
                   />
                   <span className="truncate">{recipient.email}</span>
                 </label>
@@ -5593,7 +5141,7 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
           <p className="text-[11px]" style={{ color: colors.textMuted }}>Variables disponibles : {'{date}'}, {'{time}'}, {'{session_code}'}, {'{class_url}'}.</p>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={resetForm} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>Annuler</button>
-            <button type="submit" disabled={saving} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="submit" disabled={saving} className="rounded-lg bg-[#18181B] px-3 py-2 text-xs font-semibold text-white hover:bg-[#27272A] disabled:cursor-not-allowed disabled:opacity-50">
               {saving ? 'Enregistrement…' : editingId === 'new' ? 'Créer le rappel' : 'Enregistrer le rappel'}
             </button>
           </div>
@@ -5639,7 +5187,7 @@ function StudentsToolContent({
           onChange={(event) => onStudentEmailDraftChange(event.target.value)}
           rows={3}
           placeholder="prenom@exemple.com, autre@exemple.com"
-          className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30"
+          className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-[#18181B]/15"
           style={{
             backgroundColor: colors.cardBg,
             border: `1px solid ${colors.border}`,
@@ -5655,8 +5203,8 @@ function StudentsToolContent({
           type="button"
           onClick={onAddStudentEmails}
           disabled={!studentEmailDraft.trim() || studentEmailsSaving}
-          className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ backgroundColor: '#8B5CF6', color: 'white' }}
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ backgroundColor: '#18181B', color: 'white' }}
         >
           {studentEmailsSaving ? (
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -5669,7 +5217,7 @@ function StudentsToolContent({
 
       {studentEmailsLoading ? (
         <div className="flex items-center justify-center py-5">
-          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
+          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#18181B' }} />
         </div>
       ) : studentEmails.length === 0 ? (
         <div className="rounded-xl border border-dashed px-4 py-7 text-center" style={{ borderColor: colors.border }}>
@@ -5712,11 +5260,11 @@ function StudentsToolContent({
 }
 
 function PlatformCard({
-  platform: p, audios, audiosLoading,
+  platform: p,
   colors, darkMode, studentEmails = [], studentEmailsLoading = false,
   studentEmailsSaving = false, studentEmailDraft = '',
   attendanceDate, attendanceData, attendanceLoading = false, attendanceError = '',
-  onExpand, onRefreshAudios, onToggleStudentEmails, onToggleAttendance,
+  onToggleStudentEmails, onToggleAttendance,
   onStudentEmailDraftChange, onAddStudentEmails, onDeleteStudentEmail,
   onAttendanceDateChange, onRefreshAttendance,
   onExportAttendance, onOpenCourseTimeModal, onOpenCoursFolders,
@@ -5731,17 +5279,18 @@ function PlatformCard({
   const isPreparing = preparation.status === 'preparing'
   const hasFailed = preparation.status === 'failed'
   const nextCourseSession = getNextCourseSession(p)
-  const nextCourseSessionLabel = nextCourseSession?.session_index
-    ? `Journée ${nextCourseSession.session_index}`
-    : 'Prochaine journée'
-  const nextCoursePreparationAt = formatScheduleDateTimeOffset(nextCourseSession?.scheduled_at, 48)
-  const nextCourseReviewAt = formatScheduleDateTimeOffset(nextCourseSession?.scheduled_at, 24)
+  const upcomingCourseSessions = [
+    ...(p.course_schedule?.upcoming_sessions
+      || (nextCourseSession ? [nextCourseSession] : [])),
+  ]
+    .sort((left, right) => new Date(left.scheduled_at).getTime() - new Date(right.scheduled_at).getTime())
+    .slice(0, 3)
   const rosterStage = getTeacherRosterStage(p)
   const robotTheme = getRobotTheme(p.center_platform_number || p.id, p.teacher_color)
   const rosterMeta = {
     preparing: { label: hasFailed ? 'À vérifier' : 'En préparation', color: hasFailed ? '#dc2626' : '#b45309', background: hasFailed ? '#fef2f2' : '#fffbeb' },
     ready: { label: 'Prêt', color: '#047857', background: '#ecfdf5' },
-    upcoming: { label: 'À venir', color: '#6d28d9', background: '#f5f3ff' },
+    upcoming: { label: 'À venir', color: '#52525b', background: '#f4f4f5' },
     in_progress: { label: 'En cours', color: '#047857', background: '#ecfdf5' },
     completed: { label: 'Terminé', color: '#475569', background: '#f1f5f9' },
     archived: { label: 'Archivé', color: '#64748b', background: '#f1f5f9' },
@@ -5753,11 +5302,10 @@ function PlatformCard({
   }
   const actionItems = [
     ...(p.active ? [
-      { key: 'planning', label: 'Planning', icon: 'schedule', onOpen: onOpenCourseTimeModal },
-      { key: 'audios', label: 'Audios', icon: 'audiotrack', onOpen: onExpand },
-      { key: 'courses', label: 'Cours', icon: 'folder_special', onOpen: onOpenCoursFolders },
-      { key: 'students', label: 'Élèves', icon: 'group', onOpen: onToggleStudentEmails },
-      { key: 'attendance', label: 'Présence', icon: 'fact_check', onOpen: onToggleAttendance },
+      { key: 'planning', label: 'Planning', description: 'Dates et horaires de la formation', icon: CalendarClock, onOpen: onOpenCourseTimeModal },
+      { key: 'courses', label: 'Cours', description: 'Contenus, scripts et supports', icon: FolderOpen, onOpen: onOpenCoursFolders },
+      { key: 'students', label: 'Élèves', description: 'Participants inscrits à la formation', icon: UsersRound, onOpen: onToggleStudentEmails },
+      { key: 'attendance', label: 'Présence', description: 'Entrées, sorties et exports Excel', icon: UserRoundCheck, onOpen: onToggleAttendance },
     ] : []),
   ]
   const activeToolMeta = actionItems.find((item) => item.key === activeTool)
@@ -5810,7 +5358,7 @@ function PlatformCard({
               setDetailsOpen(true)
             }
           }}
-          className="group relative flex min-h-[332px] cursor-pointer flex-col gap-2 overflow-hidden rounded-2xl p-3 text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
+          className="group relative flex min-h-[332px] cursor-pointer flex-col gap-2 overflow-hidden rounded-2xl p-3 text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40"
           style={faceStyle}
         >
           <div
@@ -5823,6 +5371,7 @@ function PlatformCard({
               alt=""
               draggable={false}
               className="h-full w-full select-none object-contain px-2 pt-2 transition-transform duration-200 ease-out group-hover:scale-[1.025] motion-reduce:transition-none"
+              style={{ filter: robotTheme.filter }}
             />
           </div>
 
@@ -5830,7 +5379,7 @@ function PlatformCard({
             <h3 className="truncate text-sm font-semibold leading-tight tracking-[-0.025em]" style={{ color: colors.text }}>
               {p.teacher_name || p.name || 'Professeur IA'}
             </h3>
-            <p className="mt-1 truncate text-xs font-medium" style={{ color: '#6C63FF' }}>
+            <p className="mt-1 truncate text-xs font-medium" style={{ color: colors.textSecondary }}>
               Professeur du {p.source_tp_name || p.name || 'parcours'}
             </p>
           </div>
@@ -5841,13 +5390,13 @@ function PlatformCard({
               <span>{rosterMeta.label}{isPreparing ? ` · ${creationProgress}%` : ''}</span>
             </li>
             <li className="flex items-start gap-2">
-              <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#6C63FF' }} />
+              <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#A1A1AA' }} />
               <span className="line-clamp-2">
                 {nextCourseSession ? `Prochaine séance ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
               </span>
             </li>
             <li className="flex items-start gap-2">
-              <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#6C63FF' }} />
+              <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#A1A1AA' }} />
               <span>{Number(p.remaining_session_count || 0)} séance(s) restante(s)</span>
             </li>
           </ul>
@@ -5869,7 +5418,7 @@ function PlatformCard({
 
           <span
             className="mt-auto flex w-full items-center justify-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-opacity group-hover:opacity-85"
-            style={{ backgroundColor: '#121212', color: '#F4F0E7' }}
+            style={{ backgroundColor: '#18181B', color: '#FFFFFF' }}
           >
             Gérer
             <Icon name="arrow_forward" className="text-sm" />
@@ -5879,7 +5428,7 @@ function PlatformCard({
 
       {detailsOpen && createPortal(
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[3px]"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-[#09090B]/55 p-3 sm:p-5"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) closeDetails()
           }}
@@ -5888,24 +5437,19 @@ function PlatformCard({
             role="dialog"
             aria-modal="true"
             aria-labelledby={`teacher-details-${p.id}`}
-            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:h-[86vh] sm:max-h-[760px] sm:flex-row"
-            style={{ border: `1px solid ${colors.border}` }}
+            className={`relative flex w-full flex-col overflow-hidden rounded-[14px] bg-white shadow-[0_24px_72px_rgba(9,9,11,0.28)] sm:flex-row ${activeTool ? 'h-[min(820px,calc(100dvh-40px))] max-w-[1080px]' : 'h-[min(660px,calc(100dvh-40px))] max-w-[920px]'}`}
           >
             <aside
-              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2 ${activeTool ? 'hidden' : 'flex min-h-[430px]'} flex-col`}
-              style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
+              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-[38%] ${activeTool ? 'hidden' : 'hidden sm:flex'} flex-col`}
+              style={{ backgroundColor: '#F4F4F5', borderRight: `1px solid ${colors.borderLight}` }}
             >
-              <div className="relative min-h-[250px] flex-1 overflow-hidden" style={{ backgroundColor: `${robotTheme.glow}12` }}>
-                <span
-                  className="absolute bottom-[12%] left-1/2 h-8 w-[58%] -translate-x-1/2 rounded-full opacity-20 blur-xl"
-                  style={{ backgroundColor: robotTheme.glow }}
-                  aria-hidden="true"
-                />
+              <div className="relative min-h-[230px] flex-1 overflow-hidden bg-[#F4F4F5]">
                 <img
                   src={robotTheme.src}
                   alt=""
                   draggable={false}
                   className="teacher-robot-float h-full w-full select-none object-contain px-7 pb-4 pt-10 sm:px-10 sm:pb-5 sm:pt-12"
+                  style={{ filter: robotTheme.filter }}
                 />
               </div>
 
@@ -5913,27 +5457,37 @@ function PlatformCard({
                 className="relative z-10 shrink-0 border-t px-5 py-4 text-left"
                 style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
               >
-                <p className="text-[11px] font-semibold" style={{ color: colors.textMuted }}>
-                  Prochaine diffusion
+                <p className="text-xs font-semibold" style={{ color: colors.text }}>
+                  Prochaines diffusions
                 </p>
-                {nextCourseSession ? (
-                  <>
-                    <p className="mt-1 text-sm font-semibold leading-5" style={{ color: colors.text }}>
-                      {nextCourseSessionLabel}
-                    </p>
-                    <p className="text-xs font-medium leading-5" style={{ color: colors.textSecondary }}>
-                      {formatScheduleLongDateTime(nextCourseSession.scheduled_at)}
-                    </p>
-                    <p className="mt-3 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
-                      Les audios seront préparés automatiquement le{' '}
-                      <span className="font-semibold" style={{ color: colors.text }}>{nextCoursePreparationAt}</span>.
-                    </p>
-                    <p className="mt-2 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
-                      Revenez le{' '}
-                      <span className="font-semibold" style={{ color: colors.text }}>{nextCourseReviewAt}</span>{' '}
-                      pour vérifier que la {nextCourseSessionLabel.toLowerCase()} est prête via l’onglet Cours.
-                    </p>
-                  </>
+                <p className="mt-1 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
+                  Vos prochaines séances seront générées automatiquement 72 heures avant leur début. Vérifiez ensuite que chaque séance a bien été générée.
+                </p>
+                <p className="mt-3 text-[11px] font-semibold" style={{ color: colors.text }}>
+                  Prochaines générations
+                </p>
+                {upcomingCourseSessions.length ? (
+                  <ul className="mt-3 divide-y border-y" style={{ borderColor: colors.borderLight }}>
+                    {upcomingCourseSessions.map((session) => {
+                      const statusMeta = getAudioStatusMeta(session.audio_status)
+                      return (
+                        <li key={session.id} className="py-2.5" style={{ borderColor: colors.borderLight }}>
+                          <p className="text-[11px] font-semibold leading-4" style={{ color: colors.text }}>{formatScheduleDateTimeOffset(session.scheduled_at, 72)}</p>
+                          <p className="mt-0.5 text-[11px] leading-4" style={{ color: colors.textSecondary }}>Séance du {formatScheduleLongDateTime(session.scheduled_at)}</p>
+                          <span className="mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ color: statusMeta.color, backgroundColor: statusMeta.background }}>{statusMeta.label}</span>
+                          {session.audio_status === 'error' && (
+                            <div className="mt-2 rounded-md bg-rose-50 p-2 text-[11px] leading-4 text-rose-800" role="alert">
+                              <p>La séance n’a pas pu être générée. Programmez un ancien cours pour cette séance et signalez l’erreur technique.</p>
+                              <div className="mt-1.5 flex flex-wrap gap-2">
+                                <button type="button" onClick={() => openTool(actionItems.find((item) => item.key === 'courses'))} className="font-semibold underline">Programmer un ancien cours</button>
+                                <a href={`mailto:support@lesocrate.fr?subject=${encodeURIComponent(`Erreur génération séance ${session.id}`)}`} className="font-semibold underline">Signaler l’erreur technique</a>
+                              </div>
+                            </div>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
                 ) : (
                   <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
                     Aucune séance n’est programmée pour le moment.
@@ -5947,10 +5501,10 @@ function PlatformCard({
                 type="button"
                 onClick={closeDetails}
                 aria-label="Fermer la fiche du professeur"
-                className="absolute right-2 top-2 z-40 flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
+                className="absolute right-3 top-3 z-40 flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30"
                 style={{ color: colors.textMuted }}
               >
-                <Icon name="close" className="text-base" />
+                <X size={18} strokeWidth={1.8} aria-hidden="true" />
               </button>
 
               <div className="relative h-full overflow-hidden">
@@ -5978,7 +5532,7 @@ function PlatformCard({
         >
           <div className="text-center px-6">
             <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px]"
-              style={{ borderColor: darkMode ? '#334155' : '#e2e8f0', borderTopColor: '#8B5CF6' }} />
+              style={{ borderColor: darkMode ? '#334155' : '#e4e4e7', borderTopColor: '#18181B' }} />
             <p className="text-sm font-semibold mb-1" style={{ color: colors.text }}>
               {preparation.stage || 'Préparation du professeur'}
             </p>
@@ -6008,8 +5562,7 @@ function PlatformCard({
                 type="button"
                 onClick={onRetryPreparation}
                 disabled={retryingPreparation}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-60"
-                style={{ backgroundColor: '#8B5CF6' }}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#18181B] px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/35 disabled:cursor-wait disabled:opacity-60"
               >
                 <Icon name={retryingPreparation ? 'hourglass_top' : 'refresh'} className="text-[16px]" aria-hidden="true" />
                 {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la pipeline'}
@@ -6020,9 +5573,9 @@ function PlatformCard({
       )}
 
       {!activeTool ? (
-      <div className="h-full overflow-y-auto p-6">
+      <div className="h-full overflow-y-auto px-5 py-6 sm:px-7 sm:py-7">
         {/* Header — SKU chip + name + status pill, optional meta line below */}
-        <div className="mb-5 space-y-2">
+        <div className="mb-6 space-y-2 pr-9">
           <div className="flex min-w-0 items-center gap-2">
             <span
               className="flex-shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase"
@@ -6039,70 +5592,82 @@ function PlatformCard({
             <h2 id={`teacher-details-${p.id}`} className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: colors.text }}>
               {p.teacher_name || p.name || 'Professeur IA'}
             </h2>
+            <span
+              className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+              style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
+            >
+              {rosterMeta.label}
+            </span>
           </div>
-          <p className="text-xs font-medium" style={{ color: '#6C63FF' }}>
+          <p className="text-xs font-medium" style={{ color: colors.textSecondary }}>
             Professeur du {p.source_tp_name || p.name || 'parcours'}
           </p>
-          {p.active && p.audio_count != null && (
-            <p
-              className="text-xs"
-              style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}
-            >
-              {(p.audio_count || 0) > 0 ? (
-                <>
-                  <span className="font-semibold" style={{ color: colors.textSecondary }}>
-                    {p.audio_count}
-                  </span>
-                  {' '}audio{p.audio_count > 1 ? 's' : ''}
-                  {p.last_upload_date && (
-                    <>
-                      {' · '}MAJ {formatRelativeTime(p.last_upload_date)}
-                    </>
-                  )}
-                </>
-              ) : (
-                <span style={{ color: '#f59e0b' }}>Aucun audio chargé</span>
-              )}
-            </p>
-          )}
         </div>
+
+        <section className="mb-6 rounded-xl border p-4 text-left sm:hidden" style={{ borderColor: colors.borderLight, backgroundColor: colors.innerBg }}>
+          <p className="text-xs font-semibold" style={{ color: colors.text }}>Prochaines diffusions</p>
+          <p className="mt-1 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
+            Vos prochaines séances seront générées automatiquement 72 heures avant leur début. Vérifiez ensuite que chaque séance a bien été générée.
+          </p>
+          <p className="mt-3 text-[11px] font-semibold" style={{ color: colors.text }}>Prochaines générations</p>
+          {upcomingCourseSessions.length ? (
+            <ul className="mt-3 divide-y border-y" style={{ borderColor: colors.borderLight }}>
+              {upcomingCourseSessions.map((session) => {
+                const statusMeta = getAudioStatusMeta(session.audio_status)
+                return (
+                  <li key={session.id} className="py-2.5" style={{ borderColor: colors.borderLight }}>
+                    <p className="text-[11px] font-semibold leading-4" style={{ color: colors.text }}>{formatScheduleDateTimeOffset(session.scheduled_at, 72)}</p>
+                    <p className="mt-0.5 text-[11px] leading-4" style={{ color: colors.textSecondary }}>Séance du {formatScheduleLongDateTime(session.scheduled_at)}</p>
+                    <span className="mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ color: statusMeta.color, backgroundColor: statusMeta.background }}>{statusMeta.label}</span>
+                    {session.audio_status === 'error' && (
+                      <div className="mt-2 rounded-md bg-rose-50 p-2 text-[11px] leading-4 text-rose-800" role="alert">
+                        <p>La séance n’a pas pu être générée. Programmez un ancien cours pour cette séance et signalez l’erreur technique.</p>
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => openTool(actionItems.find((item) => item.key === 'courses'))} className="font-semibold underline">Programmer un ancien cours</button>
+                          <a href={`mailto:support@lesocrate.fr?subject=${encodeURIComponent(`Erreur génération séance ${session.id}`)}`} className="font-semibold underline">Signaler l’erreur technique</a>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs leading-5" style={{ color: colors.textSecondary }}>Aucune séance n’est programmée pour le moment.</p>
+          )}
+        </section>
 
         {/* Slide-to-confirm + backup pipeline déménagés vers CoursFoldersModal :
             l'action lock/unlock cohabite désormais avec la vue où on voit
             les audios (modale "Cours"). Le card reste épuré. */}
 
-        {/* Barre d'outils de la formation. Les commandes partagent un même
-            cadre afin de former une seule zone fonctionnelle, et non six
-            boutons flottants sans hiérarchie. */}
+        <p className="mb-2 text-xs font-semibold" style={{ color: colors.text }}>Gestion de la formation</p>
         <div
-          className="mb-4 grid grid-cols-2 overflow-hidden rounded-xl"
-          style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}
+          className="mb-4 divide-y overflow-hidden rounded-lg"
+          style={{ border: `1px solid ${colors.borderLight}`, backgroundColor: colors.cardBg }}
         >
-          {actionItems.map((action, index) => {
+          {actionItems.map((action) => {
+            const ActionIcon = action.icon
             return (
               <button
                 key={action.key}
                 type="button"
                 onClick={() => openTool(action)}
-                className="flex min-h-12 items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors hover:bg-black/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/50 dark:hover:bg-white/5"
+                className="flex min-h-[62px] items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-[#FAFAFA] focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#18181B]/30"
                 style={{
                   backgroundColor: 'transparent',
-                  borderTop: index >= 2 ? `1px solid ${colors.border}` : 'none',
-                  borderLeft: index % 2 === 1 ? `1px solid ${colors.border}` : 'none',
                   color: colors.textSecondary,
+                  borderColor: colors.borderLight,
                 }}
               >
-                <Icon
-                  name={action.icon}
-                  className="text-lg"
-                  style={{ color: colors.textMuted }}
-                />
-                <span className="min-w-0 flex-1 truncate">{action.label}</span>
-                <Icon
-                  name="chevron_right"
-                  className="text-base"
-                  style={{ color: colors.textMuted }}
-                />
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#F4F4F5] text-[#52525B]">
+                  <ActionIcon size={16} strokeWidth={1.7} aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium text-[#18181B]">{action.label}</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-[#71717A]">{action.description}</span>
+                </span>
+                <ChevronRight size={16} strokeWidth={1.7} className="shrink-0 text-[#A1A1AA]" aria-hidden="true" />
               </button>
             )
           })}
@@ -6110,11 +5675,7 @@ function PlatformCard({
 
         {/* === Divider entre groupes A (boxed) et B (linky externes) === */}
         {p.active && (
-          <div
-            className="my-4 h-px"
-            style={{ backgroundColor: colors.border }}
-            aria-hidden="true"
-          />
+          <div className="my-4 h-px" style={{ backgroundColor: colors.borderLight }} aria-hidden="true" />
         )}
 
         {/* === Group B : liens externes (linky, pas de fond, hover bg tint) === */}
@@ -6125,14 +5686,14 @@ function PlatformCard({
             href={p.public_url || `${p.frontend_url || window.location.origin}/?p=${p.id}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+            className="flex min-h-11 w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30"
             style={{
               color: colors.textSecondary,
               textDecoration: 'none',
             }}
           >
             <span>Accéder au cours</span>
-            <Icon name="open_in_new" className="text-base" style={{ color: colors.textMuted }} />
+            <ExternalLink size={16} strokeWidth={1.7} className="text-[#71717A]" aria-hidden="true" />
           </a>
         )}
       </div>
@@ -6140,7 +5701,7 @@ function PlatformCard({
         <TeacherToolPanel
           title={activeToolMeta?.label || 'Outil'}
           subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
-          icon={activeToolMeta?.icon || 'tune'}
+          icon={activeToolMeta?.icon || Settings}
           onBack={closeTool}
           colors={colors}
           darkMode={darkMode}
@@ -6156,22 +5717,15 @@ function PlatformCard({
               onPostponeSession={onPostponeSession}
             />
           )}
-          {activeTool === 'audios' && (
-            <AudiosModal
-              embedded
-              platformId={p.id}
-              audios={audios}
-              loading={audiosLoading}
-              onRefreshAudios={onRefreshAudios}
-            />
-          )}
           {activeTool === 'courses' && (
-            <CoursFoldersModal
-              embedded
-              platformId={p.id}
-              platformName={p.name}
-              onAudiosPublished={onAudiosPublished}
-            />
+            <Suspense fallback={<DeferredPanelFallback label="Chargement des cours…" />}>
+              <CoursFoldersModal
+                embedded
+                platformId={p.id}
+                platformName={p.name}
+                onAudiosPublished={onAudiosPublished}
+              />
+            </Suspense>
           )}
           {activeTool === 'students' && (
             <StudentsToolContent
@@ -6212,28 +5766,6 @@ function PlatformCard({
       )}
     </>
   )
-}
-
-// Format Europe/Paris dates ('YYYY-MM-DD HH:MM' or ISO) en relatif court ("il y a 2 j", "il y a 14 min").
-// Retourne null si la date est invalide / absente — laisse l'appelant décider du fallback.
-function formatRelativeTime(dateStr) {
-  if (!dateStr) return null
-  const isoCandidate = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T')
-  const date = new Date(isoCandidate)
-  if (isNaN(date.getTime())) return null
-  const diffMs = Date.now() - date.getTime()
-  if (diffMs < 0) return "à l'instant"
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return "à l'instant"
-  if (diffMin < 60) return `il y a ${diffMin} min`
-  const diffHr = Math.floor(diffMin / 60)
-  if (diffHr < 24) return `il y a ${diffHr} h`
-  const diffDay = Math.floor(diffHr / 24)
-  if (diffDay < 7) return `il y a ${diffDay} j`
-  if (diffDay < 30) return `il y a ${Math.floor(diffDay / 7)} sem`
-  if (diffDay < 365) return `il y a ${Math.floor(diffDay / 30)} mois`
-  const years = Math.floor(diffDay / 365)
-  return `il y a ${years} an${years > 1 ? 's' : ''}`
 }
 
 const COURSE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
@@ -6412,7 +5944,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="postpone-session-title"
-        className="postpone-dialog-sheet w-full overflow-hidden rounded-t-2xl bg-white sm:max-w-[620px] sm:rounded-2xl"
+        className="postpone-dialog-sheet w-full overflow-hidden rounded-t-[14px] bg-white sm:max-w-[600px] sm:rounded-[14px]"
       >
         {success ? (
           <div className="flex min-h-[330px] flex-col items-center justify-center px-8 py-12 text-center" aria-live="polite">
@@ -6428,8 +5960,8 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
           <>
             <header className="flex items-start justify-between gap-4 border-b px-5 py-5 sm:px-6" style={{ borderColor: '#e2e8f0' }}>
               <div className="flex min-w-0 items-start gap-3">
-                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: '#f3f0ff', color: '#7c3aed' }}>
-                  <Icon name="event_repeat" className="text-xl" />
+                <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#F4F4F5] text-[#52525B]">
+                  <CalendarClock size={17} strokeWidth={1.7} aria-hidden="true" />
                 </span>
                 <div>
                   <h3 id="postpone-session-title" className="text-base font-semibold" style={{ color: '#0f172a' }}>
@@ -6445,31 +5977,31 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                 onClick={onClose}
                 disabled={confirming}
                 aria-label="Fermer sans reporter"
-                className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-slate-100 disabled:opacity-50"
+                className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30 disabled:opacity-50"
                 style={{ color: '#64748b' }}
               >
-                <Icon name="close" className="text-xl" />
+                <X size={18} strokeWidth={1.8} aria-hidden="true" />
               </button>
             </header>
 
             <div className="max-h-[68vh] space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
               <fieldset>
                 <legend className="mb-3 text-sm font-semibold" style={{ color: '#334155' }}>Quand souhaitez-vous le reporter ?</legend>
-                <div className="space-y-2.5">
+                <div className="divide-y overflow-hidden rounded-lg border border-[#E4E4E7]">
                   <button
                     type="button"
                     autoFocus
                     onClick={() => setMode('next_occurrence')}
-                    className="flex min-h-[72px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-violet-200"
-                    style={{ borderColor: mode === 'next_occurrence' ? '#8b5cf6' : '#e2e8f0', backgroundColor: mode === 'next_occurrence' ? '#faf8ff' : '#fff' }}
+                    className="flex min-h-[72px] w-full items-start gap-3 p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#18181B]/30"
+                    style={{ backgroundColor: mode === 'next_occurrence' ? '#F4F4F5' : '#FFFFFF' }}
                   >
-                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'next_occurrence' ? '#8b5cf6' : '#cbd5e1' }}>
-                      {mode === 'next_occurrence' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />}
+                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'next_occurrence' ? '#18181B' : '#D4D4D8' }}>
+                      {mode === 'next_occurrence' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#18181B' }} />}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold" style={{ color: '#0f172a' }}>Au prochain créneau prévu</span>
-                        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#6d28d9', backgroundColor: '#ede9fe' }}>Recommandé</span>
+                        <span className="rounded-full bg-[#E4E4E7] px-2 py-0.5 text-[10px] font-semibold text-[#52525B]">Recommandé</span>
                       </span>
                       <span className="mt-1 block text-xs leading-5" style={{ color: '#64748b' }}>Le cours suivant prend sa place et toute la suite se décale naturellement.</span>
                     </span>
@@ -6477,11 +6009,11 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                   <button
                     type="button"
                     onClick={() => setMode('specific_date')}
-                    className="flex min-h-[68px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-violet-200"
-                    style={{ borderColor: mode === 'specific_date' ? '#8b5cf6' : '#e2e8f0', backgroundColor: mode === 'specific_date' ? '#faf8ff' : '#fff' }}
+                    className="flex min-h-[68px] w-full items-start gap-3 p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#18181B]/30"
+                    style={{ backgroundColor: mode === 'specific_date' ? '#F4F4F5' : '#FFFFFF' }}
                   >
-                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'specific_date' ? '#8b5cf6' : '#cbd5e1' }}>
-                      {mode === 'specific_date' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />}
+                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'specific_date' ? '#18181B' : '#D4D4D8' }}>
+                      {mode === 'specific_date' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#18181B' }} />}
                     </span>
                     <span>
                       <span className="text-sm font-semibold" style={{ color: '#0f172a' }}>Choisir une nouvelle date</span>
@@ -6501,16 +6033,16 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                     min={toLocalDateTimeInput(new Date(new Date(session.scheduled_at).getTime() + 60000)).slice(0, 10)}
                     onChange={(event) => setCustomDate(event.target.value ? `${event.target.value}T09:00` : '')}
                     className="h-11 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2"
-                    style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': '#ddd6fe' }}
+                    style={{ borderColor: '#d4d4d8', color: '#18181b', '--tw-ring-color': 'rgba(24,24,27,0.15)' }}
                   />
                   <p className="mt-1.5 text-xs" style={{ color: '#64748b' }}>Le cours commencera à 09:00.</p>
                 </div>
               )}
 
-              <div className="rounded-xl border p-4" style={{ borderColor: '#ddd6fe', backgroundColor: '#faf8ff' }} aria-live="polite">
+              <div className="border-y border-[#E4E4E7] bg-[#FAFAFA] px-1 py-4" aria-live="polite">
                 {previewLoading ? (
                   <div className="flex items-center gap-3 text-sm" style={{ color: '#64748b' }}>
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600" />
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#D4D4D8] border-t-[#18181B]" />
                     Calcul de l’impact sur le planning…
                   </div>
                 ) : preview ? (
@@ -6520,18 +6052,18 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                         <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94a3b8' }}>Date actuelle</p>
                         <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#475569' }}>{formatPostponementDay(preview.previous_scheduled_at)}</p>
                       </div>
-                      <Icon name="arrow_forward" className="text-lg" style={{ color: '#8b5cf6' }} />
+                      <Icon name="arrow_forward" className="text-lg" style={{ color: '#71717A' }} />
                       <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#7c3aed' }}>Nouvelle date</p>
-                        <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#5b21b6' }}>{formatPostponementDay(preview.new_scheduled_at)}</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#71717A' }}>Nouvelle date</p>
+                        <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#18181B' }}>{formatPostponementDay(preview.new_scheduled_at)}</p>
                       </div>
                     </div>
-                    <div className="flex items-start gap-2 border-t pt-3 text-xs leading-5" style={{ borderColor: '#e9e2ff', color: '#475569' }}>
-                      <Icon name="verified" className="mt-0.5 text-base" style={{ color: '#7c3aed' }} />
+                    <div className="flex items-start gap-2 border-t pt-3 text-xs leading-5" style={{ borderColor: '#E4E4E7', color: '#52525B' }}>
+                      <Icon name="verified" className="mt-0.5 text-base" style={{ color: '#52525B' }} />
                       <p><strong style={{ color: '#334155' }}>Aucun cours ne sera perdu.</strong> {preview.affected_session_count > 1 ? `Les ${preview.affected_session_count - 1} cours suivants seront décalés d’un créneau.` : 'Seule cette date sera déplacée.'}</p>
                     </div>
                     <div className="flex items-start gap-2 text-xs leading-5" style={{ color: '#475569' }}>
-                      <Icon name="graphic_eq" className="mt-0.5 text-base" style={{ color: '#7c3aed' }} />
+                      <Icon name="graphic_eq" className="mt-0.5 text-base" style={{ color: '#52525B' }} />
                       <p>{audioCopy[preview.audio_preservation]}</p>
                     </div>
                   </div>
@@ -6557,7 +6089,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                   onChange={(event) => setReason(event.target.value)}
                   placeholder="Ex. indisponibilité du formateur"
                   className="h-11 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2"
-                  style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': '#ddd6fe' }}
+                  style={{ borderColor: '#d4d4d8', color: '#18181b', '--tw-ring-color': 'rgba(24,24,27,0.15)' }}
                 />
               </div>
 
@@ -6574,8 +6106,8 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                 type="button"
                 onClick={onClose}
                 disabled={confirming}
-                className="min-h-11 rounded-lg border px-4 text-sm font-semibold transition-colors hover:bg-slate-50 disabled:opacity-50"
-                style={{ color: '#475569', borderColor: '#cbd5e1' }}
+                className="min-h-11 rounded-lg border px-4 text-sm font-semibold transition-colors hover:bg-[#F4F4F5] disabled:opacity-50"
+                style={{ color: '#3F3F46', borderColor: '#D4D4D8' }}
               >
                 Garder la date actuelle
               </button>
@@ -6584,7 +6116,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                 onClick={confirmPostponement}
                 disabled={!preview || previewLoading || confirming}
                 className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-5 text-sm font-semibold text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ backgroundColor: '#8b5cf6' }}
+                style={{ backgroundColor: '#18181B' }}
               >
                 {confirming && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
                 {confirming ? 'Mise à jour…' : preview ? `Reporter au ${formatPostponementButtonDate(preview.new_scheduled_at)}` : 'Choisir une date'}
@@ -6667,7 +6199,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
         {!embedded && (
         <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: '#ede9fe', color: '#7c3aed' }}>
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: '#F4F4F5', color: '#52525B' }}>
               <Icon name="calendar_month" className="text-xl" />
             </span>
             <div>
@@ -6697,7 +6229,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
               <button
                 onClick={embedded ? () => setResult(null) : onClose}
                 className="mt-2 rounded-lg px-5 py-2 text-sm font-semibold text-white transition-colors"
-                style={{ backgroundColor: '#8B5CF6' }}
+                style={{ backgroundColor: '#18181B' }}
               >
                 {embedded ? 'Voir le planning' : 'Fermer'}
               </button>
@@ -6719,9 +6251,9 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                           onClick={() => toggleWeekday(day)}
                           className="rounded-full px-2.5 py-1 text-xs font-semibold transition-colors"
                           style={{
-                            backgroundColor: selected ? '#ede9fe' : '#ffffff',
-                            color: selected ? '#7c3aed' : '#64748b',
-                            border: `1px solid ${selected ? '#c4b5fd' : '#e2e8f0'}`,
+                            backgroundColor: selected ? '#18181B' : '#ffffff',
+                            color: selected ? '#ffffff' : '#64748b',
+                            border: `1px solid ${selected ? '#18181B' : '#e4e4e7'}`,
                           }}
                         >
                           {label}
@@ -6753,8 +6285,8 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                     required
                     className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
                     style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
-                    onFocus={(e) => { e.currentTarget.style.borderColor = '#137fec' }}
-                    onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = '#18181B' }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = '#e4e4e7' }}
                   />
                 </div>
               )}
@@ -6787,7 +6319,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                   type="submit"
                   disabled={loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError}
                   className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-opacity"
-                  style={{ backgroundColor: '#8B5CF6', opacity: (loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError) ? 0.6 : 1 }}
+                  style={{ backgroundColor: '#18181B', opacity: (loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError) ? 0.45 : 1 }}
                 >
                   {loading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
@@ -6850,7 +6382,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                         disabled={busySessionId === session.id}
                         onClick={() => runSessionAction(session)}
                         className="rounded-lg px-3 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-50"
-                        style={{ backgroundColor: '#8B5CF6' }}
+                        style={{ backgroundColor: '#18181B' }}
                       >
                         {busySessionId === session.id ? 'Relance…' : 'Relancer l’audio'}
                       </button>
@@ -6861,7 +6393,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                         disabled={busySessionId === session.id}
                         onClick={() => setSessionToPostpone(session)}
                         className="min-h-10 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50"
-                        style={{ color: '#6d28d9', backgroundColor: '#f5f3ff' }}
+                        style={{ color: '#3F3F46', backgroundColor: '#F4F4F5' }}
                       >
                         Reporter cette séance
                       </button>

@@ -1,4 +1,4 @@
-% Template XeLaTeX d'une journée de formation Le Socrate.
+% Template XeLaTeX neutre d'une journée de formation.
 % Délimiteurs Jinja2 customisés (cf. formation_pdf_service.py).
 
 \documentclass[11pt, a4paper, twoside]{article}
@@ -27,8 +27,7 @@
 \usepackage{fancyhdr}
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[LE,RO]{\small\color{mutedgray}((( tp_name | latex_escape )))}
-\fancyhead[LO,RE]{\small\color{mutedgray}Journée ((( day_number ))) — ((( day_title | latex_escape )))}
+\fancyhead[C]{\small\color{mutedgray}Support de formation}
 \fancyfoot[C]{\small\color{mutedgray}\thepage}
 \renewcommand{\headrulewidth}{0.2pt}
 
@@ -36,7 +35,7 @@
 \setlength{\parskip}{0.6em}
 \setlength{\parindent}{0pt}
 
-\usepackage[hidelinks, pdftitle={Programme de formation — ((( tp_name | latex_escape_meta )))}, pdfauthor={Le Socrate}]{hyperref}
+\usepackage[hidelinks, pdftitle={Support de formation — ((( tp_name | latex_escape_meta )))}, pdfauthor={Support de formation}]{hyperref}
 
 \begin{document}
 
@@ -44,7 +43,7 @@
 \begin{titlepage}
   \centering
   \vspace*{3cm}
-  {\fontsize{10pt}{12pt}\selectfont\color{mutedgray}\textsc{Programme de formation}\par}
+  {\fontsize{10pt}{12pt}\selectfont\color{mutedgray}\textsc{Support de formation}\par}
   \vspace{0.4cm}
   {\fontsize{26pt}{30pt}\selectfont\bfseries ((( tp_name | latex_escape )))\par}
   \vspace{1.2cm}

@@ -1046,167 +1046,6 @@ def download_reac_text_with_retry(
     ) from last_error
 
 
-# ─── Référentiel de Certification (RC) ───────────────────────────────────────
-
-def download_rc_text(rncp_code: str) -> str:
-    """
-    Télécharge le RC (Référentiel de Certification) PDF depuis France Compétences.
-    Le RC est le document complémentaire au REAC : critères d'évaluation, modalités d'examen.
-    """
-    import PyPDF2
-    page_url = f"https://www.francecompetences.fr/recherche/rncp/{rncp_code}/"
-    try:
-        resp = _http.get(page_url, headers=_FC_HEADERS, timeout=20)
-        resp.raise_for_status()
-
-        # Le RC a un pattern différent du REAC dans les URLs
-        rc_patterns = [
-            r'/wp-json/api/v1/evaluation/export/(\d+)/(\d+)',
-            r'/wp-json/api/v1/certification/export/(\d+)/(\d+)',
-            r'href="([^"]+/RC[^"]*\.pdf)"',
-            r'href="([^"]+referentiel[^"]*certification[^"]*\.pdf)"',
-        ]
-        rc_url = None
-        for pattern in rc_patterns:
-            match = re.search(pattern, resp.text, re.IGNORECASE)
-            if match:
-                if match.lastindex == 2:
-                    rc_url = f"https://www.francecompetences.fr/wp-json/api/v1/evaluation/export/{match.group(1)}/{match.group(2)}"
-                else:
-                    rc_url = match.group(1)
-                    if not rc_url.startswith('http'):
-                        rc_url = f"https://www.francecompetences.fr{rc_url}"
-                break
-
-        if not rc_url:
-            logger.warning(f"⚠️ RC introuvable pour RNCP {rncp_code}")
-            return ""
-
-        logger.info(f"📥 Téléchargement RC depuis {rc_url}")
-        rc_resp = _http.get(rc_url, timeout=60)
-        rc_resp.raise_for_status()
-
-        reader = PyPDF2.PdfReader(io.BytesIO(rc_resp.content))
-        pages_text = [p.extract_text() for p in reader.pages if p.extract_text()]
-        text = "\n".join(pages_text)
-        logger.info(f"✅ RC extrait : {len(text)} caractères")
-        return text
-
-    except Exception as e:
-        logger.warning(f"⚠️ RC non disponible pour RNCP {rncp_code} : {e}")
-        return ""
-
-
-# ─── Données ROME (France Travail) ───────────────────────────────────────────
-
-def _get_france_travail_token() -> str:
-    """Obtient un token OAuth2 France Travail (nécessite FRANCE_TRAVAIL_CLIENT_ID + SECRET)."""
-    client_id = os.getenv("FRANCE_TRAVAIL_CLIENT_ID")
-    client_secret = os.getenv("FRANCE_TRAVAIL_CLIENT_SECRET")
-    if not client_id or not client_secret:
-        return ""
-    try:
-        resp = _http.post(
-            "https://entreprise.francetravail.fr/connexion/oauth2/access_token"
-            "?realm=%2Fpartenaire",
-            data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "scope": "api_rome-metiersv1",
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json().get("access_token", "")
-    except Exception as e:
-        logger.warning(f"⚠️ Token France Travail impossible : {e}")
-        return ""
-
-
-def _get_rome_codes_from_rncp_page(rncp_code: str) -> list:
-    """Extrait les codes ROME associés à une fiche RNCP."""
-    try:
-        resp = _http.get(
-            f"https://www.francecompetences.fr/recherche/rncp/{rncp_code}/",
-            headers=_FC_HEADERS, timeout=20
-        )
-        resp.raise_for_status()
-        # Codes ROME = lettre + 4 chiffres (ex: D1408, E1206)
-        codes = re.findall(r'\b([A-Z]\d{4})\b', resp.text)
-        # Filtrer les faux positifs (garder seulement les codes ROME valides A-Z + 4 chiffres)
-        valid = [c for c in dict.fromkeys(codes) if c[0].isalpha()][:5]
-        logger.info(f"📋 Codes ROME trouvés pour RNCP {rncp_code} : {valid}")
-        return valid
-    except Exception as e:
-        logger.warning(f"⚠️ Codes ROME introuvables : {e}")
-        return []
-
-
-def fetch_rome_data(rncp_code: str) -> str:
-    """
-    Récupère les fiches ROME associées au titre RNCP.
-    Utilise l'API France Travail si les credentials sont disponibles,
-    sinon tente un scraping de la page candidat.
-    """
-    rome_codes = _get_rome_codes_from_rncp_page(rncp_code)
-    if not rome_codes:
-        return ""
-
-    token = _get_france_travail_token()
-    results = []
-
-    for rome_code in rome_codes[:3]:  # Max 3 codes ROME
-        text = ""
-
-        # Tentative 1 : API officielle France Travail
-        if token:
-            try:
-                resp = _http.get(
-                    f"https://api.francetravail.io/partenaire/rome-metiers/v1/metiers/metier/{rome_code}",
-                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                    timeout=15,
-                )
-                if resp.ok:
-                    data = resp.json()
-                    parts = []
-                    if data.get("libelle"):
-                        parts.append(f"Métier : {data['libelle']}")
-                    if data.get("definition"):
-                        parts.append(f"Définition : {data['definition']}")
-                    for cat in ["savoirs", "savoirsFaire", "savoirsEtre"]:
-                        items = data.get(cat, [])
-                        if items:
-                            parts.append(f"{cat} : " + ", ".join(i.get("libelle", "") for i in items[:15]))
-                    text = "\n".join(parts)
-                    logger.info(f"✅ ROME {rome_code} récupéré via API")
-            except Exception as e:
-                logger.warning(f"⚠️ API ROME {rome_code} : {e}")
-
-        # Tentative 2 : scraping page candidat France Travail
-        if not text:
-            try:
-                resp = _http.get(
-                    f"https://candidat.francetravail.fr/metierform/accueil?codeRome={rome_code}",
-                    headers=_FC_HEADERS, timeout=15,
-                )
-                if resp.ok and len(resp.text) > 500:
-                    # Extraire le texte brut (la page peut être partiellement rendue)
-                    clean = re.sub(r'<[^>]+>', ' ', resp.text)
-                    clean = re.sub(r'\s+', ' ', clean).strip()
-                    text = clean[:3000]
-                    logger.info(f"✅ ROME {rome_code} scraping page candidat")
-            except Exception as e:
-                logger.warning(f"⚠️ Scraping ROME {rome_code} : {e}")
-
-        if text:
-            results.append(f"=== FICHE ROME {rome_code} ===\n{text}")
-
-    combined = "\n\n".join(results)
-    logger.info(f"✅ Données ROME : {len(combined)} caractères pour {len(results)} code(s)")
-    return combined
-
-
 # ─── Appel DeepSeek ───────────────────────────────────────────────────────────
 
 def _deepseek_post(messages, max_tokens=16000, model=None):
@@ -1261,10 +1100,6 @@ def generate_global_program(
         else:
             # Fallback REAC brut (anciens jobs ou KB non construite)
             sources = f"=== REAC (Référentiel Emploi Activités Compétences) ===\n{job['reac_text'][:15000]}"
-            if job.get("rc_text"):
-                sources += f"\n\n=== RC (Référentiel de Certification) ===\n{job['rc_text'][:8000]}"
-            if job.get("rome_text"):
-                sources += f"\n\n=== FICHES ROME (France Travail) ===\n{job['rome_text'][:5000]}"
             logger.info(f"📄 Job {job_id} : programme global généré depuis REAC brut (KB non disponible)")
 
         prompt = _build_global_program_prompt(
@@ -1659,17 +1494,13 @@ def _missing_day_batches(
 
 def _split_batch(tp_name: str, nb_days: int, global_program: str,
                  day_start: int, day_end: int, model: str,
-                 reac_text: str = "", rc_text: str = "", rome_text: str = "",
+                 reac_text: str = "",
                  schedule_days: list[dict] | None = None) -> list:
     """Génère un batch de journées (day_start à day_end inclus)."""
     # Bloc sources enrichies pour le module_content
     enrichment = ""
     if reac_text:
         enrichment += f"\n\n=== EXTRAITS REAC (compétences et savoirs associés) ===\n{reac_text[:6000]}"
-    if rc_text:
-        enrichment += f"\n\n=== EXTRAITS RC (critères d'évaluation) ===\n{rc_text[:3000]}"
-    if rome_text:
-        enrichment += f"\n\n=== FICHES ROME ===\n{rome_text[:3000]}"
 
     prompt_template = (
         _DAILY_SPLIT_PROMPT_V2 if schedule_days else _DAILY_SPLIT_PROMPT
@@ -1780,8 +1611,6 @@ def run_daily_split(
                 day_end=day_end,
                 model=used_model,
                 reac_text=job.get("reac_text") or "",
-                rc_text=job.get("rc_text") or "",
-                rome_text=job.get("rome_text") or "",
                 schedule_days=schedule_days,
             )
 
@@ -2059,7 +1888,7 @@ def is_expected_course_folder(job_id: int, folder_id: int) -> bool:
 
 
 def repair_orphan_content_folders(job_id: int) -> dict:
-    """Rattache les dossiers cours créés par l'ancien launch-tts sans job_id.
+    """Rattache les anciens dossiers cours créés sans job durable.
 
     Bug historique : la route manuelle de génération texte créait les
     `cours_folders` avec `platform_id` uniquement. Le texte existait, mais le

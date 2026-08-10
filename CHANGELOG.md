@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-08-10
+
+### feat(recrutement): brouillon partagé et parcours conversationnel complet
+
+Le recrutement conversationnel et le parcours manuel partagent désormais un
+brouillon persistant et reprenable. L’assistant collecte uniquement les données
+manquantes, préremplit le calendrier, conserve les exceptions et les templates
+pendant la navigation, confirme explicitement tout abandon et termine sur un
+récapitulatif modifiable avec validation définitive du recrutement.
+
+### feat(cours): génération H-72 par séance et suivi dans la fiche professeur
+
+Chaque séance planifiée possède son propre état audio et sa génération démarre
+72 heures avant sa diffusion. La fiche professeur ne conserve que Planning,
+Cours, Élèves et Présence ; le suivi audio, les erreurs et l’action Remplir sont
+intégrés à Cours. Le panneau Prochaines diffusions présente chronologiquement
+jusqu’à trois générations, sur ordinateur comme sur mobile.
+
+### feat(audio): timeline adaptative par occurrence
+
+Les cours sont synthétisés et mesurés avant les Q&R et pauses. Leur durée
+naturelle est conservée, le bloc flexible suivant absorbe l’écart tout en
+protégeant ses durées minimales, et un manifeste immuable propre à la séance
+pilote la reprise et les coupures de sécurité côté serveur. Les audios de pause
+sont ensuite produits à leur durée définitive avec silence numérique avant
+l’annonce de reprise.
+
+### refactor(pipeline): point d’entrée durable DeepSeek uniquement
+
+Les sources RC/ROME, la génération audio globale, le mode Claude Code, les
+étapes `humanization_review` et `volume_safety`, ainsi que les anciennes actions
+manuelles ont été retirés du pipeline actif et des schémas. Le budget de mots
+reste calculé pendant la génération structurée des cours, avec audit de volume
+en lecture seule.
+
+### fix(pdf): support de formation sans marque plateforme
+
+Les PDF générés affichent uniquement « Support de formation » dans leur en-tête,
+leur pied de page et leurs métadonnées, tout en conservant la pagination.
+
 ## 2026-07-31
 
 ### refactor(runtime): retrait de SocketIO et Eventlet

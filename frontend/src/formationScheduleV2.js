@@ -201,7 +201,7 @@ export function hasMinimumLeadTime(
   assignments,
   templates,
   now = new Date(),
-  minimumHours = 48,
+  minimumHours = 72,
 ) {
   const firstSession = getFirstSessionDateTime(selectedDates, assignments, templates)
   if (!firstSession) return false
@@ -285,7 +285,7 @@ export function validateFormationScheduleV2({
       errors.push('Rechargez la bibliothèque avant de confirmer le planning.')
     }
     if (dates.length && !hasMinimumLeadTime(dates, normalizedAssignments, templates, now)) {
-      errors.push('La première journée doit commencer au moins 48 h après la validation.')
+      errors.push('La première journée doit commencer au moins 72 h après la validation.')
     }
   }
 

@@ -28,13 +28,9 @@ def default_model() -> str:
 
 def _normalize_model_alias(model: str) -> str:
     alias = (model or "").strip().lower()
-    if alias in ("flash", "haiku"):
+    if alias == "flash":
         return "deepseek-v4-flash"
-    if alias in ("pro", "sonnet"):
-        return "deepseek-v4-pro"
-    if alias.startswith("claude-haiku"):
-        return "deepseek-v4-flash"
-    if alias.startswith(("claude-sonnet", "claude-opus")):
+    if alias == "pro":
         return "deepseek-v4-pro"
     normalized = (model or "").strip()
     if not normalized.lower().startswith("deepseek"):

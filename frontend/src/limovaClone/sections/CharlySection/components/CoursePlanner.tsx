@@ -31,7 +31,7 @@ export const CoursePlanner = () => {
     <div className="cadrenza-course-planner">
       <div className="cadrenza-course-planner__topbar">
         <div className="cadrenza-course-planner__brand">
-          <img src="/cadrenza-mark.svg" alt="" />
+          <img loading="lazy" decoding="async" src="/cadrenza-mark.svg" alt="" />
           <span>Cadrenza</span>
         </div>
         <span className="cadrenza-course-planner__status"><i /> Agent prêt</span>
