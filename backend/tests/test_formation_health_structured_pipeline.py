@@ -7,6 +7,7 @@ from services.dynamic_day_schedule_service import compile_module_schedule
 from services.formation_health_service import (
     _expected_structured_segment_count,
     _expected_structured_segment_contract,
+    _humanization_is_embedded,
 )
 
 
@@ -118,6 +119,10 @@ class StructuredPipelineHealthTests(unittest.TestCase):
             "n'est pas verrouillé",
             result["checks"]["schedule_contract"]["detail"],
         )
+
+    def test_auto_pilot_embeds_humanization_in_initial_generation(self):
+        self.assertTrue(_humanization_is_embedded({"auto_pilot_enabled": True}))
+        self.assertFalse(_humanization_is_embedded({"auto_pilot_enabled": False}))
 
     def test_preflight_requires_deepseek_key_even_with_unrelated_key(self):
         job = {

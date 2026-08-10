@@ -41,7 +41,8 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.get_json()["code"], "teacher_order_required")
         create_aggregate.assert_not_called()
         create_platform.assert_not_called()
 
@@ -53,7 +54,8 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
         ) as create_platform:
             response = self.client.post("/api/formation/init-test")
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.get_json()["code"], "teacher_order_required")
         create_aggregate.assert_not_called()
         create_platform.assert_not_called()
 
@@ -64,7 +66,7 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
         ):
             response = self.client.post("/api/formation/init", json={})
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
 
 
 if __name__ == "__main__":

@@ -112,7 +112,7 @@ class DynamicBillingScheduleTest(unittest.TestCase):
             9 * 60,
         )
 
-    def test_new_v2_requires_72_real_hours_before_first_block(self):
+    def test_new_v2_requires_48_real_hours_before_first_block(self):
         now = FRANCE_TZ.localize(datetime(2026, 7, 26, 12, 0))
         with patch.object(
             billing_service,
@@ -130,7 +130,7 @@ class DynamicBillingScheduleTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 billing_service.BillingError,
-                "72 heures",
+                "48 heures",
             ):
                 billing_service._normalize_project(
                     _new_v2_payload(["2026-07-28"]),
@@ -655,7 +655,7 @@ class DynamicOrderFulfillmentTest(unittest.TestCase):
         )
         bind_days.assert_called_once_with(42, 8, 120, [401, 402])
 
-    def test_new_v2_revalidates_72_hours_from_fulfillment_time(self):
+    def test_new_v2_revalidates_48_hours_from_fulfillment_time(self):
         snapshot = compile_module_schedule(
             ["2026-07-28"],
             {"2026-07-28": 11},
@@ -673,7 +673,7 @@ class DynamicOrderFulfillmentTest(unittest.TestCase):
             "training_title": "TP CRCD",
             "total_hours": 7,
             # The order itself was created early enough, but it was only
-            # authorized and fulfilled after the 72-hour deadline.
+            # authorized and fulfilled after the 48-hour deadline.
             "created_at": FRANCE_TZ.localize(datetime(2026, 7, 24, 8, 0)),
             "authorized_at": FRANCE_TZ.localize(datetime(2026, 7, 26, 10, 0)),
             "request_payload_json": {
@@ -702,7 +702,7 @@ class DynamicOrderFulfillmentTest(unittest.TestCase):
         ) as aggregate:
             with self.assertRaisesRegex(
                 teacher_order_fulfillment_service.PermanentWorkError,
-                "72 heures",
+                "48 heures",
             ):
                 teacher_order_fulfillment_service.fulfill_teacher_order(
                     item,

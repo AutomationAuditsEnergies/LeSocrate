@@ -149,38 +149,6 @@ class HrFillFromFolderTest(unittest.TestCase):
             )
             stack.enter_context(
                 patch(
-                    "routes.hr_routes.list_course_sessions",
-                    return_value=[{
-                        "id": 501,
-                        "session_index": 1,
-                        "status": "planned",
-                        "audio_generation_completed_at": None,
-                    }],
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "routes.hr_routes.get_audio_generation_session",
-                    return_value={"id": 501, "formation_job_id": 42},
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "routes.hr_routes.publish_playlist_audio_to_platform",
-                    return_value={
-                        "publish_errors": [],
-                        "destination_prefix": "course-sessions/501",
-                    },
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "routes.hr_routes.assign_existing_audio_to_session",
-                    return_value=True,
-                )
-            )
-            stack.enter_context(
-                patch(
                     "routes.hr_routes._get_platform_info",
                     return_value={"audio_container": "formationaudio-test"},
                 )

@@ -102,7 +102,6 @@ export default function FormationSchedulePlanner({
   approximateDayCount = null,
   daysPerWeekHint = 2,
   preferredWeekdaysHint = [],
-  onCreateTemplate,
   onChange,
 }) {
   const today = useMemo(localToday, [])
@@ -169,11 +168,6 @@ export default function FormationSchedulePlanner({
       const retainedExists = loaded.some(
         (template) => String(template.id) === String(retainedTemplateId),
       )
-      if (retainedExists) {
-        setApplyAllDays(true)
-        setAssignments(assignTemplateToAll(initialDates, retainedTemplateId))
-        window.sessionStorage.removeItem('selected_day_schedule_template_id')
-      }
       setBulkTemplateId((current) => (
         current
         || (retainedExists ? String(retainedTemplateId) : String(loaded[0]?.id || ''))
@@ -183,7 +177,7 @@ export default function FormationSchedulePlanner({
     } finally {
       setTemplatesLoading(false)
     }
-  }, [initialDates, reuse])
+  }, [reuse])
 
   useEffect(() => {
     loadTemplates()
@@ -301,7 +295,7 @@ export default function FormationSchedulePlanner({
   }, [activeDateKey, normalizedDates])
 
   useEffect(() => {
-    if (!applyAllDays || !bulkTemplateId || bulkTemplateId === '__create__' || !normalizedDates.length) return
+    if (!applyAllDays || !bulkTemplateId || !normalizedDates.length) return
     setAssignments(assignTemplateToAll(normalizedDates, bulkTemplateId))
   }, [applyAllDays, bulkTemplateId, normalizedDates])
 
@@ -372,16 +366,6 @@ export default function FormationSchedulePlanner({
   }
 
   const assignTemplate = (date, templateId) => {
-    if (templateId === '__create__') {
-      onCreateTemplate?.({
-        selected_dates: normalizedDates,
-        template_assignments: cleanAssignments,
-        start_date: helperStartDate,
-        days_per_week: Number(helperDaysPerWeek),
-        preferred_weekdays: preferredWeekdays,
-      })
-      return
-    }
     setAssignments((current) => ({
       ...current,
       [date]: String(templateId),
@@ -575,7 +559,7 @@ export default function FormationSchedulePlanner({
                   <span>Template de la journée</span>
                   <select
                     value={activeAssignment}
-                    disabled={templatesLoading || applyAllDays}
+                    disabled={templatesLoading || templates.length === 0 || applyAllDays}
                     onChange={(event) => assignTemplate(activeDate, event.target.value)}
                     aria-invalid={!activeAssignment || !selectedTemplateIds.has(activeAssignment)}
                   >
@@ -583,13 +567,12 @@ export default function FormationSchedulePlanner({
                     {templates.map((template) => (
                       <option key={template.id} value={String(template.id)}>{template.name}</option>
                     ))}
-                    <option value="__create__">Créer un template</option>
                   </select>
                 </label>
               )}
               {!reuse && !templatesLoading && !templatesError && templates.length === 0 && (
                 <p className="formation-schedule__template-hint">
-                  Aucun template n’existe encore. Choisissez « Créer un template ».
+                  Créez d’abord un template dans « Organisation des cours ».
                 </p>
               )}
               <nav className="formation-schedule__day-navigation" aria-label="Naviguer entre les journées">
@@ -634,24 +617,12 @@ export default function FormationSchedulePlanner({
                   value={bulkTemplateId}
                   aria-label="Template à appliquer à toutes les journées"
                   onChange={(event) => {
-                    const templateId = event.target.value
-                    if (templateId === '__create__') {
-                      onCreateTemplate?.({
-                        selected_dates: normalizedDates,
-                        template_assignments: cleanAssignments,
-                        start_date: helperStartDate,
-                        days_per_week: Number(helperDaysPerWeek),
-                        preferred_weekdays: preferredWeekdays,
-                      })
-                      return
-                    }
-                    setBulkTemplateId(templateId)
+                    setBulkTemplateId(event.target.value)
                   }}
                 >
                   {templates.map((template) => (
                     <option key={template.id} value={String(template.id)}>{template.name}</option>
                   ))}
-                  <option value="__create__">Créer un template</option>
                 </select>
               )}
             </div>

@@ -44,13 +44,17 @@ class DeepSeekClientRetryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "DEEPSEEK_API_KEY"):
                 client.post_message(
                     [{"role": "user", "content": "hello"}],
-                    model="pro",
+                    model="sonnet",
                     max_tokens=100,
                 )
 
         post.assert_not_called()
 
-    def test_historical_model_alias_is_rejected_before_http(self):
+    def test_historical_model_alias_uses_deepseek_http_endpoint(self):
+        success = _FakeResponse(
+            200,
+            {"content": [{"type": "text", "text": "réponse DeepSeek"}]},
+        )
         with patch.dict(
             client.os.environ,
             {
@@ -61,15 +65,21 @@ class DeepSeekClientRetryTest(unittest.TestCase):
                 "LOCAL_DEV": "true",
             },
             clear=True,
-        ), patch.object(client._http, "post") as post:
-            with self.assertRaisesRegex(ValueError, "DeepSeek"):
-                client.post_message(
-                    [{"role": "user", "content": "hello"}],
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=100,
-                )
+        ), patch.object(client._http, "post", return_value=success) as post:
+            result = client.post_message(
+                [{"role": "user", "content": "hello"}],
+                model="claude-sonnet-4-20250514",
+                max_tokens=100,
+            )
 
-        post.assert_not_called()
+        self.assertEqual(result, "réponse DeepSeek")
+        request = post.call_args
+        self.assertEqual(
+            request.args[0],
+            "https://api.deepseek.com/anthropic/v1/messages",
+        )
+        self.assertEqual(request.kwargs["headers"]["x-api-key"], "deepseek-key")
+        self.assertEqual(request.kwargs["json"]["model"], "deepseek-v4-pro")
 
     def test_retries_chunked_response_then_returns_text(self):
         success = _FakeResponse(

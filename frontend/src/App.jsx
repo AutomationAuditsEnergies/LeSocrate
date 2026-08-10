@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
-import { BrowserRouter, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { BrowserRouter, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiUrl } from './runtimeConfig'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
@@ -98,14 +98,14 @@ function ProtectedHRRoute({ children }) {
           style={{
             width: '100%',
             maxWidth: 460,
-            borderRadius: 12,
+            borderRadius: 16,
             background: '#fff',
-            border: '1px solid #e4e4e7',
-            boxShadow: '0 18px 45px rgba(9, 9, 11, 0.10)',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 18px 45px rgba(15, 23, 42, 0.10)',
             padding: 28,
           }}
         >
-          <p style={{ margin: 0, color: '#52525b', fontSize: 14, fontWeight: 700 }}>
+          <p style={{ margin: 0, color: '#7c3aed', fontSize: 14, fontWeight: 700 }}>
             Centre de formation
           </p>
           <h1 style={{ margin: '10px 0 0', color: '#0f172a', fontSize: 26, lineHeight: 1.2 }}>
@@ -123,8 +123,8 @@ function ProtectedHRRoute({ children }) {
               minHeight: 44,
               alignItems: 'center',
               justifyContent: 'center',
-              borderRadius: 8,
-              background: '#18181b',
+              borderRadius: 10,
+              background: '#8B5CF6',
               color: '#fff',
               fontWeight: 700,
               padding: '0 18px',
@@ -171,20 +171,18 @@ function AuthRecoveryRedirect() {
 
 function CenterSessionGuard() {
   const navigate = useNavigate()
-  const location = useLocation()
-  const isCenterProtectedPage = CENTER_PROTECTED_PATHS.some(
-    path => location.pathname.startsWith(path),
-  )
 
   useEffect(() => {
-    if (!isCenterProtectedPage) return undefined
-
     let isMounted = true
     let isRedirecting = false
     let authSubscription = null
 
+    const isCenterProtectedPage = () => (
+      CENTER_PROTECTED_PATHS.some(path => window.location.pathname.startsWith(path))
+    )
+
     const returnToLogin = async () => {
-      if (isRedirecting) return
+      if (isRedirecting || !isCenterProtectedPage()) return
       isRedirecting = true
       localStorage.removeItem('admin_auth_token')
       localStorage.removeItem('admin_email')
@@ -212,7 +210,7 @@ function CenterSessionGuard() {
       window.removeEventListener('socrate:center-session-expired', onSessionExpired)
       authSubscription?.unsubscribe()
     }
-  }, [isCenterProtectedPage, navigate])
+  }, [navigate])
 
   return null
 }

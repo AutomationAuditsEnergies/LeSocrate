@@ -146,6 +146,7 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
             ("delete", "/api/hr/cours-folders/22", {}, "folder", 22),
             ("patch", "/api/hr/cours-folders/22", {"json": {"name": "X"}}, "folder", 22),
             ("delete", "/api/hr/cours-documents/33", {}, "document", 33),
+            ("post", "/api/hr/cours-documents/33/generate-audio", {}, "document", 33),
             (
                 "patch",
                 "/api/hr/cours-folders/22/content-job/segment",

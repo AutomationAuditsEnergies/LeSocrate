@@ -5,8 +5,8 @@
   --auth-line: #e3e4e8;
   --auth-field: #f5f5f6;
   --auth-surface: #ffffff;
-  --auth-accent: #18181b;
-  --auth-focus: #52525b;
+  --auth-accent: #2563eb;
+  --auth-focus: #f28a4b;
   min-height: 100vh;
   background: var(--auth-surface);
   color: var(--auth-ink);
@@ -62,7 +62,7 @@
   flex-direction: column;
   gap: clamp(28px, 5vh, 56px);
   padding: clamp(28px, 3vw, 48px);
-  background: #111113;
+  background: #0b1730;
   color: white;
 }
 
@@ -77,8 +77,8 @@
 .auth-visual .cadrenza-logo,
 .auth-mobile-logo .cadrenza-logo,
 .auth-fallback .cadrenza-logo {
-  --cadrenza-logo-accent: #d4d4d8;
-  --cadrenza-logo-node: #71717a;
+  --cadrenza-logo-accent: #f28a4b;
+  --cadrenza-logo-node: #8b5cf6;
   display: inline-flex;
   align-items: center;
   gap: 10px;

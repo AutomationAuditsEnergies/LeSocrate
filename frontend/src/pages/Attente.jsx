@@ -69,24 +69,9 @@ export default function Attente() {
 
   return (
     <div
-      className="flex flex-col h-full w-full bg-slate-950 relative overflow-hidden min-h-screen"
+      className="flex flex-col h-full w-full bg-cover bg-center relative overflow-hidden min-h-screen"
+      style={{ backgroundImage: 'url("/static/images/prof-avatar.jpg")' }}
     >
-      <picture className="absolute inset-0 z-0" aria-hidden="true">
-        <source
-          srcSet="/static/images/prof-avatar-1280.webp 1280w, /static/images/prof-avatar-1920.webp 1920w"
-          sizes="100vw"
-          type="image/webp"
-        />
-        <img
-          className="h-full w-full object-cover object-center"
-          src="/static/images/prof-avatar-1280.webp"
-          alt=""
-          width="1280"
-          height="720"
-          fetchPriority="high"
-          decoding="async"
-        />
-      </picture>
       <div className="absolute inset-0 bg-black/60 z-0" />
 
       <div className="absolute inset-0 z-1">

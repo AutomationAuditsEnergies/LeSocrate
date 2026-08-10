@@ -16,7 +16,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Où se trouve le siège de Cadrenza ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -46,7 +46,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Combien ça coûte ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -89,7 +89,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Cadrenza convient-il à mon activité ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -126,7 +126,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Faut-il des compétences techniques pour utiliser Cadrenza ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -163,7 +163,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Cadrenza vs ChatGPT : quelle différence ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -207,7 +207,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Cadrenza, c’est quoi ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -249,7 +249,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Puis-je suivre ce que fait l’assistant ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -283,7 +283,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Puis-je personnaliser le comportement des assistants ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -326,7 +326,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Faut-il configurer les intégrations soi-même ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"
@@ -361,7 +361,7 @@ export const FaqList = () => {
                   <p className="box-border caret-transparent text-[15.3846px] font-medium leading-[21.5385px] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
                     Avec quels outils Cadrenza peut-il s’intégrer ?
                   </p>
-                  <img loading="lazy" decoding="async"
+                  <img
                     src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-44.svg"
                     alt="Icon"
                     className="box-border caret-transparent shrink-0 text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:leading-[19.9111px] md:w-4"

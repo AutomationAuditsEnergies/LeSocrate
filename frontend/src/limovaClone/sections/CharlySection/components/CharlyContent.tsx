@@ -21,7 +21,7 @@ export const CharlyContent = () => {
       </div>
       <div className="items-center box-border caret-transparent gap-x-[15.3846px] flex flex-wrap text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[11.5385px] no-underline md:gap-x-[21.3333px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
         <div className="items-center box-border caret-transparent gap-x-[7.69231px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[7.69231px] no-underline md:gap-x-[7.11111px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[7.11111px]">
-          <img loading="lazy" decoding="async"
+          <img
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a0316d4c778d9efbe4566a6_UserDesktop.svg"
             alt=""
             className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4"
@@ -32,7 +32,7 @@ export const CharlyContent = () => {
         </div>
         <div className="bg-[color(srgb_1_1_1_/_0.12)] box-border caret-transparent hidden text-[15.3846px] h-[9.61538px] tracking-[-0.107692px] leading-[21.5385px] min-h-0 min-w-0 outline-[3px] no-underline w-px md:block md:text-[14.2222px] md:h-[8.88889px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto]"></div>
         <div className="items-center box-border caret-transparent gap-x-[7.69231px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[7.69231px] no-underline md:gap-x-[7.11111px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[7.11111px]">
-          <img loading="lazy" decoding="async"
+          <img
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a10098cac83bd4712df6ac4_Connect.svg"
             alt=""
             className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4"
@@ -43,7 +43,7 @@ export const CharlyContent = () => {
         </div>
         <div className="bg-[color(srgb_1_1_1_/_0.12)] box-border caret-transparent hidden text-[15.3846px] h-[9.61538px] tracking-[-0.107692px] leading-[21.5385px] min-h-0 min-w-0 outline-[3px] no-underline w-px md:block md:text-[14.2222px] md:h-[8.88889px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto]"></div>
         <div className="items-center box-border caret-transparent gap-x-[7.69231px] flex text-[15.3846px] justify-start tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[7.69231px] no-underline md:gap-x-[7.11111px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[7.11111px]">
-          <img loading="lazy" decoding="async"
+          <img
             src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/69a2fc473e880038d2a8e49c_Folder.svg"
             alt=""
             className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center tracking-[-0.107692px] leading-[21.5385px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-4"
@@ -65,12 +65,12 @@ export const CharlyContent = () => {
               </span>
             </div>
             <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[11.5385px] justify-center tracking-[-0.107692px] leading-[21.5385px] mb-[-0.769231px] [mask-image:linear-gradient(90deg,rgba(0,0,0,0)_0%,rgb(255,255,255)_10%,rgb(255,255,255)_90%,rgba(0,0,0,0)_100%)] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[11.5385px] md:text-[14.2222px] md:h-[10.6667px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:mb-[-0.711111px] md:w-[10.6667px]">
-              <img loading="lazy" decoding="async"
+              <img
                 src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-8.svg"
                 alt="Icon"
                 className="box-border caret-transparent text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] outline-[3px] absolute no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
               />
-              <img loading="lazy" decoding="async"
+              <img
                 src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-9.svg"
                 alt="Icon"
                 className="box-border caret-transparent text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] outline-[3px] absolute no-underline translate-x-[-100.0%] w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"

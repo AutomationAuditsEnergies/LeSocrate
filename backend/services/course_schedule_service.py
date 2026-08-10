@@ -329,7 +329,7 @@ def _normalize_weekdays(weekdays, weekly_course_count=None):
 
 
 def _audio_schedule_window_hours():
-    horizon = float(os.environ.get("SCHEDULED_AUDIO_HORIZON_HOURS", "72"))
+    horizon = float(os.environ.get("SCHEDULED_AUDIO_HORIZON_HOURS", "48"))
     late_grace = float(os.environ.get("SCHEDULED_AUDIO_LATE_GRACE_HOURS", "2"))
     return horizon, late_grace
 

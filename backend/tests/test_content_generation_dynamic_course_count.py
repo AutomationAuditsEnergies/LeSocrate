@@ -187,7 +187,8 @@ class HrContentJobDynamicCountTest(unittest.TestCase):
                 json={"program_text": "Programme " * 10},
             )
 
-        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.status_code, 410, response.get_json())
+        self.assertEqual(response.get_json()["code"], "local_generation_retired")
         extract.assert_not_called()
 
 

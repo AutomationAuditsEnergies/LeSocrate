@@ -1,63 +1,63 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-10T00:00:00Z",
+  "generatedAt": "2026-04-28T12:30:00Z",
   "title": "Design System: Le Socrate · HR Dashboard",
   "extensions": {
     "colorMeta": {
       "primary": {
         "role": "primary",
-        "displayName": "Graphite Ink",
-        "canonical": "oklch(21% 0.006 286)",
+        "displayName": "Examiner's Violet",
+        "canonical": "oklch(63.5% 0.22 296)",
         "tonalRamp": [
-          "#09090b",
-          "#18181b",
-          "#27272a",
-          "#3f3f46",
-          "#52525b",
-          "#71717a",
-          "#a1a1aa",
-          "#d4d4d8"
+          "#1e1438",
+          "#2e1f5b",
+          "#4527a0",
+          "#5b21b6",
+          "#7c3aed",
+          "#8B5CF6",
+          "#a78bfa",
+          "#c4b5fd"
         ]
       },
       "primary-deep": {
         "role": "primary",
-        "displayName": "Graphite Hover",
-        "canonical": "oklch(27% 0.006 286)"
+        "displayName": "Violet Deep",
+        "canonical": "oklch(56% 0.24 296)"
       },
       "primary-soft": {
         "role": "primary",
-        "displayName": "Graphite Soft",
-        "canonical": "oklch(37% 0.01 286)"
+        "displayName": "Violet Soft",
+        "canonical": "oklch(72% 0.16 296)"
       },
       "primary-mist": {
         "role": "primary",
-        "displayName": "Graphite Mist",
-        "canonical": "oklch(70% 0.01 286)"
+        "displayName": "Violet Mist",
+        "canonical": "oklch(82% 0.10 296)"
       },
       "bg-canvas-dark": {
         "role": "neutral",
-        "displayName": "Canvas Dark (Graphite)",
-        "canonical": "oklch(14% 0.005 286)",
+        "displayName": "Canvas Dark (Slate)",
+        "canonical": "oklch(20.5% 0.04 252)",
         "tonalRamp": [
-          "#09090b",
-          "#18181b",
-          "#27272a",
-          "#3f3f46",
-          "#52525b",
-          "#71717a",
-          "#a1a1aa",
-          "#e4e4e7"
+          "#0f172a",
+          "#1e293b",
+          "#334155",
+          "#475569",
+          "#64748b",
+          "#94a3b8",
+          "#cbd5e1",
+          "#e2e8f0"
         ]
       },
       "bg-canvas-light": {
         "role": "neutral",
-        "displayName": "Canvas Light (Zinc)",
-        "canonical": "oklch(98.5% 0.002 286)"
+        "displayName": "Canvas Light (Slate Cream)",
+        "canonical": "oklch(98% 0.005 252)"
       },
       "bg-surface-dark": {
         "role": "neutral",
         "displayName": "Surface Dark",
-        "canonical": "oklch(21% 0.006 286)"
+        "canonical": "oklch(26.5% 0.04 252)"
       },
       "bg-surface-light": {
         "role": "neutral",
@@ -67,52 +67,52 @@
       "bg-recessed-dark": {
         "role": "neutral",
         "displayName": "Recessed Dark (= Canvas)",
-        "canonical": "oklch(14% 0.005 286)"
+        "canonical": "oklch(20.5% 0.04 252)"
       },
       "bg-recessed-light": {
         "role": "neutral",
         "displayName": "Recessed Light",
-        "canonical": "oklch(96.7% 0.003 286)"
+        "canonical": "oklch(96% 0.01 252)"
       },
       "text-primary-dark": {
         "role": "neutral",
         "displayName": "Text Primary Dark",
-        "canonical": "oklch(98.5% 0.002 286)"
+        "canonical": "oklch(96% 0.01 252)"
       },
       "text-primary-light": {
         "role": "neutral",
         "displayName": "Text Primary Light",
-        "canonical": "oklch(21% 0.006 286)"
+        "canonical": "oklch(20.5% 0.04 252)"
       },
       "text-secondary-dark": {
         "role": "neutral",
         "displayName": "Text Secondary Dark",
-        "canonical": "oklch(87% 0.006 286)"
+        "canonical": "oklch(83% 0.02 252)"
       },
       "text-secondary-light": {
         "role": "neutral",
         "displayName": "Text Secondary Light",
-        "canonical": "oklch(32% 0.006 286)"
+        "canonical": "oklch(36% 0.04 252)"
       },
       "text-muted": {
         "role": "neutral",
         "displayName": "Text Muted",
-        "canonical": "oklch(55% 0.008 286)"
+        "canonical": "oklch(54% 0.03 252)"
       },
       "border-dark": {
         "role": "neutral",
         "displayName": "Border Dark",
-        "canonical": "oklch(32% 0.006 286)"
+        "canonical": "oklch(36% 0.04 252)"
       },
       "border-light": {
         "role": "neutral",
         "displayName": "Border Light",
-        "canonical": "oklch(91.9% 0.004 286)"
+        "canonical": "oklch(91% 0.01 252)"
       },
       "divider-light": {
         "role": "neutral",
         "displayName": "Divider Light",
-        "canonical": "oklch(87% 0.006 286)"
+        "canonical": "oklch(83% 0.02 252)"
       },
       "status-locked": {
         "role": "tertiary",
@@ -219,9 +219,9 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "The single most consequential action on a screen. Graphite Ink, white text, used once or twice per surface maximum.",
+      "description": "The single most consequential action on a screen. Examiner's Violet, white text, used once or twice per surface maximum.",
       "html": "<button class=\"ds-btn-primary\"><svg class=\"ds-btn-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"12\" y1=\"5\" x2=\"12\" y2=\"19\"/><line x1=\"5\" y1=\"12\" x2=\"19\" y2=\"12\"/></svg><span>Nouvelle plateforme</span></button>",
-      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: #18181b; color: #ffffff; font-family: 'Inter', system-ui, sans-serif; font-size: 14px; font-weight: 500; line-height: 1.25rem; border: none; border-radius: 8px; cursor: pointer; transition: background-color 200ms cubic-bezier(0.4, 0, 0.2, 1); } .ds-btn-primary:hover { background: #27272a; } .ds-btn-primary:focus-visible { outline: 2px solid #71717a; outline-offset: 2px; } .ds-btn-primary:disabled { background: #a1a1aa; cursor: not-allowed; opacity: 0.55; } .ds-btn-icon { width: 18px; height: 18px; flex-shrink: 0; }"
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: #8B5CF6; color: #ffffff; font-family: 'Inter', system-ui, sans-serif; font-size: 14px; font-weight: 500; line-height: 1.25rem; border: none; border-radius: 8px; cursor: pointer; transition: background-color 200ms cubic-bezier(0.4, 0, 0.2, 1), transform 200ms cubic-bezier(0.4, 0, 0.2, 1); } .ds-btn-primary:hover { background: #7c3aed; transform: scale(1.02); } .ds-btn-primary:active { transform: scale(0.98); } .ds-btn-primary:focus-visible { outline: 2px solid rgba(139, 92, 246, 0.5); outline-offset: 2px; } .ds-btn-primary:disabled { background: #a78bfa; cursor: not-allowed; transform: none; opacity: 0.6; } .ds-btn-icon { width: 18px; height: 18px; flex-shrink: 0; }"
     },
     {
       "name": "Status Pill — Locked",
@@ -235,9 +235,9 @@
       "name": "Platform Card",
       "kind": "card",
       "refersTo": "card-platform",
-      "description": "The principal dashboard container. Carries platform identity, slide-to-confirm, actions and optional audio content. Active state stays neutral and is communicated through content or a stronger graphite border.",
+      "description": "The principal container of the dashboard. Carries platform identity, slide-to-confirm, action buttons, optional audio expand. Border switches to violet when the platform is active (the only place violet-as-status appears).",
       "html": "<article class=\"ds-card-platform ds-card-platform--active\"><header class=\"ds-card-header\"><h3 class=\"ds-card-title\">Formation 1 TP CRCD</h3></header><div class=\"ds-card-body\"><p class=\"ds-card-helper\">Carte plateforme — slot pour slide-to-confirm, actions, expand audios.</p></div></article>",
-      "css": ".ds-card-platform { position: relative; background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; padding: 24px; transition: border-color 200ms cubic-bezier(0.4, 0, 0.2, 1); overflow: hidden; } .ds-card-platform--active { border-color: #71717a; } @media (prefers-color-scheme: light) { .ds-card-platform { background: #ffffff; border-color: #e4e4e7; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px -1px rgba(0,0,0,0.1); } .ds-card-platform--active { border-color: #71717a; } } .ds-card-header { margin-bottom: 24px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; } .ds-card-title { margin: 0; font-family: 'Inter', system-ui, sans-serif; font-size: 18px; font-weight: 600; line-height: 1.5rem; letter-spacing: -0.005em; color: #fafafa; } @media (prefers-color-scheme: light) { .ds-card-title { color: #18181b; } } .ds-card-helper { font-family: 'Inter', system-ui, sans-serif; font-size: 14px; color: #d4d4d8; margin: 0; } @media (prefers-color-scheme: light) { .ds-card-helper { color: #3f3f46; } }"
+      "css": ".ds-card-platform { position: relative; background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 24px; transition: border-color 200ms cubic-bezier(0.4, 0, 0.2, 1); overflow: hidden; } .ds-card-platform--active { border-color: #8B5CF6; } @media (prefers-color-scheme: light) { .ds-card-platform { background: #ffffff; border-color: #e2e8f0; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px -1px rgba(0,0,0,0.1); } .ds-card-platform--active { border-color: #8B5CF6; } } .ds-card-header { margin-bottom: 24px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; } .ds-card-title { margin: 0; font-family: 'Inter', system-ui, sans-serif; font-size: 18px; font-weight: 600; line-height: 1.5rem; letter-spacing: -0.005em; color: #f1f5f9; } @media (prefers-color-scheme: light) { .ds-card-title { color: #0f172a; } } .ds-card-helper { font-family: 'Inter', system-ui, sans-serif; font-size: 14px; color: #cbd5e1; margin: 0; } @media (prefers-color-scheme: light) { .ds-card-helper { color: #334155; } }"
     },
     {
       "name": "Slide to Confirm",
@@ -245,15 +245,15 @@
       "refersTo": "slide-to-confirm",
       "description": "Signature interaction for irreversible state changes. The drag itself is the contract — no separate confirmation modal. Currently mounted in PlatformCard for lock/unlock + backup.",
       "html": "<div class=\"ds-slide-track\" role=\"slider\" aria-label=\"Glisser pour verrouiller l'accès aux audios\" aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"0\"><div class=\"ds-slide-fill\"></div><div class=\"ds-slide-label\">Glisser pour verrouiller l'accès aux audios →</div><button class=\"ds-slide-thumb\" type=\"button\"><svg class=\"ds-slide-thumb-icon\" viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M12 17a2 2 0 1 0-2-2 2 2 0 0 0 2 2zm6-9h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm-9.1 0V6a3.1 3.1 0 1 1 6.2 0v2z\"/></svg></button></div>",
-      "css": ".ds-slide-track { position: relative; height: 44px; border-radius: 9999px; background: rgba(63, 63, 70, 0.55); border: 1px solid #3f3f46; overflow: hidden; user-select: none; } @media (prefers-color-scheme: light) { .ds-slide-track { background: #e4e4e7; border-color: #d4d4d8; } } .ds-slide-fill { position: absolute; inset: 0 auto 0 0; width: 40px; border-radius: 9999px; background: #52525b; opacity: 0.45; transition: width 350ms cubic-bezier(0.34, 1.56, 0.64, 1); } @media (prefers-color-scheme: light) { .ds-slide-fill { background: #18181b; opacity: 0.12; } } .ds-slide-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px 0 52px; pointer-events: none; font-family: 'Inter', system-ui, sans-serif; font-size: 12px; font-weight: 500; color: #71717a; white-space: nowrap; transition: opacity 300ms; } .ds-slide-thumb { position: absolute; top: 4px; left: 4px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: #ffffff; border: none; border-radius: 9999px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); cursor: grab; color: #71717a; transition: left 350ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 200ms, transform 200ms; } .ds-slide-thumb:active { cursor: grabbing; box-shadow: 0 4px 12px rgba(0,0,0,0.2); transform: scale(1.1); } .ds-slide-thumb:focus-visible { outline: 2px solid #71717a; outline-offset: 2px; } .ds-slide-thumb-icon { width: 18px; height: 18px; }"
+      "css": ".ds-slide-track { position: relative; height: 44px; border-radius: 9999px; background: rgba(71, 85, 105, 0.4); border: 1px solid #334155; overflow: hidden; user-select: none; } @media (prefers-color-scheme: light) { .ds-slide-track { background: #e8edf2; border-color: #e2e8f0; } } .ds-slide-fill { position: absolute; inset: 0 auto 0 0; width: 40px; border-radius: 9999px; background: #8B5CF6; opacity: 0.12; transition: width 350ms cubic-bezier(0.34, 1.56, 0.64, 1); } @media (prefers-color-scheme: light) { .ds-slide-fill { background: #10b981; } } .ds-slide-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px 0 52px; pointer-events: none; font-family: 'Inter', system-ui, sans-serif; font-size: 12px; font-weight: 500; color: #64748b; white-space: nowrap; transition: opacity 300ms; } .ds-slide-thumb { position: absolute; top: 4px; left: 4px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: #ffffff; border: none; border-radius: 9999px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); cursor: grab; color: #64748b; transition: left 350ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 200ms, transform 200ms; } .ds-slide-thumb:active { cursor: grabbing; box-shadow: 0 4px 12px rgba(0,0,0,0.2); transform: scale(1.1); } .ds-slide-thumb:focus-visible { outline: 2px solid rgba(139, 92, 246, 0.5); outline-offset: 2px; } .ds-slide-thumb-icon { width: 18px; height: 18px; }"
     },
     {
       "name": "Audio Item",
       "kind": "custom",
       "refersTo": "audio-item",
-      "description": "Recessed row inside the expanded audio panel. The graphite play control sits inside an otherwise neutral list. Delete is one-click destructive (no confirmation).",
+      "description": "Recessed row inside the expanded audio panel. Single tactile expression of the violet primary (the play button) inside an otherwise neutral list. Delete is one-click destructive (no confirmation).",
       "html": "<div class=\"ds-audio-item\"><button class=\"ds-audio-play\" type=\"button\" aria-label=\"Lire\"><svg class=\"ds-audio-play-icon\" viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M8 5v14l11-7z\"/></svg></button><span class=\"ds-audio-name\" title=\"cours_jour1_chapitre1.mp3\">cours_jour1_chapitre1.mp3</span><span class=\"ds-audio-size\">2.4 MB</span><button class=\"ds-audio-delete\" type=\"button\" aria-label=\"Supprimer\"><svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z\"/></svg></button></div>",
-      "css": ".ds-audio-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #09090b; border-radius: 8px; transition: background-color 150ms; } @media (prefers-color-scheme: light) { .ds-audio-item { background: #f4f4f5; } } .ds-audio-play { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: #18181b; color: #ffffff; border: none; border-radius: 9999px; cursor: pointer; flex-shrink: 0; transition: background-color 150ms; } .ds-audio-play:hover { background: #27272a; } .ds-audio-play:focus-visible { outline: 2px solid #71717a; outline-offset: 2px; } .ds-audio-play-icon { width: 14px; height: 14px; } .ds-audio-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'Inter', system-ui, sans-serif; font-size: 12px; color: #d4d4d8; } @media (prefers-color-scheme: light) { .ds-audio-name { color: #3f3f46; } } .ds-audio-size { font-family: 'Inter', system-ui, sans-serif; font-size: 10px; color: #71717a; flex-shrink: 0; } .ds-audio-delete { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; background: transparent; color: #71717a; border: none; border-radius: 6px; cursor: pointer; flex-shrink: 0; transition: background-color 150ms, color 150ms; } .ds-audio-delete:hover { background: rgba(248, 113, 113, 0.15); color: #f87171; } .ds-audio-delete:focus-visible { outline: 2px solid #71717a; outline-offset: 2px; } .ds-audio-delete svg { width: 14px; height: 14px; }"
+      "css": ".ds-audio-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #0f172a; border-radius: 8px; transition: background-color 150ms; } @media (prefers-color-scheme: light) { .ds-audio-item { background: #f1f5f9; } } .ds-audio-play { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: #8B5CF6; color: #ffffff; border: none; border-radius: 9999px; cursor: pointer; flex-shrink: 0; transition: filter 150ms; } .ds-audio-play:hover { filter: brightness(1.1); } .ds-audio-play:focus-visible { outline: 2px solid rgba(139, 92, 246, 0.5); outline-offset: 2px; } .ds-audio-play-icon { width: 14px; height: 14px; } .ds-audio-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'Inter', system-ui, sans-serif; font-size: 12px; color: #cbd5e1; } @media (prefers-color-scheme: light) { .ds-audio-name { color: #334155; } } .ds-audio-size { font-family: 'Inter', system-ui, sans-serif; font-size: 10px; color: #64748b; flex-shrink: 0; } .ds-audio-delete { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; background: transparent; color: #64748b; border: none; border-radius: 6px; cursor: pointer; flex-shrink: 0; transition: background-color 150ms, color 150ms; } .ds-audio-delete:hover { background: rgba(248, 113, 113, 0.15); color: #f87171; } .ds-audio-delete:focus-visible { outline: 2px solid rgba(139, 92, 246, 0.5); outline-offset: 2px; } .ds-audio-delete svg { width: 14px; height: 14px; }"
     },
     {
       "name": "Pagination Control",
@@ -261,7 +261,7 @@
       "refersTo": "pagination",
       "description": "Sober pagination: muted 'Page X / Y' label + two icon-only chevron buttons. Right-aligned above cards grid. Renders only when total pages > 1.",
       "html": "<nav class=\"ds-pagination\" aria-label=\"Pagination des plateformes\"><span class=\"ds-page-label\">Page <strong>4</strong> / 5</span><button class=\"ds-page-btn\" type=\"button\" aria-label=\"Page précédente\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><polyline points=\"15 18 9 12 15 6\"/></svg></button><button class=\"ds-page-btn\" type=\"button\" aria-label=\"Page suivante\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><polyline points=\"9 18 15 12 9 6\"/></svg></button></nav>",
-      "css": ".ds-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; } .ds-page-label { font-family: 'Inter', system-ui, sans-serif; font-size: 14px; color: #71717a; } .ds-page-label strong { font-weight: 600; color: #fafafa; } @media (prefers-color-scheme: light) { .ds-page-label strong { color: #18181b; } } .ds-page-btn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: transparent; color: #d4d4d8; border: 1px solid #3f3f46; border-radius: 8px; cursor: pointer; transition: background-color 150ms; } @media (prefers-color-scheme: light) { .ds-page-btn { color: #3f3f46; border-color: #e4e4e7; } } .ds-page-btn:hover { background: rgba(255, 255, 255, 0.05); } @media (prefers-color-scheme: light) { .ds-page-btn:hover { background: rgba(0, 0, 0, 0.05); } } .ds-page-btn:focus-visible { outline: 2px solid #71717a; outline-offset: 2px; } .ds-page-btn:disabled { opacity: 0.3; cursor: not-allowed; } .ds-page-btn svg { width: 20px; height: 20px; }"
+      "css": ".ds-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; } .ds-page-label { font-family: 'Inter', system-ui, sans-serif; font-size: 14px; color: #64748b; } .ds-page-label strong { font-weight: 600; color: #f1f5f9; } @media (prefers-color-scheme: light) { .ds-page-label strong { color: #0f172a; } } .ds-page-btn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: transparent; color: #cbd5e1; border: 1px solid #334155; border-radius: 12px; cursor: pointer; transition: background-color 150ms; } @media (prefers-color-scheme: light) { .ds-page-btn { color: #334155; border-color: #e2e8f0; } } .ds-page-btn:hover { background: rgba(255, 255, 255, 0.05); } @media (prefers-color-scheme: light) { .ds-page-btn:hover { background: rgba(0, 0, 0, 0.05); } } .ds-page-btn:focus-visible { outline: 2px solid rgba(139, 92, 246, 0.5); outline-offset: 2px; } .ds-page-btn:disabled { opacity: 0.3; cursor: not-allowed; } .ds-page-btn svg { width: 20px; height: 20px; }"
     }
   ],
   "narrative": {
@@ -269,31 +269,31 @@
     "overview": "The HR Dashboard is the desk of the RNCP examiner. Quiet authority, certifying paperwork, the dignity of a public-service tool that has to be right because it stamps people's careers. The interface should feel like the well-designed admin office of an institution that takes itself seriously, not like a SaaS product trying to charm the user into a free trial. References at the top of the lane: gov.uk and France Identité (civic minimalism done well), Linear and Stripe Dashboard (operator-first product calm), Coursera and edX (institutional edtech credibility). The pairing — civic register + product calm — is the whole spine.\n\nEvery element on this surface answers the question 'would a national exam board approve of this rendering ?' before it answers 'would a designer admire this on Dribbble ?'. The dashboard is for an operator who runs the place, not a visitor who needs to be excited. Operator-first explicitly: if a UX choice serves the apprenant by inconveniencing the admin, the admin wins.",
     "keyCharacteristics": [
       "Dark and light parity are both first-class. Neither is 'default.'",
-      "Graphite ink is the primary action color; the operator surface has no decorative brand accent.",
+      "Single primary accent (violet) carrying ≤ 10 % of any screen; everything else is slate-tinted neutral.",
       "Flat surfaces, tonal layering, near-zero shadow.",
       "Inter as the only typeface (operator side). The apprenant side's Poppins does not cross over.",
       "Slide-to-confirm as the signature interaction for irreversible actions (lock/unlock).",
-      "Every modal uses the same neutral shell: black backdrop, white or graphite surface, divided header and no colored icon tile."
+      "Every modal must eventually match the violet shell — the Stitch-blue legacy in AudiosModal / PDFModal is debt to be repaid, not a documented role."
     ],
     "rules": [
       {
         "name": "The One Voice Rule",
-        "body": "Graphite Ink is the single non-semantic action color. Use it for primary CTAs, active navigation and focus. Never add a decorative accent 'to brighten things up'; hierarchy comes from weight, spacing and contrast.",
+        "body": "Examiner's Violet is the only saturated color on screen. Use it for the primary CTA, the brand accent dot, the focus ring, and the slide-to-confirm fill at confirmation. Never as filler, decoration, or 'to brighten things up.' If a screen has more than one violet element competing for attention, one of them is wrong.",
         "section": "colors"
       },
       {
-        "name": "The No-Decorative-Color Rule",
-        "body": "Blue, violet and other saturated hues have no brand role on the operator surface. Existing colored chrome is migration debt. Use semantic colors only for an actual status, warning, success or destructive action.",
+        "name": "The No-Stitch-Blue Rule",
+        "body": "#137fec (the legacy bandeau color in AudiosModal and PDFModal) is debt, not a role. Do not introduce blue elsewhere. When touching those modals, migrate them to violet header chrome or to a quieter neutral header. There is no 'info' blue in this system.",
         "section": "colors"
       },
       {
-        "name": "The Graphite-Spine Rule",
-        "body": "Reuse the zinc/graphite spine (#09090B, #18181B, #3F3F46, #71717A, #A1A1AA, #D4D4D8, #E4E4E7, #F4F4F5, #FAFAFA). Prefer named tokens over mixed gray-*, slate-* and arbitrary hex values.",
+        "name": "The Slate-Drift Rule",
+        "body": "Every neutral has a faint chroma drift toward the violet hue (slate, not pure gray). Never use Tailwind's gray-*, zinc-*, stone-*, or hardcoded #888 / #aaa. Slate or nothing.",
         "section": "colors"
       },
       {
         "name": "The Inter-Only Rule",
-        "body": "No other typeface inside the admin surface. No serif accents, no monospace exceptions, no Google-Fonts-of-the-week. Inter handles display, title, body, label and eyebrow.",
+        "body": "No other typeface inside the admin surface. No serif accents, no monospace exceptions, no Google-Fonts-of-the-week. Inter handles display, title, body, label, eyebrow. Material Icons handles iconography. That's the entire type stack.",
         "section": "typography"
       },
       {
@@ -313,28 +313,28 @@
       }
     ],
     "dos": [
-      "Do use Graphite Ink (#18181B) for the single most consequential action on each light screen. Once or twice per surface; hierarchy comes from rarity.",
-      "Do keep neutrals on the graphite spine (#09090B / #18181B / #3F3F46 / #71717A / #A1A1AA / #D4D4D8 / #F4F4F5 / #FAFAFA).",
+      "Do use Examiner's Violet (#8B5CF6) for the single most consequential action on each screen. Once or twice per surface. Earned by rarity, not repetition.",
+      "Do keep neutrals on the slate spine (#0f172a / #1e293b / #334155 / #cbd5e1 / #f1f5f9). Faint chroma drift toward violet, never pure gray.",
       "Do treat dark and light as equally first-class. If you only design one of the two and shrug at the other, you're shipping a half-system.",
       "Do prefer tonal layering over shadows. Border + tonal shift conveys depth in dark mode; faint shadow on cards only in light mode.",
       "Do track all eyebrow labels (10px, uppercase, letter-spacing 0.2em). The eyebrow is the institutional voice of the system — give it room.",
       "Do confirm irreversible actions through the slide-to-confirm pattern, not a modal 'Are you sure ?' dialog. The drag is the contract.",
-      "Do use Lucide for new operator controls; keep legacy Material Icons contained until their host group is migrated.",
+      "Do use Material Icons via the local <Icon name='...' /> helper. Inline-SVG one-offs are acceptable only for shapes Material Icons don't carry (rare).",
       "Do write microcopy as if it were going on a printed certificate: posée, claire, factuelle. No 'Boost your career !', no 'Tu peux le faire !', no exclamations except literal validation ('✓ Confirmé').",
-      "Do use the shared neutral modal shell for every nested tool and settings view."
+      "Do migrate AudiosModal / PDFModal headers off Stitch blue (#137fec) on next touch."
     ],
     "donts": [
-      "Don't ship a colored rounded square with an abstract icon as a logo mark. This is the canonical AI-slop signature; use the graphite S mark or a wordmark.",
+      "Don't ever ship a violet rounded-xl square with an abstract Material Icon (hub, auto_awesome, bolt, category) as a logo mark. This is the canonical AI-slop signature. (Real-world incident, April 2026 — refused on the dashboard chrome and removed.)",
       "Don't introduce edtech 'playful' patterns: gamification, mascots, streaks, XP, level-up animations, celebration confetti, 'Bravo ! 🎉', saturated yellow / orange / red primaries. Quote PRODUCT.md Anti-references by name.",
       "Don't use the hero-metric SaaS template (big number / small label / supporting stats / gradient accent). It is the cliché.",
       "Don't ship identical card grids — three or four equally-weighted cards with icon + title + paragraph in a 3-up row is the AI mockup tell. If two cards on screen have the same shape, their content must visibly distinguish them.",
       "Don't apply background-clip: text with a gradient to any heading, anywhere. Solid color, weight contrast, scale contrast — those carry hierarchy without ornament.",
-      "Don't use glassmorphism (backdrop-filter: blur(...) over translucent surfaces) decoratively. Operator navigation, cards and modal backdrops stay opaque.",
-      "Don't mix gray-*, slate-*, zinc-*, stone-* and arbitrary hex values in one surface. Prefer the named graphite tokens.",
-      "Don't introduce blue, violet or another brand accent on the operator surface. Saturated colors are reserved for semantic state.",
+      "Don't use glassmorphism (backdrop-filter: blur(...) over translucent surfaces) decoratively. The sticky top nav and the inactive-platform overlay are the only justified uses; do not extend the pattern.",
+      "Don't use Tailwind's gray-*, zinc-*, stone-* palettes. Slate or nothing — and prefer the named tokens above over raw Tailwind colors.",
+      "Don't introduce blue (#137fec or any blue-* from Tailwind) outside the documented Stitch debt in AudiosModal / PDFModal. There is no 'info' blue in this system. The legacy blue is debt to repay, not a role to formalize.",
       "Don't add hover:-translate-y-0.5 (or any layout-property animation) on hover. The system uses transition-colors and transition-transform (scale only) — moving an element on hover causes layout reflow and looks SaaS-default.",
       "Don't silence focus rings without an alternative. Keyboard users exist; the focus-visible outline is the contract.",
-      "Don't scatter colored icon boxes, tinted panels or glowing illustrations across the screen. Tone decorative assets to graphite and let the task content lead.",
+      "Don't scatter Examiner's Violet across the screen as decoration. If a screen has more than one or two violet elements competing, tone the lesser ones to slate and re-anchor on the single most consequential action.",
       "Don't mix Inter and Poppins on the admin surface. The apprenant side has Poppins; the admin side has Inter. The two systems do not cross. If you find yourself reaching for font-family: 'Poppins' inside /hr-dashboard, the answer is no.",
       "Don't add a 'Layout' or 'Motion' or 'Responsive' top-level section to this DESIGN.md. The Stitch spec has six sections, not nine. Layout / motion / responsive content folds into Overview (philosophy) or Components (per-component behavior)."
     ]

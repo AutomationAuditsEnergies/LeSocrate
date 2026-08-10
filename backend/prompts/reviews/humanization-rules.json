@@ -1,0 +1,158 @@
+{
+  "version": "2026-05-23-humanization-v1-polish-only",
+  "source": "content_generation_service.py _HUMANIZATION_REVIEW_RULES before modularization",
+  "rules": [
+    {
+      "id": 101,
+      "name": "Éviter les débuts trop brusques ou trop conférence",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #101 — Éviter les débuts trop brusques ou trop conférence\nCouche de finition uniquement : corrige localement une ouverture trop sèche,\ntrop mécanique ou trop \"grand discours\". Ne recrée pas l'introduction complète\net ne change pas le plan. Préfère une phrase d'accueil ou de reprise plus\nnaturelle, courte et compatible avec le plan verrouillé."
+    },
+    {
+      "id": 102,
+      "name": "Créer des respirations pédagogiques",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #102 — Créer des respirations pédagogiques\nAprès une idée dense, une démonstration ou un exemple important, le texte doit\nlaisser une respiration : reformulation simple, phrase tampon, [pause],\nmini-synthèse ou reconnexion terrain. Corrige uniquement les passages trop\ncompacts qui ne laissent pas le temps d'assimiler, sans ajouter un nouveau\ndéveloppement."
+    },
+    {
+      "id": 103,
+      "name": "Laisser vivre les idées importantes",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #103 — Laisser vivre les idées importantes\nUne phrase forte ne doit pas toujours être immédiatement sur-expliquée. Ajoute\nou conserve une respiration courte, une reformulation calme ou une phrase\némotionnelle simple après les idées importantes."
+    },
+    {
+      "id": 104,
+      "name": "Humaniser le formateur",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #104 — Humaniser le formateur\nLe formateur doit sembler humain : il accompagne, rassure, réfléchit légèrement,\nnormalise les difficultés et partage des repères terrain. Corrige les passages\nqui sonnent comme une conférence mécanique ou une démonstration permanente,\nsans inventer d'anecdote, de vécu personnel ou d'exemple métier non nécessaire."
+    },
+    {
+      "id": 105,
+      "name": "Éviter l'accumulation de punchlines",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #105 — Éviter l'accumulation de punchlines\nN'enchaîne pas les phrases très fortes comme des slogans. Alterne phrases\nfortes, phrases simples, phrases neutres et formulations conversationnelles."
+    },
+    {
+      "id": 106,
+      "name": "Ajouter des micro-interactions sobres",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #106 — Ajouter des micro-interactions sobres\nLe cours doit régulièrement s'adresser aux apprenants : \"vous voyez l'idée ?\",\n\"essayez de vous projeter\", \"retenez surtout ça\". Corrige les longs passages\nqui oublient complètement l'apprenant. Ne demande pas d'interaction réelle :\npas de \"vous me répondez\", pas de \"vous m'entendez ?\", pas de question qui\nsuppose une réponse immédiate."
+    },
+    {
+      "id": 107,
+      "name": "Varier le niveau d'énergie",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #107 — Varier le niveau d'énergie\nLe script doit alterner phases dynamiques, moments calmes, exemples terrain,\nsynthèses lentes et transitions douces. Utilise les tags [pause], [calm],\n[speaking softly], [inhale], [warm and reassuring] uniquement quand ils servent\nune respiration, une transition ou une reformulation."
+    },
+    {
+      "id": 108,
+      "name": "Réduire la densité cognitive des longues phrases",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #108 — Réduire la densité cognitive des longues phrases\nCorrige les phrases longues qui contiennent plusieurs concepts ou nuances.\nSépare les idées, ajoute des pauses et préfère des phrases plus courtes."
+    },
+    {
+      "id": 109,
+      "name": "Créer de vraies transitions entre grandes idées",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #109 — Créer de vraies transitions entre grandes idées\nUne transition ne doit pas être seulement logique et rapide. Elle doit ralentir,\nreconnecter à ce qui vient d'être vu et préparer la suite avec anticipation."
+    },
+    {
+      "id": 110,
+      "name": "Préparer des fins de blocs conclues",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #110 — Préparer des fins de blocs conclues\nQuand un passage ressemble à une fin de séquence, il doit redescendre\nprogressivement : synthèse, valorisation du chemin parcouru, projection vers la\nsuite. Évite les arrêts secs du type \"on continue\". Ne transforme pas cette\nfin locale en conclusion générale si le plan ne le prévoit pas."
+    },
+    {
+      "id": 111,
+      "name": "Donner l'impression d'une journée vécue",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #111 — Donner l'impression d'une journée vécue\nLe cours doit former une progression continue, pas une succession de fichiers\nindépendants. Corrige les transitions qui ignorent totalement ce qui précède ou\nqui cassent le fil émotionnel et pédagogique de la journée. La correction doit\nrester locale : elle lisse le passage, elle ne réorganise pas le cours."
+    },
+    {
+      "id": 112,
+      "name": "Ouverture annuelle : introduction générale obligatoire",
+      "scope": "humanization_legacy_reference",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #112 — Ouverture annuelle : introduction générale obligatoire\nQuand le passage est l'ouverture absolue de la formation, il ne doit jamais\ndémarrer directement par \"bon, on va aborder\", \"on entre dans le vif du sujet\",\n\"nouvelle partie\" ou une phrase intense. Il doit d'abord faire une vraie\nintroduction annuelle, développée et chaleureuse, avant toute notion métier.\nCette ouverture doit raconter la formation : à quoi elle sert, dans quel\ncontexte professionnel elle s'inscrit, ce que les apprenants vont construire,\nles grandes familles de compétences qui seront abordées, la progression sur les\njournées, la manière de travailler, et pourquoi ce parcours va leur être utile\nconcrètement. Elle doit encourager les élèves, rassurer sur le rythme, donner\nenvie d'avancer, puis seulement faire une transition douce vers le premier grand\nthème de la journée. Une simple intro générique de quelques phrases est insuffisante."
+    },
+    {
+      "id": 113,
+      "name": "Début de journée ou de thème : amorce progressive obligatoire",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #113 — Début de journée ou de thème : amorce progressive obligatoire\nChaque début de journée, de reprise ou de grand thème doit avoir une amorce orale\nprogressive. Corrige les démarrages mécaniques du type \"Bon, on va aborder une\nnouvelle partie du cours\", \"ce cours\" ou \"c'est une partie absolument fondamentale\".\nLe formateur doit reconnecter calmement au parcours et introduire le sujet sans\nbrusquerie, sans refaire tout le cadrage pédagogique."
+    },
+    {
+      "id": 114,
+      "name": "Références entre cours toujours vagues, jamais datées",
+      "scope": "humanization_legacy_reference",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #114 — Références entre cours toujours vagues, jamais datées\nLes cours ne s'enchaînent PAS au jour le jour : il y a en général un cours par\nsemaine, et ce rythme peut changer. Toute référence à un cours passé ou à venir\ndoit donc rester VAGUE et NON datée. Corrige systématiquement \"hier\", \"demain\",\n\"la semaine dernière\", \"la semaine prochaine\" et toute mention calendaire\nprécise — y compris dans les intros de reprise (\"depuis hier\", \"la pause\nd'hier\", \"hier on a vu\"). Remplace par des formulations vagues : \"la dernière\nfois\", \"lors du dernier cours\", \"dans la séance précédente\", \"au prochain\ncours\", \"la prochaine fois\". Une intro de début de journée ne doit jamais\nsupposer que le cours précédent était la veille."
+    },
+    {
+      "id": 115,
+      "name": "Carte mentale avant développement",
+      "scope": "humanization_legacy_reference",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #115 — Carte mentale avant développement\nAvant tout storytelling, cas client, métaphore ou exemple émotionnel, le cours\ndoit poser une carte mentale claire : où l'apprenant se situe, ce qu'il va\napprendre, pourquoi c'est utile, comment le cours est structuré et ce qui vient\nensuite. Corrige les ouvertures qui commencent par l'inspiration ou l'exemple\navant d'avoir donné ce repère."
+    },
+    {
+      "id": 116,
+      "name": "Première partie : parcours annuel, journée, thème actuel",
+      "scope": "humanization_legacy_reference",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #116 — Première partie : parcours annuel, journée, thème actuel\nPour la première partie de la première journée, l'ouverture doit garder l'accueil\nhumain puis présenter synthétiquement les grands thèmes de l'année, les thèmes\nde la journée dans l'ordre pédagogique, puis basculer naturellement vers le\npremier grand thème, son objectif et un plan oral en 2 à 4 axes. Le texte doit\nensuite suivre ce plan dans le même ordre avec des transitions explicites. Pour\nla première partie d'une journée suivante, ne refais pas la présentation annuelle\ncomplète : fais un accueil de journée, une reprise douce de la progression, les\nthèmes de la journée, puis le thème, l'objectif et les axes de la première partie.\nNe mentionne jamais les horaires, les créneaux, les durées ou le planning, même\npour dire aux apprenants de ne pas s'en soucier. Évite \"ce cours\", \"premier cours\",\n\"cours actuel\" et \"trois quarts d'heure à venir\" côté apprenant."
+    },
+    {
+      "id": 117,
+      "name": "Première partie : conclusion Q/R verrouillée",
+      "scope": "humanization_legacy_reference",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #117 — Première partie : conclusion Q/R verrouillée\nPour la première partie, la conclusion doit durer environ 3 à 4 minutes en équivalent\naudio : récapituler les points vus, redire pourquoi ils comptent et à quoi ils\nserviront, puis annoncer le temps de questions-réponses dans le tchat. Après\ncette annonce, aucun nouveau développement, exemple, mini-synthèse ou ajout de\nremplissage ne doit apparaître."
+    },
+    {
+      "id": 118,
+      "name": "Anti-redondance et anti-remplissage",
+      "scope": "humanization_polish",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #118 — Anti-redondance et anti-remplissage\nChaque développement doit apporter une idée nouvelle identifiable. Corrige les\npassages répétés, les reformulations qui tournent à vide, les tunnels de\nmétaphores ou de storytelling sans progression, et les ajouts placés après une\nconclusion uniquement pour allonger le texte. La correction attendue est une\nsuppression ou une fusion propre, pas un nouveau développement."
+    },
+    {
+      "id": 119,
+      "name": "Frontières nettes entre cours, Q/R et pauses",
+      "scope": "humanization_legacy_reference",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #119 — Frontières nettes entre grands thèmes, Q/R et pauses\nUne nouvelle partie ne doit jamais commencer en terminant la partie précédente. Après un Q/R\nou une pause, la reprise doit être autonome et cohérente avec le vocal précédent\nqui indique que la pause ou le Q/R est terminé : reprise naturelle, rappel bref\nde ce qui a été vu, lien avec le nouveau thème, annonce de l'objectif et des axes\nde la partie actuelle. Corrige les débuts qui poursuivent une conclusion précédente,\nqui font comme si la pause/Q/R n'avait pas eu lieu, qui redémarrent deux fois,\nou qui parlent du planning interne. Une seule reprise, un seul cadrage, puis le\ndéveloppement du nouveau thème."
+    }
+  ]
+}

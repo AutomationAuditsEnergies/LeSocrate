@@ -54,13 +54,7 @@ export const HeroSection = () => {
                 </span>
                 {" "}
                 <span className="cadrenza-hero-teacher-portrait" aria-hidden="true">
-                  <img
-                    src="/robot-blue-192.webp"
-                    alt=""
-                    width="192"
-                    height="218"
-                    fetchPriority="high"
-                  />
+                  <img src="/robot-blue.png" alt="" />
                 </span>
                 {" "}
                 <span className="box-border caret-transparent text-[32.6923px] tracking-[-1.14423px] leading-[35.9615px] outline-[3px] no-underline md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]">

@@ -26,6 +26,7 @@ from repositories.pipeline_repository import (
     count_completed_segments_for_folders,
     count_dirty_completed_segments_for_folders,
     count_segments_with_pre_review_snapshot_for_folders,
+    count_unhumanized_segments_without_error_for_folders,
     count_unreviewed_segments_without_error_for_folders,
     get_content_job_docx_state,
     get_formation_module_for_pipeline_job,
@@ -144,6 +145,11 @@ def _expected_structured_segment_count(job: dict, daily_programs: list) -> int:
             daily_programs,
         )["expected_segments"]
     )
+
+
+def _humanization_is_embedded(job: dict) -> bool:
+    """The auto-pilot structured prompt embeds oral style in initial content."""
+    return bool(job.get("auto_pilot_enabled"))
 
 
 # ─── Pre-flight ──────────────────────────────────────────────────────────────
@@ -302,10 +308,10 @@ def compute_health(job_id: int) -> dict:
             "checks": {"job_state": {"ok": False, "detail": f"Job {job_id} introuvable"}},
         }
 
-    # L'audio ne fait plus partie de la pipeline globale : chaque occurrence
-    # est générée séparément par le worker H-72. Un segment ``dirty`` est donc
-    # un état normal à la fin de cette pipeline texte.
-    audio_deferred = True
+    audio_deferred = (
+        job.get("status") == "text_ready"
+        or not bool(job.get("auto_pilot_generate_audio", 0))
+    )
     try:
         daily_programs = json.loads(job.get("daily_programs") or "[]")
     except Exception:
@@ -459,7 +465,29 @@ def compute_health(job_id: int) -> dict:
     if not snap_ok:
         warnings.append("pre_review_snapshotted")
 
-    # 5. Review cohérent : tous les segments completed → reviewed=1 OU review_error
+    # 5. Humanisation cohérente : tous les segments completed → humanized=1 OU erreur.
+    n_unhumanized_no_error = 0
+    if folders:
+        n_unhumanized_no_error = count_unhumanized_segments_without_error_for_folders(folder_ids)
+    humanization_embedded = _humanization_is_embedded(job)
+    humanization_ok = humanization_embedded or n_unhumanized_no_error == 0
+    checks["humanization_consistent"] = {
+        "ok": humanization_ok,
+        "detail": (
+            "oralité intégrée à la génération structurée initiale"
+            if humanization_embedded
+            else
+            f"{n_unhumanized_no_error} segment(s) non passés en humanisation"
+            if not humanization_ok
+            else "tous les segments ont été tentés en humanisation"
+        ),
+        "unhumanized_segments": n_unhumanized_no_error,
+        "applicable": not humanization_embedded,
+    }
+    if not humanization_ok:
+        blocking.append("humanization_consistent")
+
+    # 6. Review cohérent : tous les segments completed → reviewed=1 OU review_error
     n_unreviewed_no_error = 0
     if folders:
         n_unreviewed_no_error = count_unreviewed_segments_without_error_for_folders(folder_ids)
@@ -477,7 +505,7 @@ def compute_health(job_id: int) -> dict:
     if not review_ok:
         blocking.append("review_consistent")
 
-    # 6. Audio TTS présent si demandé. En pipeline texte, dirty=1 est normal :
+    # 7. Audio TTS présent si demandé. En pipeline texte, dirty=1 est normal :
     # il signifie "texte prêt, audio à générer plus tard".
     n_dirty = 0
     if folders:

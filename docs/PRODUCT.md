@@ -19,7 +19,7 @@ Plateforme de formation en ligne synchrone pour titres professionnels RNCP. Comb
 1. **Côté apprenant** : expérience de classe virtuelle simulée (playlist audio horodatée + Q&A IA contextuel) qui reproduit la rigueur d'un cours synchrone à heure fixe.
 2. **Côté admin** : pipeline complète de génération de contenu pédagogique (REAC → knowledge base → contenu rédigé → audio TTS Fish Audio S2-Pro / gTTS), couplée à un tableau de bord HR pour piloter les promos en multi-tenant (P1–P4).
 
-Succès = un module audio complet et durable produit par la pipeline DeepSeek, puis réutilisé tel quel pour toutes les promos du même RNCP (économie d'échelle native, coûts DeepSeek + TTS amortis). L'apprenant doit ressentir la rigueur d'un titre certifiant ; l'admin doit pouvoir opérer le parc sans drama.
+Succès = un module audio complet et durable produit en une seule passe pipeline, puis réutilisé tel quel pour toutes les promos du même RNCP (économie d'échelle native, coûts Claude + TTS amortis). L'apprenant doit ressentir la rigueur d'un titre certifiant ; l'admin doit pouvoir opérer le parc sans drama.
 
 ## Brand Personality
 

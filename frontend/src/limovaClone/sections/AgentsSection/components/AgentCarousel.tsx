@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
+import { SalesHackingSourceSlide } from "../../../../components/slides/templates/SalesHackingSourceSlides";
 import "./AgentCarousel.css";
 
 type ArrowId = "slides" | "training" | "students";
@@ -257,14 +258,7 @@ export const AgentCarousel = () => {
       <header className="cadrenza-pierre-intro">
         <div className="cadrenza-pierre-identity">
           <span className="cadrenza-pierre-avatar" aria-hidden="true">
-            <img
-              src="/robot-blue-192.webp"
-              alt=""
-              width="192"
-              height="218"
-              loading="lazy"
-              decoding="async"
-            />
+            <img src="/robot-blue.png" alt="" />
           </span>
           <span>
             <strong>Pierre</strong>
@@ -325,25 +319,13 @@ export const AgentCarousel = () => {
               role="img"
               aria-label="Diapo Traiter une demande : identifier, qualifier, agir et clore."
             >
-              <img
-                className="cadrenza-classroom-monitor__preview"
-                src="/cadrenza-flow-preview.webp"
-                alt=""
-                width="816"
-                height="400"
-                loading="lazy"
-                decoding="async"
-              />
+              <SalesHackingSourceSlide sourceId="flow" />
             </div>
           </figure>
           <img
             className="cadrenza-pierre-foreground"
-            src="/pierre-classe-ia.webp"
+            src="/pierre-classe-ia.png"
             alt="Pierre, professeur IA, présente un cours devant trois postes élèves"
-            width="1448"
-            height="1086"
-            loading="lazy"
-            decoding="async"
           />
         </div>
 

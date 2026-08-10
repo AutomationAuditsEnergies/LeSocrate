@@ -249,7 +249,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                     )
                 except ValueError as exc:
                     raise PermanentWorkError(
-                        "Le délai de 72 heures du planning V2 n’est pas respecté"
+                        "Le délai de 48 heures du planning V2 n’est pas respecté"
                     ) from exc
             else:
                 nb_days = int(
@@ -355,6 +355,10 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                 auto_pilot_enabled=1,
                 auto_pilot_model="pro",
                 auto_pilot_tts_mode="fish_audio",
+                auto_pilot_use_cc=0,
+                auto_pilot_skip_vs=0,
+                auto_pilot_generate_audio=0,
+                auto_pilot_volume_done=0,
                 auto_pilot_post_review_docs_done=0,
                 auto_pilot_error=None,
             )

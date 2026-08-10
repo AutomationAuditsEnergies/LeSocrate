@@ -33,11 +33,8 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.match(plannerSource, /Naviguer entre les journées/)
   assert.match(plannerSource, /Appliquer le même template à toutes les journées/)
   assert.match(plannerSource, /formation-schedule__day-navigation/)
-  assert.match(dashboardSource, /Valider le recrutement/)
-  assert.match(dashboardSource, /Prochaines diffusions/)
-  assert.match(dashboardSource, /Prochaines générations/)
-  assert.match(dashboardSource, /Vos prochaines séances seront générées automatiquement 72 heures avant leur début/)
-  assert.match(dashboardSource, /La première date doit être au minimum à J\+3/)
+  assert.match(dashboardSource, /Confirmer le planning définitif/)
+  assert.match(dashboardSource, /La première date doit être au minimum à J\+2/)
   assert.match(dashboardSource, /Associez un template à/)
 })
 
@@ -99,14 +96,14 @@ test('locks the template editor page and scrolls only the calendar', async () =>
   assert.match(dashboardSource, /scheduleTemplatesVisible \? 'overflow-hidden'/)
 })
 
-test('moves audio status and fill actions into the course view', async () => {
-  const dashboardSource = await readFile(new URL('../../src/pages/HRDashboard.jsx', import.meta.url), 'utf8')
-  const coursesSource = await readFile(new URL('../../src/components/CoursFolders.jsx', import.meta.url), 'utf8')
+test('renders the audio modal from the real playlist instead of the legacy 19-file list', async () => {
+  const source = await readFile(new URL('../../src/pages/HRDashboard.jsx', import.meta.url), 'utf8')
+  const modalStart = source.indexOf('function AudiosModal(')
+  const modalEnd = source.indexOf('// ─── PDF Modal', modalStart)
+  const modalSource = source.slice(modalStart, modalEnd)
 
-  assert.doesNotMatch(dashboardSource, /function AudiosModal\(/)
-  assert.doesNotMatch(dashboardSource, /key: 'audio'/)
-  assert.doesNotMatch(dashboardSource, /\/api\/hr\/platforms\/\$\{platformId\}\/audios/)
-  assert.match(coursesSource, /getAudioStatusMeta\(folder\.audio_status\)/)
-  assert.match(coursesSource, />\s*Remplir\s*</)
-  assert.doesNotMatch(coursesSource, /generate-playlist/)
+  assert.ok(modalStart >= 0 && modalEnd > modalStart)
+  assert.doesNotMatch(modalSource, /EXPECTED_AUDIOS|cours_9h00_9h45/)
+  assert.doesNotMatch(modalSource, chromaticColorName)
+  assert.match(modalSource, /classifyFormationAudios/)
 })

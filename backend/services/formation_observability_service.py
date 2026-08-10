@@ -114,9 +114,13 @@ def persist_review_report(
     return int(report_id)
 
 
-def get_latest_review_report(job_id: int, folder_id: int) -> dict | None:
-    """Retourne le dernier rapport de conformité persisté pour une journée."""
-    row = get_latest_review_report_row(job_id=job_id, folder_id=folder_id)
+def get_latest_review_report(job_id: int, folder_id: int, kind: str = "compliance") -> dict | None:
+    """Retourne le dernier rapport persisté pour une journée.
+
+    `kind` : "compliance" (défaut) → toute conformité non-humanization
+             "humanization"        → source LIKE '%humanization%' (legacy)
+    """
+    row = get_latest_review_report_row(job_id=job_id, folder_id=folder_id, kind=kind)
     if not row:
         return None
     try:

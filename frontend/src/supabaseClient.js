@@ -1,3 +1,4 @@
+import { createClient } from '@supabase/supabase-js'
 import { apiUrl } from './runtimeConfig'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
@@ -16,22 +17,15 @@ const SUPABASE_AUTH_OPTIONS = {
 
 export let isSupabaseConfigured = Boolean(supabaseUrl && supabasePublishableKey)
 
-export let supabase = null
+export let supabase = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabasePublishableKey, SUPABASE_AUTH_OPTIONS)
+  : null
 
 let supabaseClientPromise = null
-let supabaseSdkPromise = null
 
-function loadSupabaseSdk() {
-  if (!supabaseSdkPromise) {
-    supabaseSdkPromise = import('@supabase/supabase-js')
-  }
-  return supabaseSdkPromise
-}
-
-async function configureSupabaseClient(url, publishableKey) {
+function configureSupabaseClient(url, publishableKey) {
   if (!url || !publishableKey) return null
   if (!supabase) {
-    const { createClient } = await loadSupabaseSdk()
     supabase = createClient(url, publishableKey, SUPABASE_AUTH_OPTIONS)
   }
   isSupabaseConfigured = true
@@ -41,11 +35,6 @@ async function configureSupabaseClient(url, publishableKey) {
 export async function getSupabaseClient() {
   if (supabase) return supabase
   if (supabaseClientPromise) return supabaseClientPromise
-
-  if (supabaseUrl && supabasePublishableKey) {
-    supabaseClientPromise = configureSupabaseClient(supabaseUrl, supabasePublishableKey)
-    return supabaseClientPromise
-  }
 
   supabaseClientPromise = fetch(apiUrl('/api/auth/supabase-config'), {
     credentials: 'include',

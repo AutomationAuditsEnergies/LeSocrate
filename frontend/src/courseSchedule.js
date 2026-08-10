@@ -1,9 +1,9 @@
 export const AUDIO_STATUS_META = {
-  scheduled: { label: 'Audios manquants', color: '#475569', background: '#f1f5f9' },
-  preparing: { label: 'Audios en cours de génération', color: '#3f3f46', background: '#f4f4f5' },
-  ready: { label: 'Audios générés et disponibles', color: '#047857', background: '#d1fae5' },
-  error: { label: 'Audios en erreur', color: '#b91c1c', background: '#fee2e2' },
-  waiting_content: { label: 'Audios manquants', color: '#92400e', background: '#fef3c7' },
+  scheduled: { label: 'Programmé', color: '#475569', background: '#f1f5f9' },
+  preparing: { label: 'En préparation', color: '#6d28d9', background: '#ede9fe' },
+  ready: { label: 'Audio prêt', color: '#047857', background: '#d1fae5' },
+  error: { label: 'À relancer', color: '#b91c1c', background: '#fee2e2' },
+  waiting_content: { label: 'Contenu en attente', color: '#92400e', background: '#fef3c7' },
   cancelled: { label: 'Annulée', color: '#64748b', background: '#e2e8f0' },
 }
 

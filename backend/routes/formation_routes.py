@@ -18,6 +18,8 @@ from io import BytesIO
 from services.formation_pipeline_service import (
     search_rncp,
     download_reac_text_with_retry,
+    download_rc_text,
+    fetch_rome_data,
     generate_global_program,
     run_daily_split,
     daily_programs_are_complete,
@@ -48,6 +50,35 @@ _PIPELINE_MODEL_ALIASES = {
     "pro": "deepseek-v4-pro",
 }
 _PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
+_LEGACY_PIPELINE_MODEL_CHOICES = {
+    "sonnet": "pro",
+    "claude-sonnet-4-20250514": "pro",
+    "haiku": "flash",
+    "claude-haiku-4-5-20251001": "flash",
+}
+
+_RETIRED_MANUAL_PIPELINE_ENDPOINTS = frozenset({
+    "init_formation",
+    "init_test_pipeline",
+    "fetch_reac",
+    "enrich_reac",
+    "generate_global",
+    "validate_global",
+    "split_daily",
+    "validate_daily",
+    "launch_tts",
+    "refine",
+    "launch_volume_safety",
+    "review_content",
+    "generate_folder_audio",
+    "launch_audio",
+    "stop_auto_pilot",
+})
+_RETIRED_MANUAL_PIPELINE_CREATION_ENDPOINTS = frozenset({
+    "init_formation",
+    "init_test_pipeline",
+})
+
 
 def _slides_folder_workers(default: int = 3) -> int:
     """Nombre de journées dont les decks slides sont générés en parallèle."""
@@ -62,8 +93,8 @@ def _resolve_pipeline_slide_model(api_model: str | None) -> str | None:
     """Modèle dédié à la curation slides.
 
     L'itération manuelle "Régénérer curation + slides" utilise DeepSeek Pro par
-    défaut. On aligne l'auto-pilot dessus, tout en laissant un override vers un
-    autre profil DeepSeek lorsque l'environnement l'exige.
+    défaut. On aligne l'auto-pilot dessus, tout en laissant un override env pour
+    les environnements sans clé DeepSeek.
     """
     override = (os.getenv("FORMATION_SLIDES_MODEL") or "").strip()
     if override:
@@ -125,9 +156,11 @@ def _raise_pipeline_batch_failure(message: str, failures: list[dict]) -> None:
 def _normalize_pipeline_model_choice(raw, default=None):
     """Normalise le choix UI persistant de l'auto-pilot."""
     value = (raw or default or "").strip().lower()
+    value = _LEGACY_PIPELINE_MODEL_CHOICES.get(value, value)
     if value in _PIPELINE_MODEL_CHOICES:
         return value
     fallback = str(default or "").strip().lower()
+    fallback = _LEGACY_PIPELINE_MODEL_CHOICES.get(fallback, fallback)
     return fallback if fallback in _PIPELINE_MODEL_CHOICES else None
 
 
@@ -148,10 +181,10 @@ def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
     if not model:
         model = "deepseek-v4-pro"
     model = str(model).strip()
-    resolved = _PIPELINE_MODEL_ALIASES.get(model.lower(), model)
-    if not str(resolved).lower().startswith("deepseek"):
-        raise ValueError("La pipeline utilise uniquement DeepSeek")
-    return resolved
+    legacy_choice = _LEGACY_PIPELINE_MODEL_CHOICES.get(model.lower())
+    if legacy_choice:
+        return _PIPELINE_MODEL_ALIASES[legacy_choice]
+    return _PIPELINE_MODEL_ALIASES.get(model.lower(), model)
 
 
 def _get_platform_id():
@@ -192,6 +225,29 @@ def _pipeline_job_not_found():
 
 def _formation_admin_forbidden():
     return jsonify({"error": "Non autorisé"}), 403
+
+
+def _retired_manual_pipeline_response(endpoint_name: str):
+    if endpoint_name in _RETIRED_MANUAL_PIPELINE_CREATION_ENDPOINTS:
+        return jsonify({
+            "error": (
+                "La création manuelle d'une pipeline a été retirée. "
+                "La pipeline démarre automatiquement après la commande d'un professeur IA."
+            ),
+            "code": "teacher_order_required",
+        }), 410
+
+    job_id = (request.view_args or {}).get("job_id")
+    payload = {
+        "error": (
+            "Cette ancienne commande manuelle a été retirée. "
+            "Le worker durable enchaîne automatiquement toutes les étapes."
+        ),
+        "code": "durable_pipeline_only",
+    }
+    if job_id is not None:
+        payload["resume_endpoint"] = f"/api/formation/{int(job_id)}/run-auto/resume"
+    return jsonify(payload), 410
 
 
 @formation_bp.before_request
@@ -259,6 +315,9 @@ def _enforce_pipeline_job_tenant_scope():
         if not folder_allowed:
             return _pipeline_job_not_found()
 
+    endpoint_name = str(request.endpoint or "").rsplit(".", 1)[-1]
+    if endpoint_name in _RETIRED_MANUAL_PIPELINE_ENDPOINTS:
+        return _retired_manual_pipeline_response(endpoint_name)
     return None
 
 
@@ -287,10 +346,20 @@ def search_rncp_route():
         return jsonify({"error": str(e)}), 500
 
 
+# ─── Initialisation d'un job ──────────────────────────────────────────────────
+
+@formation_bp.route("/api/formation/init", methods=["POST"])
+def init_formation():
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("init_formation")
 
 
+# ─── Mode test : init avec DOCX pré-injectés (skip génération content) ───────
 
-
+@formation_bp.route("/api/formation/init-test", methods=["POST"])
+def init_test_pipeline():
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("init_test_pipeline")
 
 
 # ─── Statut d'un job ──────────────────────────────────────────────────────────
@@ -306,17 +375,29 @@ def get_formation_job(job_id):
         return jsonify({"error": "Job introuvable"}), 404
 
     # Ne pas renvoyer les textes bruts (trop lourds), seulement leurs tailles
-    result = {k: v for k, v in job.items() if k != "reac_text"}
+    result = {k: v for k, v in job.items() if k not in ("reac_text", "rc_text", "rome_text")}
     result["reac_available"] = bool(job.get("reac_text"))
     result["reac_length"] = len(job.get("reac_text") or "")
+    result["rc_length"] = len(job.get("rc_text") or "")
+    result["rome_length"] = len(job.get("rome_text") or "")
 
     return jsonify(result)
 
 
+# ─── Téléchargement REAC ──────────────────────────────────────────────────────
+
+@formation_bp.route("/api/formation/<int:job_id>/fetch-reac", methods=["POST"])
+def fetch_reac(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("fetch_reac")
 
 
+# ─── Couche 1 : Enrichissement REAC → Knowledge Base ─────────────────────────
 
-
+@formation_bp.route("/api/formation/<int:job_id>/enrich-reac", methods=["POST"])
+def enrich_reac(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("enrich_reac")
 
 
 @formation_bp.route("/api/formation/<int:job_id>/kb", methods=["GET"])
@@ -334,23 +415,52 @@ def get_kb(job_id):
     return jsonify({"entries": entries, "stats": stats})
 
 
+# ─── Génération programme global ──────────────────────────────────────────────
+
+@formation_bp.route("/api/formation/<int:job_id>/generate-global", methods=["POST"])
+def generate_global(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("generate_global")
 
 
+# ─── Validation programme global ──────────────────────────────────────────────
+
+@formation_bp.route("/api/formation/<int:job_id>/validate-global", methods=["POST"])
+def validate_global(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("validate_global")
 
 
+# ─── Découpage en journées ────────────────────────────────────────────────────
+
+@formation_bp.route("/api/formation/<int:job_id>/split-daily", methods=["POST"])
+def split_daily(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("split_daily")
 
 
+# ─── Validation programmes journée ───────────────────────────────────────────
+
+@formation_bp.route("/api/formation/<int:job_id>/validate-daily", methods=["POST"])
+def validate_daily(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("validate_daily")
 
 
+# ─── Lancement TTS ────────────────────────────────────────────────────────────
 
-
-
-
-
+@formation_bp.route("/api/formation/<int:job_id>/launch-tts", methods=["POST"])
+def launch_tts(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("launch_tts")
 
 
 # ─── Affinage IA (refine) ─────────────────────────────────────────────────────
 
+@formation_bp.route("/api/formation/<int:job_id>/refine", methods=["POST"])
+def refine(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("refine")
 
 
 # ─── Étape 6 : Contenu des journées (lecture + PDF) ──────────────────────────
@@ -404,6 +514,7 @@ def list_content(job_id):
         cg_err = content_row.get("error_message")
         n_completed = content_row.get("completed_segments") or 0
         n_reviewed = content_row.get("reviewed_segments") or 0
+        n_humanized = content_row.get("humanized_segments") or 0
         n_review_errors = content_row.get("review_error_segments") or 0
         n_dirty = content_row.get("dirty_segments") or 0
         slide_deck_id = None
@@ -437,6 +548,7 @@ def list_content(job_id):
             "total_words": cg_words or 0,
             "segments_completed": n_completed,
             "segments_total": max(3, segment_total),
+            "segments_humanized": n_humanized,
             "segments_reviewed": n_reviewed,
             "segments_review_errors": n_review_errors,
             "dirty_segments": n_dirty,
@@ -809,6 +921,7 @@ def _review_chunk_ids_for_position(position: int) -> list[str]:
         + [
             f"day_{day}_review_api",
             f"day_{day}_review_local_compliance_api",
+            f"day_{day}_review_humanization_api",
             f"day_{day}_review",
         ]
     )
@@ -1244,6 +1357,19 @@ def get_review_report(job_id, folder_id):
     return jsonify({"report": report, "source_path": chunk_dir_with_output, "lite": True}), 200
 
 
+@formation_bp.route(
+    "/api/formation/<int:job_id>/content/<int:folder_id>/humanization-report",
+    methods=["GET"],
+)
+def get_humanization_report(job_id, folder_id):
+    """Retourne le rapport JSON de la passe humanisation (intros/transitions/rythme)."""
+    from services.formation_observability_service import get_latest_review_report
+    report = get_latest_review_report(job_id, folder_id, kind="humanization")
+    if not report:
+        return jsonify({"error": "Aucun rapport d'humanisation disponible pour cette journée"}), 404
+    return jsonify({"report": report}), 200
+
+
 # ─── Legacy — audit volume lisible, enrichissement append-only désactivé ─────
 
 @formation_bp.route("/api/formation/<int:job_id>/volume-audit", methods=["GET"])
@@ -1274,11 +1400,45 @@ def volume_audit(job_id):
         return jsonify({"error": str(e)}), 500
 
 
+@formation_bp.route(
+    "/api/formation/<int:job_id>/content/<int:folder_id>/volume-safety",
+    methods=["POST"],
+)
+def launch_volume_safety(job_id, folder_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("launch_volume_safety")
+
+
 # ─── Ancienne reprise partielle de la génération texte ───────────────────────
+
+@formation_bp.route("/api/formation/<int:job_id>/resume-content", methods=["POST"])
+def resume_content(job_id):
+    """Ancienne reprise directe, remplacée par la reprise globale durable."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+
+    return jsonify({
+        "error": (
+            "La reprise partielle du texte a été retirée. "
+            "Utilise « Reprendre la pipeline » pour reprendre depuis le dernier checkpoint durable."
+        ),
+        "code": "durable_pipeline_resume_required",
+        "resume_endpoint": f"/api/formation/{job_id}/run-auto/resume",
+    }), 410
+
 
 # ─── Étape 6bis : Révision conformité via reviewer API DeepSeek ──────────────
 # Le runner CLI local historique a été supprimé : cette route utilise
 # exclusivement le reviewer API de la pipeline courante.
+
+@formation_bp.route(
+    "/api/formation/<int:job_id>/content/<int:folder_id>/review",
+    methods=["POST"],
+)
+def review_content(job_id, folder_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("review_content")
+
 
 # ─── Pre-flight et health-check (audit pipeline) ─────────────────────────────
 
@@ -1326,6 +1486,16 @@ def health_pipeline(job_id):
 
 class _ScheduledAudioLeaseLost(RuntimeError):
     """The scheduled-session fencing token no longer belongs to this worker."""
+
+
+def _legacy_bulk_audio_enabled() -> bool:
+    """Emergency-only opt-in for pre-SaaS all-days synthesis endpoints."""
+    return str(os.getenv("ALLOW_LEGACY_BULK_AUDIO", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _try_acquire_scheduled_audio_capacity() -> bool:
@@ -1629,7 +1799,7 @@ def _finalize_text_ready_state(job_id: int) -> dict:
 
 
 def _persist_daily_teacher_audio_assets(job_id: int, folder_id: int) -> dict:
-    """Snapshot one occurrence playlist as soon as that training day is complete."""
+    """Snapshot one J-1 playlist as soon as that training day is complete."""
     from repositories.pipeline_repository import get_formation_module_for_pipeline_job
     from services.teacher_asset_service import ensure_module_asset_manifest
 
@@ -1720,7 +1890,7 @@ def start_folder_audio_generation(
 ):
     """Lance l'audio d'une seule journée.
 
-    Utilisé uniquement par la file durable d'une séance à H-72.
+    Utilisé par le bouton manuel d'une journée et par le timer 48h avant cours.
     Retourne (payload, http_status) pour rester réutilisable hors route Flask.
     """
     job = get_job(job_id)
@@ -2166,6 +2336,18 @@ def start_folder_audio_generation(
     return response, 202
 
 
+@formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
+def generate_folder_audio(job_id, folder_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("generate_folder_audio")
+
+
+@formation_bp.route("/api/formation/<int:job_id>/launch-audio", methods=["POST"])
+def launch_audio(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("launch_audio")
+
+
 def _completed_text_folder_candidates(job_id: int) -> list[dict]:
     """Liste les dossiers rattachés au job qui ont vraiment un texte complet."""
     from repositories.pipeline_repository import list_text_folder_states_for_folders
@@ -2287,6 +2469,23 @@ def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
     from repositories.pipeline_repository import delete_script_slide_decks_for_content_job
 
     return delete_script_slide_decks_for_content_job(folder_id, content_job_id)
+
+
+@formation_bp.route(
+    "/api/formation/<int:job_id>/content/<int:folder_id>/continue-after-text",
+    methods=["POST"],
+)
+def continue_after_text(job_id, folder_id):
+    """Ancienne relance partielle, remplacée par la reprise durable globale."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+    return jsonify({
+        "error": (
+            "Cette relance partielle a été retirée. "
+            "Utilisez la reprise globale de la pipeline."
+        ),
+        "code": "durable_pipeline_resume_required",
+    }), 410
 
 
 # ─── Liste des jobs ───────────────────────────────────────────────────────────
@@ -2467,8 +2666,9 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     if len(completed_folder_ids) < len(folder_ids):
         return "content"
 
-    # Le volume est calibré pendant la génération structurée, avec le plan
-    # verrouillé comme contexte. Aucune correction globale n'est exécutée ici.
+    # Volume safety append-only retirée du flux auto-pilot : elle ajoutait parfois
+    # du développement après les conclusions/Q-R. Le rattrapage de volume se fait
+    # désormais dans le calibrage budget texte, avec le plan verrouillé comme contexte.
 
     from services.content_generation_service import _current_compliance_review_signature
     compliance_signature = _current_compliance_review_signature()
@@ -2511,9 +2711,23 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     if missing_slide_decks:
         return "slides"
 
-    # Finalization is the last durable text step. Audio is scheduled strictly
-    # per occurrence by the H-72 worker.
-    return None if j.get("status") == "text_ready" else "finalize_text"
+    # 10. Audio TTS optionnel. Par défaut l'auto-pilot s'arrête texte prêt :
+    # les audios se génèrent ensuite à la demande, journée/semaine par journée/semaine.
+    bulk_audio_enabled = bool(
+        j.get("auto_pilot_generate_audio") and _legacy_bulk_audio_enabled()
+    )
+    if not bulk_audio_enabled:
+        # Finalization is a real durable step. Merely asking for status must
+        # never expose the platform or create its module envelope.
+        return None if j.get("status") == "text_ready" else "finalize_text"
+
+    # Si l'audio auto est explicitement demandé, on vérifie via dirty=0 sur tous les segments (pas le status qui
+    # est positionné au début du loop audio, donc non fiable en cas de restart)
+    dirty_count = count_dirty_completed_segments_for_folders(folder_ids)
+    if dirty_count > 0 or j.get("status") not in ("audio_completed", "audio_launched"):
+        return "audio"
+
+    return None  # tout est fait
 
 
 
@@ -2526,6 +2740,12 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
 
     model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="pro")
     tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
+    if job.get("auto_pilot_use_cc"):
+        logger.warning(
+            "PIPELINE_LEGACY_CLAUDE_CODE_DISABLED job=%s fallback=deepseek",
+            job_id,
+        )
+        update_job(job_id, auto_pilot_use_cc=0, auto_pilot_model=model)
     platform_id = job["platform_id"]
 
     api_model = _PIPELINE_MODEL_ALIASES[model]
@@ -2572,7 +2792,17 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
             attempts=1,
             on_attempt=_log_reac_attempt,
         )
-        update_job(job_id, status="reac_ready", reac_text=reac)
+        rc_text, rome_text = None, None
+        try:
+            rc_text = download_rc_text(job["rncp_code"]) or None
+        except Exception:
+            pass
+        try:
+            rome_text = fetch_rome_data(job["rncp_code"]) or None
+        except Exception:
+            pass
+        update_job(job_id, status="reac_ready", reac_text=reac,
+                   rc_text=rc_text, rome_text=rome_text)
         logger.info(f"🤖 ✓ REAC téléchargé job {job_id}")
 
     elif step == "kb":
@@ -2612,6 +2842,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         update_job(
             job_id,
             status="tts_launched",
+            auto_pilot_volume_done=0,
             auto_pilot_post_review_docs_done=0,
             error_message=None,
         )
@@ -2755,6 +2986,21 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
             )
 
         logger.info(f"🤖 ✓ Contenu généré job {job_id}")
+
+    elif step == "volume_safety":
+        logger.warning(
+            "🤖 Auto-pilot job %s : étape volume_safety ignorée, réparation append-only désactivée",
+            job_id,
+        )
+        update_job(job_id, auto_pilot_volume_done=1, auto_pilot_post_review_docs_done=0)
+
+    elif step == "humanization_review":
+        logger.info(
+            "🤖 Auto-pilot job %s : étape humanization_review ignorée, "
+            "l'oralité est portée par le prompt initial",
+            job_id,
+        )
+        update_job(job_id, auto_pilot_post_review_docs_done=0)
 
     elif step == "review":
         from services.formation_pipeline_service import get_expected_course_folders
@@ -3040,12 +3286,135 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
             job_id=int(job_id),
             platform_id=int(platform_id),
         )
-        update_job(job_id, status="text_ready", error_message=None)
+        update_kwargs = {
+            "status": "text_ready",
+            "error_message": None,
+        }
+        if job.get("auto_pilot_generate_audio") and not _legacy_bulk_audio_enabled():
+            update_kwargs["auto_pilot_generate_audio"] = 0
+        update_job(job_id, **update_kwargs)
         logger.info(
             "🤖 ✓ Finalisation texte durable terminée job %s, supports_pdf=%s",
             job_id,
             len(published_course_pdfs),
         )
+
+    elif step == "audio":
+        if not _legacy_bulk_audio_enabled():
+            raise RuntimeError(
+                "Synthèse audio bulk désactivée : utiliser le déclenchement durable J-1 par séance"
+            )
+        from services.content_generation_service import generate_audio_from_script
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+        if not folder_ids:
+            raise RuntimeError("Aucun cours_folder trouvé pour la plateforme")
+
+        mock = (tts_mode == "mock")
+        basic_tts = (tts_mode == "gtts")
+        voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
+        update_job(job_id, status="audio_running", error_message=None)
+        for idx, fid in enumerate(folder_ids):
+            next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
+            folder_started_at = time.time()
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "audio_folder_started",
+                    step="audio",
+                    status="running",
+                    folder_id=fid,
+                    message="Synthèse audio journée démarrée",
+                    model=_resolve_pipeline_api_model(job),
+                    data={"voice_type": voice_type, "auto_pilot": True},
+                )
+            except Exception:
+                pass
+            try:
+                generate_audio_from_script(
+                    fid,
+                    on_progress=_make_audio_progress_logger(job_id, fid, voice_type),
+                    force_all=False,
+                    mock=mock,
+                    basic_tts=basic_tts,
+                    next_folder_id=next_fid,
+                    is_last_folder=next_fid is None,
+                    sync_slides=True,
+                    auto_generate_slides=True,
+                    slide_max_slides=60,
+                    slide_pace="normal",
+                    slide_model=_resolve_pipeline_api_model(job),
+                    llm_model=_resolve_pipeline_api_model(job),
+                )
+            except Exception as e:
+                try:
+                    from services.formation_observability_service import log_pipeline_event
+                    log_pipeline_event(
+                        job_id,
+                        "audio_folder_failed",
+                        step="audio",
+                        status="error",
+                        folder_id=fid,
+                        duration_ms=int((time.time() - folder_started_at) * 1000),
+                        message="Synthèse audio journée échouée",
+                        model=_resolve_pipeline_api_model(job),
+                        data={"voice_type": voice_type, "auto_pilot": True},
+                        error=str(e)[:500],
+                    )
+                except Exception:
+                    pass
+                raise
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "audio_folder_completed",
+                    step="audio",
+                    status="completed",
+                    folder_id=fid,
+                    duration_ms=int((time.time() - folder_started_at) * 1000),
+                    message="Synthèse audio journée terminée",
+                    model=_resolve_pipeline_api_model(job),
+                    data={"voice_type": voice_type, "auto_pilot": True},
+                )
+            except Exception:
+                pass
+            time.sleep(5)
+        # Status posé APRÈS le loop — si Azure redémarre en cours de route,
+        # dirty=1 sur les folders non traités permettra à _determine_next_ap_step
+        # de détecter que l'audio est incomplet et de relancer l'étape.
+        update_job(job_id, status="audio_completed", error_message=None)
+
+        _finalize_audio_ready_state(job_id, voice_type)
+
+        # Health-check final — bloque sur les incohérences bloquantes.
+        # Un warning silencieux permettrait à l'auto-pilot de finir avec une
+        # formation incomplète (segments manquants, audios dirty, etc.).
+        from services.formation_health_service import compute_health
+        health = compute_health(job_id)
+        if health["ok"]:
+            logger.info(f"💚 Health-check OK job {job_id}")
+        else:
+            blocking = health.get("blocking", [])
+            raise RuntimeError(
+                f"Health-check : {len(blocking)} incohérence(s) bloquante(s) : {blocking}"
+            )
+        logger.info(f"🤖 ✓ Audio TTS terminé job {job_id}")
+
+
+@formation_bp.route("/api/formation/<int:job_id>/run-auto", methods=["POST"])
+def run_auto_pilot(job_id):
+    """Ancien démarrage manuel, remplacé par la commande professeur IA."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+    return jsonify({
+        "error": (
+            "Le démarrage manuel a été retiré. "
+            "La pipeline démarre automatiquement après la commande d'un professeur IA."
+        ),
+        "code": "teacher_order_required",
+    }), 410
 
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/resume", methods=["POST"])
@@ -3171,8 +3540,15 @@ def resume_auto_pilot(job_id):
         "next_step": next_step,
         "model": job.get("auto_pilot_model"),
         "tts_mode": job.get("auto_pilot_tts_mode"),
+        "generate_audio": bool(job.get("auto_pilot_generate_audio")),
         "dispatch": dispatch,
     }), 202
+
+
+@formation_bp.route("/api/formation/<int:job_id>/run-auto/stop", methods=["POST"])
+def stop_auto_pilot(job_id):
+    """Ancienne commande manuelle conservée comme tombstone HTTP 410."""
+    return _retired_manual_pipeline_response("stop_auto_pilot")
 
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/status", methods=["GET"])
@@ -3185,22 +3561,37 @@ def auto_pilot_status(job_id):
         return jsonify({"error": "Job introuvable"}), 404
     queue_state = _queue_status_for_job(job_id)
     if not job.get("auto_pilot_enabled"):
+        if job.get("auto_pilot_step") == "stopped":
+            try:
+                next_step = _determine_next_ap_step(job_id)
+            except Exception:
+                next_step = None
+            return jsonify({
+                "status": "stopped",
+                "step": "stopped",
+                "next_step": next_step,
+                "model": job.get("auto_pilot_model"),
+                "tts_mode": job.get("auto_pilot_tts_mode"),
+                "generate_audio": bool(job.get("auto_pilot_generate_audio")),
+                "queue": queue_state,
+            }), 200
         return jsonify({"status": "idle", "queue": queue_state}), 200
     step = job.get("auto_pilot_step")
     error = job.get("auto_pilot_error")
     model = job.get("auto_pilot_model")
     tts_mode = job.get("auto_pilot_tts_mode")
+    generate_audio = bool(job.get("auto_pilot_generate_audio"))
     try:
         next_step = _determine_next_ap_step(job_id)
     except Exception:
         next_step = None
     if step == "done":
-        return jsonify({"status": "done", "step": "done", "next_step": next_step, "model": model, "tts_mode": tts_mode, "queue": queue_state}), 200
+        return jsonify({"status": "done", "step": "done", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
     if error:
-        return jsonify({"status": "error", "step": step, "next_step": next_step, "error": error, "model": model, "tts_mode": tts_mode, "queue": queue_state}), 200
+        return jsonify({"status": "error", "step": step, "next_step": next_step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
     if step:
-        return jsonify({"status": "running", "step": step, "next_step": next_step, "model": model, "tts_mode": tts_mode, "queue": queue_state}), 200
-    return jsonify({"status": "starting", "next_step": next_step, "model": model, "tts_mode": tts_mode, "queue": queue_state}), 200
+        return jsonify({"status": "running", "step": step, "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
+    return jsonify({"status": "starting", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
 
 
 @formation_bp.route("/api/formation/<int:job_id>/events", methods=["GET"])

@@ -56,6 +56,8 @@ class PipelineQueueHandlerTest(unittest.TestCase):
             "auto_pilot_enabled": True,
             "auto_pilot_model": "pro",
             "auto_pilot_tts_mode": "gtts",
+            "auto_pilot_use_cc": False,
+            "auto_pilot_generate_audio": False,
         }
 
         routes_module = types.SimpleNamespace()

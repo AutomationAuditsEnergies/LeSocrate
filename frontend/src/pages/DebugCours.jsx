@@ -397,7 +397,7 @@ export default function DebugCours() {
         </div>
 
         <div className="mt-6 bg-gray-800 p-6 rounded-lg">
-          <h2 className="text-xl font-semibold mb-4 text-zinc-200">Playlist</h2>
+          <h2 className="text-xl font-semibold mb-4 text-purple-400">Playlist</h2>
           <p className="text-gray-400 mb-4">
             {debugInfo.nombre_audios} audios - Durée totale : {debugInfo.duree_totale_cours_secondes}s (
             {debugInfo.duree_totale_cours_minutes} min)
@@ -445,7 +445,7 @@ export default function DebugCours() {
               <p className="text-sm text-gray-400">Durée totale</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-zinc-200">{debugInfo.temps_ecoule_secondes}s</p>
+              <p className="text-2xl font-bold text-purple-400">{debugInfo.temps_ecoule_secondes}s</p>
               <p className="text-sm text-gray-400">Temps écoulé</p>
             </div>
           </div>
@@ -457,7 +457,7 @@ export default function DebugCours() {
           </a>
           <a
             href={`/video?p=${platformId}`}
-            className="bg-zinc-100 text-zinc-950 hover:bg-white px-6 py-3 rounded-lg font-medium transition inline-block"
+            className="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg font-medium transition inline-block"
           >
             Aller au cours
           </a>

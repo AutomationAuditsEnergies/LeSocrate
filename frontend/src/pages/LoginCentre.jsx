@@ -107,6 +107,16 @@ export default function LoginCentre({ preloadDashboardRoute }) {
   }, [initialAuthMode, initialPasswordRecoveryMode, navigate, preloadDashboardRoute])
 
   useEffect(() => {
+    const preload = () => { preloadDashboardRoute?.().catch(() => {}) }
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(preload, { timeout: 1500 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timeoutId = window.setTimeout(preload, 800)
+    return () => window.clearTimeout(timeoutId)
+  }, [preloadDashboardRoute])
+
+  useEffect(() => {
     let cancelled = false
     let subscription = null
 
@@ -370,8 +380,6 @@ export default function LoginCentre({ preloadDashboardRoute }) {
 
             <form
               className="auth-form"
-              onFocusCapture={() => { preloadDashboardRoute?.().catch(() => {}) }}
-              onPointerEnter={() => { preloadDashboardRoute?.().catch(() => {}) }}
               onSubmit={forgotPasswordMode ? handleForgotPassword : handleSubmit}
             >
               {authMode === 'signup' && !passwordRecoveryMode && !forgotPasswordMode && (

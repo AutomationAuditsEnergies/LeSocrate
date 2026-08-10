@@ -16,9 +16,12 @@ def _job(**overrides):
         "platform_id": 7,
         "status": "init",
         "reac_text": None,
+        "rc_text": None,
+        "rome_text": None,
         "auto_pilot_step": None,
         "auto_pilot_model": "pro",
         "auto_pilot_tts_mode": "gtts",
+        "auto_pilot_generate_audio": False,
         "auto_pilot_locked_at": None,
     }
     value.update(overrides)
@@ -66,8 +69,12 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(read_response.status_code, 200)
-        self.assertEqual(mutation_response.status_code, 404)
-        self.assertEqual(belongs.call_count, 1)
+        self.assertEqual(mutation_response.status_code, 410)
+        self.assertEqual(
+            mutation_response.get_json()["code"],
+            "durable_pipeline_only",
+        )
+        self.assertEqual(belongs.call_count, 2)
         belongs.assert_called_with(42, 10)
         get_job.assert_called_once_with(42)
         update_job.assert_not_called()
@@ -93,8 +100,8 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             ]
 
         self.assertEqual([response.status_code for response in responses], [404, 404, 404])
-        self.assertTrue(all(response.get_json() is None for response in responses))
-        belongs.assert_not_called()
+        self.assertTrue(all(response.get_json() == {"error": "Job introuvable"} for response in responses))
+        self.assertEqual(belongs.call_count, 3)
         get_job.assert_not_called()
         update_job.assert_not_called()
         dispatch.assert_not_called()
@@ -122,8 +129,10 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             )
             stop_response = self.client.post("/api/formation/42/run-auto/stop")
 
-        self.assertEqual(run_response.status_code, 404)
-        self.assertEqual(stop_response.status_code, 404)
+        self.assertEqual(run_response.status_code, 410)
+        self.assertEqual(run_response.get_json()["code"], "teacher_order_required")
+        self.assertEqual(stop_response.status_code, 410)
+        self.assertEqual(stop_response.get_json()["code"], "durable_pipeline_only")
         update_job.assert_not_called()
 
     def test_training_center_without_account_id_is_fail_closed(self):
@@ -156,7 +165,7 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
         create_platform.assert_not_called()
         create_aggregate.assert_not_called()
 
@@ -188,7 +197,7 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(public_response.status_code, 403)
-        self.assertEqual(unknown_response.status_code, 404)
+        self.assertEqual(unknown_response.status_code, 403)
 
     def test_legacy_and_superadmin_types_cannot_access_pipeline(self):
         for account_type in ("legacy_admin", "superadmin"):
@@ -207,11 +216,12 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
 
     def test_folder_job_mismatch_is_hidden_before_text_blob_docx_or_reports(self):
         self._login(account_type="training_center", account_id=10)
-        scoped_urls = (
+        urls = (
             "/api/formation/42/content/99/text",
             "/api/formation/42/content/99/artifact/content-plan.json",
             "/api/formation/42/content/99/docx",
             "/api/formation/42/content/99/review-report",
+            "/api/formation/42/content/99/humanization-report",
         )
         with patch(
             "repositories.pipeline_repository.pipeline_job_belongs_to_center",
@@ -220,18 +230,13 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             "repositories.pipeline_repository.course_folder_belongs_to_job",
             return_value=False,
         ) as belongs, patch("routes.formation_routes.get_job") as get_job:
-            responses = [self.client.get(url) for url in scoped_urls]
+            responses = [self.client.get(url) for url in urls]
 
-        self.assertEqual([response.status_code for response in responses], [404] * len(scoped_urls))
+        self.assertEqual([response.status_code for response in responses], [404] * len(urls))
         self.assertTrue(all(response.get_json() == {"error": "Job introuvable"} for response in responses))
-        self.assertEqual(belongs.call_count, len(scoped_urls))
+        self.assertEqual(belongs.call_count, len(urls))
         belongs.assert_called_with(99, 42)
         get_job.assert_not_called()
-
-        removed_response = self.client.get(
-            "/api/formation/42/content/99/humanization-report"
-        )
-        self.assertEqual(removed_response.status_code, 404)
 
     def test_scope_lookup_error_is_hidden_and_fail_closed(self):
         self._login(account_id=10)

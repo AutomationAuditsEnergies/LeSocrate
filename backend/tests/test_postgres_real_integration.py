@@ -330,6 +330,10 @@ class RealPostgresIntegrationTest(unittest.TestCase):
                 global_program_validated INTEGER,
                 daily_programs_validated INTEGER,
                 auto_pilot_enabled INTEGER,
+                auto_pilot_use_cc INTEGER,
+                auto_pilot_skip_vs INTEGER,
+                auto_pilot_generate_audio INTEGER,
+                auto_pilot_volume_done INTEGER,
                 auto_pilot_post_review_docs_done INTEGER,
                 status TEXT,
                 created_at TEXT,
@@ -337,7 +341,7 @@ class RealPostgresIntegrationTest(unittest.TestCase):
             );
             INSERT INTO formation_pipeline_jobs VALUES
                 (90, 7, 'TP Test', 'RNCP00001', 14, 2, '[{"day": 1}]',
-                 0, 0, 1, 0, 'daily_ready',
+                 0, 0, 1, 0, 0, 0, 0, 0, 'daily_ready',
                  '2026-01-15 09:00:00', '2026-01-15 09:05:00');
             """
         )

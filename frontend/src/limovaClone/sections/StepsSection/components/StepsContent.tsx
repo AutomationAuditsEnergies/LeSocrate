@@ -109,12 +109,12 @@ export const StepsContent = () => {
               </span>
             </div>
             <div className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[11.5385px] justify-center tracking-[-0.107692px] leading-[21.5385px] mb-[-0.769231px] [mask-image:linear-gradient(90deg,rgba(0,0,0,0)_0%,rgb(255,255,255)_10%,rgb(255,255,255)_90%,rgba(0,0,0,0)_100%)] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-[11.5385px] md:text-[14.2222px] md:h-[10.6667px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:mb-[-0.711111px] md:w-[10.6667px]">
-              <img loading="lazy" decoding="async"
+              <img
                 src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-8.svg"
                 alt="Icon"
                 className="box-border caret-transparent text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] outline-[3px] absolute no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
               />
-              <img loading="lazy" decoding="async"
+              <img
                 src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-9.svg"
                 alt="Icon"
                 className="box-border caret-transparent text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] outline-[3px] absolute no-underline translate-x-[-100.0%] w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"

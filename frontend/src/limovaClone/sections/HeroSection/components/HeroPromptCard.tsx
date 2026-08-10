@@ -21,10 +21,8 @@ export const HeroPromptCard = () => {
           <div className="items-center box-border caret-transparent gap-x-[5.04808px] flex text-[13.4615px] justify-start tracking-[-0.107692px] leading-[18.8462px] min-h-0 min-w-0 outline-[3px] gap-y-[5.04808px] no-underline md:gap-x-[5.33333px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto] md:gap-y-[5.33333px]">
             <div className="cadrenza-hero-agent-avatar items-center box-border caret-transparent flex shrink-0 text-[13.4615px] h-[16.8269px] justify-center tracking-[-0.107692px] leading-[18.8462px] min-h-0 min-w-0 outline-[3px] no-underline w-[16.8269px] md:text-[14.2222px] md:h-[17.7778px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto] md:w-[17.7778px]">
               <img
-                src="/robot-blue-192.webp"
+                src="/robot-blue.png"
                 alt="Pierre, professeur IA"
-                width="192"
-                height="218"
                 className="box-border caret-transparent text-[13.4615px] h-full tracking-[-0.107692px] leading-[18.8462px] max-w-full min-h-0 min-w-0 object-contain outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto]"
               />
             </div>

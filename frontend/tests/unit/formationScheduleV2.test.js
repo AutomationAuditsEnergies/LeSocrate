@@ -111,19 +111,19 @@ test('applies one template to every selected day and replaces earlier choices', 
   })
 })
 
-test('validates complete new-module assignments and the 72-hour lead time', () => {
+test('validates complete new-module assignments and the 48-hour lead time', () => {
   const result = validateFormationScheduleV2({
     selectedDates: ['2026-08-03'],
     assignments: { '2026-08-03': '12' },
     templates: [template],
-    now: new Date('2026-07-31T06:59:00Z'),
+    now: new Date('2026-08-01T06:59:00Z'),
   })
   assert.equal(result.valid, true)
   assert.equal(hasMinimumLeadTime(
     ['2026-08-03'],
     { '2026-08-03': '12' },
     [template],
-    new Date('2026-07-31T07:01:00Z'),
+    new Date('2026-08-01T07:01:00Z'),
   ), false)
 })
 

@@ -5,7 +5,7 @@
 > 3 angles indépendants. Chaque passe est générée DEPUIS le CONTENU_DU_MODULE.
 >
 > Les RÈGLES ÉTHIQUES / ANTI-HALLUCINATION / STYLE ORAL (#1 à #26) sont
-> dupliquées dans chaque passe pour que chaque appel DeepSeek les voie en
+> dupliquées dans chaque passe pour que chaque appel Claude les voie en
 > entier.
 >
 > Input de chaque passe : NOM_DU_TITRE_PROFESSIONNEL + NOM_DE_LA_SOUS_PARTIE

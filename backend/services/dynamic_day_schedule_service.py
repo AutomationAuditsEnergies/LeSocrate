@@ -20,7 +20,7 @@ from typing import Any
 SCHEDULE_SCHEMA_VERSION = 2
 WORDS_PER_MINUTE = 165.7
 COURSE_AUDIO_MARGIN_MINUTES = 0.5
-MIN_NEW_MODULE_LEAD_HOURS = 72
+MIN_NEW_MODULE_LEAD_HOURS = 48
 
 MIN_COURSES_PER_DAY = 4
 MAX_COURSES_PER_DAY = 10
@@ -849,10 +849,10 @@ def validate_new_module_lead_time(
     *,
     is_reuse: bool = False,
 ) -> bool:
-    """Require 72 real hours before the first course of a new module.
+    """Require 48 real hours before the first course of a new module.
 
     Reused modules are explicitly exempt because their audio assets already
-    exist. Exact equality at 72 hours is accepted.
+    exist. Exact equality at 48 hours is accepted.
     """
 
     if is_reuse:

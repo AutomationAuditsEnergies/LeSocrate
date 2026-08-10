@@ -299,7 +299,7 @@ def load_occurrence_playback_manifest(
         payload = json.loads(blob.download_blob().readall().decode("utf-8"))
     except ResourceNotFoundError:
         # Historic occurrences predate adaptive manifests.  Do not cache the
-        # miss: the H-72 publisher may still be completing this immutable prefix.
+        # miss: a J-1 publisher may still be completing this immutable prefix.
         return None
     if (
         not isinstance(payload, dict)

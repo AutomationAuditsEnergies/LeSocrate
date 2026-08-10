@@ -134,7 +134,7 @@ def render_daily_course_pdf(
         topMargin=22 * mm,
         bottomMargin=20 * mm,
         title=f"{formation_title} - Journée {day_number}",
-        author="Support de formation",
+        author="Le Socrate",
         subject="Support de formation",
     )
     base = getSampleStyleSheet()
@@ -213,7 +213,7 @@ def render_daily_course_pdf(
     meta.append(("Journée", str(day_number)))
 
     story = [
-        Paragraph("SUPPORT DE FORMATION", brand),
+        Paragraph("LE SOCRATE", brand),
         Spacer(1, 18 * mm),
         Paragraph(html.escape(_strip_technical_tags(formation_title)), title_style),
         Paragraph(
@@ -265,7 +265,7 @@ def render_daily_course_pdf(
         canvas.rect(0, height - 5 * mm, width, 5 * mm, stroke=0, fill=1)
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(slate)
-        canvas.drawCentredString(width / 2, 10 * mm, "Support de formation")
+        canvas.drawCentredString(width / 2, 10 * mm, "Le Socrate · Support de formation")
         canvas.restoreState()
 
     def _page_chrome(canvas, doc):
@@ -276,7 +276,7 @@ def render_daily_course_pdf(
         canvas.line(20 * mm, 14 * mm, width - 20 * mm, 14 * mm)
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(slate)
-        canvas.drawString(20 * mm, 9.5 * mm, "Support de formation")
+        canvas.drawString(20 * mm, 9.5 * mm, "Le Socrate · Support de formation")
         canvas.drawRightString(width - 20 * mm, 9.5 * mm, f"Page {doc.page - 1}")
         canvas.restoreState()
 
@@ -387,7 +387,7 @@ def publish_pipeline_course_pdfs(
     """Build every daily support as the text pipeline reaches completion.
 
     The operation is idempotent: retries overwrite the same occurrence-scoped
-    blobs. Audio preparation can therefore remain independent at H-72.
+    blobs. Audio preparation can therefore remain independent at H-48.
     """
     from repositories.course_schedule_repository import list_course_sessions
     from services.formation_pipeline_service import get_expected_course_folders

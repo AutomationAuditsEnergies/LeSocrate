@@ -77,12 +77,6 @@ html.limova-landing-active {
   box-sizing: border-box;
 }
 
-.cadrenza-main-content > section:not(:first-child),
-.cadrenza-main-content > footer {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 900px;
-}
-
 .limova-strict-copy [class~="outline-[3px]"]:not(.outline) {
   outline-style: none !important;
 }
