@@ -425,10 +425,7 @@ def create_hr_blueprint():
                 ),
             }), 404
 
-        available = bool(
-            certification.get("active")
-            and certification.get("reac_available")
-        )
+        available = bool(certification.get("reac_available"))
         return jsonify({
             "success": True,
             "available": available,

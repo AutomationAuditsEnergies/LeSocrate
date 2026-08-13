@@ -891,6 +891,36 @@ def get_rncp_certification(rncp_code: str) -> dict | None:
     title = clean_html(title_match.group(1))
     status = clean_html(status_match.group(1)) if status_match else ""
     reac_url = urljoin(source_url, unescape(reac_match.group(1))) if reac_match else None
+
+    replacement_certifications = []
+    replacement_table_match = re.search(
+        r'<caption>\s*Nouvelle\(s\) Certification\(s\)\s*</caption>(.*?)</table>',
+        page,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if replacement_table_match:
+        for row in re.findall(
+            r'<tr[^>]*>(.*?)</tr>',
+            replacement_table_match.group(1),
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            replacement_code_match = re.search(
+                r'<a[^>]+title="RNCP\s*(\d{4,6})"[^>]*>',
+                row,
+                flags=re.IGNORECASE,
+            )
+            cells = re.findall(
+                r'<td[^>]*>(.*?)</td>',
+                row,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if not replacement_code_match or len(cells) < 2:
+                continue
+            replacement_certifications.append({
+                "rncp_code": replacement_code_match.group(1),
+                "title": clean_html(cells[1]),
+            })
+
     return {
         "rncp_code": code,
         "title": title,
@@ -898,6 +928,7 @@ def get_rncp_certification(rncp_code: str) -> dict | None:
         "active": status.casefold() == "active",
         "reac_available": bool(reac_url),
         "reac_url": reac_url,
+        "replacement_certifications": replacement_certifications,
         "source_url": source_url,
     }
 

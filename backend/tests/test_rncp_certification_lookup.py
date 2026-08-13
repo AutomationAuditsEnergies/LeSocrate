@@ -36,6 +36,15 @@ class RncpCertificationLookupTest(unittest.TestCase):
             <span class="tag--fcpt-certification__status">RNCP12345</span>
             <span>Etat :</span>
             <span class="tag--fcpt-certification__status">Inactive</span>
+            <table>
+              <caption>Nouvelle(s) Certification(s)</caption>
+              <tbody>
+                <tr>
+                  <td><a href="/recherche/rncp/67890" title="RNCP67890">RNCP67890</a></td>
+                  <td>  Nouveau &amp; meilleur titre  </td>
+                </tr>
+              </tbody>
+            </table>
         """
         http_get.return_value = response
 
@@ -43,6 +52,10 @@ class RncpCertificationLookupTest(unittest.TestCase):
 
         self.assertFalse(result["active"])
         self.assertFalse(result["reac_available"])
+        self.assertEqual(result["replacement_certifications"], [{
+            "rncp_code": "67890",
+            "title": "Nouveau & meilleur titre",
+        }])
 
     @patch("services.formation_pipeline_service._http.get")
     def test_returns_none_when_the_official_page_does_not_identify_the_code(self, http_get):

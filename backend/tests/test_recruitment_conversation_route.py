@@ -68,12 +68,33 @@ class RecruitmentConversationRouteTest(unittest.TestCase):
             "TP - Employé commercial",
         )
 
-    def test_inactive_rncp_uses_the_product_unavailability_message(self):
+    def test_inactive_rncp_remains_available_when_its_reac_exists(self):
         certification = {
             "rncp_code": "12345",
             "title": "Ancien titre",
             "active": False,
             "reac_available": True,
+            "replacement_certifications": [{
+                "rncp_code": "67890",
+                "title": "Nouveau titre",
+            }],
+        }
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "services.formation_pipeline_service.get_rncp_certification",
+            return_value=certification,
+        ):
+            response = self.client.get("/api/hr/recruitment/rncp/12345")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["available"])
+        self.assertEqual(response.get_json()["reply"], "")
+
+    def test_missing_reac_uses_the_product_unavailability_message(self):
+        certification = {
+            "rncp_code": "12345",
+            "title": "Titre sans REAC",
+            "active": True,
+            "reac_available": False,
         }
         with patch("routes.hr_routes.HR_ENABLED", True), patch(
             "services.formation_pipeline_service.get_rncp_certification",

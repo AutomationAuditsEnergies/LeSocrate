@@ -2512,6 +2512,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const [history, setHistory] = useState([])
   const [isThinking, setIsThinking] = useState(false)
   const [pendingConfirmation, setPendingConfirmation] = useState(null)
+  const [pendingRncpDecision, setPendingRncpDecision] = useState(null)
   const [clarificationAttempts, setClarificationAttempts] = useState({})
   const chatScrollRef = useRef(null)
   const responseTimeoutRef = useRef(null)
@@ -2557,7 +2558,14 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     return String(value)
   }
 
-  const advance = (value, { recordUser = true, verifiedCertification = null } = {}) => {
+  const advance = (
+    value,
+    {
+      recordUser = true,
+      verifiedCertification = null,
+      skipRncpConfirmation = false,
+    } = {},
+  ) => {
     if (!currentStep) return
     if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
       const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
@@ -2580,7 +2588,9 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
         trainingName: verifiedCertification?.title || nextDraft.trainingName,
       }
     }
-    const nextIndex = stepIndex + 1
+    const nextIndex = stepIndex + (
+      currentStep.id === 'rncpCode' && skipRncpConfirmation ? 2 : 1
+    )
     const nextStep = RECRUITMENT_STEPS[nextIndex]
     const nextMatchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
     setDraft(nextDraft)
@@ -2600,6 +2610,66 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
           : 'La configuration est prête. Vérifiez les informations avant de poursuivre.',
       },
     ])
+  }
+
+  const presentVerifiedCertification = (
+    certification,
+    { skipRncpConfirmation = false } = {},
+  ) => {
+    const replacements = Array.isArray(certification?.replacement_certifications)
+      ? certification.replacement_certifications
+      : []
+    const replacement = replacements[0] || null
+
+    if (!certification?.active) {
+      setPendingRncpDecision({ certification, replacement })
+      revealAssistantMessages([{
+        role: 'assistant',
+        text: replacement
+          ? `La fiche RNCP ${certification.rncp_code} « ${certification.title} » est inactive. Elle a été remplacée par RNCP ${replacement.rncp_code} « ${replacement.title} ». Souhaitez-vous conserver l’ancienne fiche ou utiliser la nouvelle certification ?`
+          : `La fiche RNCP ${certification.rncp_code} « ${certification.title} » est inactive, mais son REAC reste disponible. Êtes-vous sûr de vouloir dispenser ce titre professionnel ?`,
+      }])
+      return
+    }
+
+    advance(certification.rncp_code, {
+      recordUser: false,
+      verifiedCertification: certification,
+      skipRncpConfirmation,
+    })
+  }
+
+  const verifyRncpCode = async (
+    rncpCode,
+    { skipRncpConfirmation = false } = {},
+  ) => {
+    setIsThinking(true)
+    try {
+      const response = await apiFetch(`/api/hr/recruitment/rncp/${encodeURIComponent(rncpCode)}`, {
+        timeoutMs: 25000,
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok || !payload.success) {
+        revealAssistantMessages([{
+          role: 'assistant',
+          text: payload.error || 'Je ne peux pas vérifier ce code RNCP pour le moment. Réessayez dans quelques instants.',
+        }])
+        return
+      }
+      if (!payload.available) {
+        revealAssistantMessages([{
+          role: 'assistant',
+          text: payload.reply || 'Désolé, nous n’avons pas encore de professeur disponible pour dispenser cette formation.',
+        }])
+        return
+      }
+      presentVerifiedCertification(payload.certification, { skipRncpConfirmation })
+    } catch {
+      revealAssistantMessages([{
+        role: 'assistant',
+        text: 'France Compétences est temporairement inaccessible. Réessayez la vérification dans quelques instants.',
+      }])
+    }
   }
 
   const interpretFreeTextAnswer = async (field, value, { initialBrief = false } = {}) => {
@@ -2654,35 +2724,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     }
 
     if (field === 'rncpCode') {
-      try {
-        const response = await apiFetch(`/api/hr/recruitment/rncp/${encodeURIComponent(interpretedValue)}`, {
-          timeoutMs: 25000,
-        })
-        const payload = await response.json().catch(() => ({}))
-        if (!response.ok || !payload.success) {
-          revealAssistantMessages([{
-            role: 'assistant',
-            text: payload.error || 'Je ne peux pas vérifier ce code RNCP pour le moment. Réessayez dans quelques instants.',
-          }])
-          return
-        }
-        if (!payload.available) {
-          revealAssistantMessages([{
-            role: 'assistant',
-            text: payload.reply || 'Désolé, nous n’avons pas encore de professeur disponible pour dispenser cette formation.',
-          }])
-          return
-        }
-        advance(interpretedValue, {
-          recordUser: false,
-          verifiedCertification: payload.certification,
-        })
-      } catch {
-        revealAssistantMessages([{
-          role: 'assistant',
-          text: 'France Compétences est temporairement inaccessible. Réessayez la vérification dans quelques instants.',
-        }])
-      }
+      await verifyRncpCode(interpretedValue)
       return
     }
 
@@ -2724,6 +2766,41 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
       role: 'assistant',
       text: 'D’accord. Quel prénom ou quel nom voulez-vous précisément donner au professeur IA ? Par exemple « Pierre » ou « Sofia ».',
     }])
+  }
+
+  const resolvePendingRncpDecision = async (useReplacement) => {
+    if (!pendingRncpDecision) return
+    const { certification, replacement } = pendingRncpDecision
+    setPendingRncpDecision(null)
+
+    if (useReplacement && replacement) {
+      setHistory((current) => [...current, {
+        role: 'user',
+        text: `Utiliser RNCP ${replacement.rncp_code} « ${replacement.title} »`,
+      }])
+      await verifyRncpCode(replacement.rncp_code, { skipRncpConfirmation: true })
+      return
+    }
+
+    if (useReplacement) {
+      setHistory((current) => [...current, { role: 'user', text: 'Saisir un autre code RNCP' }])
+      setAnswer('')
+      revealAssistantMessages([{
+        role: 'assistant',
+        text: 'D’accord. Quel autre code RNCP souhaitez-vous utiliser ?',
+      }])
+      return
+    }
+
+    setHistory((current) => [...current, {
+      role: 'user',
+      text: `Conserver RNCP ${certification.rncp_code} « ${certification.title} »`,
+    }])
+    advance(certification.rncp_code, {
+      recordUser: false,
+      verifiedCertification: certification,
+      skipRncpConfirmation: true,
+    })
   }
 
   const toggleDay = (day) => {
@@ -2892,13 +2969,45 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                 </button>
               </div>
             )}
-            {!pendingConfirmation && (currentStep.type === 'text' || currentStep.type === 'number') && (
+            {!isThinking && pendingRncpDecision && (
+              <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
+                <div className="px-4 py-3.5 sm:px-5">
+                  <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>
+                    Choisir la certification RNCP
+                  </p>
+                  <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                    Le REAC de la fiche inactive reste disponible pour préparer le professeur.
+                  </p>
+                </div>
+                <button type="button" onClick={() => resolvePendingRncpDecision(false)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#097FE8]/45 sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>1</span>
+                  <span>
+                    <span className="block font-medium">Conserver RNCP {pendingRncpDecision.certification.rncp_code}</span>
+                    <span className="mt-0.5 block text-xs" style={{ color: colors.textMuted }}>{pendingRncpDecision.certification.title}</span>
+                  </span>
+                </button>
+                <button type="button" onClick={() => resolvePendingRncpDecision(true)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#097FE8]/45 sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>2</span>
+                  <span>
+                    <span className="block font-medium">
+                      {pendingRncpDecision.replacement
+                        ? `Utiliser RNCP ${pendingRncpDecision.replacement.rncp_code}`
+                        : 'Saisir un autre code RNCP'}
+                    </span>
+                    {pendingRncpDecision.replacement && (
+                      <span className="mt-0.5 block text-xs" style={{ color: colors.textMuted }}>{pendingRncpDecision.replacement.title}</span>
+                    )}
+                  </span>
+                </button>
+              </div>
+            )}
+            {!pendingConfirmation && !pendingRncpDecision && (currentStep.type === 'text' || currentStep.type === 'number') && (
               <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl border bg-white p-2 pl-4" style={{ borderColor: colors.borderLight }}>
                 <input type="text" inputMode={currentStep.type === 'number' ? 'numeric' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={isThinking ? 'Réflexion en cours…' : currentStep.placeholder} disabled={isThinking} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B] disabled:cursor-wait disabled:text-[#73736F]" style={{ color: colors.text }} autoFocus={!isThinking} />
                 <button type="submit" disabled={isThinking || !answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#191918] text-white transition-colors hover:bg-[#30302E] disabled:cursor-not-allowed disabled:bg-[#C7C7C4]" aria-label="Valider la réponse"><ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" /></button>
               </form>
             )}
-            {!isThinking && !pendingConfirmation && currentIsChoice && (
+            {!isThinking && !pendingConfirmation && !pendingRncpDecision && currentIsChoice && (
               <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
                 <div className="flex items-start justify-between gap-4 px-4 py-3.5 sm:px-5">
                   <div>
