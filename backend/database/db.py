@@ -949,21 +949,6 @@ def init_database(_recovered_from_corruption: bool = False):
         except Exception:
             pass
         try:
-            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0")
-            logger.info("✅ Colonne humanized ajoutée à content_generation_segments")
-        except Exception:
-            pass
-        try:
-            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT")
-            logger.info("✅ Colonne humanization_error ajoutée à content_generation_segments")
-        except Exception:
-            pass
-        try:
-            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT")
-            logger.info("✅ Colonne humanization_signature ajoutée à content_generation_segments")
-        except Exception:
-            pass
-        try:
             cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN structured_checkpoint_signature TEXT")
             logger.info("✅ Colonne structured_checkpoint_signature ajoutée à content_generation_segments")
         except Exception:

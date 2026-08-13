@@ -961,9 +961,6 @@ CREATE TABLE IF NOT EXISTS content_generation_segments (
     review_error TEXT,
     text_content_pre_review TEXT,
     review_signature TEXT,
-    humanized BOOLEAN NOT NULL DEFAULT FALSE,
-    humanization_error TEXT,
-    humanization_signature TEXT,
     structured_checkpoint_signature TEXT,
     structured_checkpoint_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -974,6 +971,10 @@ ALTER TABLE content_generation_segments
     ADD COLUMN IF NOT EXISTS structured_checkpoint_signature TEXT;
 ALTER TABLE content_generation_segments
     ADD COLUMN IF NOT EXISTS structured_checkpoint_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE content_generation_segments
+    DROP COLUMN IF EXISTS humanized,
+    DROP COLUMN IF EXISTS humanization_error,
+    DROP COLUMN IF EXISTS humanization_signature;
 
 CREATE TABLE IF NOT EXISTS content_script_annotations (
     id BIGSERIAL PRIMARY KEY,

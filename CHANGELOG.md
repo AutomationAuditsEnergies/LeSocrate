@@ -2,6 +2,15 @@
 
 ## 2026-08-13
 
+### refactor(pipeline): retrait définitif de l'état d'humanisation séparé
+
+La passe `humanization_review`, déjà neutralisée parce que l'oralité est intégrée
+à la génération structurée initiale, est supprimée avec ses rapports, règles de
+review dédiées et colonnes `humanized`, `humanization_error` et
+`humanization_signature`. Le schéma Postgres retire ces colonnes si elles
+existent et ne les exige plus au démarrage, ce qui rétablit les bases existantes
+créées avant leur réintroduction accidentelle par revert.
+
 ### perf(pipeline): DeepSeek Flash par défaut pour les lancements
 
 Les nouvelles pipelines issues d'une commande professeur IA persistent

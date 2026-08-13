@@ -68,7 +68,7 @@ BOOL_COLUMNS = {
     },
     "formation_knowledge_base": {"dirty"},
     "content_generation_jobs": {"from_scratch"},
-    "content_generation_segments": {"dirty", "reviewed", "humanized"},
+    "content_generation_segments": {"dirty", "reviewed"},
     "formation_modules": {"immutable", "canonical_reuse_allowed"},
     "formation_module_days": {"immutable"},
     "formation_module_assets": {"immutable"},

@@ -515,7 +515,6 @@ def list_content(job_id):
         cg_err = content_row.get("error_message")
         n_completed = content_row.get("completed_segments") or 0
         n_reviewed = content_row.get("reviewed_segments") or 0
-        n_humanized = content_row.get("humanized_segments") or 0
         n_review_errors = content_row.get("review_error_segments") or 0
         n_dirty = content_row.get("dirty_segments") or 0
         slide_deck_id = None
@@ -549,7 +548,6 @@ def list_content(job_id):
             "total_words": cg_words or 0,
             "segments_completed": n_completed,
             "segments_total": max(3, segment_total),
-            "segments_humanized": n_humanized,
             "segments_reviewed": n_reviewed,
             "segments_review_errors": n_review_errors,
             "dirty_segments": n_dirty,
@@ -922,7 +920,6 @@ def _review_chunk_ids_for_position(position: int) -> list[str]:
         + [
             f"day_{day}_review_api",
             f"day_{day}_review_local_compliance_api",
-            f"day_{day}_review_humanization_api",
             f"day_{day}_review",
         ]
     )
@@ -1356,19 +1353,6 @@ def get_review_report(job_id, folder_id):
             f"folder={folder_id} : {e}"
         )
     return jsonify({"report": report, "source_path": chunk_dir_with_output, "lite": True}), 200
-
-
-@formation_bp.route(
-    "/api/formation/<int:job_id>/content/<int:folder_id>/humanization-report",
-    methods=["GET"],
-)
-def get_humanization_report(job_id, folder_id):
-    """Retourne le rapport JSON de la passe humanisation (intros/transitions/rythme)."""
-    from services.formation_observability_service import get_latest_review_report
-    report = get_latest_review_report(job_id, folder_id, kind="humanization")
-    if not report:
-        return jsonify({"error": "Aucun rapport d'humanisation disponible pour cette journée"}), 404
-    return jsonify({"report": report}), 200
 
 
 # ─── Legacy — audit volume lisible, enrichissement append-only désactivé ─────
@@ -2997,14 +2981,6 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
             job_id,
         )
         update_job(job_id, auto_pilot_volume_done=1, auto_pilot_post_review_docs_done=0)
-
-    elif step == "humanization_review":
-        logger.info(
-            "🤖 Auto-pilot job %s : étape humanization_review ignorée, "
-            "l'oralité est portée par le prompt initial",
-            job_id,
-        )
-        update_job(job_id, auto_pilot_post_review_docs_done=0)
 
     elif step == "review":
         from services.formation_pipeline_service import get_expected_course_folders

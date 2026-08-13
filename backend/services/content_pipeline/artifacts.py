@@ -38,12 +38,12 @@ SCRIPT_REVIEW_ARTIFACT_PREFIX = "script-reviews"
 CONTENT_ARTIFACT_DESCRIPTIONS = {
     CONTENT_PLAN_BLOB: "Plan JSON verrouillé et validation serveur.",
     CONTENT_DRAFT_SECTIONS_BLOB: "Sections brutes générées avant assemblage/calibrage.",
-    CONTENT_COURSE_SCRIPTS_BLOB: "Cours complets après calibrage budget et micro-conformité, avant humanisation.",
+    CONTENT_COURSE_SCRIPTS_BLOB: "Cours complets après calibrage budget et micro-conformité.",
     CONTENT_BUDGET_CALIBRATION_BLOB: "Avant/après du calibrage budget texte par cours.",
     CONTENT_QUALITY_REVIEWS_BLOB: "Audit d'adhérence au plan après génération par section, avant calibrage budget.",
     CONTENT_ETHICAL_MICRO_REVIEW_BLOB: "Micro-conformité éthique #1-#16, patches avant/après par section.",
     CONTENT_VOLUME_SAFETY_BLOB: "Ajouts de sécurité volume, avec texte avant/après et passages ajoutés.",
-    CONTENT_REVIEWED_SCRIPTS_BLOB: "Scripts après humanisation/conformité.",
+    CONTENT_REVIEWED_SCRIPTS_BLOB: "Scripts après conformité.",
     CONTENT_AUDIO_PLAN_BLOB: "Texte réellement planifié/généré pour les fichiers audio.",
     COURSE_SCRIPT_PLAN_BLOB: "Plan UI historique compatible.",
 }

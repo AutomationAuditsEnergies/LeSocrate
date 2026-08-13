@@ -16,7 +16,6 @@ const PIPELINE_STAGES = [
 const STEP_ALIASES = {
   start: 'reac',
   plan_adherence_review: 'review',
-  humanization_review: 'review',
   audio_word_calibration: 'review',
   word_budget_review: 'review',
   done: 'done',

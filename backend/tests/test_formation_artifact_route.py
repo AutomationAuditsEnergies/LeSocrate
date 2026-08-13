@@ -93,7 +93,6 @@ class FormationArtifactRouteTest(unittest.TestCase):
             "error_message": None,
             "completed_segments": 7,
             "reviewed_segments": 7,
-            "humanized_segments": 0,
             "review_error_segments": 0,
             "dirty_segments": 7,
         }]

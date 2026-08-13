@@ -221,7 +221,6 @@ class PipelineTenantScopeRouteTest(unittest.TestCase):
             "/api/formation/42/content/99/artifact/content-plan.json",
             "/api/formation/42/content/99/docx",
             "/api/formation/42/content/99/review-report",
-            "/api/formation/42/content/99/humanization-report",
         )
         with patch(
             "repositories.pipeline_repository.pipeline_job_belongs_to_center",

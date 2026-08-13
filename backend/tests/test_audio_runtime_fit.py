@@ -415,21 +415,21 @@ class CourseSpeechDeadlineTest(unittest.TestCase):
 
         pad.assert_not_called()
 
-    def test_review_budget_guard_rolls_back_oversized_humanization_patch(self):
+    def test_review_budget_guard_rolls_back_oversized_compliance_patch(self):
         original = " ".join(["mot"] * 100)
         candidate = " ".join(["mot"] * 500)
         applied = [{
             "original": "mot mot mot",
             "replacement": "long remplacement",
-            "rule_violated": "#101",
-            "reason": "Trop brusque.",
+            "rule_violated": "#14",
+            "reason": "Non conforme.",
         }]
 
         guarded_text, guarded_applied, rejected = cgs._apply_review_budget_guard(
             original,
             candidate,
             applied,
-            "humanization",
+            "local_compliance",
         )
 
         self.assertEqual(guarded_text, original)
@@ -438,42 +438,13 @@ class CourseSpeechDeadlineTest(unittest.TestCase):
         self.assertGreater(rejected[0]["words_after"], rejected[0]["max_words"])
 
 
-class HumanizationReviewRulesTest(unittest.TestCase):
-    def test_review_includes_humanization_rule_group(self):
-        group = next(
-            (g for g in cgs._HUMANIZATION_REVIEW_RULE_GROUPS if g["id"] == "humanisation_polish"),
-            None,
-        )
-        self.assertIsNotNone(group)
-        self.assertIn(101, group["rules"])
-        self.assertIn(111, group["rules"])
-        rules_text = cgs._load_review_rules()
-        self.assertIn("RÈGLE #101", rules_text)
-        self.assertIn("RÈGLE #111", rules_text)
-
+class ContentReviewRulesTest(unittest.TestCase):
     def test_each_review_group_extracts_rules(self):
         rules_text = cgs._load_review_rules()
-        for group in cgs._COMPLIANCE_REVIEW_RULE_GROUPS + cgs._HUMANIZATION_REVIEW_RULE_GROUPS:
+        for group in cgs._COMPLIANCE_REVIEW_RULE_GROUPS:
             with self.subTest(group=group["id"]):
                 extracted = cgs._extract_rules_for_group(rules_text, group["rules"])
                 self.assertIn(f"RÈGLE #{group['rules'][0]}", extracted)
-
-    def test_humanization_prompt_can_propose_rhythm_corrections(self):
-        rules_text = cgs._extract_rules_for_group(
-            cgs._load_review_rules(),
-            [101, 102, 103],
-        )
-        prompt = cgs._build_review_prompt_focused(
-            "Bonjour à tous. On entre maintenant dans le vif du sujet.",
-            rules_text,
-            "Humanisation et rythme pédagogique",
-            "Intros plus douces, respirations et transitions",
-            [101, 102, 103],
-        )
-
-        self.assertIn("finition orale légère", prompt)
-        self.assertIn("micro-interaction", prompt)
-        self.assertIn("Pas de réécriture complète", prompt)
 
     def test_review_group_fails_when_rules_are_missing(self):
         group = {
@@ -525,9 +496,6 @@ class ContentReviewSignatureSelectionTest(unittest.TestCase):
                 reviewed INTEGER DEFAULT 0,
                 review_error TEXT,
                 review_signature TEXT,
-                humanized INTEGER DEFAULT 0,
-                humanization_error TEXT,
-                humanization_signature TEXT,
                 text_content_pre_review TEXT
             )
             """
@@ -601,71 +569,6 @@ class ContentReviewSignatureSelectionTest(unittest.TestCase):
             self.assertEqual(calls, [])
         finally:
             os.unlink(db_path)
-
-    def test_humanization_patch_invalidates_compliance_review(self):
-        rules_text = "RÈGLE #101 — test"
-        current_compliance_signature = cgs._current_compliance_review_signature()
-        db_path = self._make_db(current_compliance_signature)
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.execute(
-                """
-                UPDATE content_generation_segments
-                SET reviewed = 1, review_signature = ?
-                WHERE id = 1
-                """,
-                (current_compliance_signature,),
-            )
-            conn.commit()
-            conn.close()
-
-            def connect():
-                return sqlite3.connect(db_path)
-
-            def fake_group_review(current_text, _rules_text, group, model=None):
-                return (
-                    "Bonjour. [pause] On commence tranquillement.",
-                    [{
-                        "original": "Bonjour. On commence directement.",
-                        "replacement": "Bonjour. [pause] On commence tranquillement.",
-                        "rule_violated": "#101",
-                        "reason": "Début trop brusque.",
-                    }],
-                    [],
-                    None,
-                    1,
-                )
-
-            with patch.object(cgs, "get_job_from_db", return_value={"id": 1, "formation_job_id": 9}), patch.object(
-                pipeline_repo, "get_db_connection", side_effect=connect
-            ), patch.object(cgs, "_load_review_rules", return_value=rules_text), patch.object(
-                cgs, "_ensure_review_state_columns"
-            ), patch.object(
-                cgs, "_save_reviewed_scripts_artifact"
-            ), patch.object(cgs, "_review_group_chunks", side_effect=fake_group_review):
-                result = cgs.run_humanization_review(123)
-
-            conn = sqlite3.connect(db_path)
-            row = conn.execute(
-                """
-                SELECT humanized, humanization_signature, reviewed, review_signature,
-                       dirty, text_content
-                FROM content_generation_segments WHERE id = 1
-                """
-            ).fetchone()
-            conn.close()
-
-            self.assertEqual(result["review_kind"], "humanization")
-            self.assertEqual(result["patches_applied"], 1)
-            self.assertEqual(row[0], 1)
-            self.assertEqual(row[1], result["review_signature"])
-            self.assertEqual(row[2], 0)
-            self.assertIsNone(row[3])
-            self.assertEqual(row[4], 1)
-            self.assertIn("[pause]", row[5])
-        finally:
-            os.unlink(db_path)
-
 
 class ConclusionAppendedAfterStopTest(unittest.TestCase):
     def test_runtime_fit_does_not_append_conclusion_or_extend_timing(self):

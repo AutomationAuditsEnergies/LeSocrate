@@ -26,6 +26,17 @@ class PostgresSchemaContractTest(unittest.TestCase):
             for column in columns:
                 self.assertRegex(schema, rf"(?m)^\s*{column}\s+")
 
+    def test_retired_humanization_state_is_not_required_and_is_cleaned_up(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        segment_columns = PIPELINE_REQUIRED_SCHEMA["content_generation_segments"]
+        for column in (
+            "humanized",
+            "humanization_error",
+            "humanization_signature",
+        ):
+            self.assertNotIn(column, segment_columns)
+            self.assertIn(f"DROP COLUMN IF EXISTS {column}", schema)
+
     def test_existing_course_sessions_receive_all_runtime_columns(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
         for column in (

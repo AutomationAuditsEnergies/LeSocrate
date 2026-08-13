@@ -6448,7 +6448,6 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
     if not calibrated_blocks:
         return 0
 
-    review_signature = _current_humanization_review_signature()
     rows = list_completed_content_segment_rows(job["id"])
     if len(rows) < len(calibrated_blocks):
         raise ValueError(
@@ -6468,7 +6467,6 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
             segment_id=seg_id,
             text_content=stored_text,
             word_count=words,
-            humanization_signature=review_signature,
         )
 
     for row in rows[len(calibrated_blocks):]:
@@ -6476,7 +6474,6 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
             segment_id=row["id"],
             text_content="",
             word_count=0,
-            humanization_signature=review_signature,
         )
 
     update_content_generation_job(job["id"], total_words=total_words)
@@ -7443,9 +7440,7 @@ def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
         text = row["text_content"]
         word_count = row["word_count"]
         dirty = row["dirty"]
-        humanized = row["humanized"]
         reviewed = row["reviewed"]
-        humanization_error = row["humanization_error"]
         review_error = row["review_error"]
         marker_course_number = _extract_audio_block_number(text or "")
         course_number = marker_course_number or int(sub_idx or 0) + 1
@@ -7458,9 +7453,7 @@ def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
             "word_count": count_tts_spoken_words(clean_text),
             "stored_word_count": int(word_count or 0),
             "dirty": bool(dirty),
-            "humanized": bool(humanized),
             "reviewed": bool(reviewed),
-            "humanization_error": humanization_error or "",
             "review_error": review_error or "",
             "text": clean_text,
             "has_audio_marker": bool(marker_course_number),
@@ -16367,7 +16360,6 @@ import json as _json
 import re as _re
 
 _REVIEW_MAX_PATCHES = 5
-_HUMANIZATION_MAX_PATCHES = 3
 _REVIEW_MAX_TOKENS = 2000
 
 
@@ -16382,7 +16374,6 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_RULESET_VERSION = "2026-05-31-compliance-v8-minimal"
-_HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v9-polish-only"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -16406,15 +16397,6 @@ _COMPLIANCE_REVIEW_RULE_GROUPS = [
     },
 ]
 
-_HUMANIZATION_REVIEW_RULE_GROUPS = [
-    {
-        "id": "humanisation_polish",
-        "label": "Finition orale légère",
-        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 113, 118],
-        "description": "Polish oral : rythme, respirations, transitions locales, densité, présence du formateur, anti-redondance. Ne restructure pas le cours.",
-    },
-]
-
 _REVIEW_RULE_GROUPS = _COMPLIANCE_REVIEW_RULE_GROUPS
 
 _RULES_CACHE = {"mtime": 0, "text": ""}
@@ -16432,11 +16414,10 @@ def _load_review_rules() -> str:
     """
     try:
         compliance_text, compliance_mtime = _load_structured_rule_file("compliance-rules.json")
-        humanization_text, humanization_mtime = _load_structured_rule_file("humanization-rules.json")
-        cache_key = ("modular", compliance_mtime, humanization_mtime)
+        cache_key = ("modular", compliance_mtime)
         if _RULES_CACHE["mtime"] == cache_key and _RULES_CACHE["text"]:
             return _RULES_CACHE["text"]
-        rules_text = compliance_text.rstrip() + "\n\n" + humanization_text.strip()
+        rules_text = compliance_text.rstrip()
         _RULES_CACHE["mtime"] = cache_key
         _RULES_CACHE["text"] = rules_text
         return rules_text
@@ -16504,16 +16485,8 @@ def _current_compliance_review_signature() -> str:
     )
 
 
-def _current_humanization_review_signature() -> str:
-    return _review_rules_signature(
-        _load_review_rules(),
-        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
-        version=_HUMANIZATION_RULESET_VERSION,
-    )
-
-
 def _ensure_review_state_columns() -> None:
-    """Migrations légères pour tracer les deux passes de review."""
+    """Migration légère pour tracer la passe de conformité."""
     global _REVIEW_SIGNATURE_COLUMNS_READY
     if _REVIEW_SIGNATURE_COLUMNS_READY:
         return
@@ -16541,37 +16514,11 @@ def _build_review_prompt_focused(
     chunk_index: int = 1, chunk_total: int = 1, review_context: str = "",
 ) -> str:
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
-    is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
-    review_contract = _load_prompt_file(
-        "reviews",
-        "humanization-polish.md" if is_humanization_scope else "compliance-review.md",
-    )
-    max_patches = _HUMANIZATION_MAX_PATCHES if is_humanization_scope else _REVIEW_MAX_PATCHES
-    review_mode = (
-        "Pour les règles d'humanisation, tu fais une finition orale légère. "
-        "Tu corriges seulement ce qui sonne trop récité, trop dense, trop sec, "
-        "trop mécanique, redondant ou mal relié localement. Tu ne restructures "
-        "pas le cours et tu ne compenses pas un problème de plan."
-        if is_humanization_scope
-        else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
-    )
-    replacement_constraint = (
-        "- Pour l'humanisation, `replacement` peut ajouter une courte phrase orale, "
-        "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
-        "le rythme, sans changer le fond pédagogique ni le plan verrouillé. "
-        "Si la correction exigerait de réécrire toute une section ou de changer "
-        "l'architecture, renvoie plutôt {\"patches\": []}. Dans tous les cas, "
-        "respecte le budget audio : substitue et condense autant que possible, "
-        "ne gonfle pas le segment hors budget mots."
-        if is_humanization_scope
-        else "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
-    )
-    preference_constraint = (
-        "- Ne corrige QUE les non-conformités de rythme/humanisation du scope. "
-        "Pas de réécriture complète, pas de préférence personnelle hors règles."
-        if is_humanization_scope
-        else f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
-    )
+    review_contract = _load_prompt_file("reviews", "compliance-review.md")
+    max_patches = _REVIEW_MAX_PATCHES
+    review_mode = "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
+    replacement_constraint = "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
+    preference_constraint = f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
     return f"""Tu es un reviewer éditorial SPÉCIALISÉ. Tu reçois un extrait de cours oral et un sous-ensemble de règles à vérifier.
 
 CONTRAT DE REVIEW :
@@ -16871,13 +16818,8 @@ def _review_budget_guard_limit(original_word_count: int, review_kind: str) -> in
     marge, puis on rejette toute salve qui gonfle trop le segment.
     """
     original_word_count = max(0, int(original_word_count or 0))
-    is_humanization = (review_kind or "").strip().lower() == "humanization"
-    if is_humanization:
-        ratio = _env_float("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_RATIO", 0.03, min_value=0.0, max_value=0.20)
-        absolute = _env_int("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_WORDS", 120, min_value=1)
-    else:
-        ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
-        absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
+    ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
+    absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
     allowed_extra = max(absolute, int(original_word_count * ratio))
     return original_word_count + allowed_extra
 
@@ -16935,7 +16877,6 @@ def _run_content_review_pass(
     signature_column: str,
     review_kind: str,
     review_label: str,
-    invalidate_compliance_on_change: bool = False,
 ):
     """
     Révise les segments completed pour un dossier cours.
@@ -16956,10 +16897,7 @@ def _run_content_review_pass(
         if on_progress:
             on_progress(step, total, msg)
 
-    allowed_columns = {
-        "reviewed", "review_error", "review_signature",
-        "humanized", "humanization_error", "humanization_signature",
-    }
+    allowed_columns = {"reviewed", "review_error", "review_signature"}
     for col in (reviewed_column, error_column, signature_column):
         if col not in allowed_columns:
             raise ValueError(f"Colonne review non autorisée : {col}")
@@ -17318,7 +17256,6 @@ def _run_content_review_pass(
                 error_column=error_column,
                 signature_column=signature_column,
                 review_signature=review_signature,
-                invalidate_compliance_on_change=invalidate_compliance_on_change,
             )
             logger.info(
                 "PIPELINE_REVIEW_SEGMENT_PATCHED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s applied=%s rejected=%s new_words=%s",
@@ -17416,24 +17353,6 @@ def _run_content_review_pass(
         summary=summary,
     )
     return summary
-
-
-def run_humanization_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Passe 1 : finition orale légère avant la conformité stricte."""
-    return _run_content_review_pass(
-        folder_id,
-        on_progress=on_progress,
-        model=model,
-        force=force,
-        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
-        signature_version=_HUMANIZATION_RULESET_VERSION,
-        reviewed_column="humanized",
-        error_column="humanization_error",
-        signature_column="humanization_signature",
-        review_kind="humanization",
-        review_label="Humanisation",
-        invalidate_compliance_on_change=True,
-    )
 
 
 def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):
