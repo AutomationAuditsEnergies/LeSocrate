@@ -2417,10 +2417,9 @@ const RECRUITMENT_STEPS = [
   { id: 'rncpCode', question: 'Quel est le code RNCP de la formation que vous souhaitez dispenser ?', placeholder: 'Ex. 37099', type: 'number' },
   { id: 'rncpConfirm', question: 'S’agit-il bien de ce titre professionnel ?', type: 'confirm' },
   { id: 'trainingDays', question: 'Combien de journées de formation faut-il prévoir au total ?', placeholder: 'Ex. 52', type: 'number' },
-  { id: 'weeklyCourseCount', question: 'Combien de journées de cours auront lieu chaque semaine ?', type: 'frequency' },
-  { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous programmer ?', type: 'days' },
+  { id: 'weeklyCourseCount', question: 'En moyenne, combien de journées de cours souhaitez-vous prévoir chaque semaine ?', type: 'frequency' },
+  { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous prévoir habituellement ?', type: 'days' },
   { id: 'startDate', question: 'À quelle date la formation doit-elle commencer ?', type: 'date' },
-  { id: 'teacherColor', question: 'Quelle couleur souhaitez-vous pour le robot professeur ?', type: 'color' },
 ]
 
 const RECRUITMENT_DAY_OPTIONS = [
@@ -2439,7 +2438,7 @@ const RECRUITMENT_COLOR_OPTIONS = [
   { id: 'amber', label: 'Ambre', value: '#F59E0B', image: '/robot-amber.png' },
 ]
 
-const RECRUITMENT_CHOICE_TYPES = new Set(['confirm', 'frequency', 'days', 'color'])
+const RECRUITMENT_CHOICE_TYPES = new Set(['confirm', 'frequency', 'days'])
 const RECRUITMENT_PLACEHOLDER_EXAMPLES = [
   'Recruter un professeur pour le TP Conseiller relation client à distance',
   'Préparer un professeur pour une nouvelle promotion en septembre',
@@ -2486,10 +2485,9 @@ function getRecruitmentAssistantText(step, draft, matchingModule) {
     const code = draft.rncpCode || matchingModule?.rncp_code
     return `Le code RNCP ${String(code).replace(/\D/g, '')} correspond au titre professionnel « ${title} ». Est-ce bien ce titre que vous souhaitez dispenser ?`
   }
-  if (step.id === 'weeklyCourseCount') return 'Définissons maintenant le rythme hebdomadaire de la formation.'
-  if (step.id === 'teachingDays') return 'Choisissez les jours qui correspondent à ce rythme.'
+  if (step.id === 'weeklyCourseCount') return 'Choisissons maintenant le rythme hebdomadaire habituel de la formation. Pour l’instant, indiquez simplement un nombre moyen de jours par semaine. Ne vous inquiétez pas si certaines semaines diffèrent : même si vous choisissez deux jours, une semaine pourra n’en compter qu’un et la suivante trois. Vous pourrez ajuster précisément le calendrier plus tard.'
+  if (step.id === 'teachingDays') return 'Choisissez maintenant les jours habituels de formation, ceux qui s’appliqueront pendant la majorité du parcours. Ne vous inquiétez pas pour les semaines particulières : en cas de jour férié ou d’exception, vous pourrez déplacer les séances sur d’autres jours lorsque vous préciserez le calendrier.'
   if (step.id === 'startDate') return 'Il reste à fixer la date de démarrage de la formation.'
-  if (step.id === 'teacherColor') return 'Dernier choix : l’identité visuelle du professeur IA.'
   return step.question
 }
 
@@ -2578,8 +2576,9 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
       const messageId = `recruitment-assistant-${responseMessageIdRef.current + 1}`
       responseMessageIdRef.current += 1
       const fullText = String(message.text || '')
-      const chunkSize = Math.max(1, Math.ceil(fullText.length / 96))
-      let characterCount = 0
+      const textChunks = fullText.match(/\S+\s*/g) || [fullText]
+      const chunkSize = Math.max(1, Math.ceil(textChunks.length / 28))
+      let revealedChunkCount = 0
 
       setStreamingMessageId(messageId)
       setHistory((current) => [...current, { ...message, id: messageId, text: '' }])
@@ -2596,15 +2595,15 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
       responseStreamRef.current.timeoutId = window.setTimeout(() => {
         responseStreamRef.current.timeoutId = null
         responseStreamRef.current.intervalId = window.setInterval(() => {
-          characterCount = Math.min(fullText.length, characterCount + chunkSize)
+          revealedChunkCount = Math.min(textChunks.length, revealedChunkCount + chunkSize)
           setHistory((current) => current.map((item) => (
             item.id === messageId
-              ? { ...item, text: fullText.slice(0, characterCount) }
+              ? { ...item, text: textChunks.slice(0, revealedChunkCount).join('') }
               : item
           )))
-          if (characterCount >= fullText.length) finishMessage()
-        }, 18)
-      }, 260)
+          if (revealedChunkCount >= textChunks.length) finishMessage()
+        }, 32)
+      }, 180)
     }
 
     revealNextMessage()
@@ -2612,7 +2611,6 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
 
   const displayAnswer = (step, value) => {
     if (step.id === 'teachingDays') return value.map((day) => RECRUITMENT_DAY_OPTIONS.find((option) => option.id === day)?.label || day).join(', ')
-    if (step.id === 'teacherColor') return RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === value)?.label || value
     if (step.id === 'weeklyCourseCount') return `${value} jour${Number(value) > 1 ? 's' : ''} par semaine`
     if (step.id === 'trainingDays') return `${value} journées`
     if (step.id === 'rncpCode') return `RNCP ${String(value).replace(/\D/g, '')}`
@@ -2663,14 +2661,15 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     }
     setStepIndex(nextIndex)
     setAnswer('')
-    revealAssistantMessages([
-      {
-        role: 'assistant',
-        text: nextStep
-          ? getRecruitmentAssistantText(nextStep, nextDraft, nextMatchingModule)
-          : 'La configuration est prête. Vérifiez les informations avant de poursuivre.',
-      },
-    ])
+    const nextAssistantText = nextStep
+      ? getRecruitmentAssistantText(nextStep, nextDraft, nextMatchingModule)
+      : 'La configuration est prête. Vérifiez les informations avant de poursuivre.'
+
+    if (nextAssistantText) {
+      revealAssistantMessages([{ role: 'assistant', text: nextAssistantText }])
+    } else {
+      setIsThinking(false)
+    }
   }
 
   const presentVerifiedCertification = (
@@ -2971,7 +2970,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                   {message.text}
                 </div>
               ) : (
-                <p className={`recruitment-assistant-message max-w-[68ch] text-sm leading-6 ${message.id === streamingMessageId ? 'recruitment-assistant-message--streaming' : ''}`} style={{ color: colors.text }}>{message.text}</p>
+                <p className="max-w-[68ch] text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
               )}
               {message.text && message.id !== streamingMessageId && <button
                 type="button"
@@ -3115,24 +3114,12 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                   )
                 })}
 
-                {currentStep.type === 'color' && RECRUITMENT_COLOR_OPTIONS.map((color, index) => {
-                  const selected = draft.teacherColor === color.id
-                  return (
-                    <button key={color.id} type="button" onClick={() => setDraft((current) => ({ ...current, teacherColor: color.id }))} aria-pressed={selected} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: selected ? `${color.value}22` : colors.innerBg, color: colors.textMuted }}>{index + 1}</span>
-                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.value }} />
-                      <span className="flex-1">{color.label}</span>
-                      {selected && <Icon name="check" className="text-base" style={{ color: color.value }} />}
-                    </button>
-                  )
-                })}
-
-                {(currentStep.type === 'days' || currentStep.type === 'color') && (
+                {currentStep.type === 'days' && (
                   <div className="flex items-center justify-between gap-3 border-t px-4 py-3 sm:px-5" style={{ borderColor: colors.borderLight }}>
                     <span className="text-xs" style={{ color: colors.textMuted }}>
-                      {currentStep.type === 'days' ? `${draft.teachingDays.length} jour${draft.teachingDays.length > 1 ? 's' : ''} sélectionné${draft.teachingDays.length > 1 ? 's' : ''}` : RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === draft.teacherColor)?.label}
+                      {`${draft.teachingDays.length} jour${draft.teachingDays.length > 1 ? 's' : ''} sélectionné${draft.teachingDays.length > 1 ? 's' : ''}`}
                     </span>
-                    <button type="button" disabled={currentStep.type === 'days' && draft.teachingDays.length !== Number(draft.weeklyCourseCount)} onClick={() => advance(currentStep.type === 'days' ? draft.teachingDays : draft.teacherColor)} className="rounded-lg bg-[#191714] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">
+                    <button type="button" disabled={draft.teachingDays.length !== Number(draft.weeklyCourseCount)} onClick={() => advance(draft.teachingDays)} className="rounded-lg bg-[#191714] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">
                       Valider ce choix
                     </button>
                   </div>
