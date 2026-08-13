@@ -43,6 +43,10 @@ class RncpCertificationLookupTest(unittest.TestCase):
                   <td><a href="/recherche/rncp/67890" title="RNCP67890">RNCP67890</a></td>
                   <td>  Nouveau &amp; meilleur titre  </td>
                 </tr>
+                <tr>
+                  <td><a href="/recherche/rncp/67891" title="RNCP67891">RNCP67891</a></td>
+                  <td>Autre titre de remplacement</td>
+                </tr>
               </tbody>
             </table>
         """
@@ -52,10 +56,16 @@ class RncpCertificationLookupTest(unittest.TestCase):
 
         self.assertFalse(result["active"])
         self.assertFalse(result["reac_available"])
-        self.assertEqual(result["replacement_certifications"], [{
-            "rncp_code": "67890",
-            "title": "Nouveau & meilleur titre",
-        }])
+        self.assertEqual(result["replacement_certifications"], [
+            {
+                "rncp_code": "67890",
+                "title": "Nouveau & meilleur titre",
+            },
+            {
+                "rncp_code": "67891",
+                "title": "Autre titre de remplacement",
+            },
+        ])
 
     @patch("services.formation_pipeline_service._http.get")
     def test_returns_none_when_the_official_page_does_not_identify_the_code(self, http_get):

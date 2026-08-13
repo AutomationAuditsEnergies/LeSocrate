@@ -2619,14 +2619,18 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const replacements = Array.isArray(certification?.replacement_certifications)
       ? certification.replacement_certifications
       : []
-    const replacement = replacements[0] || null
 
     if (!certification?.active) {
-      setPendingRncpDecision({ certification, replacement })
+      const formattedReplacements = replacements
+        .map((replacement) => `RNCP ${replacement.rncp_code} « ${replacement.title} »`)
+        .join(', ')
+      setPendingRncpDecision({ certification, replacements })
       revealAssistantMessages([{
         role: 'assistant',
-        text: replacement
-          ? `La fiche RNCP ${certification.rncp_code} « ${certification.title} » est inactive. Elle a été remplacée par RNCP ${replacement.rncp_code} « ${replacement.title} ». Souhaitez-vous conserver l’ancienne fiche ou utiliser la nouvelle certification ?`
+        text: replacements.length === 1
+          ? `Ce titre professionnel n’est désormais plus d’actualité. Il a été remplacé par ${formattedReplacements}, qui correspond à une version plus à jour. Êtes-vous sûr de vouloir quand même dispenser une formation pour le titre professionnel RNCP ${certification.rncp_code} « ${certification.title} », ou souhaitez-vous dispenser la formation du titre RNCP ${replacements[0].rncp_code} ?`
+          : replacements.length > 1
+            ? `Ce titre professionnel n’est désormais plus d’actualité. Il a été remplacé par les certifications suivantes, qui correspondent à des versions plus à jour : ${formattedReplacements}. Êtes-vous sûr de vouloir quand même dispenser une formation pour le titre professionnel RNCP ${certification.rncp_code} « ${certification.title} », ou souhaitez-vous dispenser la formation de l’un de ces nouveaux titres RNCP ?`
           : `La fiche RNCP ${certification.rncp_code} « ${certification.title} » est inactive, mais son REAC reste disponible. Êtes-vous sûr de vouloir dispenser ce titre professionnel ?`,
       }])
       return
@@ -2768,12 +2772,12 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     }])
   }
 
-  const resolvePendingRncpDecision = async (useReplacement) => {
+  const resolvePendingRncpDecision = async (replacement = null) => {
     if (!pendingRncpDecision) return
-    const { certification, replacement } = pendingRncpDecision
+    const { certification } = pendingRncpDecision
     setPendingRncpDecision(null)
 
-    if (useReplacement && replacement) {
+    if (replacement && replacement !== 'other') {
       setHistory((current) => [...current, {
         role: 'user',
         text: `Utiliser RNCP ${replacement.rncp_code} « ${replacement.title} »`,
@@ -2782,7 +2786,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
       return
     }
 
-    if (useReplacement) {
+    if (replacement === 'other') {
       setHistory((current) => [...current, { role: 'user', text: 'Saisir un autre code RNCP' }])
       setAnswer('')
       revealAssistantMessages([{
@@ -2979,26 +2983,28 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                     Le REAC de la fiche inactive reste disponible pour préparer le professeur.
                   </p>
                 </div>
-                <button type="button" onClick={() => resolvePendingRncpDecision(false)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#097FE8]/45 sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                <button type="button" onClick={() => resolvePendingRncpDecision()} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#097FE8]/45 sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>1</span>
                   <span>
                     <span className="block font-medium">Conserver RNCP {pendingRncpDecision.certification.rncp_code}</span>
                     <span className="mt-0.5 block text-xs" style={{ color: colors.textMuted }}>{pendingRncpDecision.certification.title}</span>
                   </span>
                 </button>
-                <button type="button" onClick={() => resolvePendingRncpDecision(true)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#097FE8]/45 sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>2</span>
-                  <span>
-                    <span className="block font-medium">
-                      {pendingRncpDecision.replacement
-                        ? `Utiliser RNCP ${pendingRncpDecision.replacement.rncp_code}`
-                        : 'Saisir un autre code RNCP'}
+                {pendingRncpDecision.replacements.map((replacement, index) => (
+                  <button key={replacement.rncp_code} type="button" onClick={() => resolvePendingRncpDecision(replacement)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#097FE8]/45 sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>{index + 2}</span>
+                    <span>
+                      <span className="block font-medium">Utiliser RNCP {replacement.rncp_code}</span>
+                      <span className="mt-0.5 block text-xs" style={{ color: colors.textMuted }}>{replacement.title}</span>
                     </span>
-                    {pendingRncpDecision.replacement && (
-                      <span className="mt-0.5 block text-xs" style={{ color: colors.textMuted }}>{pendingRncpDecision.replacement.title}</span>
-                    )}
-                  </span>
-                </button>
+                  </button>
+                ))}
+                {pendingRncpDecision.replacements.length === 0 && (
+                  <button type="button" onClick={() => resolvePendingRncpDecision('other')} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#097FE8]/45 sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>2</span>
+                    Saisir un autre code RNCP
+                  </button>
+                )}
               </div>
             )}
             {!pendingConfirmation && !pendingRncpDecision && (currentStep.type === 'text' || currentStep.type === 'number') && (
