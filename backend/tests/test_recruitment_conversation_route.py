@@ -47,6 +47,47 @@ class RecruitmentConversationRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_rncp_lookup_returns_the_official_available_title(self):
+        certification = {
+            "rncp_code": "37099",
+            "title": "TP - Employé commercial",
+            "active": True,
+            "reac_available": True,
+            "source_url": "https://www.francecompetences.fr/recherche/rncp/37099/",
+        }
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "services.formation_pipeline_service.get_rncp_certification",
+            return_value=certification,
+        ):
+            response = self.client.get("/api/hr/recruitment/rncp/37099")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["available"])
+        self.assertEqual(
+            response.get_json()["certification"]["title"],
+            "TP - Employé commercial",
+        )
+
+    def test_inactive_rncp_uses_the_product_unavailability_message(self):
+        certification = {
+            "rncp_code": "12345",
+            "title": "Ancien titre",
+            "active": False,
+            "reac_available": True,
+        }
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "services.formation_pipeline_service.get_rncp_certification",
+            return_value=certification,
+        ):
+            response = self.client.get("/api/hr/recruitment/rncp/12345")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()["available"])
+        self.assertEqual(
+            response.get_json()["reply"],
+            "Désolé, nous n’avons pas encore de professeur disponible pour dispenser cette formation.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -384,6 +384,62 @@ def create_hr_blueprint():
             return jsonify({"success": False, "error": str(exc)}), 400
         return jsonify({"success": True, **result}), 200
 
+    @hr_bp.route("/api/hr/recruitment/rncp/<rncp_code>", methods=["GET"])
+    def verify_hr_recruitment_rncp(rncp_code):
+        """Resolve one exact RNCP record from the official source."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        if _admin_account_type() not in _HR_SUPERADMIN_ACCOUNT_TYPES | {"training_center"}:
+            return jsonify({"success": False, "error": "Compte centre requis"}), 403
+
+        code = re.sub(r"\D", "", str(rncp_code or ""))
+        if not re.fullmatch(r"\d{4,6}", code):
+            return jsonify({
+                "success": False,
+                "error": "Le code RNCP doit contenir entre 4 et 6 chiffres",
+            }), 400
+
+        try:
+            from services.formation_pipeline_service import get_rncp_certification
+
+            certification = get_rncp_certification(code)
+        except Exception:
+            logger.exception("RNCP_LOOKUP_FAILED code=%s", code)
+            return jsonify({
+                "success": False,
+                "code": "rncp_source_unavailable",
+                "error": (
+                    "France Compétences est temporairement inaccessible. "
+                    "Réessayez la vérification dans quelques instants."
+                ),
+            }), 503
+
+        if certification is None:
+            return jsonify({
+                "success": False,
+                "code": "rncp_not_found",
+                "error": (
+                    f"Je ne trouve aucune fiche correspondant au code RNCP {code}. "
+                    "Vérifiez le code puis réessayez."
+                ),
+            }), 404
+
+        available = bool(
+            certification.get("active")
+            and certification.get("reac_available")
+        )
+        return jsonify({
+            "success": True,
+            "available": available,
+            "certification": certification,
+            "reply": (
+                ""
+                if available
+                else "Désolé, nous n’avons pas encore de professeur disponible pour dispenser cette formation."
+            ),
+        }), 200
+
     def _day_schedule_center_id():
         denied = _require_admin()
         if denied:

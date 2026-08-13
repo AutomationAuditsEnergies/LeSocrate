@@ -10,7 +10,14 @@ test('asks again when the training answer only describes its duration', () => {
   const result = validateRecruitmentAnswer('trainingName', 'une formation longue')
 
   assert.equal(result.valid, false)
-  assert.match(result.message, /pas le sujet de la formation/)
+  assert.match(result.message, /pas un intitulé précis/)
+})
+
+test('rejects a certification category instead of confirming it as a title', () => {
+  const result = validateRecruitmentAnswer('trainingName', 'Un titre professionnel')
+
+  assert.equal(result.valid, false)
+  assert.match(result.message, /nom exact du titre professionnel/)
 })
 
 test('accepts a short but specific training title', () => {

@@ -24,8 +24,8 @@ FIELD_RULES = {
         "example": "Pierre ou Sofia",
     },
     "trainingName": {
-        "label": "l’intitulé ou le sujet précis de la formation",
-        "example": "TP Conseiller relation client à distance ou Développeur web",
+        "label": "l’intitulé exact du titre professionnel à dispenser",
+        "example": "Conseiller relation client à distance",
     },
     "rncpCode": {
         "label": "le code RNCP de la formation, composé de 4 à 6 chiffres",
@@ -44,9 +44,18 @@ _UNCERTAIN = re.compile(
 )
 _GENERIC_TRAINING_WORDS = {
     "un", "une", "le", "la", "les", "de", "des", "du", "en", "pour", "sur",
-    "formation", "formations", "cours", "programme", "parcours", "long", "longue",
+    "formation", "formations", "cours", "programme", "parcours", "titre", "titres", "tp", "long", "longue",
     "court", "courte", "general", "generale", "professionnel", "professionnelle",
     "complete", "complet", "certifiant", "certifiante", "qualifiant", "qualifiante",
+}
+_GENERIC_TRAINING_LABELS = {
+    "titre professionnel",
+    "un titre professionnel",
+    "le titre professionnel",
+    "tp",
+    "un tp",
+    "une certification professionnelle",
+    "formation professionnelle",
 }
 
 
@@ -62,12 +71,20 @@ def _clarification(field: str, attempt: int = 0) -> str:
     if attempt <= 0:
         questions = {
             "teacherName": "Quel nom souhaitez-vous donner au professeur IA ?",
-            "trainingName": "Quel est le nom précis de la formation qu’il enseignera ?",
+            "trainingName": "Quel est l’intitulé exact du titre professionnel qu’il devra dispenser ?",
             "rncpCode": "Quel est le code RNCP de cette formation ?",
             "trainingDays": "Combien de journées la formation doit-elle durer au total ?",
         }
         return questions[field]
     return f"Pour continuer, j’ai besoin de {rule['label']}. Par exemple : « {rule['example']} »."
+
+
+def _generic_training_clarification(value: str) -> str:
+    return (
+        f"« {value} » désigne une catégorie de certification, pas un intitulé précis. "
+        "Indiquez le nom exact du titre professionnel, par exemple "
+        "« Conseiller relation client à distance »."
+    )
 
 
 def _validate_value(field: str, value: Any) -> str | int | None:
@@ -82,6 +99,8 @@ def _validate_value(field: str, value: Any) -> str | int | None:
         return raw[:80]
 
     if field == "trainingName":
+        if normalized in _GENERIC_TRAINING_LABELS:
+            return None
         specific_words = [
             word for word in normalized.split()
             if len(word) >= 3 and word not in _GENERIC_TRAINING_WORDS
@@ -160,7 +179,10 @@ Règles absolues :
 - Extrais uniquement le champ attendu, même si le message parle aussi d’autre chose.
 - N’invente rien et ne déduis pas une valeur absente.
 - Une préférence vague, un refus, une question ou du hors-sujet vaut answered=false.
-- Pour trainingName, une durée comme « formation longue » n’est pas un intitulé.
+- Pour trainingName, accepte uniquement le nom précis d’un titre professionnel identifiable.
+- « un titre professionnel », « une formation », « un TP » ou une durée comme « formation longue »
+  désignent une catégorie ou un format : retourne answered=false.
+- N’invente jamais un intitulé de titre professionnel à partir d’une catégorie vague.
 - Pour teacherName, « un professeur » n’est pas un nom.
 - Pour rncpCode, retourne uniquement 4 à 6 chiffres.
 - Pour trainingDays, retourne un entier de 1 à 365.
@@ -188,10 +210,14 @@ Réponse utilisateur : {json.dumps(message, ensure_ascii=False)}
         value = _fallback_extract(field, message)
 
     if value is None:
+        if field == "trainingName" and _normalize(message) in _GENERIC_TRAINING_LABELS:
+            reply = _generic_training_clarification(message)
+        else:
+            reply = _clarification(field, attempt)
         return {
             "answered": False,
             "value": None,
-            "reply": _clarification(field, attempt),
+            "reply": reply,
         }
 
     return {"answered": True, "value": value, "reply": ""}

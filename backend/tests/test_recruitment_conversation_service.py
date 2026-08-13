@@ -12,7 +12,17 @@ class RecruitmentConversationServiceTest(unittest.TestCase):
         result = interpret_recruitment_answer("trainingName", "une formation longue")
 
         self.assertFalse(result["answered"])
-        self.assertIn("nom précis", result["reply"])
+        self.assertIn("intitulé exact", result["reply"])
+
+    @patch("services.recruitment_conversation_service._llm_post")
+    def test_rejects_title_professionnel_as_a_category_not_a_title(self, llm_post):
+        llm_post.return_value = '{"answered": true, "value": "Un titre professionnel"}'
+
+        result = interpret_recruitment_answer("trainingName", "Un titre professionnel")
+
+        self.assertFalse(result["answered"])
+        self.assertIn("catégorie de certification", result["reply"])
+        self.assertIn("nom exact du titre professionnel", result["reply"])
 
     @patch("services.recruitment_conversation_service._llm_post")
     def test_extracts_requested_value_from_a_longer_message(self, llm_post):

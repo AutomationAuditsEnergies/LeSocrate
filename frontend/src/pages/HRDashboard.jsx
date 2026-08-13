@@ -37,7 +37,7 @@ import {
   getReusableTeacherDefaults,
   shouldShowCenterOnboarding,
 } from '../centerWorkspace'
-import { applyKnownRncpTraining, validateRecruitmentAnswer } from '../recruitmentConversation'
+import { validateRecruitmentAnswer } from '../recruitmentConversation'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
 
@@ -2415,9 +2415,8 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
 
 const RECRUITMENT_STEPS = [
   { id: 'teacherName', question: 'Comment souhaitez-vous appeler ce professeur IA ?', placeholder: 'Ex. Pierre, Lina, Sofia…', type: 'text' },
-  { id: 'trainingName', question: 'Quelle formation va-t-il délivrer ?', placeholder: 'Ex. TP Conseiller relation client à distance', type: 'text' },
-  { id: 'rncpCode', question: 'Quel est le code RNCP de cette formation ?', placeholder: 'Ex. 35304', type: 'number' },
-  { id: 'rncpConfirm', question: 'S’agit-il bien de cette formation ?', type: 'confirm' },
+  { id: 'rncpCode', question: 'Quel est le code RNCP de la formation que vous souhaitez dispenser ?', placeholder: 'Ex. 37099', type: 'number' },
+  { id: 'rncpConfirm', question: 'S’agit-il bien de ce titre professionnel ?', type: 'confirm' },
   { id: 'trainingDays', question: 'Combien de journées de formation faut-il prévoir au total ?', placeholder: 'Ex. 52', type: 'number' },
   { id: 'weeklyCourseCount', question: 'Combien de journées de cours auront lieu chaque semaine ?', type: 'frequency' },
   { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous programmer ?', type: 'days' },
@@ -2484,10 +2483,9 @@ function useAnimatedPlaceholder(examples) {
 function getRecruitmentAssistantText(step, draft, matchingModule) {
   if (!step) return ''
   if (step.id === 'rncpConfirm') {
-    const reference = matchingModule
-      ? `${matchingModule.tp_name}, RNCP ${matchingModule.rncp_code}`
-      : `${draft.trainingName}, RNCP ${draft.rncpCode}`
-    return `Je vérifie la référence avant de continuer : ${reference}.`
+    const title = draft.trainingName || matchingModule?.tp_name
+    const code = draft.rncpCode || matchingModule?.rncp_code
+    return `Le code RNCP ${String(code).replace(/\D/g, '')} correspond au titre professionnel « ${title} ». Est-ce bien ce titre que vous souhaitez dispenser ?`
   }
   if (step.id === 'weeklyCourseCount') return 'Définissons maintenant le rythme hebdomadaire de la formation.'
   if (step.id === 'teachingDays') return 'Choisissez les jours qui correspondent à ce rythme.'
@@ -2552,7 +2550,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     return String(value)
   }
 
-  const advance = (value, { recordUser = true } = {}) => {
+  const advance = (value, { recordUser = true, verifiedCertification = null } = {}) => {
     if (!currentStep) return
     if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
       const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
@@ -2561,7 +2559,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
       setStepIndex(1)
       setAnswer('')
       revealAssistantMessages([
-        { role: 'assistant', text: 'D’accord, reprenons le nom de la formation. Quelle formation va-t-il délivrer ?' },
+        { role: 'assistant', text: 'D’accord. Quel est le code RNCP du titre professionnel que vous souhaitez dispenser ?' },
       ])
       return
     }
@@ -2569,15 +2567,15 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     let nextDraft = currentStep.id === 'rncpConfirm'
       ? draft
       : { ...draft, [currentStep.id]: normalizedValue }
-    let knownRncpModule = null
     if (currentStep.id === 'rncpCode') {
-      const knownRncp = applyKnownRncpTraining(nextDraft, modules, normalizedValue)
-      nextDraft = knownRncp.draft
-      knownRncpModule = knownRncp.matchingModule
+      nextDraft = {
+        ...nextDraft,
+        trainingName: verifiedCertification?.title || nextDraft.trainingName,
+      }
     }
     const nextIndex = stepIndex + 1
     const nextStep = RECRUITMENT_STEPS[nextIndex]
-    const nextMatchingModule = knownRncpModule || modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
+    const nextMatchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
     setDraft(nextDraft)
     if (recordUser) {
       setHistory((current) => [...current, {
@@ -2639,14 +2637,45 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
 
     setClarificationAttempts((current) => ({ ...current, [field]: 0 }))
     const interpretedValue = interpretation.value
-    if (field === 'teacherName' || field === 'trainingName') {
+    if (field === 'teacherName') {
       setPendingConfirmation({ field, value: interpretedValue })
       revealAssistantMessages([{
         role: 'assistant',
-        text: field === 'teacherName'
-          ? `J’ai compris « ${interpretedValue} ». Est-ce bien le nom que vous souhaitez donner au professeur IA ?`
-          : `J’ai compris « ${interpretedValue} ». Est-ce bien l’intitulé de la formation qu’il devra assurer ?`,
+        text: `J’ai compris « ${interpretedValue} ». Est-ce bien le nom que vous souhaitez donner au professeur IA ?`,
       }])
+      return
+    }
+
+    if (field === 'rncpCode') {
+      try {
+        const response = await apiFetch(`/api/hr/recruitment/rncp/${encodeURIComponent(interpretedValue)}`, {
+          timeoutMs: 25000,
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok || !payload.success) {
+          revealAssistantMessages([{
+            role: 'assistant',
+            text: payload.error || 'Je ne peux pas vérifier ce code RNCP pour le moment. Réessayez dans quelques instants.',
+          }])
+          return
+        }
+        if (!payload.available) {
+          revealAssistantMessages([{
+            role: 'assistant',
+            text: payload.reply || 'Désolé, nous n’avons pas encore de professeur disponible pour dispenser cette formation.',
+          }])
+          return
+        }
+        advance(interpretedValue, {
+          recordUser: false,
+          verifiedCertification: payload.certification,
+        })
+      } catch {
+        revealAssistantMessages([{
+          role: 'assistant',
+          text: 'France Compétences est temporairement inaccessible. Réessayez la vérification dans quelques instants.',
+        }])
+      }
       return
     }
 
@@ -2675,7 +2704,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
 
   const resolvePendingConfirmation = (confirmed) => {
     if (!pendingConfirmation) return
-    const { field, value } = pendingConfirmation
+    const { value } = pendingConfirmation
     setPendingConfirmation(null)
     if (confirmed) {
       setHistory((current) => [...current, { role: 'user', text: 'Oui, c’est bien cela' }])
@@ -2684,12 +2713,9 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     }
 
     setHistory((current) => [...current, { role: 'user', text: 'Non, je veux le corriger' }])
-    const step = RECRUITMENT_STEPS.find((item) => item.id === field)
     revealAssistantMessages([{
       role: 'assistant',
-      text: field === 'teacherName'
-        ? 'D’accord. Quel prénom ou quel nom voulez-vous précisément donner au professeur IA ? Par exemple « Pierre » ou « Sofia ».'
-        : `D’accord. Quel est l’intitulé précis de la formation ? Par exemple « ${step?.placeholder?.replace('Ex. ', '') || 'Développeur web'} ».`,
+      text: 'D’accord. Quel prénom ou quel nom voulez-vous précisément donner au professeur IA ? Par exemple « Pierre » ou « Sofia ».',
     }])
   }
 
@@ -2844,17 +2870,17 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
               <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
                 <div className="px-4 py-3.5 sm:px-5">
                   <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>
-                    {pendingConfirmation.field === 'teacherName' ? 'Confirmer le nom du professeur' : 'Confirmer la formation'}
+                    Confirmer le nom du professeur
                   </p>
                   <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>{pendingConfirmation.value}</p>
                 </div>
                 <button type="button" onClick={() => resolvePendingConfirmation(true)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>1</span>
-                  Oui, confirmer
+                  Confirmer ce nom
                 </button>
                 <button type="button" onClick={() => resolvePendingConfirmation(false)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>2</span>
-                  Non, modifier
+                  Modifier le nom
                 </button>
               </div>
             )}
@@ -2871,7 +2897,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                     <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>{currentStep.question}</p>
                     {currentStep.id === 'rncpConfirm' && (
                       <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-                        {matchingModule ? `${matchingModule.tp_name} · RNCP ${matchingModule.rncp_code}` : `${draft.trainingName} · RNCP ${draft.rncpCode}`}
+                        {`${draft.trainingName || matchingModule?.tp_name} · RNCP ${draft.rncpCode || matchingModule?.rncp_code}`}
                       </p>
                     )}
                   </div>

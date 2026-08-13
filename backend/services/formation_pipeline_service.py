@@ -15,9 +15,10 @@ import re
 import math
 import json
 import time
+from html import unescape
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 import requests as _http
 
@@ -847,6 +848,58 @@ _FC_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
+
+
+def get_rncp_certification(rncp_code: str) -> dict | None:
+    """Return the exact France Compétences record for one RNCP code."""
+    code = re.sub(r"^RNCP", "", str(rncp_code or "").strip(), flags=re.IGNORECASE)
+    if not re.fullmatch(r"\d{4,6}", code):
+        raise ValueError("Le code RNCP doit contenir entre 4 et 6 chiffres")
+
+    source_url = f"https://www.francecompetences.fr/recherche/rncp/{code}/"
+    response = _http.get(source_url, headers=_FC_HEADERS, timeout=20)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    page = response.text
+
+    title_match = re.search(
+        r'<h2[^>]*class="[^"]*title--page--generic[^"]*"[^>]*>(.*?)</h2>',
+        page,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    code_match = re.search(
+        r'tag--fcpt-certification__status[^>]*>\s*RNCP\s*(\d{4,6})\s*<',
+        page,
+        flags=re.IGNORECASE,
+    )
+    status_match = re.search(
+        r'Etat\s*:</span>\s*<span[^>]*tag--fcpt-certification__status[^>]*>(.*?)</span>',
+        page,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    reac_match = re.search(
+        r'<a[^>]+href="([^"]+)"[^>]+title="Référentiel d[’\'’]activité[^\"]*"',
+        page,
+        flags=re.IGNORECASE,
+    )
+
+    if not title_match or not code_match or code_match.group(1) != code:
+        return None
+
+    clean_html = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", unescape(value))).strip()
+    title = clean_html(title_match.group(1))
+    status = clean_html(status_match.group(1)) if status_match else ""
+    reac_url = urljoin(source_url, unescape(reac_match.group(1))) if reac_match else None
+    return {
+        "rncp_code": code,
+        "title": title,
+        "status": status,
+        "active": status.casefold() == "active",
+        "reac_available": bool(reac_url),
+        "reac_url": reac_url,
+        "source_url": source_url,
+    }
 
 
 def search_rncp(query: str) -> list:

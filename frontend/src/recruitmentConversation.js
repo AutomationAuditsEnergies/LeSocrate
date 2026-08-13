@@ -10,9 +10,19 @@ const UNCERTAIN_ANSWER = /^(je ne sais pas|j sais pas|jsp|aucune idee|n importe 
 const GENERIC_TRAINING_WORDS = new Set([
   'un', 'une', 'le', 'la', 'les', 'de', 'des', 'du', 'en', 'pour', 'sur',
   'formation', 'formations', 'cours', 'programme', 'parcours',
+  'titre', 'titres', 'tp',
   'long', 'longue', 'court', 'courte', 'general', 'generale',
   'professionnel', 'professionnelle', 'complete', 'complet',
   'certifiant', 'certifiante', 'qualifiant', 'qualifiante',
+])
+const GENERIC_TRAINING_LABELS = new Set([
+  'titre professionnel',
+  'un titre professionnel',
+  'le titre professionnel',
+  'tp',
+  'un tp',
+  'une certification professionnelle',
+  'formation professionnelle',
 ])
 
 export function validateRecruitmentAnswer(stepId, rawValue) {
@@ -38,10 +48,10 @@ export function validateRecruitmentAnswer(stepId, rawValue) {
     const specificWords = normalized
       .split(' ')
       .filter((word) => word.length >= 3 && !GENERIC_TRAINING_WORDS.has(word))
-    if (UNCERTAIN_ANSWER.test(normalized) || specificWords.length === 0) {
+    if (UNCERTAIN_ANSWER.test(normalized) || GENERIC_TRAINING_LABELS.has(normalized) || specificWords.length === 0) {
       return {
         valid: false,
-        message: `« ${value} » décrit le format ou la durée, mais pas le sujet de la formation. Donnez-moi son intitulé précis, par exemple « TP Conseiller relation client à distance » ou « Développeur web ».`,
+        message: `« ${value} » désigne une catégorie de certification, pas un intitulé précis. Indiquez le nom exact du titre professionnel, par exemple « Conseiller relation client à distance ».`,
       }
     }
   }
