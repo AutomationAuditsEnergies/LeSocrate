@@ -399,6 +399,23 @@
   box-shadow: inset 0 0 0 1px #292824;
 }
 
+.day-schedule-name-input.day-schedule-input--invalid {
+  border-color: #b42318;
+  background: #fffafa;
+}
+
+.day-schedule-name-input.day-schedule-input--invalid:focus-visible {
+  border-color: #b42318;
+  box-shadow: inset 0 0 0 1px #b42318;
+}
+
+.day-schedule-field-error {
+  margin: 6px 0 0;
+  color: #b42318;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .day-schedule-timeline-shell {
   position: relative;
   overflow: hidden;
@@ -563,8 +580,8 @@
 }
 
 .day-schedule-calendar-event[data-invalid="true"] {
-  outline: 1px dashed #77756e;
-  outline-offset: -3px;
+  outline: 2px solid #b42318;
+  outline-offset: -2px;
 }
 
 .day-schedule-calendar-event[data-resizing="true"] {
@@ -761,6 +778,18 @@
 
 .day-schedule-validation li + li {
   margin-top: 3px;
+}
+
+.day-schedule-feedback-list {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.day-schedule-feedback-list li + li {
+  margin-top: 2px;
 }
 
 @media (max-width: 1023px) {

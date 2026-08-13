@@ -93,6 +93,22 @@ function blockPresentation(block, counters) {
   }
 }
 
+function getValidationMessages(validation, blocks) {
+  const messages = [...validation.errors]
+  const counters = { course: 0, qa: 0 }
+
+  blocks.forEach((block) => {
+    const presentation = blockPresentation(block, counters)
+    const blockMessages = validation.blockErrors[block.block_key] || []
+    if (!blockMessages.length) return
+    blockMessages.forEach((message) => {
+      messages.push(`${presentation.title} : ${message}`)
+    })
+  })
+
+  return messages
+}
+
 function durationBounds(block) {
   if (block.block_type === 'course') return DAY_SCHEDULE_RULES.course
   if (block.block_type === 'qa') return DAY_SCHEDULE_RULES.qa
@@ -590,6 +606,12 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
       : { valid: false, errors: [], blockErrors: {}, stats: getScheduleStats([]) },
     [visibleTemplate],
   )
+  const validationMessages = useMemo(
+    () => visibleTemplate
+      ? getValidationMessages(validation, visibleTemplate.blocks)
+      : [],
+    [validation, visibleTemplate],
+  )
 
   const startCreate = () => {
     setDraft(createEmptyScheduleTemplateDraft())
@@ -627,7 +649,8 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     if (!result.valid) {
       setFeedback({
         tone: 'error',
-        message: 'Corrigez les points signalés avant d’enregistrer.',
+        validation: true,
+        message: 'Impossible d’enregistrer ce template.',
       })
       return
     }
@@ -650,6 +673,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     } catch (saveError) {
       setFeedback({
         tone: 'error',
+        validation: false,
         message: saveError.message || 'Impossible d’enregistrer le template.',
       })
     } finally {
@@ -743,13 +767,24 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
 
       {feedback && (
         <div
-          className="mb-4 flex items-start gap-2 rounded-lg border border-[#D4D4D8] bg-[#F4F4F5] px-3.5 py-3 text-sm text-[#3F3F46]"
+          className={`mb-4 flex items-start gap-2 rounded-lg border px-3.5 py-3 text-sm ${feedback.tone === 'error'
+            ? 'border-[#E7B8B4] bg-[#FFF7F6] text-[#5C2622]'
+            : 'border-[#D4D4D8] bg-[#F4F4F5] text-[#3F3F46]'}`}
           role={feedback.tone === 'error' ? 'alert' : 'status'}
         >
           {feedback.tone === 'error'
-            ? <CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            ? <CircleAlert size={16} className="mt-0.5 shrink-0 text-[#B42318]" aria-hidden="true" />
             : <Check size={16} className="mt-0.5 shrink-0" aria-hidden="true" />}
-          <span>{feedback.message}</span>
+          <div className="min-w-0">
+            <p>{feedback.message}</p>
+            {feedback.validation && validationMessages.length > 0 && (
+              <ul className="day-schedule-feedback-list">
+                {validationMessages.map((message, index) => (
+                  <li key={`${message}-${index}`}>{message}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
 
@@ -759,15 +794,22 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
             <label htmlFor="day-schedule-template-name">Nom du template</label>
             <input
               id="day-schedule-template-name"
-              className="day-schedule-name-input"
+              className={`day-schedule-name-input${feedback?.validation && !draft.name.trim() ? ' day-schedule-input--invalid' : ''}`}
               value={draft.name}
               placeholder="Ex. Journée standard"
+              aria-invalid={feedback?.validation && !draft.name.trim() ? 'true' : undefined}
+              aria-describedby={feedback?.validation && !draft.name.trim() ? 'day-schedule-template-name-error' : undefined}
               autoFocus={!draft.id}
               onChange={(event) => setDraft((current) => ({
                 ...current,
                 name: event.target.value,
               }))}
             />
+            {feedback?.validation && !draft.name.trim() && (
+              <p id="day-schedule-template-name-error" className="day-schedule-field-error">
+                Donnez un nom au template.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -832,7 +874,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
                 <ScheduleTimeline
                   blocks={visibleTemplate.blocks}
                   readOnly={mode !== 'edit'}
-                  blockErrors={validation.blockErrors}
+                  blockErrors={feedback?.validation ? validation.blockErrors : {}}
                   onBlocksChange={updateDraftBlocks}
                   onAddSequence={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
                   canAddSequence={validation.stats.courseCount < DAY_SCHEDULE_RULES.maxCourses}
