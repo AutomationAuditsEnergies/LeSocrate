@@ -298,6 +298,24 @@ class PipelineQueueRouteTest(unittest.TestCase):
             "flash",
         )
 
+    def test_missing_pipeline_model_falls_back_to_deepseek_flash(self):
+        self.assertEqual(
+            formation_routes._resolve_pipeline_api_model({}),
+            "deepseek-v4-flash",
+        )
+
+    def test_slides_follow_the_pipeline_flash_model_by_default(self):
+        with patch.dict(
+            formation_routes.os.environ,
+            {"FORMATION_SLIDES_MODEL": ""},
+        ):
+            self.assertEqual(
+                formation_routes._resolve_pipeline_slide_model(
+                    "deepseek-v4-flash"
+                ),
+                "deepseek-v4-flash",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,11 @@ from services.canonical_teacher_service import resolve_compatible_canonical_teac
 from services.platform_storage_service import ensure_platform_storage
 
 
+# Les nouvelles pipelines utilisent le profil économique par défaut. La valeur
+# courte est celle persistée dans auto_pilot_model et normalisée par les routes.
+DEFAULT_PIPELINE_MODEL = "flash"
+
+
 def _schedule_schema_version(schedule) -> int:
     if not isinstance(schedule, dict):
         return 1
@@ -322,7 +327,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                 rncp_code=rncp_code,
                 total_hours=total_hours,
                 nb_days=nb_days,
-                model="pro",
+                model=DEFAULT_PIPELINE_MODEL,
                 teacher_name=teacher_name,
                 teacher_color=teacher_color,
                 creation_request_id=creation_request_id,
@@ -353,7 +358,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             update_job(
                 pipeline_job_id,
                 auto_pilot_enabled=1,
-                auto_pilot_model="pro",
+                auto_pilot_model=DEFAULT_PIPELINE_MODEL,
                 auto_pilot_tts_mode="fish_audio",
                 auto_pilot_use_cc=0,
                 auto_pilot_skip_vs=0,

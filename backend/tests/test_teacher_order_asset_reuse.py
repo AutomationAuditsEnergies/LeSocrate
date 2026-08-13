@@ -80,7 +80,9 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
             service,
             "create_postgres_pipeline_aggregate",
             return_value={"platform": {"id": 120}, "job_id": 420},
-        ), patch.object(service, "update_job"), patch.object(
+        ) as create_aggregate, patch.object(
+            service, "update_job"
+        ) as update_job, patch.object(
             service, "update_order_state"
         ) as update_order:
             result = service.fulfill_teacher_order(_work_item(), _Lease())
@@ -88,6 +90,8 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
         self.assertEqual(result.result["status"], "preparing")
         self.assertEqual(result.next_items[0].payload["teacher_order_id"], 7)
         self.ensure_storage.assert_called_once_with({"id": 120})
+        self.assertEqual(create_aggregate.call_args.kwargs["model"], "flash")
+        self.assertEqual(update_job.call_args.kwargs["auto_pilot_model"], "flash")
         self.assertEqual(update_order.call_args.kwargs["status"], "fulfilling")
         self.assertEqual(update_order.call_args.kwargs["fulfillment_status"], "running")
 

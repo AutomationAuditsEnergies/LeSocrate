@@ -50,6 +50,7 @@ _PIPELINE_MODEL_ALIASES = {
     "pro": "deepseek-v4-pro",
 }
 _PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
+_DEFAULT_PIPELINE_MODEL_CHOICE = "flash"
 _LEGACY_PIPELINE_MODEL_CHOICES = {
     "sonnet": "pro",
     "claude-sonnet-4-20250514": "pro",
@@ -92,14 +93,14 @@ def _slides_folder_workers(default: int = 3) -> int:
 def _resolve_pipeline_slide_model(api_model: str | None) -> str | None:
     """Modèle dédié à la curation slides.
 
-    L'itération manuelle "Régénérer curation + slides" utilise DeepSeek Pro par
-    défaut. On aligne l'auto-pilot dessus, tout en laissant un override env pour
-    les environnements sans clé DeepSeek.
+    Par défaut, les slides suivent le modèle choisi au lancement de la pipeline.
+    Un override reste disponible pour les environnements qui souhaitent dédier
+    un autre modèle à cette étape.
     """
     override = (os.getenv("FORMATION_SLIDES_MODEL") or "").strip()
     if override:
         return _PIPELINE_MODEL_ALIASES.get(override.lower(), override)
-    return "deepseek-v4-pro"
+    return api_model or _PIPELINE_MODEL_ALIASES[_DEFAULT_PIPELINE_MODEL_CHOICE]
 
 
 def _formation_content_day_workers(default: int = 3) -> int:
@@ -170,7 +171,7 @@ def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
     Priorité :
       1. modèle explicite passé en argument
       2. modèle choisi au lancement (`auto_pilot_model`)
-      3. fallback DeepSeek Pro
+      3. fallback DeepSeek Flash
 
     Garantit qu'un job lancé en DeepSeek reste en DeepSeek pour TOUTES les
     étapes, même si `auto_pilot_model` n'a pas été persisté côté DB (jobs
@@ -179,7 +180,7 @@ def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
     """
     model = requested_model or (job or {}).get("auto_pilot_model")
     if not model:
-        model = "deepseek-v4-pro"
+        model = _DEFAULT_PIPELINE_MODEL_CHOICE
     model = str(model).strip()
     legacy_choice = _LEGACY_PIPELINE_MODEL_CHOICES.get(model.lower())
     if legacy_choice:
@@ -2738,7 +2739,10 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
         update_job(job_id, status=fallback, error_message=None)
         job = {**job, "status": fallback, "error_message": None}
 
-    model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="pro")
+    model = _normalize_pipeline_model_choice(
+        job.get("auto_pilot_model"),
+        default=_DEFAULT_PIPELINE_MODEL_CHOICE,
+    )
     tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
     if job.get("auto_pilot_use_cc"):
         logger.warning(

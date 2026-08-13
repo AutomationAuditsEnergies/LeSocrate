@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-13
+
+### perf(pipeline): DeepSeek Flash par défaut pour les lancements
+
+Les nouvelles pipelines issues d'une commande professeur IA persistent
+désormais le profil `flash`. Les étapes de génération, y compris les slides,
+utilisent ainsi `deepseek-v4-flash` par défaut afin de réduire le coût des tests.
+Un `FORMATION_SLIDES_MODEL` explicite continue de surcharger le modèle des
+slides, et les jobs déjà enregistrés avec `pro` conservent ce choix.
+
 ## 2026-07-31
 
 ### refactor(runtime): retrait de SocketIO et Eventlet
