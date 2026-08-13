@@ -14,6 +14,9 @@ test('smoothly keeps the latest recruitment exchange above the composer', () => 
     /behavior: prefersReducedMotionRef\.current \? 'auto' : 'smooth'/,
   )
   assert.match(dashboardSource, /h-\[clamp\(72px,14vh,144px\)\]/)
+  assert.match(dashboardSource, /justify-start py-8 sm:py-10/)
+  assert.match(dashboardSource, /window\.setInterval\(\(\) => \{/)
+  assert.match(dashboardSource, /recruitment-assistant-message--streaming/)
   assert.doesNotMatch(
     dashboardSource,
     /scrollArea\.scrollTop = scrollArea\.scrollHeight/,

@@ -167,12 +167,24 @@ body {
   animation: recruitment-thinking-pulse 900ms cubic-bezier(0.16, 1, 0.3, 1) infinite;
 }
 
+.recruitment-assistant-message--streaming::after {
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  background: currentColor;
+  content: '';
+  animation: recruitment-thinking-pulse 900ms cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .teacher-card-enter,
   .teacher-robot-float,
   .teacher-identity-avatar,
   .recruitment-review-enter,
-  .recruitment-thinking-dot {
+  .recruitment-thinking-dot,
+  .recruitment-assistant-message--streaming::after {
     animation: none;
   }
 }
