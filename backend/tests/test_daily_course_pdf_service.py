@@ -33,16 +33,20 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
         )
 
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+        reader = PdfReader(io.BytesIO(pdf_bytes))
         text = "\n".join(
             page.extract_text() or ""
-            for page in PdfReader(io.BytesIO(pdf_bytes)).pages
+            for page in reader.pages
         )
+        self.assertIn("Support de formation", text)
         self.assertIn("Conseiller relation client", text)
         self.assertIn("22/07/2026", text)
         self.assertIn("La reformulation permet", text)
         self.assertNotIn("[warm]", text)
         self.assertNotIn("[pause]", text)
         self.assertNotIn("BLOC_AUDIO", text)
+        self.assertNotIn("LE SOCRATE", text.upper())
+        self.assertNotIn("LE SOCRATE", str(reader.metadata or {}).upper())
 
     def test_publish_uses_tenant_and_occurrence_scoped_blob(self):
         destination = Mock()

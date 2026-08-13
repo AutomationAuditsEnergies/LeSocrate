@@ -11,7 +11,6 @@ import {
   findActiveAudioSlideTiming,
 } from '../components/slides/audioSlideSync'
 import {
-  buildBreakPlaybackPlan,
   getStudentAudioProxyPath,
   isBreakAudioType,
 } from '../studentCoursePlayback.js'
@@ -319,13 +318,9 @@ export default function Video() {
     const breakAudio = isBreakAudioType(audioInfo.type)
     const initialOffset = Math.max(0, Number(audioInfo.offset) || 0)
     const initialRemaining = Math.max(0, Number(audioInfo.remaining) || 0)
-    const effectiveDuration = Math.max(0, Number(audioInfo.duration) || 0)
     const startedAt = Date.now()
     let hasAttemptedPlay = false
     let refreshed = false
-    let inSilentPreRoll = false
-    let silentPreRollEndsAt = 0
-    let silentLoopStart = 0.05
     let endedTimer = null
 
     const refreshAtBoundary = (delay = 0) => {
@@ -342,32 +337,11 @@ export default function Video() {
       const decodedAssetDuration = Number.isFinite(audio.duration)
         ? audio.duration
         : Math.max(0, Number(audioInfo.assetDuration) || 0)
-      if (!breakAudio) {
-        const maxOffset = decodedAssetDuration > 0
-          ? Math.max(0, decodedAssetDuration - 0.05)
-          : initialOffset
-        audio.currentTime = Math.min(initialOffset, maxOffset)
-        setPlaybackTime(initialOffset * 1000)
-        return
-      }
-
-      const plan = buildBreakPlaybackPlan({
-        effectiveOffset: initialOffset,
-        effectiveDuration,
-        assetDuration: decodedAssetDuration,
-      })
-      silentLoopStart = decodedAssetDuration > 5 ? 2 : 0.05
-      if (plan.preRollRemaining > 0) {
-        inSilentPreRoll = true
-        silentPreRollEndsAt = Date.now() + plan.preRollRemaining * 1000
-        audio.currentTime = Math.min(
-          silentLoopStart,
-          Math.max(0, decodedAssetDuration - 0.05),
-        )
-      } else {
-        const maxOffset = Math.max(0, decodedAssetDuration - 0.05)
-        audio.currentTime = Math.min(plan.mediaOffset, maxOffset)
-      }
+      const maxOffset = decodedAssetDuration > 0
+        ? Math.max(0, decodedAssetDuration - 0.05)
+        : initialOffset
+      audio.currentTime = Math.min(initialOffset, maxOffset)
+      setPlaybackTime(initialOffset * 1000)
     }
 
     const syncPlaybackClock = () => {
@@ -379,18 +353,7 @@ export default function Video() {
       const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
       const remaining = Math.max(0, initialRemaining - elapsed)
       setBreakRemaining(Math.ceil(remaining))
-      setPlaybackTime(Math.min(effectiveDuration, initialOffset + elapsed) * 1000)
-
-      if (inSilentPreRoll) {
-        if (Date.now() >= silentPreRollEndsAt) {
-          inSilentPreRoll = false
-          audio.currentTime = 0
-        } else if (audio.currentTime >= silentLoopStart + 0.75) {
-          // The MP3 itself supplies the digital silence while an early course
-          // has made this break longer than its nominal asset.
-          audio.currentTime = silentLoopStart
-        }
-      }
+      setPlaybackTime((initialOffset + elapsed) * 1000)
       if (remaining <= 0) {
         audio.pause()
         refreshAtBoundary()
@@ -418,11 +381,6 @@ export default function Video() {
     const handleCanPlay = () => attemptPlay()
     const handleTimeUpdate = () => syncPlaybackClock()
     const handleEnded = () => {
-      if (breakAudio && inSilentPreRoll) {
-        audio.currentTime = silentLoopStart
-        audio.play().catch(() => setShowPlayPrompt(true))
-        return
-      }
       const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
       const boundaryDelay = Math.max(0, initialRemaining - elapsed) * 1000
       refreshAtBoundary(boundaryDelay + 50)

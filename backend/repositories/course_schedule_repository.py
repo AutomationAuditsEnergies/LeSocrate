@@ -1073,7 +1073,7 @@ def mark_audio_waiting_for_content(session_id: int, *, updated_at) -> bool:
 
 
 def list_course_schedule_dashboard_states(platform_ids: list[int]) -> dict[int, dict[str, Any]]:
-    """Batch-load the next occurrence for dashboard cards without N+1 reads."""
+    """Batch-load the next three occurrences for dashboard cards."""
     ids = sorted({int(platform_id) for platform_id in platform_ids if platform_id})
     if not ids or not schedule_store_is_postgres():
         return {}
@@ -1089,7 +1089,8 @@ def list_course_schedule_dashboard_states(platform_ids: list[int]) -> dict[int, 
                        next_session.audio_generation_started_at,
                        next_session.audio_generation_completed_at,
                        next_session.audio_generation_attempts,
-                       next_session.audio_generation_next_retry_at
+                       next_session.audio_generation_next_retry_at,
+                       upcoming_sessions.items AS upcoming_sessions
                 FROM course_schedule_config cfg
                 LEFT JOIN LATERAL (
                     SELECT cs.*
@@ -1099,6 +1100,32 @@ def list_course_schedule_dashboard_states(platform_ids: list[int]) -> dict[int, 
                     ORDER BY cs.scheduled_at ASC
                     LIMIT 1
                 ) next_session ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'id', items.id,
+                            'session_index', items.session_index,
+                            'scheduled_at', items.scheduled_at,
+                            'status', items.status,
+                            'audio_generation_status', items.audio_generation_status,
+                            'audio_generation_started_at', items.audio_generation_started_at,
+                            'audio_generation_completed_at', items.audio_generation_completed_at,
+                            'audio_generation_attempts', items.audio_generation_attempts,
+                            'audio_generation_next_retry_at', items.audio_generation_next_retry_at,
+                            'postponement_count', items.postponement_count,
+                            'postponed_from', items.postponed_from,
+                            'postponed_at', items.postponed_at
+                        ) ORDER BY items.scheduled_at ASC
+                    ) AS items
+                    FROM (
+                        SELECT cs.*
+                        FROM course_sessions cs
+                        WHERE cs.platform_id = cfg.platform_id
+                          AND cs.status IN ('planned', 'active')
+                        ORDER BY cs.scheduled_at ASC
+                        LIMIT 3
+                    ) items
+                ) upcoming_sessions ON TRUE
                 WHERE cfg.platform_id = ANY(%s)
                 """,
                 (ids,),
@@ -3151,6 +3178,85 @@ def complete_audio_generation_session(session_id: int, *, completed_at, expected
             {owner_sql}
             """,
             params,
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def assign_fallback_audio_to_session(
+    platform_id: int,
+    session_id: int,
+    *,
+    module_day_id: int,
+    folder_id: int,
+    completed_at,
+) -> bool:
+    """Bind a reviewed older day to one failed/upcoming occurrence."""
+    storage_prefix = f"course-sessions/{int(session_id)}"
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"course-schedule:{int(platform_id)}",),
+                )
+                cur.execute(
+                    """
+                    UPDATE course_sessions
+                    SET module_day_id = %s,
+                        audio_folder_id = %s,
+                        audio_storage_prefix = %s,
+                        audio_generation_status = 'completed',
+                        audio_generation_started_at = COALESCE(audio_generation_started_at, %s),
+                        audio_generation_completed_at = %s,
+                        audio_generation_error = NULL,
+                        audio_generation_next_retry_at = NULL,
+                        updated_at = %s
+                    WHERE id = %s AND platform_id = %s
+                      AND status IN ('planned', 'active')
+                    RETURNING id
+                    """,
+                    (
+                        int(module_day_id),
+                        int(folder_id),
+                        storage_prefix,
+                        completed_at,
+                        completed_at,
+                        completed_at,
+                        int(session_id),
+                        int(platform_id),
+                    ),
+                )
+                return cur.fetchone() is not None
+
+    conn = get_db_connection()
+    try:
+        value = _sqlite_datetime(completed_at)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE course_sessions
+            SET module_day_id = ?, audio_folder_id = ?, audio_storage_prefix = ?,
+                audio_generation_status = 'completed',
+                audio_generation_started_at = COALESCE(audio_generation_started_at, ?),
+                audio_generation_completed_at = ?, audio_generation_error = NULL,
+                audio_generation_next_retry_at = NULL, updated_at = ?
+            WHERE id = ? AND platform_id = ?
+              AND status IN ('planned', 'active')
+            """,
+            (
+                int(module_day_id),
+                int(folder_id),
+                storage_prefix,
+                value,
+                value,
+                value,
+                int(session_id),
+                int(platform_id),
+            ),
         )
         changed = cursor.rowcount == 1
         conn.commit()

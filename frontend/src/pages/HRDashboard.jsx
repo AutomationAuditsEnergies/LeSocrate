@@ -1309,7 +1309,6 @@ export default function HRDashboard() {
               newFormRncp={newFormRncp}
               setNewFormRncp={setNewFormRncp}
               newFormHours={newFormHours}
-              setNewFormHours={setNewFormHours}
               initialScheduleV2={initialScheduleV2}
               creating={creating}
               billing={billing}
@@ -2515,7 +2514,9 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const [pendingRncpDecision, setPendingRncpDecision] = useState(null)
   const [clarificationAttempts, setClarificationAttempts] = useState({})
   const chatScrollRef = useRef(null)
-  const responseTimeoutRef = useRef(null)
+  const responseStreamRef = useRef({ timeoutId: null, intervalId: null })
+  const responseMessageIdRef = useRef(0)
+  const [streamingMessageId, setStreamingMessageId] = useState(null)
   const prefersReducedMotionRef = useRef(
     typeof window !== 'undefined'
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -2526,7 +2527,13 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const completed = stepIndex >= RECRUITMENT_STEPS.length
   const currentIsChoice = Boolean(currentStep && RECRUITMENT_CHOICE_TYPES.has(currentStep.type))
 
-  useEffect(() => () => window.clearTimeout(responseTimeoutRef.current), [])
+  const clearResponseStream = () => {
+    window.clearTimeout(responseStreamRef.current.timeoutId)
+    window.clearInterval(responseStreamRef.current.intervalId)
+    responseStreamRef.current = { timeoutId: null, intervalId: null }
+  }
+
+  useEffect(() => () => clearResponseStream(), [])
 
   useEffect(() => {
     const scrollArea = chatScrollRef.current
@@ -2541,12 +2548,66 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   }, [history, isThinking, stepIndex])
 
   const revealAssistantMessages = (messages) => {
-    window.clearTimeout(responseTimeoutRef.current)
+    clearResponseStream()
+    setStreamingMessageId(null)
     setIsThinking(true)
-    responseTimeoutRef.current = window.setTimeout(() => {
+
+    if (prefersReducedMotionRef.current) {
       setHistory((current) => [...current, ...messages])
       setIsThinking(false)
-    }, 620)
+      return
+    }
+
+    let messageIndex = 0
+    const revealNextMessage = () => {
+      if (messageIndex >= messages.length) {
+        setStreamingMessageId(null)
+        setIsThinking(false)
+        return
+      }
+
+      const message = messages[messageIndex]
+      messageIndex += 1
+
+      if (message.role !== 'assistant') {
+        setHistory((current) => [...current, message])
+        revealNextMessage()
+        return
+      }
+
+      const messageId = `recruitment-assistant-${responseMessageIdRef.current + 1}`
+      responseMessageIdRef.current += 1
+      const fullText = String(message.text || '')
+      const chunkSize = Math.max(1, Math.ceil(fullText.length / 96))
+      let characterCount = 0
+
+      setStreamingMessageId(messageId)
+      setHistory((current) => [...current, { ...message, id: messageId, text: '' }])
+
+      const finishMessage = () => {
+        window.clearInterval(responseStreamRef.current.intervalId)
+        responseStreamRef.current.intervalId = null
+        setHistory((current) => current.map((item) => (
+          item.id === messageId ? { ...item, text: fullText } : item
+        )))
+        responseStreamRef.current.timeoutId = window.setTimeout(revealNextMessage, 90)
+      }
+
+      responseStreamRef.current.timeoutId = window.setTimeout(() => {
+        responseStreamRef.current.timeoutId = null
+        responseStreamRef.current.intervalId = window.setInterval(() => {
+          characterCount = Math.min(fullText.length, characterCount + chunkSize)
+          setHistory((current) => current.map((item) => (
+            item.id === messageId
+              ? { ...item, text: fullText.slice(0, characterCount) }
+              : item
+          )))
+          if (characterCount >= fullText.length) finishMessage()
+        }, 18)
+      }, 260)
+    }
+
+    revealNextMessage()
   }
 
   const displayAnswer = (step, value) => {
@@ -2899,10 +2960,10 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
 
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-1 sm:px-3">
         <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" aria-live="polite">
-          <div className="flex min-h-full flex-col justify-end py-5 sm:py-6">
+          <div className="flex min-h-full flex-col justify-start py-8 sm:py-10">
           {history.map((message, index) => (
             <div
-              key={`${message.role}-${index}`}
+              key={message.id || `${message.role}-${index}`}
               className={`group relative flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${index === 0 ? '' : history[index - 1]?.role === message.role ? 'mt-2' : 'mt-6'}`}
             >
               {message.role === 'user' ? (
@@ -2910,9 +2971,9 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                   {message.text}
                 </div>
               ) : (
-                <p className="max-w-[68ch] text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
+                <p className={`recruitment-assistant-message max-w-[68ch] text-sm leading-6 ${message.id === streamingMessageId ? 'recruitment-assistant-message--streaming' : ''}`} style={{ color: colors.text }}>{message.text}</p>
               )}
-              <button
+              {message.text && message.id !== streamingMessageId && <button
                 type="button"
                 onClick={() => navigator.clipboard?.writeText(message.text)}
                 className={`absolute top-full mt-0.5 flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-opacity duration-150 hover:bg-[#F3F3F1] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/40 ${message.role === 'user' ? 'right-0' : 'left-0'}`}
@@ -2920,10 +2981,10 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                 aria-label="Copier le message"
               >
                 <Copy size={14} strokeWidth={1.6} aria-hidden="true" />
-              </button>
+              </button>}
             </div>
           ))}
-          {isThinking && (
+          {isThinking && !streamingMessageId && (
             <div className="mt-6 flex items-center gap-2 py-1 text-sm" style={{ color: colors.textMuted }}>
               <span className="recruitment-thinking-dot h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
               <span>Réflexion…</span>
@@ -4350,7 +4411,6 @@ export function CreatePlatformView({
   newFormRncp,
   setNewFormRncp,
   newFormHours,
-  setNewFormHours,
   initialScheduleV2,
   creating,
   billing,
@@ -5875,6 +5935,7 @@ function PlatformCard({
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [activeTool, setActiveTool] = useState(null)
+  const [fallbackSessionId, setFallbackSessionId] = useState(null)
   const creationProgress = getHiddenPipelineProgress(p)
   const preparation = getTeacherPreparation(p)
   const isPreparing = preparation.status === 'preparing'
@@ -5883,8 +5944,11 @@ function PlatformCard({
   const nextCourseSessionLabel = nextCourseSession?.session_index
     ? `Journée ${nextCourseSession.session_index}`
     : 'Prochaine journée'
-  const nextCoursePreparationAt = formatScheduleDateTimeOffset(nextCourseSession?.scheduled_at, 48)
-  const nextCourseReviewAt = formatScheduleDateTimeOffset(nextCourseSession?.scheduled_at, 24)
+  const upcomingCourseSessions = (
+    Array.isArray(p.course_schedule?.upcoming_sessions)
+      ? p.course_schedule.upcoming_sessions
+      : nextCourseSession ? [nextCourseSession] : []
+  ).slice(0, 3)
   const rosterStage = getTeacherRosterStage(p)
   const robotTheme = getRobotTheme(p.center_platform_number || p.id, p.teacher_color)
   const rosterMeta = {
@@ -5903,7 +5967,6 @@ function PlatformCard({
   const actionItems = [
     ...(p.active ? [
       { key: 'planning', label: 'Planning', icon: 'schedule', onOpen: onOpenCourseTimeModal },
-      { key: 'audios', label: 'Audios', icon: 'audiotrack', onOpen: onExpand },
       { key: 'courses', label: 'Cours', icon: 'folder_special', onOpen: onOpenCoursFolders },
       { key: 'students', label: 'Élèves', icon: 'group', onOpen: onToggleStudentEmails },
       { key: 'attendance', label: 'Présence', icon: 'fact_check', onOpen: onToggleAttendance },
@@ -5911,7 +5974,9 @@ function PlatformCard({
   ]
   const activeToolMeta = actionItems.find((item) => item.key === activeTool)
 
-  const openTool = async (action) => {
+  const openTool = async (action, { targetSessionId = null } = {}) => {
+    if (!action) return
+    if (action.key === 'courses') setFallbackSessionId(targetSessionId)
     await action.onOpen?.()
     setActiveTool(action.key)
   }
@@ -6063,25 +6128,46 @@ function PlatformCard({
                 style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
               >
                 <p className="text-[11px] font-semibold" style={{ color: colors.textMuted }}>
-                  Prochaine diffusion
+                  Prochaines diffusions
                 </p>
-                {nextCourseSession ? (
+                {upcomingCourseSessions.length > 0 ? (
                   <>
-                    <p className="mt-1 text-sm font-semibold leading-5" style={{ color: colors.text }}>
-                      {nextCourseSessionLabel}
+                    <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                      Vos prochaines séances seront générées automatiquement 72 heures avant leur début. Vérifiez ensuite que chaque séance a bien été générée.
                     </p>
-                    <p className="text-xs font-medium leading-5" style={{ color: colors.textSecondary }}>
-                      {formatScheduleLongDateTime(nextCourseSession.scheduled_at)}
+                    <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: colors.textMuted }}>
+                      Prochaines générations
                     </p>
-                    <p className="mt-3 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
-                      Les audios seront préparés automatiquement le{' '}
-                      <span className="font-semibold" style={{ color: colors.text }}>{nextCoursePreparationAt}</span>.
-                    </p>
-                    <p className="mt-2 text-[11px] leading-[1.55]" style={{ color: colors.textSecondary }}>
-                      Revenez le{' '}
-                      <span className="font-semibold" style={{ color: colors.text }}>{nextCourseReviewAt}</span>{' '}
-                      pour vérifier que la {nextCourseSessionLabel.toLowerCase()} est prête via l’onglet Cours.
-                    </p>
+                    <div className="mt-1 divide-y" style={{ borderColor: colors.border }}>
+                      {upcomingCourseSessions.map((session) => (
+                        <div key={session.id} className="py-2">
+                          <p className="text-[11px] font-semibold leading-4" style={{ color: colors.text }}>
+                            J{session.session_index} · {formatScheduleLongDateTime(session.scheduled_at)}
+                          </p>
+                          <p className="mt-0.5 text-[11px] leading-4" style={{ color: colors.textSecondary }}>
+                            Génération : {formatScheduleDateTimeOffset(session.scheduled_at, 72)}
+                          </p>
+                          {session.audio_status === 'error' && (
+                            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2.5">
+                              <p className="text-[11px] font-semibold text-red-700">La génération a échoué.</p>
+                              <p className="mt-1 text-[11px] leading-4 text-red-700">
+                                Signalez cette erreur technique. Vous pouvez utiliser un ancien cours pour assurer la séance.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => openTool(
+                                  actionItems.find((item) => item.key === 'courses'),
+                                  { targetSessionId: session.id },
+                                )}
+                                className="mt-2 min-h-9 rounded-md bg-red-700 px-3 py-1.5 text-[11px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
+                              >
+                                Utiliser un ancien cours
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </>
                 ) : (
                   <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
@@ -6192,28 +6278,6 @@ function PlatformCard({
           <p className="text-xs font-medium" style={{ color: '#6C63FF' }}>
             Professeur du {p.source_tp_name || p.name || 'parcours'}
           </p>
-          {p.active && p.audio_count != null && (
-            <p
-              className="text-xs"
-              style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}
-            >
-              {(p.audio_count || 0) > 0 ? (
-                <>
-                  <span className="font-semibold" style={{ color: colors.textSecondary }}>
-                    {p.audio_count}
-                  </span>
-                  {' '}audio{p.audio_count > 1 ? 's' : ''}
-                  {p.last_upload_date && (
-                    <>
-                      {' · '}MAJ {formatRelativeTime(p.last_upload_date)}
-                    </>
-                  )}
-                </>
-              ) : (
-                <span style={{ color: '#f59e0b' }}>Aucun audio chargé</span>
-              )}
-            </p>
-          )}
         </div>
 
         {/* Slide-to-confirm + backup pipeline déménagés vers CoursFoldersModal :
@@ -6305,20 +6369,12 @@ function PlatformCard({
               onPostponeSession={onPostponeSession}
             />
           )}
-          {activeTool === 'audios' && (
-            <AudiosModal
-              embedded
-              platformId={p.id}
-              audios={audios}
-              loading={audiosLoading}
-              onRefreshAudios={onRefreshAudios}
-            />
-          )}
           {activeTool === 'courses' && (
             <CoursFoldersModal
               embedded
               platformId={p.id}
               platformName={p.name}
+              targetSessionId={fallbackSessionId}
               onAudiosPublished={onAudiosPublished}
             />
           )}
@@ -6545,7 +6601,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
   const audioCopy = {
     ready: 'L’audio déjà prêt sera conservé pour cette nouvelle date.',
     preparing: 'La préparation audio continue et restera liée à ce cours.',
-    scheduled: 'L’audio sera préparé automatiquement 48 h avant la nouvelle date.',
+    scheduled: 'L’audio sera préparé automatiquement 72 h avant la nouvelle date.',
   }
 
   return (
@@ -6955,7 +7011,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                 <div>
                   <h4 className="text-sm font-semibold" style={{ color: '#0f172a' }}>Journées programmées</h4>
                   <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
-                    Les fichiers sont préparés 48 h avant chaque séance pour être vérifiés à H-24.
+                    Les fichiers sont préparés 72 h avant chaque séance.
                   </p>
                 </div>
                 <span className="text-xs font-medium" style={{ color: '#64748b' }}>

@@ -225,6 +225,9 @@ class AudioMp3IntegrityTest(unittest.TestCase):
 
     def test_contextual_break_silence_fallback_preserves_slot_duration(self):
         with patch(
+            "services.fixed_break_scripts.get_fixed_break_script",
+            return_value=None,
+        ), patch(
             "services.break_transition_service.build_break_transition_texts",
             side_effect=RuntimeError("llm unavailable"),
         ), patch(

@@ -14036,7 +14036,12 @@ def generate_audio_from_script(
         _measure_duration_ms,
     )
     from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
-    from services.azure_blob_service import blob_exists, upload_blob, CONTAINER_AUDIOS
+    from services.azure_blob_service import (
+        blob_exists,
+        download_blob,
+        upload_blob,
+        CONTAINER_AUDIOS,
+    )
 
     def _progress(step, total, msg):
         if on_progress:
@@ -14294,6 +14299,9 @@ def generate_audio_from_script(
             )
     generated = []
     skipped = []
+    measured_media_durations = {}
+    effective_break_durations = {}
+    adaptive_generation_manifest = None
     slide_audio_timings = []
     slide_sync_files = []
     if sync_slides and slide_deck and preserve_existing:
@@ -14661,39 +14669,102 @@ def generate_audio_from_script(
         and not target_filename
         and break_workers > 1
     )
-    if parallel_breaks_enabled:
-        break_items = [
-            (idx, filename, duration_sec, file_type, bloc_num)
-            for idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items)
-            if file_type != "cours"
-        ]
-        if len(break_items) > 1:
-            workers = min(break_workers, len(break_items))
-            logger.info(
-                "PIPELINE_AUDIO_PARALLEL_BREAKS formation_job_id=%s content_job_id=%s folder_id=%s breaks=%s workers=%s",
-                formation_job_id,
-                job_id,
-                folder_id,
-                len(break_items),
-                workers,
-            )
-            _progress(
-                0,
-                len(playlist_items),
-                f"Q&A/pauses — génération parallèle de {len(break_items)} fichiers ({workers} workers)...",
-            )
-            results = run_parallel_ordered(
-                break_items,
-                lambda args: _parallel_break_worker(*args),
-                max_workers=workers,
-                thread_name_prefix=f"audio-break-{folder_id}",
-            )
-            for result in results:
-                parallel_break_results[result["item_idx"]] = result
-        else:
-            parallel_breaks_enabled = False
+    break_generation_started = False
 
-    for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
+    def _measure_existing_course_files() -> None:
+        """Complete the natural-duration map before compiling break slots."""
+        for course_filename, _planned, course_type, _course_num in playlist_items:
+            if course_type != "cours" or measured_media_durations.get(course_filename):
+                continue
+            try:
+                raw = download_blob(
+                    CONTAINER_AUDIOS,
+                    f"{azure_prefix}{course_filename}",
+                )
+                measured_media_durations[course_filename] = (
+                    _mp3_duration_seconds_no_ffprobe(raw)
+                )
+            except Exception as exc:
+                logger.warning(
+                    "PIPELINE_AUDIO_COURSE_DURATION_FALLBACK "
+                    "formation_job_id=%s content_job_id=%s folder_id=%s "
+                    "filename=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    course_filename,
+                    str(exc)[:220],
+                )
+
+    def _prepare_break_generation() -> None:
+        """Stage 2: derive final slots, then generate break assets to fit them."""
+        nonlocal break_generation_started, adaptive_generation_manifest
+        if break_generation_started:
+            return
+        break_generation_started = True
+        _measure_existing_course_files()
+        from services.adaptive_playback_service import build_occurrence_playback_manifest
+
+        adaptive_generation_manifest = build_occurrence_playback_manifest(
+            playlist_items,
+            measured_media_durations,
+            folder_id=int(folder_id),
+        )
+        for segment in adaptive_generation_manifest.get("segments") or []:
+            if segment.get("type") != "cours":
+                effective_break_durations[str(segment.get("filename") or "")] = int(
+                    segment.get("effective_duration_sec") or 1
+                )
+
+        if not parallel_breaks_enabled:
+            return
+        break_items = [
+            (
+                idx,
+                item_filename,
+                effective_break_durations.get(item_filename, planned_duration),
+                item_type,
+                item_bloc_num,
+            )
+            for idx, (item_filename, planned_duration, item_type, item_bloc_num)
+            in enumerate(playlist_items)
+            if item_type != "cours"
+        ]
+        if len(break_items) <= 1:
+            return
+        workers = min(break_workers, len(break_items))
+        logger.info(
+            "PIPELINE_AUDIO_PARALLEL_BREAKS_STAGE2 formation_job_id=%s "
+            "content_job_id=%s folder_id=%s breaks=%s workers=%s",
+            formation_job_id,
+            job_id,
+            folder_id,
+            len(break_items),
+            workers,
+        )
+        _progress(
+            0,
+            len(playlist_items),
+            f"Q&R/pauses — génération finale de {len(break_items)} fichiers ({workers} workers)...",
+        )
+        results = run_parallel_ordered(
+            break_items,
+            lambda args: _parallel_break_worker(*args),
+            max_workers=workers,
+            thread_name_prefix=f"audio-break-{folder_id}",
+        )
+        for result in results:
+            parallel_break_results[result["item_idx"]] = result
+
+    # Les cours sont toujours produits et mesurés avant les Q&R/pauses. Les
+    # index originaux restent intacts pour les transitions et les slides.
+    indexed_playlist_items = list(enumerate(playlist_items))
+    generation_order = (
+        [entry for entry in indexed_playlist_items if entry[1][2] == "cours"]
+        + [entry for entry in indexed_playlist_items if entry[1][2] != "cours"]
+    )
+
+    for item_idx, (filename, duration_sec, file_type, bloc_num) in generation_order:
         if target_filename and filename != target_filename:
             continue
         step = item_idx + 1
@@ -14712,7 +14783,7 @@ def generate_audio_from_script(
             duration_sec,
         )
 
-        if preserve_existing and filename in existing_playlist_files:
+        if preserve_existing and filename in existing_playlist_files and file_type == "cours":
             logger.info(f"   ⏭️ {filename}: MP3 existant conservé")
             _progress(step, len(playlist_items), f"{filename} — conservé (déjà présent)")
             if file_type == "cours" and bloc:
@@ -14741,6 +14812,8 @@ def generate_audio_from_script(
             continue
 
         if file_type != "cours":
+            _prepare_break_generation()
+            duration_sec = effective_break_durations.get(filename, duration_sec)
             if not include_breaks:
                 logger.info(f"   ⏭️ {filename}: break ignoré (génération cours uniquement)")
                 _progress(step, len(playlist_items), f"{filename} — ignoré")
@@ -14976,6 +15049,7 @@ def generate_audio_from_script(
             audio_bloc = parallel_result["audio_bloc"]
             voice_duration = float(parallel_result.get("voice_duration") or 0.0)
             final_duration = float(parallel_result.get("final_duration") or voice_duration)
+            measured_media_durations[filename] = final_duration
             fit_method = parallel_result.get("fit_method") or "fish_observe_parallel"
             attempts = parallel_result.get("attempts") or []
             actual_reading = parallel_result.get("actual_reading")
@@ -15325,6 +15399,7 @@ def generate_audio_from_script(
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 final_duration = target_sec
+        measured_media_durations[filename] = float(final_duration)
         if not mock and not bloc.get("dynamic_schedule"):
             _assert_audio_duration_within_slot(
                 filename,
@@ -15467,6 +15542,8 @@ def generate_audio_from_script(
         "course_blocs": course_script_plan,
         "planned_course_blocs": planned_course_script_plan,
     }
+    if adaptive_generation_manifest:
+        audio_plan_payload["adaptive_playback_manifest"] = adaptive_generation_manifest
     if saved_script_plan.get("course_bloc_overrides"):
         audio_plan_payload["course_bloc_overrides"] = saved_script_plan.get("course_bloc_overrides")
     if saved_script_plan.get("break_overrides"):

@@ -9,6 +9,10 @@ from services import scheduled_audio_service as service
 
 
 class ScheduledAudioServiceTest(unittest.TestCase):
+    def test_default_readiness_target_is_h72(self):
+        with patch.dict(service.os.environ, {}, clear=True):
+            self.assertEqual(service._scheduled_audio_window_hours(), (72.0, 2.0))
+
     def test_v2_starts_at_h24_while_v1_keeps_h26_buffer(self):
         now = FRANCE_TZ.localize(datetime(2026, 9, 1, 9, 0))
 

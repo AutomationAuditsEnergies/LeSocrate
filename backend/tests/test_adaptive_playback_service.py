@@ -25,6 +25,14 @@ class AdaptivePlaybackServiceTest(unittest.TestCase):
         )
         self.assertEqual(manifest["effective_total_duration_sec"], 4500)
         self.assertTrue(manifest["segments"][1]["elastic"])
+        self.assertEqual(
+            manifest["segments"][1]["generation_target_duration_sec"],
+            1319,
+        )
+        self.assertEqual(
+            manifest["strategy"],
+            "natural_course_then_exact_elastic_break_assets",
+        )
 
     def test_small_overrun_shortens_the_following_qa(self):
         playlist = [

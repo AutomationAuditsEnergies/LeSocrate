@@ -77,7 +77,7 @@ const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function CoursFoldersModal({ platformId, platformName, onClose, onAudiosPublished, embedded = false }) {
+export default function CoursFoldersModal({ platformId, platformName, targetSessionId = null, onClose, onAudiosPublished, embedded = false }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
   const [folders, setFolders] = useState([])
   const [documents, setDocuments] = useState([])
@@ -102,6 +102,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
   const [audioPlaylistItems, setAudioPlaylistItems] = useState([]) // manifeste V1/V2 attendu
+  const [folderAudioStates, setFolderAudioStates] = useState({})
+  const [showFillForm, setShowFillForm] = useState(false)
+  const [fillFolderId, setFillFolderId] = useState('')
+  const [fillingPlatform, setFillingPlatform] = useState(false)
+  const [fillFeedback, setFillFeedback] = useState(null)
   const [courseMaterials, setCourseMaterials] = useState([]) // PDF généré à la fin de la pipeline texte
   const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
   const [courseMaterialsError, setCourseMaterialsError] = useState('')
@@ -117,15 +122,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [annotationComment, setAnnotationComment] = useState('')
   const [annotationError, setAnnotationError] = useState('')
   const [savingAnnotation, setSavingAnnotation] = useState(false)
-  const [scriptRules, setScriptRules] = useState(null)
-  const [rulesPanelOpen, setRulesPanelOpen] = useState(false)
-  const [extractingRules, setExtractingRules] = useState(false)
-  const [rulesError, setRulesError] = useState('')
-  const [editingRules, setEditingRules] = useState(false)
-  const [rulesDraft, setRulesDraft] = useState('')
-  const [savingRules, setSavingRules] = useState(false)
-  const [reviewingRules, setReviewingRules] = useState(false)
-  const [rulesReviewSummary, setRulesReviewSummary] = useState(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
   const [contentScriptView, setContentScriptView] = useState('courses')
@@ -193,13 +189,55 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   }, [showCreateFolderForm])
 
   // ─── Fetch folders ──────────────────────────────────────────────────────
+  const fetchFolderAudioStates = async (folderList) => {
+    const entries = await Promise.all((folderList || []).map(async (folder) => {
+      try {
+        const [audioResp, jobResp] = await Promise.all([
+          apiFetch(`/api/hr/cours-folders/${folder.id}/generated-audios`),
+          apiFetch(`/api/hr/cours-folders/${folder.id}/playlist-status`),
+        ])
+        const audioData = await audioResp.json().catch(() => ({}))
+        const jobData = await jobResp.json().catch(() => ({}))
+        const expected = Array.isArray(audioData.audio_playlist_items)
+          ? audioData.audio_playlist_items
+          : []
+        const generated = new Set(
+          (Array.isArray(audioData.audios) ? audioData.audios : [])
+            .map((audio) => audio.filename),
+        )
+        const readyCount = expected.filter((item) => generated.has(item.filename)).length
+        if (jobData.status === 'running') {
+          return [folder.id, { status: 'preparing', label: 'Audios en préparation' }]
+        }
+        if (jobData.status === 'error') {
+          return [folder.id, { status: 'error', label: 'Erreur de génération' }]
+        }
+        if (expected.length > 0 && readyCount === expected.length) {
+          return [folder.id, { status: 'ready', label: `Audios prêts · ${readyCount}/${expected.length}` }]
+        }
+        return [folder.id, {
+          status: 'missing',
+          label: expected.length > 0
+            ? `Audios incomplets · ${readyCount}/${expected.length}`
+            : 'Audios non générés',
+        }]
+      } catch (error) {
+        console.warn(`État audio indisponible pour le dossier ${folder.id}:`, error)
+        return [folder.id, { status: 'unknown', label: 'État audio indisponible' }]
+      }
+    }))
+    setFolderAudioStates(Object.fromEntries(entries))
+  }
+
   const fetchFolders = async () => {
     setLoading(true)
     try {
       const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`)
       const data = await resp.json()
       if (data.success) {
-        setFolders(data.folders)
+        const nextFolders = Array.isArray(data.folders) ? data.folders : []
+        setFolders(nextFolders)
+        await fetchFolderAudioStates(nextFolders)
       }
     } catch (e) {
       console.error('Erreur chargement dossiers:', e)
@@ -390,9 +428,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
         setScriptActiveCourse(visibleCourseBlocs?.[0]?.bloc_number || 1)
         setScriptActiveBreak(null)
         setEditingSegment(null)
-        setRulesPanelOpen(false)
-        setRulesError('')
-        loadScriptRules()
       } else {
         alert(data.error || 'Script non disponible')
       }
@@ -517,137 +552,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     } catch (e) {
       console.error('Erreur téléchargement annotations:', e)
       alert(e.message)
-    }
-  }
-
-  const loadScriptRules = async () => {
-    if (!selectedFolder) return
-    try {
-      const resp = await apiFetch(
-        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`,
-      )
-      const data = await resp.json()
-      if (data.success) setScriptRules(data)
-    } catch (e) {
-      console.error('Erreur chargement règles:', e)
-    }
-  }
-
-  const extractScriptRules = async () => {
-    if (!selectedFolder || extractingRules) return
-    setExtractingRules(true)
-    setRulesError('')
-    try {
-      const resp = await apiFetch(
-        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/extract`,
-        { method: 'POST' },
-      )
-      const data = await resp.json()
-      if (data.success) {
-        setScriptRules(data)
-        setRulesPanelOpen(true)
-      } else {
-        setRulesError(data.error || 'Extraction impossible.')
-      }
-    } catch (e) {
-      console.error('Erreur extract rules:', e)
-      setRulesError('Erreur réseau pendant l\'extraction.')
-    } finally {
-      setExtractingRules(false)
-    }
-  }
-
-  const downloadRulesMarkdown = async () => {
-    if (!selectedFolder) return
-    try {
-      await apiDownload(
-        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/markdown`,
-        `regles-cours-${selectedFolder.id}.md`,
-      )
-    } catch (e) {
-      console.error('Erreur téléchargement règles:', e)
-      alert(e.message)
-    }
-  }
-
-  const startEditingRules = () => {
-    setRulesDraft(scriptRules?.rules_markdown || '')
-    setEditingRules(true)
-    setRulesError('')
-  }
-
-  const cancelEditingRules = () => {
-    setEditingRules(false)
-    setRulesDraft('')
-    setRulesError('')
-  }
-
-  const saveRulesMarkdown = async () => {
-    if (!selectedFolder || savingRules) return
-    setSavingRules(true)
-    setRulesError('')
-    try {
-      const resp = await apiFetch(
-        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules_markdown: rulesDraft }),
-        }
-      )
-      const data = await resp.json()
-      if (data.success) {
-        setScriptRules(prev => ({
-          ...(prev || {}),
-          rules_markdown: data.rules_markdown,
-          rules_count: data.rules_count,
-          updated_at: data.updated_at,
-          model: 'manual',
-        }))
-        setEditingRules(false)
-        setRulesDraft('')
-      } else {
-        setRulesError(data.error || 'Sauvegarde impossible.')
-      }
-    } catch (e) {
-      console.error('Erreur save rules markdown:', e)
-      setRulesError('Erreur réseau pendant la sauvegarde.')
-    } finally {
-      setSavingRules(false)
-    }
-  }
-
-  const runRulesReview = async (dryRun) => {
-    if (!selectedFolder || reviewingRules) return
-    if (!dryRun) {
-      const ok = window.confirm(
-        'Cette action va lire les MP3 du dossier, vérifier chaque chunk audio contre les règles, et patcher en place les portions non conformes. Continuer ?'
-      )
-      if (!ok) return
-    }
-    setReviewingRules(true)
-    setRulesError('')
-    setRulesReviewSummary(null)
-    try {
-      const resp = await apiFetch(
-        `/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-post-tts`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dry_run: !!dryRun }),
-        }
-      )
-      const data = await resp.json()
-      if (data.success) {
-        setRulesReviewSummary(data)
-      } else {
-        setRulesError(data.error || 'Revérif impossible.')
-      }
-    } catch (e) {
-      console.error('Erreur review post-tts:', e)
-      setRulesError('Erreur réseau pendant la revérif.')
-    } finally {
-      setReviewingRules(false)
     }
   }
 
@@ -904,6 +808,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setDocuments([])
     setTtsStatus(null)
     setAudioPlaylistItems([])
+    fetchFolderAudioStates(folders)
     if (pollingRef.current) {
       clearInterval(pollingRef.current)
       pollingRef.current = null
@@ -1052,6 +957,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
           playlistPollingRef.current = null
           if (data.status === 'completed') {
             fetchGeneratedAudios(folderId)
+            fetchFolderAudioStates(folders)
             onAudiosPublished?.(platformId)
           }
         }
@@ -1164,6 +1070,39 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       }
     } catch (e) {
       console.error('Erreur chargement audios générés:', e)
+    }
+  }
+
+  const handleFillPlatform = async (event) => {
+    event.preventDefault()
+    if (!fillFolderId || fillingPlatform) return
+    setFillingPlatform(true)
+    setFillFeedback(null)
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/fill-from-folder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder_id: Number(fillFolderId),
+          ...(targetSessionId ? { session_id: Number(targetSessionId) } : {}),
+        }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Impossible de remplir la prochaine journée.')
+      }
+      setFillFeedback({
+        tone: 'success',
+        text: `${data.folder_name || 'Le cours'} est prêt pour ${targetSessionId ? 'la séance concernée' : 'la prochaine diffusion'}.`,
+      })
+      onAudiosPublished?.(platformId)
+    } catch (error) {
+      setFillFeedback({
+        tone: 'error',
+        text: error.message || 'Impossible de remplir la prochaine journée.',
+      })
+    } finally {
+      setFillingPlatform(false)
     }
   }
 
@@ -1303,28 +1242,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       }
     }
   }, [view, selectedFolder])
-
-  const StatusBadge = ({ status }) => {
-    const statusConfig = {
-      uploaded: { color: '#94a3b8', label: 'Uploadé', bg: darkMode ? '#334155' : '#f1f5f9' },
-      processing: { color: '#f59e0b', label: 'En cours...', bg: darkMode ? '#78350f' : '#fef3c7' },
-      done: { color: '#22c55e', label: 'Terminé', bg: darkMode ? '#14532d' : '#dcfce7' },
-      error: { color: '#ef4444', label: 'Erreur', bg: darkMode ? '#7f1d1d' : '#fee2e2' },
-    }
-    const config = statusConfig[status] || statusConfig.uploaded
-    return (
-      <span
-        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
-        style={{ backgroundColor: config.bg, color: config.color }}
-      >
-        <span
-          className={`size-1.5 rounded-full ${status === 'processing' ? 'animate-pulse' : ''}`}
-          style={{ backgroundColor: config.color }}
-        />
-        {config.label}
-      </span>
-    )
-  }
 
   const annotationMatchesContext = (annotation, context) => {
     if (!annotation || !context || annotation.source_type !== context.source_type) return false
@@ -1678,20 +1595,71 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                   </div>
                 </form>
               ) : (
-                <button
-                  onClick={handleCreateFolder}
-                  className="mb-6 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-4 text-sm font-medium transition-colors border-2"
-                  style={{
-                    backgroundColor: colors.innerBg,
-                    borderColor: colors.border,
-                    color: colors.textSecondary,
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.borderColor = colors.textSecondary}
-                  onMouseLeave={(e) => e.currentTarget.style.borderColor = colors.border}
+                <div className="mb-5 flex gap-2">
+                  <button
+                    onClick={handleCreateFolder}
+                    className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
+                    style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                  >
+                    <Icon name="add" className="text-lg" />
+                    Nouveau cours
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowFillForm((value) => !value)
+                      setFillFeedback(null)
+                    }}
+                    className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white"
+                    style={{ backgroundColor: '#7c3aed' }}
+                  >
+                    <Icon name="publish" className="text-lg" />
+                    Remplir
+                  </button>
+                </div>
+              )}
+
+              {showFillForm && (
+                <form
+                  onSubmit={handleFillPlatform}
+                  className="mb-5 rounded-lg border p-3"
+                  style={{ backgroundColor: colors.innerBg, borderColor: colors.border }}
                 >
-                  <Icon name="add" className="text-xl" />
-                  Nouveau cours
-                </button>
+                  <label htmlFor={`fill-folder-${platformId}`} className="block text-xs font-semibold" style={{ color: colors.text }}>
+                    {targetSessionId ? 'Cours de remplacement pour la séance en erreur' : 'Cours pour la prochaine journée'}
+                  </label>
+                  <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                    Choisissez la journée déjà générée à utiliser {targetSessionId ? 'pour cette séance' : 'pour la prochaine diffusion'}.
+                  </p>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <select
+                      id={`fill-folder-${platformId}`}
+                      value={fillFolderId}
+                      onChange={(event) => setFillFolderId(event.target.value)}
+                      className="min-h-11 min-w-0 flex-1 rounded-md border px-3 text-sm outline-none"
+                      style={{ backgroundColor: colors.cardBg, borderColor: colors.border, color: colors.text }}
+                    >
+                      <option value="">Sélectionner une journée</option>
+                      {folders.map((folder, index) => (
+                        <option key={folder.id} value={folder.id}>
+                          Jour {index + 1} — {folder.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="submit"
+                      disabled={!fillFolderId || fillingPlatform}
+                      className="min-h-11 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {fillingPlatform ? 'Copie en cours…' : 'Utiliser ce cours'}
+                    </button>
+                  </div>
+                  {fillFeedback && (
+                    <p className="mt-2 text-xs font-medium" style={{ color: fillFeedback.tone === 'success' ? '#047857' : '#b91c1c' }}>
+                      {fillFeedback.text}
+                    </p>
+                  )}
+                </form>
               )}
 
               {loading ? (
@@ -1713,6 +1681,17 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                     {folders.map((folder, idx) => {
                       const courseMaterial = materialForFolder(folder, idx)
+                      const audioState = folderAudioStates[folder.id] || {
+                        status: 'unknown',
+                        label: 'Vérification des audios…',
+                      }
+                      const audioColor = audioState.status === 'ready'
+                        ? '#047857'
+                        : audioState.status === 'error'
+                          ? '#b91c1c'
+                          : audioState.status === 'preparing'
+                            ? '#6d28d9'
+                            : colors.textMuted
                       return (
                         <div
                         key={folder.id}
@@ -1788,6 +1767,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                             </div>
                             <p className="text-sm" style={{ color: colors.textMuted }}>
                               {folder.document_count || 0} document{folder.document_count !== 1 ? 's' : ''}
+                            </p>
+                            <p className="mt-1.5 flex items-center gap-1.5 text-xs" style={{ color: audioColor }}>
+                              <Icon
+                                name={audioState.status === 'ready'
+                                  ? 'check_circle'
+                                  : audioState.status === 'error'
+                                    ? 'error_outline'
+                                    : audioState.status === 'preparing'
+                                      ? 'hourglass_top'
+                                      : 'radio_button_unchecked'}
+                                style={{ fontSize: '15px' }}
+                              />
+                              {audioState.label}
                             </p>
                             <p className="mt-1.5 flex items-center gap-1.5 text-xs" style={{ color: courseMaterial ? '#047857' : colors.textMuted }}>
                               <Icon
@@ -2228,175 +2220,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                 <Icon name="close" style={{ fontSize: '22px' }} />
               </button>
             </div>
-
-            {false && rulesPanelOpen && (
-              <div
-                className="border-b px-6 py-3 overflow-y-auto flex-shrink-0"
-                style={{
-                  backgroundColor: darkMode ? '#1a1332' : '#fefce8',
-                  borderColor: colors.border,
-                  maxHeight: '50vh',
-                }}
-              >
-                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold" style={{ color: colors.text }}>
-                      Règles apprises depuis tes annotations
-                    </p>
-                    <p className="text-xs" style={{ color: colors.textMuted }}>
-                      {scriptRules?.source_annotations_count
-                        ? `Extraites de ${scriptRules.source_annotations_count} annotation${scriptRules.source_annotations_count > 1 ? 's' : ''} via ${scriptRules.model || 'DeepSeek'}. Généré le ${scriptRules.generated_at || '—'}.`
-                        : 'Aucune extraction encore — applique au moins une correction puis clique sur Extraire.'}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                    <button
-                      type="button"
-                      onClick={extractScriptRules}
-	                      disabled={extractingRules || scriptAnnotations.length === 0}
-	                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-	                      style={{ backgroundColor: colors.text, color: colors.cardBg }}
-                    >
-                      <Icon name="auto_awesome" style={{ fontSize: '14px' }} />
-                      {extractingRules ? 'Extraction…' : (scriptRules?.rules_count ? 'Ré-extraire' : 'Extraire')}
-                    </button>
-                    {scriptRules?.rules_markdown && (
-                      <button
-                        type="button"
-                        onClick={downloadRulesMarkdown}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors"
-                        style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                      >
-                        <Icon name="download" style={{ fontSize: '14px' }} />
-                        Markdown
-                      </button>
-                    )}
-                    {scriptRules?.rules_markdown && !editingRules && (
-                      <button
-                        type="button"
-                        onClick={startEditingRules}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors"
-                        style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                        title="Éditer le markdown des règles à la main (sauve via PUT /rules)"
-                      >
-                        <Icon name="edit" style={{ fontSize: '14px' }} />
-                        Modifier
-                      </button>
-                    )}
-                    {scriptRules?.rules_markdown && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => runRulesReview(true)}
-                          disabled={reviewingRules}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                          title="Simule la revérif niveau chunk audio. Nécessite script_slide_deck (sinon utilise les boutons texte ci-dessus)."
-                        >
-                          <Icon name="visibility" style={{ fontSize: '14px' }} />
-                          {reviewingRules ? 'Analyse MP3…' : 'Simuler MP3'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runRulesReview(false)}
-                          disabled={reviewingRules}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: '#16a34a' }}
-                          title="Patche les MP3 non conformes en place via splice ms-précis. Nécessite script_slide_deck."
-                        >
-                          <Icon name="auto_fix_high" style={{ fontSize: '14px' }} />
-                          {reviewingRules ? 'Patch MP3…' : 'Appliquer aux MP3'}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {rulesReviewSummary && (
-                  <div
-                    className="mb-2 rounded-md p-3 text-xs"
-                    style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                  >
-	                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: colors.textSecondary }}>
-                      Résumé revérif MP3{rulesReviewSummary.dry_run ? ' (simulation)' : ''}
-                    </p>
-                    <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-                      <li>Examinés : <strong>{rulesReviewSummary.chunks_examined}</strong></li>
-                      <li style={{ color: '#16a34a' }}>{rulesReviewSummary.dry_run ? 'À corriger' : 'Corrigés'} : <strong>{rulesReviewSummary.chunks_corrected}</strong></li>
-                      <li style={{ color: colors.textMuted }}>Skipped : <strong>{rulesReviewSummary.chunks_skipped}</strong></li>
-                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{rulesReviewSummary.chunks_failed}</strong></li>
-                    </ul>
-                    {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').slice(0, 6).map((d, i) => (
-                      <div key={i} className="mt-2 rounded p-2 text-[11px]" style={{ backgroundColor: 'rgba(124,58,237,0.08)' }}>
-                        <p className="font-semibold">{d.audio_filename} · bloc {d.bloc_number} · <span style={{ color: d.status === 'done' || d.status === 'would_correct' ? '#16a34a' : '#dc2626' }}>{d.status}</span></p>
-                        {d.violations?.length > 0 && (
-                          <p style={{ color: colors.textMuted }}>{d.violations.join(' · ')}</p>
-                        )}
-                        {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
-                      </div>
-                    ))}
-                    {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').length > 6 && (
-                      <p className="mt-2 text-[11px] italic" style={{ color: colors.textMuted }}>
-                        … et {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').length - 6} autres
-                      </p>
-                    )}
-                  </div>
-                )}
-                {rulesError && (
-                  <p className="mb-2 text-xs font-semibold" style={{ color: '#dc2626' }}>{rulesError}</p>
-                )}
-                {editingRules ? (
-                  <div>
-                    <textarea
-                      value={rulesDraft}
-                      onChange={(e) => setRulesDraft(e.target.value)}
-                      rows={14}
-                      spellCheck={false}
-                      className="w-full rounded-md p-3 text-xs leading-relaxed font-mono"
-                      style={{
-                        backgroundColor: colors.innerBg,
-                        color: colors.text,
-                        border: `1px solid ${colors.border}`,
-                        resize: 'vertical',
-                      }}
-                      placeholder="# Règles de revérification — …"
-                    />
-                    <div className="mt-2 flex justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={cancelEditingRules}
-                        disabled={savingRules}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                        style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-                      >
-                        Annuler
-                      </button>
-                      <button
-                        type="button"
-                        onClick={saveRulesMarkdown}
-                        disabled={savingRules}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                        style={{ backgroundColor: '#16a34a' }}
-                      >
-                        <Icon name="save" style={{ fontSize: '14px' }} />
-                        {savingRules ? 'Sauvegarde…' : 'Enregistrer'}
-                      </button>
-                    </div>
-                  </div>
-                ) : scriptRules?.rules_markdown ? (
-                  <pre
-                    className="max-h-72 overflow-auto rounded-md p-3 text-xs leading-relaxed"
-                    style={{ backgroundColor: colors.innerBg, color: colors.text, whiteSpace: 'pre-wrap' }}
-                  >
-                    {scriptRules.rules_markdown}
-                  </pre>
-                ) : (
-                  <p className="text-xs italic" style={{ color: colors.textMuted }}>
-                    Aucune règle apprise pour ce dossier. L'extraction lit toutes les annotations (appliquées et rejetées) pour produire un markdown de règles transversales.
-                  </p>
-                )}
-              </div>
-            )}
 
             {/* Corps : sidebar + contenu */}
             {contentScriptView === 'source' ? (

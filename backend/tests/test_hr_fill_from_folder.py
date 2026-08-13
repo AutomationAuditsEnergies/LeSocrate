@@ -260,6 +260,68 @@ class HrFillFromFolderTest(unittest.TestCase):
             len(expected_names) + 2,
         )
 
+    def test_v2_can_bind_an_older_folder_to_one_failed_session(self):
+        playlist_items = [
+            ("course_01.mp3", 2700, "cours", 1),
+            ("qa_01.mp3", 600, "qa", 1),
+        ]
+        events = []
+        tts_service = _BlobService({"audiostts": _Container("source", {}, events)})
+        audio_service = _BlobService({
+            "formationaudio-test": _Container("destination", {}, events),
+            "audioqapause": _Container("static", {}, events),
+        })
+        publish = Mock(return_value={
+            "published": [item[0] for item in playlist_items],
+            "publish_errors": [],
+        })
+        assign = Mock(return_value=True)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("routes.hr_routes.HR_ENABLED", True))
+            stack.enter_context(patch.dict("os.environ", {
+                "AZURE_TTS_STORAGE_CONNECTION_STRING": "tts",
+                "AZURE_AUDIO_STORAGE_CONNECTION_STRING": "audio",
+            }, clear=False))
+            stack.enter_context(patch("routes.hr_routes.get_db_connection", return_value=_Connection()))
+            stack.enter_context(patch("routes.hr_routes.resolve_folder_asset_origin", return_value={"source_platform_id": 5}))
+            stack.enter_context(patch("routes.hr_routes._get_platform_info", return_value={"audio_container": "formationaudio-test"}))
+            stack.enter_context(patch("services.day_playlist_service.resolve_folder_playlist", return_value={
+                "schema_version": 2,
+                "module_day_id": 701,
+                "playlist_items": playlist_items,
+            }))
+            stack.enter_context(patch(
+                "azure.storage.blob.BlobServiceClient.from_connection_string",
+                side_effect=[tts_service, audio_service],
+            ))
+            stack.enter_context(patch("routes.hr_routes.get_audio_generation_session", return_value={
+                "id": 41,
+                "platform_id": 5,
+                "status": "planned",
+                "scheduled_at": "2026-08-20T09:00:00+02:00",
+            }))
+            stack.enter_context(patch("routes.hr_routes.publish_playlist_audio_to_platform", publish))
+            stack.enter_context(patch("routes.hr_routes.assign_fallback_audio_to_session", assign))
+            response = self.client.post(
+                "/api/hr/platforms/5/fill-from-folder",
+                json={"folder_id": 91, "session_id": 41},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["fallback_assigned"])
+        publish.assert_called_once_with(
+            5,
+            91,
+            filenames=["course_01.mp3", "qa_01.mp3"],
+            source_platform_id=5,
+            destination_prefix="course-sessions/41",
+            create_playback_manifest=True,
+        )
+        assign.assert_called_once()
+        self.assertEqual(assign.call_args.args, (5, 41))
+        self.assertEqual(assign.call_args.kwargs["module_day_id"], 701)
+
     def test_generated_audio_library_exposes_the_exact_v2_manifest_without_storage(self):
         playlist_items = [
             ("course_01.mp3", 2700, "cours", 1),

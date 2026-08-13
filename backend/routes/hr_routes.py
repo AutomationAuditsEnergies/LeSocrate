@@ -21,7 +21,9 @@ from repositories.core_repository import (
 )
 from repositories.course_schedule_repository import (
     add_explicit_course_reminder_recipients,
+    assign_fallback_audio_to_session,
     delete_explicit_course_reminder_recipient,
+    get_audio_generation_session,
     list_course_schedule_dashboard_states,
     list_course_sessions,
     list_explicit_course_reminder_recipients,
@@ -1451,8 +1453,12 @@ def create_hr_blueprint():
                 schedule_row = schedule_dashboard_states.get(int(pid))
                 course_schedule = None
                 if schedule_row:
-                    next_session = None
-                    if schedule_row.get("session_id"):
+                    upcoming_sessions = []
+                    for session_row in schedule_row.get("upcoming_sessions") or []:
+                        if isinstance(session_row, dict) and session_row.get("id"):
+                            upcoming_sessions.append(build_course_session_state(session_row))
+                    next_session = upcoming_sessions[0] if upcoming_sessions else None
+                    if next_session is None and schedule_row.get("session_id"):
                         next_session = build_course_session_state({
                             "id": schedule_row["session_id"],
                             "session_index": schedule_row.get("session_index"),
@@ -1468,6 +1474,7 @@ def create_hr_blueprint():
                         "timezone": schedule_row.get("timezone") or "Europe/Paris",
                         "start_time": schedule_row.get("start_time") or "09:00",
                         "next_session": next_session,
+                        "upcoming_sessions": upcoming_sessions or ([next_session] if next_session else []),
                     }
                 # En multi-tenant, toute plateforme en BDD est active
                 active = pid == 1 or bool(pinfo.get("backend_url")) or pid >= 4
@@ -6014,6 +6021,17 @@ def create_hr_blueprint():
                 folder_id = int(folder_id)
             except (TypeError, ValueError):
                 return jsonify({"success": False, "error": "folder_id invalide"}), 400
+            raw_session_id = data.get("session_id")
+            session_id = None
+            if raw_session_id not in (None, ""):
+                if isinstance(raw_session_id, bool):
+                    return jsonify({"success": False, "error": "session_id invalide"}), 400
+                try:
+                    session_id = int(raw_session_id)
+                except (TypeError, ValueError):
+                    return jsonify({"success": False, "error": "session_id invalide"}), 400
+                if session_id <= 0:
+                    return jsonify({"success": False, "error": "session_id invalide"}), 400
 
             # ``folder_id`` vient du corps et n'est donc pas couvert par le
             # garde URL. Résoudre son centre avant le moindre lookup Blob/DB
@@ -6136,6 +6154,61 @@ def create_hr_blueprint():
                         "Lancez d'abord la pipeline."
                     ),
                 }), 404
+
+            if session_id is not None:
+                target_session = get_audio_generation_session(platform_id, session_id)
+                if not target_session or str(target_session.get("status") or "") not in {"planned", "active"}:
+                    return jsonify({
+                        "success": False,
+                        "error": "La séance de remplacement est introuvable ou terminée",
+                    }), 404
+                module_day_id = playlist_contract.get("module_day_id")
+                if schedule_schema_version != 2 or not module_day_id:
+                    return jsonify({
+                        "success": False,
+                        "error": "Seule une journée planifiée V2 peut remplacer cette séance",
+                    }), 409
+
+                publish_result = publish_playlist_audio_to_platform(
+                    platform_id,
+                    folder_id,
+                    filenames=[item["filename"] for item in copy_plan],
+                    source_platform_id=source_platform_id,
+                    destination_prefix=f"course-sessions/{session_id}",
+                    create_playback_manifest=True,
+                )
+                publish_errors = publish_result.get("publish_errors") or []
+                published = publish_result.get("published") or []
+                if publish_errors or len(published) != len(copy_plan):
+                    return jsonify({
+                        "success": False,
+                        "error": "La copie du cours de remplacement est incomplète",
+                        "error_details": publish_errors,
+                    }), 409
+                completed_at = datetime.now(FRANCE_TZ)
+                assigned = assign_fallback_audio_to_session(
+                    platform_id,
+                    session_id,
+                    module_day_id=int(module_day_id),
+                    folder_id=folder_id,
+                    completed_at=completed_at,
+                )
+                if not assigned:
+                    return jsonify({
+                        "success": False,
+                        "error": "La séance a changé pendant la copie. Rechargez la fiche.",
+                    }), 409
+                return jsonify({
+                    "success": True,
+                    "copied": len(published),
+                    "errors": 0,
+                    "files": published,
+                    "folder_name": folder_row[0],
+                    "session_id": session_id,
+                    "scheduled_at": target_session.get("scheduled_at"),
+                    "schedule_schema_version": schedule_schema_version,
+                    "fallback_assigned": True,
+                }), 200
 
             prepared_files = []
             missing_required_files = []

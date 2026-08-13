@@ -1,10 +1,12 @@
-"""Build and persist an occurrence-bound adaptive learner timeline.
+"""Build and persist an occurrence-bound, two-stage learner timeline.
 
 Course MP3s are allowed to keep their natural generated duration.  The Q&A or
 pause immediately following a course is the elastic buffer: it starts as soon
 as speech ends, grows when speech ends early, and shrinks when speech runs
 late.  A type-specific minimum is always protected; beyond that boundary the
-course is hard-stopped.
+course is hard-stopped. Break MP3s are then generated to the computed effective
+duration, so the browser can play every asset normally without seeking or
+looping silence.
 """
 
 from __future__ import annotations
@@ -116,6 +118,7 @@ def build_occurrence_playback_manifest(
                     "asset_duration_sec": round(asset_duration, 3),
                     "effective_start_sec": cursor,
                     "effective_duration_sec": effective_duration,
+                    "generation_target_duration_sec": effective_duration,
                     "effective_end_sec": cursor + effective_duration,
                     "hard_stopped": False,
                 }
@@ -184,7 +187,8 @@ def build_occurrence_playback_manifest(
                         "planned_duration_sec": int(flex_planned),
                         "asset_duration_sec": round(flex_asset_duration, 3),
                         "effective_start_sec": cursor,
-                        "effective_duration_sec": effective_flex_duration,
+                    "effective_duration_sec": effective_flex_duration,
+                    "generation_target_duration_sec": effective_flex_duration,
                         "effective_end_sec": cursor + effective_flex_duration,
                         "elastic": is_elastic,
                         "hard_stopped": False,
@@ -201,7 +205,7 @@ def build_occurrence_playback_manifest(
         )
     return {
         "schema_version": PLAYBACK_MANIFEST_SCHEMA_VERSION,
-        "strategy": "natural_course_fixed_anchor_elastic_next_break",
+        "strategy": "natural_course_then_exact_elastic_break_assets",
         "folder_id": int(folder_id) if folder_id is not None else None,
         "planned_total_duration_sec": planned_total,
         "effective_total_duration_sec": cursor,

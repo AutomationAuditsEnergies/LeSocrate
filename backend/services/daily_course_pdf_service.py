@@ -119,7 +119,6 @@ def render_daily_course_pdf(
         TableStyle,
     )
 
-    violet = colors.HexColor("#7C3AED")
     ink = colors.HexColor("#0F172A")
     slate = colors.HexColor("#475569")
     pale = colors.HexColor("#F5F3FF")
@@ -133,21 +132,11 @@ def render_daily_course_pdf(
         leftMargin=20 * mm,
         topMargin=22 * mm,
         bottomMargin=20 * mm,
-        title=f"{formation_title} - Journée {day_number}",
-        author="Le Socrate",
+        title=f"Support de formation - Journée {day_number}",
+        author="Support de formation",
         subject="Support de formation",
     )
     base = getSampleStyleSheet()
-    brand = ParagraphStyle(
-        "Brand",
-        parent=base["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=9,
-        leading=12,
-        textColor=violet,
-        alignment=TA_CENTER,
-        spaceAfter=5 * mm,
-    )
     title_style = ParagraphStyle(
         "CourseTitle",
         parent=base["Title"],
@@ -213,8 +202,8 @@ def render_daily_course_pdf(
     meta.append(("Journée", str(day_number)))
 
     story = [
-        Paragraph("LE SOCRATE", brand),
-        Spacer(1, 18 * mm),
+        Paragraph("Support de formation", day_style),
+        Spacer(1, 10 * mm),
         Paragraph(html.escape(_strip_technical_tags(formation_title)), title_style),
         Paragraph(
             html.escape(_strip_technical_tags(day_title) or f"Journée {day_number}"),
@@ -261,11 +250,11 @@ def render_daily_course_pdf(
     def _cover_chrome(canvas, _doc):
         canvas.saveState()
         width, height = A4
-        canvas.setFillColor(violet)
+        canvas.setFillColor(ink)
         canvas.rect(0, height - 5 * mm, width, 5 * mm, stroke=0, fill=1)
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(slate)
-        canvas.drawCentredString(width / 2, 10 * mm, "Le Socrate · Support de formation")
+        canvas.drawCentredString(width / 2, 10 * mm, "Support de formation")
         canvas.restoreState()
 
     def _page_chrome(canvas, doc):
@@ -276,7 +265,7 @@ def render_daily_course_pdf(
         canvas.line(20 * mm, 14 * mm, width - 20 * mm, 14 * mm)
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(slate)
-        canvas.drawString(20 * mm, 9.5 * mm, "Le Socrate · Support de formation")
+        canvas.drawString(20 * mm, 9.5 * mm, "Support de formation")
         canvas.drawRightString(width - 20 * mm, 9.5 * mm, f"Page {doc.page - 1}")
         canvas.restoreState()
 
@@ -387,7 +376,7 @@ def publish_pipeline_course_pdfs(
     """Build every daily support as the text pipeline reaches completion.
 
     The operation is idempotent: retries overwrite the same occurrence-scoped
-    blobs. Audio preparation can therefore remain independent at H-48.
+    blobs. Audio preparation can therefore remain independent at H-72.
     """
     from repositories.course_schedule_repository import list_course_sessions
     from services.formation_pipeline_service import get_expected_course_folders
