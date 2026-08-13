@@ -2515,6 +2515,10 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const [clarificationAttempts, setClarificationAttempts] = useState({})
   const chatScrollRef = useRef(null)
   const responseTimeoutRef = useRef(null)
+  const prefersReducedMotionRef = useRef(
+    typeof window !== 'undefined'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  )
   const animatedPlaceholder = useAnimatedPlaceholder(RECRUITMENT_PLACEHOLDER_EXAMPLES)
   const currentStep = RECRUITMENT_STEPS[stepIndex]
   const matchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(draft.rncpCode || '').replace(/\D/g, ''))
@@ -2527,7 +2531,10 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const scrollArea = chatScrollRef.current
     if (!scrollArea) return
     const frameId = window.requestAnimationFrame(() => {
-      scrollArea.scrollTop = scrollArea.scrollHeight
+      scrollArea.scrollTo({
+        top: scrollArea.scrollHeight,
+        behavior: prefersReducedMotionRef.current ? 'auto' : 'smooth',
+      })
     })
     return () => window.cancelAnimationFrame(frameId)
   }, [history, isThinking, stepIndex])
@@ -2841,6 +2848,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
               <span>Réflexion…</span>
             </div>
           )}
+          {!completed && <div aria-hidden="true" className="h-[clamp(72px,14vh,144px)] shrink-0" />}
           </div>
         </div>
 
