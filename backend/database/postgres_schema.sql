@@ -726,6 +726,18 @@ CREATE TABLE IF NOT EXISTS formation_pipeline_jobs (
 );
 
 ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS rc_text TEXT;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS rome_text TEXT;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS auto_pilot_use_cc BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS auto_pilot_skip_vs BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS auto_pilot_generate_audio BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE formation_pipeline_jobs
+    ADD COLUMN IF NOT EXISTS auto_pilot_volume_done BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE formation_pipeline_jobs
     ADD COLUMN IF NOT EXISTS schedule_schema_version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE formation_pipeline_jobs
     ADD COLUMN IF NOT EXISTS schedule_snapshot_json JSONB;

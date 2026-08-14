@@ -20,6 +20,17 @@ test('keeps the Formation3 pipeline page read-only apart from global resume', ()
   assert.doesNotMatch(source, /Reprendre depuis une étape/)
 })
 
+test('keeps the selected pipeline and URL in sync', () => {
+  assert.match(source, /url\.searchParams\.set\('job', String\(selectedJobId\)\)/)
+  assert.match(source, /\}, \[selectedJobId\]\)/)
+})
+
+test('does not disguise a server failure as a missing pipeline', () => {
+  assert.match(source, /response\.status >= 500/)
+  assert.match(source, /Le job existe toujours et peut être repris/)
+  assert.doesNotMatch(source, /Pipeline introuvable\./)
+})
+
 test('explains that teacher orders are the only pipeline entry point', () => {
   assert.match(
     source,

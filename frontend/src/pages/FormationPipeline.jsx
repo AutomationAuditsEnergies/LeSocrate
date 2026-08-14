@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '../api'
+import './FormationPipeline.css'
 
 const PIPELINE_STAGES = [
   { key: 'reac', label: 'Référentiel RNCP', icon: 'description' },
@@ -37,6 +38,18 @@ function formatDate(value) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date)
+}
+
+function responseErrorMessage(response, payload, fallback) {
+  if (payload?.error && response.status < 500) return payload.error
+  if (response.status === 404) return 'Cette pipeline n’existe plus ou n’appartient pas à votre centre.'
+  if (response.status === 401 || response.status === 403) {
+    return 'Votre session ne permet plus d’accéder à cette pipeline. Reconnectez-vous.'
+  }
+  if (response.status >= 500) {
+    return 'Le serveur ne peut pas charger cette pipeline pour le moment. Le job existe toujours et peut être repris.'
+  }
+  return fallback
 }
 
 function normalizeStep(step) {
@@ -352,17 +365,19 @@ export default function FormationPipeline() {
   const [diagnostic, setDiagnostic] = useState(null)
   const [loadingJobs, setLoadingJobs] = useState(true)
   const [loadingDetail, setLoadingDetail] = useState(false)
-  const [pageError, setPageError] = useState('')
+  const [jobsError, setJobsError] = useState('')
+  const [detailError, setDetailError] = useState('')
   const [resumeBusy, setResumeBusy] = useState(false)
   const [resumeNotice, setResumeNotice] = useState('')
 
   const selectJob = useCallback((jobId) => {
     const normalized = Number(jobId)
     setSelectedJobId(normalized)
+    setJob(null)
+    setAutoPilotState(null)
+    setDiagnostic(null)
+    setDetailError('')
     setResumeNotice('')
-    const url = new URL(window.location.href)
-    url.searchParams.set('job', String(normalized))
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }, [])
 
   const fetchJobs = useCallback(async () => {
@@ -378,9 +393,9 @@ export default function FormationPipeline() {
         if (requestedId && nextJobs.some(item => Number(item.id) === requestedId)) return requestedId
         return nextJobs[0]?.id ? Number(nextJobs[0].id) : null
       })
-      setPageError('')
+      setJobsError('')
     } catch (error) {
-      setPageError(error.message || 'Impossible de charger les pipelines.')
+      setJobsError(error.message || 'Impossible de charger les pipelines.')
     } finally {
       setLoadingJobs(false)
     }
@@ -405,15 +420,24 @@ export default function FormationPipeline() {
         statusResponse.json().catch(() => ({})),
         diagnosticResponse.json().catch(() => ({})),
       ])
-      if (!jobResponse.ok) throw new Error(jobPayload.error || 'Pipeline introuvable.')
-      if (!statusResponse.ok) throw new Error(statusPayload.error || 'État de la pipeline indisponible.')
-      if (!diagnosticResponse.ok) throw new Error(diagnosticPayload.error || 'Diagnostic indisponible.')
+      if (!jobResponse.ok) {
+        throw new Error(responseErrorMessage(jobResponse, jobPayload, 'Impossible de charger cette pipeline.'))
+      }
+      if (!statusResponse.ok) {
+        throw new Error(responseErrorMessage(statusResponse, statusPayload, 'État de la pipeline indisponible.'))
+      }
+      if (!diagnosticResponse.ok) {
+        throw new Error(responseErrorMessage(diagnosticResponse, diagnosticPayload, 'Diagnostic indisponible.'))
+      }
       setJob(jobPayload)
       setAutoPilotState(statusPayload)
       setDiagnostic(diagnosticPayload)
-      setPageError('')
+      setDetailError('')
     } catch (error) {
-      setPageError(error.message || 'Impossible de charger cette pipeline.')
+      setJob(null)
+      setAutoPilotState(null)
+      setDiagnostic(null)
+      setDetailError(error.message || 'Impossible de charger cette pipeline.')
     } finally {
       if (showLoader) setLoadingDetail(false)
     }
@@ -431,6 +455,14 @@ export default function FormationPipeline() {
     const interval = window.setInterval(() => fetchDetail(selectedJobId), 5000)
     return () => window.clearInterval(interval)
   }, [fetchDetail, selectedJobId])
+
+  useEffect(() => {
+    if (!selectedJobId) return
+    const url = new URL(window.location.href)
+    if (Number(url.searchParams.get('job')) === Number(selectedJobId)) return
+    url.searchParams.set('job', String(selectedJobId))
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [selectedJobId])
 
   const resumePipeline = async () => {
     if (!selectedJobId || resumeBusy) return
@@ -460,7 +492,7 @@ export default function FormationPipeline() {
       )
       await Promise.all([fetchJobs(), fetchDetail(selectedJobId)])
     } catch (error) {
-      setPageError(error.message || 'La pipeline n’a pas pu reprendre.')
+      setDetailError(error.message || 'La pipeline n’a pas pu reprendre.')
     } finally {
       setResumeBusy(false)
     }
@@ -472,14 +504,15 @@ export default function FormationPipeline() {
   const activeStep = formatStep(autoPilotState?.step || autoPilotState?.next_step)
   const healthBlocking = diagnostic?.health?.blocking || []
   const healthWarnings = diagnostic?.health?.warnings || []
+  const pageError = jobsError || detailError
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <div className="formation-pipeline-page min-h-screen bg-slate-50 text-slate-900" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex min-h-16 max-w-[1480px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-violet-700">
-              <Icon name="account_tree" className="text-xl" />
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center text-violet-400">
+              <Icon name="school" className="text-2xl" />
             </span>
             <div className="min-w-0">
               <h1 className="truncate text-lg font-semibold tracking-tight text-slate-950">Pipeline formation</h1>

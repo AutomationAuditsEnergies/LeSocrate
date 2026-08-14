@@ -8,6 +8,32 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 class PostgresSchemaContractTest(unittest.TestCase):
+    def test_runtime_pipeline_columns_are_required_at_boot(self):
+        required = PIPELINE_REQUIRED_SCHEMA["formation_pipeline_jobs"]
+        self.assertTrue({
+            "rc_text",
+            "rome_text",
+            "auto_pilot_use_cc",
+            "auto_pilot_skip_vs",
+            "auto_pilot_generate_audio",
+            "auto_pilot_volume_done",
+        }.issubset(required))
+
+    def test_existing_pipeline_table_receives_runtime_columns(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        for column in (
+            "rc_text",
+            "rome_text",
+            "auto_pilot_use_cc",
+            "auto_pilot_skip_vs",
+            "auto_pilot_generate_audio",
+            "auto_pilot_volume_done",
+        ):
+            self.assertRegex(
+                schema,
+                rf"ALTER TABLE formation_pipeline_jobs\s+ADD COLUMN IF NOT EXISTS {column}\b",
+            )
+
     def test_supabase_auth_relation_is_optional_for_portable_postgres(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
         training_center_table = schema[
