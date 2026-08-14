@@ -43,3 +43,22 @@ test('explains that teacher orders are the only pipeline entry point', () => {
   )
   assert.match(source, /sans validation ou relance intermédiaire/)
 })
+
+test('restores the detailed 17-step auto-pilot roadmap', () => {
+  assert.match(source, /Roadmap auto-pilot API/)
+  assert.match(source, /DETAILED_PIPELINE_STAGES/)
+  assert.match(source, /Plan JSON verrouillé/)
+  assert.match(source, /Micro-conformité éthique/)
+  assert.match(source, /Curation IA des slides/)
+  assert.match(source, /Slides anchor-first/)
+  assert.match(source, /stages\.length/)
+})
+
+test('shows durable queue, health checks and matching stage events for debugging', () => {
+  assert.match(source, /File durable/)
+  assert.match(source, /queue\.attempt/)
+  assert.match(source, /Contrôles de santé/)
+  assert.match(source, /Événements correspondants/)
+  assert.match(source, /folder_resolution/)
+  assert.match(source, /volume_audit/)
+})

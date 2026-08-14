@@ -14,11 +14,181 @@ const PIPELINE_STAGES = [
   { key: 'finalize_text', label: 'Finalisation', icon: 'verified' },
 ]
 
+const LEGACY_OVERVIEW_STAGES = [
+  { key: 'start', label: 'Recherche RNCP', icon: 'search' },
+  { key: 'reac', label: 'Téléchargement REAC', icon: 'download' },
+  { key: 'kb', label: 'Enrichissement KB', icon: 'psychology' },
+  { key: 'global', label: 'Programme global', icon: 'auto_stories' },
+  { key: 'daily', label: 'Programmes journée', icon: 'calendar_view_week' },
+  { key: 'done', label: 'Texte + slides', icon: 'slideshow' },
+]
+
+const DETAILED_PIPELINE_STAGES = [
+  {
+    key: 'start',
+    title: 'Initialisation RNCP et plateforme',
+    detail: 'Création du job, contrôle du RNCP et verrouillage de la plateforme cible.',
+    icon: 'search',
+    majorStep: 'start',
+    signals: ['initialisation', 'pipeline_started', 'job_created'],
+  },
+  {
+    key: 'reac',
+    title: 'Téléchargement REAC',
+    detail: 'Récupération des sources officielles avant l’enrichissement métier.',
+    icon: 'download',
+    majorStep: 'reac',
+    signals: ['reac'],
+  },
+  {
+    key: 'kb',
+    title: 'Enrichissement Knowledge Base',
+    detail: 'Compétences, cas terrain, pièges fréquents et vocabulaire métier.',
+    icon: 'psychology',
+    majorStep: 'kb',
+    signals: ['knowledge_base', 'enrichissement', 'kb_'],
+  },
+  {
+    key: 'global',
+    title: 'Programme global',
+    detail: 'Architecture complète de la formation à partir du REAC enrichi.',
+    icon: 'auto_stories',
+    majorStep: 'global',
+    signals: ['global_program', 'programme_global'],
+  },
+  {
+    key: 'daily',
+    title: 'Programmes journée',
+    detail: 'Découpage pédagogique par journées, thèmes et chapitres.',
+    icon: 'calendar_view_week',
+    majorStep: 'daily',
+    signals: ['daily_program', 'programmes_journee', 'daily_'],
+  },
+  {
+    key: 'plan_json',
+    title: 'Plan JSON verrouillé',
+    detail: 'Validation de la structure, des budgets, des cours et des conclusions.',
+    icon: 'schema',
+    majorStep: 'content',
+    signals: ['plan_json', 'content-plan', 'structured_plan', 'plan_locked'],
+    artifacts: ['content-plan.json'],
+  },
+  {
+    key: 'slide_beats',
+    title: 'Moments pédagogiques et ancrages visuels',
+    detail: 'Exemples, conseils, pièges et comparaisons reliés au plan.',
+    icon: 'account_tree',
+    majorStep: 'content',
+    signals: ['slide_beat', 'anchor', 'ancrage'],
+    artifacts: ['content-plan.json'],
+  },
+  {
+    key: 'section_generation',
+    title: 'Génération par section, texte V1',
+    detail: 'Production des journées section par section avec checkpoints durables.',
+    icon: 'edit_note',
+    majorStep: 'content',
+    signals: ['section_generation', 'structured_section', 'content_generation'],
+    artifacts: ['content-draft-sections.json'],
+  },
+  {
+    key: 'plan_adherence',
+    title: 'Adhérence au plan',
+    detail: 'Contrôle de l’ordre, des reprises, des conclusions et des doublons.',
+    icon: 'rule',
+    majorStep: 'content',
+    signals: ['plan_adherence', 'adherence'],
+    artifacts: ['content-quality-reviews.json'],
+  },
+  {
+    key: 'budget_calibration',
+    title: 'Calibrage budget texte',
+    detail: 'Alignement des volumes de mots avant les contrôles de conformité.',
+    icon: 'speed',
+    majorStep: 'content',
+    signals: ['budget_calibration', 'word_budget', 'calibration'],
+    artifacts: ['content-budget-calibration.json'],
+  },
+  {
+    key: 'ethical_micro',
+    title: 'Micro-conformité éthique',
+    detail: 'Contrôle des règles éthiques sur le texte calibré.',
+    icon: 'shield',
+    majorStep: 'content',
+    signals: ['ethical_micro', 'micro_review', 'ethique'],
+    artifacts: ['content-ethical-micro-review.json'],
+  },
+  {
+    key: 'structured_artifacts',
+    title: 'Artefacts structurés',
+    detail: 'Persistance des plans, brouillons, scripts et scripts révisés.',
+    icon: 'data_object',
+    majorStep: 'content',
+    signals: ['structured_artifact', 'artifact', 'course_scripts'],
+    artifacts: ['content-course-scripts.json', 'content-reviewed-scripts.json'],
+  },
+  {
+    key: 'local_compliance',
+    title: 'Conformité par morceau',
+    detail: 'Relecture locale des hallucinations, du style oral et de l’architecture.',
+    icon: 'verified_user',
+    majorStep: 'review',
+    signals: ['review', 'local_compliance', 'conformite'],
+  },
+  {
+    key: 'post_review_docs',
+    title: 'Texte validé, Word 2 et audio-plan',
+    detail: 'Assemblage du texte validé et des artefacts prêts pour les slides.',
+    icon: 'description',
+    majorStep: 'post_review_docs',
+    signals: ['post_review_docs', 'word_2', 'audio_plan'],
+    artifacts: ['content-audio-plan.json', 'content-script-plan.json'],
+  },
+  {
+    key: 'slide_curation',
+    title: 'Curation IA des slides',
+    detail: 'Choix des passages visualisables, des ancrages et des templates.',
+    icon: 'filter_alt',
+    majorStep: 'slides',
+    signals: ['slide_curation', 'curation', 'template_backlog'],
+  },
+  {
+    key: 'slides',
+    title: 'Slides anchor-first',
+    detail: 'Génération des decks depuis les décisions de curation.',
+    icon: 'slideshow',
+    majorStep: 'slides',
+    signals: ['slides', 'slide_deck'],
+  },
+  {
+    key: 'done',
+    title: 'Finalisation',
+    detail: 'Texte, documents et slides prêts pour la diffusion.',
+    icon: 'inventory_2',
+    majorStep: 'done',
+    signals: ['finalization', 'finalisation', 'pipeline_completed'],
+  },
+]
+
+const MAJOR_STEP_ORDER = [
+  'start',
+  'reac',
+  'kb',
+  'global',
+  'daily',
+  'content',
+  'review',
+  'post_review_docs',
+  'slides',
+  'done',
+]
+
 const STEP_ALIASES = {
   start: 'reac',
   plan_adherence_review: 'review',
   audio_word_calibration: 'review',
   word_budget_review: 'review',
+  finalize_text: 'done',
   done: 'done',
 }
 
@@ -55,6 +225,13 @@ function responseErrorMessage(response, payload, fallback) {
 function normalizeStep(step) {
   const value = String(step || '').trim()
   return STEP_ALIASES[value] || value
+}
+
+function normalizeDetailedStep(step) {
+  const value = String(step || '').trim()
+  if (['plan_adherence_review', 'audio_word_calibration', 'word_budget_review'].includes(value)) return 'review'
+  if (value === 'finalize_text') return 'done'
+  return value || 'start'
 }
 
 function formatStep(step) {
@@ -132,21 +309,363 @@ function canResumePipeline(job, autoPilotState) {
   )
 }
 
-function completedStageKeys(autoPilotState, events) {
-  const completed = new Set(
-    (events || [])
-      .filter(event => event.event_type === 'step_completed' || event.status === 'completed')
-      .map(event => normalizeStep(event.step))
-      .filter(Boolean),
-  )
-  const current = normalizeStep(autoPilotState?.step || autoPilotState?.next_step)
-  const currentIndex = PIPELINE_STAGES.findIndex(stage => stage.key === current)
-  if (current === 'done' || autoPilotState?.status === 'done') {
-    PIPELINE_STAGES.forEach(stage => completed.add(stage.key))
-  } else if (currentIndex > 0) {
-    PIPELINE_STAGES.slice(0, currentIndex).forEach(stage => completed.add(stage.key))
+function eventSearchText(event) {
+  let payload = ''
+  try {
+    payload = JSON.stringify(event?.data || event?.payload || {})
+  } catch {
+    payload = ''
   }
-  return completed
+  return [
+    event?.step,
+    event?.event_type,
+    event?.status,
+    event?.message,
+    event?.error,
+    payload,
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function eventMatchesDetailedStage(event, stage) {
+  const haystack = eventSearchText(event)
+  return stage.signals.some(signal => haystack.includes(signal))
+}
+
+function eventIsComplete(event) {
+  const value = `${event?.status || ''} ${event?.event_type || ''}`.toLowerCase()
+  return value.includes('completed') || value.includes('success') || value.includes('validated')
+}
+
+function eventIsFailure(event) {
+  const value = `${event?.status || ''} ${event?.event_type || ''}`.toLowerCase()
+  return value.includes('error') || value.includes('failed') || value.includes('dead_letter')
+}
+
+function detailedStageStates(job, autoPilotState, diagnostic) {
+  const events = diagnostic?.events || []
+  const rawCurrentStep = autoPilotState?.step || autoPilotState?.next_step || job?.auto_pilot_step || 'start'
+  const currentStep = normalizeDetailedStep(rawCurrentStep)
+  const currentMajorIndex = Math.max(0, MAJOR_STEP_ORDER.indexOf(currentStep))
+  const pipelineDone = autoPilotState?.status === 'done' || currentStep === 'done'
+  const folders = diagnostic?.folders || []
+  const allContentComplete = folders.length > 0 && folders.every(folder => folder.content_status === 'completed')
+  const allReviewsComplete = folders.length > 0 && folders.every(folder => {
+    const completed = Number(folder.segments_completed || 0)
+    const reviewed = Number(folder.reviewed_segments || 0)
+    const errors = Number(folder.review_errors || 0)
+    return completed > 0 && reviewed + errors >= completed && errors === 0
+  })
+
+  const matchedEvents = DETAILED_PIPELINE_STAGES.map(stage => (
+    events.filter(event => eventMatchesDetailedStage(event, stage))
+  ))
+  let lastReachedIndex = -1
+  matchedEvents.forEach((matches, index) => {
+    if (matches.length > 0) lastReachedIndex = index
+  })
+  if (currentStep === 'content' && lastReachedIndex < 5) lastReachedIndex = 5
+
+  return DETAILED_PIPELINE_STAGES.map((stage, index) => {
+    const stageMajorIndex = MAJOR_STEP_ORDER.indexOf(stage.majorStep)
+    const matches = matchedEvents[index]
+    const failedEvent = [...matches].reverse().find(eventIsFailure)
+    const completedByEvent = matches.some(eventIsComplete)
+    let complete = pipelineDone || stageMajorIndex < currentMajorIndex || completedByEvent
+    let active = !complete && stageMajorIndex === currentMajorIndex
+
+    if (stage.key === 'start' && job?.id && currentStep !== 'start') complete = true
+    if (stage.key === 'reac' && job?.reac_available) complete = true
+    if (stage.key === 'kb' && Number(job?.kb_total || 0) > 0) complete = true
+    if (stage.key === 'global' && job?.global_program_validated) complete = true
+    if (stage.key === 'daily' && job?.daily_programs_validated) complete = true
+    if (stage.majorStep === 'content' && allContentComplete) complete = true
+    if (stage.key === 'local_compliance' && allReviewsComplete) complete = true
+
+    if (currentStep === 'content' && stage.majorStep === 'content') {
+      complete = complete || index < lastReachedIndex
+      active = !complete && index === lastReachedIndex
+    }
+    if (complete) active = false
+
+    const failed = Boolean(
+      failedEvent
+      || (active && (
+        autoPilotState?.status === 'error'
+        || QUEUE_RECOVERABLE_STATUSES.has(autoPilotState?.queue?.status)
+      ))
+    )
+
+    return {
+      ...stage,
+      index,
+      complete,
+      active,
+      failed,
+      matches,
+      latestEvent: matches[matches.length - 1] || null,
+    }
+  })
+}
+
+function LegacyOverviewProgress({ job, autoPilotState, diagnostic }) {
+  const detailedStates = useMemo(
+    () => detailedStageStates(job, autoPilotState, diagnostic),
+    [job, autoPilotState, diagnostic],
+  )
+  const stateForOverview = stage => {
+    if (stage.key === 'done') {
+      const tail = detailedStates.slice(5)
+      return {
+        complete: tail.length > 0 && tail.every(item => item.complete),
+        active: tail.some(item => item.active),
+        failed: tail.some(item => item.failed),
+      }
+    }
+    const state = detailedStates.find(item => item.key === stage.key)
+    return state || { complete: false, active: false, failed: false }
+  }
+
+  return (
+    <ol className="legacy-overview" aria-label="Vue synthétique du pipeline">
+      {LEGACY_OVERVIEW_STAGES.map((stage, index) => {
+        const state = stateForOverview(stage)
+        return (
+          <li
+            key={stage.key}
+            className={`legacy-overview__step ${
+              state.failed ? 'is-failed' : state.complete ? 'is-complete' : state.active ? 'is-active' : ''
+            }`}
+          >
+            <span className="legacy-overview__icon">
+              <Icon name={state.complete ? 'check' : state.failed ? 'error_outline' : stage.icon} />
+            </span>
+            <span>{stage.label}</span>
+            {index < LEGACY_OVERVIEW_STAGES.length - 1 && <span className="legacy-overview__connector" aria-hidden="true" />}
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function DetailedRoadmap({ job, autoPilotState, diagnostic }) {
+  const [selectedKey, setSelectedKey] = useState(null)
+  const stages = useMemo(
+    () => detailedStageStates(job, autoPilotState, diagnostic),
+    [job, autoPilotState, diagnostic],
+  )
+  const selectedStage = stages.find(stage => stage.key === selectedKey)
+  const doneCount = stages.filter(stage => stage.complete).length
+  const activeStage = stages.find(stage => stage.active)
+
+  return (
+    <section className="debug-roadmap">
+      <div className="debug-roadmap__header">
+        <div>
+          <h3><Icon name="route" /> Roadmap auto-pilot API</h3>
+          <p>
+            Trajet réel de fabrication : plan structuré, génération par sections, contrôles,
+            artefacts et slides anchor-first.
+          </p>
+        </div>
+        <span className={`debug-roadmap__count ${activeStage ? 'is-active' : doneCount === stages.length ? 'is-complete' : ''}`}>
+          <Icon name={activeStage ? 'hourglass_empty' : 'timeline'} />
+          {activeStage ? `Actif : ${activeStage.title}` : `${doneCount}/${stages.length} étapes`}
+        </span>
+      </div>
+
+      <div className="debug-roadmap__grid">
+        {stages.map(stage => (
+          <button
+            key={stage.key}
+            type="button"
+            className={`debug-stage ${
+              stage.failed ? 'is-failed' : stage.complete ? 'is-complete' : stage.active ? 'is-active' : ''
+            } ${selectedKey === stage.key ? 'is-selected' : ''}`}
+            onClick={() => setSelectedKey(current => current === stage.key ? null : stage.key)}
+            aria-expanded={selectedKey === stage.key}
+          >
+            <span className="debug-stage__icon">
+              <Icon name={stage.complete ? 'check_circle' : stage.failed ? 'error' : stage.icon} />
+            </span>
+            <span className="debug-stage__body">
+              <span className="debug-stage__meta">
+                {String(stage.index + 1).padStart(2, '0')}
+                <strong>{stage.failed ? 'ERREUR' : stage.complete ? 'OK' : stage.active ? 'EN COURS' : 'À VENIR'}</strong>
+              </span>
+              <span className="debug-stage__title">{stage.title}</span>
+              <span className="debug-stage__detail">{stage.detail}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {selectedStage && (
+        <div className="debug-stage-inspector" aria-live="polite">
+          <div className="debug-stage-inspector__heading">
+            <div>
+              <span>Étape {selectedStage.index + 1}</span>
+              <h4>{selectedStage.title}</h4>
+            </div>
+            <button type="button" onClick={() => setSelectedKey(null)} aria-label="Fermer le détail">
+              <Icon name="close" />
+            </button>
+          </div>
+          <p>{selectedStage.detail}</p>
+          {selectedStage.artifacts?.length > 0 && (
+            <div className="debug-stage-inspector__artifacts">
+              <strong>Artefacts attendus</strong>
+              {selectedStage.artifacts.map(artifact => <code key={artifact}>{artifact}</code>)}
+            </div>
+          )}
+          <div className="debug-stage-inspector__events">
+            <strong>Événements correspondants ({selectedStage.matches.length})</strong>
+            {selectedStage.matches.length === 0 ? (
+              <span>Aucun événement spécifique enregistré pour cette étape.</span>
+            ) : (
+              selectedStage.matches.slice(-6).reverse().map((event, index) => (
+                <div key={event.id || `${event.created_at}-${index}`}>
+                  <time>{formatDate(event.created_at)}</time>
+                  <span>{event.message || event.event_type || event.step}</span>
+                  {event.error && <em>{event.error}</em>}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function healthCheckLabel(key) {
+  const labels = {
+    segments_completed: 'Segments texte générés',
+    cg_jobs_completed: 'Jobs texte terminés',
+    docx_buildable: 'Document Word final',
+    pre_review_snapshotted: 'Snapshot avant review',
+    review_consistent: 'Review de conformité',
+    audio_tts_files: 'Segments audio à jour',
+    module_persistant: 'Module persistant',
+    structured_pipeline_v2: 'Pipeline structurée V2',
+    health_error: 'Calcul du diagnostic',
+  }
+  return labels[key] || String(key || '').replace(/_/g, ' ')
+}
+
+function PipelineDiagnostics({ diagnostic, autoPilotState }) {
+  const health = diagnostic?.health || {}
+  const folders = diagnostic?.folders || []
+  const checks = Object.entries(health.checks || {})
+  const queue = autoPilotState?.queue || {}
+  const volumeFolders = diagnostic?.volume_audit?.folders || []
+  const totals = folders.reduce((result, folder) => ({
+    words: result.words + Number(folder.total_words || 0),
+    segments: result.segments + Number(folder.segments_completed || 0),
+    reviewed: result.reviewed + Number(folder.reviewed_segments || 0),
+    errors: result.errors + Number(folder.review_errors || 0),
+    dirty: result.dirty + Number(folder.dirty_segments || 0),
+  }), { words: 0, segments: 0, reviewed: 0, errors: 0, dirty: 0 })
+  const resolution = diagnostic?.folder_resolution || {}
+  const expectedFolders = Number(resolution.expected_count || folders.length || 0)
+
+  return (
+    <section className="pipeline-diagnostics">
+      <div className="pipeline-diagnostics__header">
+        <div>
+          <h3><Icon name="analytics" /> Diagnostic pipeline</h3>
+          <p>État brut des contrôles, de la file durable et des sorties enregistrées.</p>
+        </div>
+        <span className={`pipeline-diagnostics__health ${
+          health.ok ? 'is-complete' : health.blocking?.length ? 'is-failed' : 'is-warning'
+        }`}>
+          <Icon name={health.ok ? 'verified' : health.blocking?.length ? 'error_outline' : 'warning_amber'} />
+          {health.ok ? 'Audit OK' : health.blocking?.length ? 'Audit bloquant' : 'À surveiller'}
+        </span>
+      </div>
+
+      <div className="diagnostic-metrics">
+        <div><span>Journées</span><strong>{folders.length}/{expectedFolders || '—'}</strong></div>
+        <div><span>Mots générés</span><strong>{totals.words.toLocaleString('fr-FR')}</strong></div>
+        <div><span>Segments</span><strong>{totals.segments}</strong></div>
+        <div><span>Segments revus</span><strong>{totals.reviewed}</strong></div>
+        <div className={totals.errors ? 'is-failed' : ''}><span>Erreurs review</span><strong>{totals.errors}</strong></div>
+        <div className={totals.dirty ? 'is-warning' : ''}><span>Audio à régénérer</span><strong>{totals.dirty}</strong></div>
+      </div>
+
+      <div className="diagnostic-columns">
+        <div className="diagnostic-panel">
+          <h4><Icon name="dns" /> File durable</h4>
+          <dl className="diagnostic-definition-list">
+            <div><dt>Statut</dt><dd data-state={queue.status}>{queue.status || 'indisponible'}</dd></div>
+            <div><dt>Tentative</dt><dd>{queue.attempt ?? '—'} / {queue.max_attempts ?? '—'}</dd></div>
+            <div><dt>Étape DB</dt><dd>{autoPilotState?.step || autoPilotState?.next_step || '—'}</dd></div>
+            <div><dt>Work item</dt><dd title={queue.work_item_id}>{queue.work_item_id ? queue.work_item_id.slice(0, 12) : '—'}</dd></div>
+          </dl>
+          {(queue.last_error || queue.error) && (
+            <p className="diagnostic-error"><Icon name="error_outline" /> {queue.last_error || queue.error}</p>
+          )}
+        </div>
+
+        <div className="diagnostic-panel">
+          <h4><Icon name="folder_copy" /> Résolution des journées</h4>
+          <dl className="diagnostic-definition-list">
+            <div><dt>Attendues</dt><dd>{expectedFolders || '—'}</dd></div>
+            <div><dt>Trouvées</dt><dd>{folders.length}</dd></div>
+            <div><dt>Manquantes</dt><dd>{resolution.missing?.length || 0}</dd></div>
+            <div><dt>Doublons</dt><dd>{resolution.duplicates?.length || 0}</dd></div>
+          </dl>
+          {(resolution.missing?.length > 0 || resolution.duplicates?.length > 0) && (
+            <p className="diagnostic-warning">
+              <Icon name="warning_amber" />
+              Vérifier les dossiers manquants ou dupliqués avant les étapes de contenu.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {checks.length > 0 && (
+        <div className="health-checks">
+          <h4>Contrôles de santé</h4>
+          <div className="health-checks__grid">
+            {checks.map(([key, check]) => (
+              <div key={key} className={`health-check ${check?.ok ? 'is-complete' : 'is-failed'}`}>
+                <Icon name={check?.ok ? 'check_circle' : 'error_outline'} />
+                <div>
+                  <strong>{healthCheckLabel(key)}</strong>
+                  <span>{check?.detail || (check?.ok ? 'Contrôle validé' : 'Contrôle non validé')}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {volumeFolders.length > 0 && (
+        <details className="volume-audit">
+          <summary>Audit des volumes par journée <Icon name="expand_more" /></summary>
+          <div className="volume-audit__rows">
+            {volumeFolders.map(folder => {
+              const outsideBudget = Number(folder.deficit || 0) > 0 || Number(folder.overflow || 0) > 0
+              return (
+                <div key={folder.folder_id} className={outsideBudget ? 'is-warning' : 'is-complete'}>
+                  <span>Jour {folder.day_number}: {folder.folder_name}</span>
+                  <strong>{Number(folder.total_words || 0).toLocaleString('fr-FR')} mots</strong>
+                  <em>
+                    {folder.deficit > 0
+                      ? `Déficit ${Number(folder.deficit).toLocaleString('fr-FR')}`
+                      : folder.overflow > 0
+                        ? `Dépassement ${Number(folder.overflow).toLocaleString('fr-FR')}`
+                        : 'Dans le budget'}
+                  </em>
+                </div>
+              )
+            })}
+          </div>
+        </details>
+      )}
+    </section>
+  )
 }
 
 function PipelineList({ jobs, selectedJobId, onSelect, loading }) {
@@ -206,57 +725,6 @@ function PipelineList({ jobs, selectedJobId, onSelect, loading }) {
         )
       })}
     </div>
-  )
-}
-
-function PipelineProgress({ autoPilotState, events }) {
-  const completed = useMemo(
-    () => completedStageKeys(autoPilotState, events),
-    [autoPilotState, events],
-  )
-  const currentStep = normalizeStep(autoPilotState?.step || autoPilotState?.next_step)
-  const failed = autoPilotState?.status === 'error'
-
-  return (
-    <ol className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4" aria-label="Étapes de la pipeline">
-      {PIPELINE_STAGES.map((stage, index) => {
-        const isComplete = completed.has(stage.key)
-        const isCurrent = stage.key === currentStep && !isComplete
-        const isFailed = isCurrent && failed
-        return (
-          <li
-            key={stage.key}
-            className={`flex min-h-20 items-center gap-3 rounded-xl border px-4 py-3 ${
-              isComplete
-                ? 'border-emerald-200 bg-emerald-50'
-                : isFailed
-                  ? 'border-red-200 bg-red-50'
-                  : isCurrent
-                    ? 'border-violet-300 bg-violet-50'
-                    : 'border-slate-200 bg-white'
-            }`}
-          >
-            <span
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
-                isComplete
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : isFailed
-                    ? 'bg-red-100 text-red-700'
-                    : isCurrent
-                      ? 'bg-violet-100 text-violet-700'
-                      : 'bg-slate-100 text-slate-500'
-              }`}
-            >
-              <Icon name={isComplete ? 'check' : isFailed ? 'error_outline' : stage.icon} className="text-lg" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-[11px] font-medium text-slate-500">Étape {index + 1}</p>
-              <p className="mt-0.5 text-sm font-semibold leading-5 text-slate-900">{stage.label}</p>
-            </div>
-          </li>
-        )
-      })}
-    </ol>
   )
 }
 
@@ -534,11 +1002,11 @@ export default function FormationPipeline() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-[1480px] gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:px-8">
-        <aside className="self-start lg:sticky lg:top-24">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">Historique</h2>
-            <span className="text-xs text-slate-500">{jobs.length} pipeline{jobs.length > 1 ? 's' : ''}</span>
+      <main className="formation-pipeline-main">
+        <section className="pipeline-history" aria-labelledby="pipeline-history-title">
+          <div className="pipeline-history__heading">
+            <h2 id="pipeline-history-title"><Icon name="history" /> Pipelines existants</h2>
+            <span>{jobs.length} pipeline{jobs.length > 1 ? 's' : ''}</span>
           </div>
           <PipelineList
             jobs={jobs}
@@ -546,9 +1014,9 @@ export default function FormationPipeline() {
             onSelect={selectJob}
             loading={loadingJobs}
           />
-        </aside>
+        </section>
 
-        <section className="min-w-0" aria-live="polite">
+        <section className="pipeline-detail" aria-live="polite">
           {pageError && (
             <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               {pageError}
@@ -573,7 +1041,7 @@ export default function FormationPipeline() {
 
           {job && (
             <div className="space-y-5">
-              <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+              <section className="pipeline-job-summary rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
                 <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -638,15 +1106,25 @@ export default function FormationPipeline() {
                 </div>
               )}
 
-              <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-                <div className="mb-5">
-                  <h3 className="text-base font-semibold text-slate-950">Avancement automatique</h3>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Les étapes s’enchaînent dans la file durable, sans validation ou relance intermédiaire.
-                  </p>
+              <section className="legacy-overview-panel" aria-labelledby="overview-title">
+                <div className="legacy-overview-panel__header">
+                  <h3 id="overview-title">Avancement automatique</h3>
+                  <p>Les étapes s’enchaînent dans la file durable, sans validation ou relance intermédiaire.</p>
                 </div>
-                <PipelineProgress autoPilotState={autoPilotState} events={diagnostic?.events} />
+                <LegacyOverviewProgress
+                  job={job}
+                  autoPilotState={autoPilotState}
+                  diagnostic={diagnostic}
+                />
               </section>
+
+              <DetailedRoadmap
+                job={job}
+                autoPilotState={autoPilotState}
+                diagnostic={diagnostic}
+              />
+
+              <PipelineDiagnostics diagnostic={diagnostic} autoPilotState={autoPilotState} />
 
               <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
