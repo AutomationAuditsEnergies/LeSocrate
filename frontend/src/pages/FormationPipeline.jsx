@@ -30,7 +30,7 @@ const DETAILED_PIPELINE_STAGES = [
     detail: 'Création du job, contrôle du RNCP et verrouillage de la plateforme cible.',
     icon: 'search',
     majorStep: 'start',
-    signals: ['initialisation', 'pipeline_started', 'job_created'],
+    signals: ['start', 'initialisation', 'pipeline_started', 'job_created'],
   },
   {
     key: 'reac',
@@ -46,7 +46,7 @@ const DETAILED_PIPELINE_STAGES = [
     detail: 'Compétences, cas terrain, pièges fréquents et vocabulaire métier.',
     icon: 'psychology',
     majorStep: 'kb',
-    signals: ['knowledge_base', 'enrichissement', 'kb_'],
+    signals: ['kb', 'knowledge_base', 'enrichissement'],
   },
   {
     key: 'global',
@@ -54,7 +54,7 @@ const DETAILED_PIPELINE_STAGES = [
     detail: 'Architecture complète de la formation à partir du REAC enrichi.',
     icon: 'auto_stories',
     majorStep: 'global',
-    signals: ['global_program', 'programme_global'],
+    signals: ['global', 'global_program', 'programme_global'],
   },
   {
     key: 'daily',
@@ -62,7 +62,7 @@ const DETAILED_PIPELINE_STAGES = [
     detail: 'Découpage pédagogique par journées, thèmes et chapitres.',
     icon: 'calendar_view_week',
     majorStep: 'daily',
-    signals: ['daily_program', 'programmes_journee', 'daily_'],
+    signals: ['daily', 'daily_program', 'programmes_journee'],
   },
   {
     key: 'plan_json',
@@ -1004,10 +1004,14 @@ export default function FormationPipeline() {
   const activeStep = formatStep(autoPilotState?.step || autoPilotState?.next_step)
   const healthBlocking = diagnostic?.health?.blocking || []
   const healthWarnings = diagnostic?.health?.warnings || []
+  const activeMajorIndex = MAJOR_STEP_ORDER.indexOf(normalizeDetailedStep(
+    autoPilotState?.step || autoPilotState?.next_step || job?.auto_pilot_step,
+  ))
   const healthChecksPending = (
-    !resumable
-    && autoPilotState?.status !== 'done'
+    autoPilotState?.status !== 'done'
     && !(diagnostic?.folders || []).length
+    && activeMajorIndex >= 0
+    && activeMajorIndex < MAJOR_STEP_ORDER.indexOf('content')
   )
   const pageError = jobsError || detailError
 
