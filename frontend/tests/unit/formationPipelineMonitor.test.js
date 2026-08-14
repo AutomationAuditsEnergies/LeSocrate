@@ -31,6 +31,11 @@ test('does not disguise a server failure as a missing pipeline', () => {
   assert.doesNotMatch(source, /Pipeline introuvable\./)
 })
 
+test('does not report future health checks as current blockers', () => {
+  assert.match(source, /healthChecksPending/)
+  assert.match(source, /Contrôles à venir/)
+})
+
 test('explains that teacher orders are the only pipeline entry point', () => {
   assert.match(
     source,

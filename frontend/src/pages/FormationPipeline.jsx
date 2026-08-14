@@ -504,6 +504,11 @@ export default function FormationPipeline() {
   const activeStep = formatStep(autoPilotState?.step || autoPilotState?.next_step)
   const healthBlocking = diagnostic?.health?.blocking || []
   const healthWarnings = diagnostic?.health?.warnings || []
+  const healthChecksPending = (
+    !resumable
+    && autoPilotState?.status !== 'done'
+    && !(diagnostic?.folders || []).length
+  )
   const pageError = jobsError || detailError
 
   return (
@@ -650,13 +655,17 @@ export default function FormationPipeline() {
                     <p className="mt-1 text-sm text-slate-600">État enregistré des contenus et contrôles.</p>
                   </div>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                    healthBlocking.length > 0
+                    healthChecksPending
+                      ? 'bg-slate-100 text-slate-600'
+                      : healthBlocking.length > 0
                       ? 'bg-red-50 text-red-700'
                       : healthWarnings.length > 0
                         ? 'bg-amber-50 text-amber-800'
                         : 'bg-emerald-50 text-emerald-700'
                   }`}>
-                    {healthBlocking.length > 0
+                    {healthChecksPending
+                      ? 'Contrôles à venir'
+                      : healthBlocking.length > 0
                       ? `${healthBlocking.length} blocage${healthBlocking.length > 1 ? 's' : ''}`
                       : healthWarnings.length > 0
                         ? `${healthWarnings.length} avertissement${healthWarnings.length > 1 ? 's' : ''}`
