@@ -336,6 +336,11 @@
   color: #fcd34d;
 }
 
+.pipeline-diagnostics__health.is-pending {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
 .debug-roadmap__grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -716,6 +721,11 @@
   background: rgb(16 185 129 / 8%);
 }
 
+.health-check.is-pending {
+  border-color: #334155;
+  background: #172033;
+}
+
 .health-check > .material-icons {
   flex: 0 0 auto;
   color: #f87171;
@@ -724,6 +734,10 @@
 
 .health-check.is-complete > .material-icons {
   color: #34d399;
+}
+
+.health-check.is-pending > .material-icons {
+  color: #94a3b8;
 }
 
 .health-check div {

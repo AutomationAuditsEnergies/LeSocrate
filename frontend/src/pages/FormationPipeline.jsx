@@ -194,7 +194,9 @@ const STEP_ALIASES = {
 
 const QUEUE_ACTIVE_STATUSES = new Set(['queued', 'retry_scheduled', 'running'])
 const QUEUE_RECOVERABLE_STATUSES = new Set(['dead_lettered', 'cancelled'])
+const QUEUE_TERMINAL_STATUSES = new Set(['completed', 'missing'])
 const JOB_FAILURE_STATUSES = new Set(['error', 'audio_error'])
+const STALE_QUEUE_GAP_MS = 2 * 60 * 1000
 
 const Icon = ({ name, className = '' }) => (
   <span className={`material-icons ${className}`} aria-hidden="true">{name}</span>
@@ -240,6 +242,14 @@ function formatStep(step) {
   return PIPELINE_STAGES.find(item => item.key === normalized)?.label || 'Initialisation'
 }
 
+function hasDetachedQueue(job, autoPilotState) {
+  if (!job || !autoPilotState) return false
+  const queueStatus = autoPilotState.queue?.status
+  if (autoPilotState.status !== 'running' || !QUEUE_TERMINAL_STATUSES.has(queueStatus)) return false
+  const updatedAt = new Date(job.updated_at || job.created_at || 0).getTime()
+  return Number.isFinite(updatedAt) && updatedAt > 0 && Date.now() - updatedAt > STALE_QUEUE_GAP_MS
+}
+
 function statusView(job, autoPilotState) {
   const queueStatus = autoPilotState?.queue?.status
   const autoStatus = autoPilotState?.status
@@ -259,6 +269,13 @@ function statusView(job, autoPilotState) {
     return {
       label: 'Interrompue',
       icon: 'pause_circle',
+      className: 'border-amber-200 bg-amber-50 text-amber-800',
+    }
+  }
+  if (hasDetachedQueue(job, autoPilotState)) {
+    return {
+      label: 'À reprendre',
+      icon: 'warning_amber',
       className: 'border-amber-200 bg-amber-50 text-amber-800',
     }
   }
@@ -288,6 +305,9 @@ function statusView(job, autoPilotState) {
 }
 
 function pipelineError(job, autoPilotState) {
+  if (hasDetachedQueue(job, autoPilotState)) {
+    return 'Le job est resté actif en base, mais aucune tâche durable ne le traite actuellement.'
+  }
   return (
     autoPilotState?.error
     || autoPilotState?.queue?.last_error
@@ -304,6 +324,7 @@ function canResumePipeline(job, autoPilotState) {
     autoPilotState.status === 'error'
     || autoPilotState.status === 'stopped'
     || autoPilotState.lock_stale
+    || hasDetachedQueue(job, autoPilotState)
     || JOB_FAILURE_STATUSES.has(job.status)
     || QUEUE_RECOVERABLE_STATUSES.has(queueStatus)
   )
@@ -553,7 +574,7 @@ function healthCheckLabel(key) {
   return labels[key] || String(key || '').replace(/_/g, ' ')
 }
 
-function PipelineDiagnostics({ diagnostic, autoPilotState }) {
+function PipelineDiagnostics({ job, diagnostic, autoPilotState }) {
   const health = diagnostic?.health || {}
   const folders = diagnostic?.folders || []
   const checks = Object.entries(health.checks || {})
@@ -568,6 +589,11 @@ function PipelineDiagnostics({ diagnostic, autoPilotState }) {
   }), { words: 0, segments: 0, reviewed: 0, errors: 0, dirty: 0 })
   const resolution = diagnostic?.folder_resolution || {}
   const expectedFolders = Number(resolution.expected_count || folders.length || 0)
+  const currentMajorIndex = MAJOR_STEP_ORDER.indexOf(normalizeDetailedStep(
+    autoPilotState?.step || autoPilotState?.next_step || job?.auto_pilot_step,
+  ))
+  const checksPending = folders.length === 0 && currentMajorIndex >= 0 && currentMajorIndex < MAJOR_STEP_ORDER.indexOf('content')
+  const detachedQueue = hasDetachedQueue(job, autoPilotState)
 
   return (
     <section className="pipeline-diagnostics">
@@ -577,10 +603,10 @@ function PipelineDiagnostics({ diagnostic, autoPilotState }) {
           <p>État brut des contrôles, de la file durable et des sorties enregistrées.</p>
         </div>
         <span className={`pipeline-diagnostics__health ${
-          health.ok ? 'is-complete' : health.blocking?.length ? 'is-failed' : 'is-warning'
+          detachedQueue ? 'is-failed' : checksPending ? 'is-pending' : health.ok ? 'is-complete' : health.blocking?.length ? 'is-failed' : 'is-warning'
         }`}>
-          <Icon name={health.ok ? 'verified' : health.blocking?.length ? 'error_outline' : 'warning_amber'} />
-          {health.ok ? 'Audit OK' : health.blocking?.length ? 'Audit bloquant' : 'À surveiller'}
+          <Icon name={detachedQueue ? 'error_outline' : checksPending ? 'schedule' : health.ok ? 'verified' : health.blocking?.length ? 'error_outline' : 'warning_amber'} />
+          {detachedQueue ? 'Worker sans tâche active' : checksPending ? 'Contrôles à venir' : health.ok ? 'Audit OK' : health.blocking?.length ? 'Audit bloquant' : 'À surveiller'}
         </span>
       </div>
 
@@ -604,6 +630,12 @@ function PipelineDiagnostics({ diagnostic, autoPilotState }) {
           </dl>
           {(queue.last_error || queue.error) && (
             <p className="diagnostic-error"><Icon name="error_outline" /> {queue.last_error || queue.error}</p>
+          )}
+          {detachedQueue && (
+            <p className="diagnostic-error">
+              <Icon name="sync_problem" />
+              La base indique une étape active, mais le dernier work item est terminé. Utilisez « Reprendre la pipeline ».
+            </p>
           )}
         </div>
 
@@ -629,11 +661,11 @@ function PipelineDiagnostics({ diagnostic, autoPilotState }) {
           <h4>Contrôles de santé</h4>
           <div className="health-checks__grid">
             {checks.map(([key, check]) => (
-              <div key={key} className={`health-check ${check?.ok ? 'is-complete' : 'is-failed'}`}>
-                <Icon name={check?.ok ? 'check_circle' : 'error_outline'} />
+              <div key={key} className={`health-check ${check?.ok ? 'is-complete' : checksPending ? 'is-pending' : 'is-failed'}`}>
+                <Icon name={check?.ok ? 'check_circle' : checksPending ? 'schedule' : 'error_outline'} />
                 <div>
                   <strong>{healthCheckLabel(key)}</strong>
-                  <span>{check?.detail || (check?.ok ? 'Contrôle validé' : 'Contrôle non validé')}</span>
+                  <span>{checksPending && !check?.ok ? 'Cette vérification sera exécutée après la génération du contenu.' : check?.detail || (check?.ok ? 'Contrôle validé' : 'Contrôle non validé')}</span>
                 </div>
               </div>
             ))}
@@ -1124,7 +1156,7 @@ export default function FormationPipeline() {
                 diagnostic={diagnostic}
               />
 
-              <PipelineDiagnostics diagnostic={diagnostic} autoPilotState={autoPilotState} />
+              <PipelineDiagnostics job={job} diagnostic={diagnostic} autoPilotState={autoPilotState} />
 
               <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

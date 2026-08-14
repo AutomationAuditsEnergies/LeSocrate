@@ -62,3 +62,10 @@ test('shows durable queue, health checks and matching stage events for debugging
   assert.match(source, /folder_resolution/)
   assert.match(source, /volume_audit/)
 })
+
+test('detects an active job left without a durable work item', () => {
+  assert.match(source, /hasDetachedQueue/)
+  assert.match(source, /QUEUE_TERMINAL_STATUSES/)
+  assert.match(source, /Worker sans tâche active/)
+  assert.match(source, /Utilisez « Reprendre la pipeline »/)
+})
