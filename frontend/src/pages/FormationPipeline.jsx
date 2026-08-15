@@ -212,6 +212,25 @@ function formatDate(value) {
   }).format(date)
 }
 
+function formatCompactDate(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return new Intl.DateTimeFormat('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function legacyStatusTone(status) {
+  if (['text_ready', 'audio_completed', 'audio_launched', 'done', 'completed'].includes(status)) return 'green'
+  if (JOB_FAILURE_STATUSES.has(status)) return 'red'
+  if (['reac_fetching', 'kb_building', 'global_generating', 'daily_splitting', 'tts_launched', 'audio_running'].includes(status)) return 'amber'
+  return 'violet'
+}
+
 function responseErrorMessage(response, payload, fallback) {
   if (payload?.error && response.status < 500) return payload.error
   if (response.status === 404) return 'Cette pipeline n’existe plus ou n’appartient pas à votre centre.'
@@ -723,35 +742,38 @@ function PipelineList({ jobs, selectedJobId, onSelect, loading }) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="legacy-job-list">
       {jobs.map(item => {
         const selected = Number(item.id) === Number(selectedJobId)
+        const jobLabel = item.job_label || `Job #${item.id}`
+        const platformLabel = item.platform_label || (item.platform_id ? `P${item.platform_id}` : 'P?')
         return (
           <button
             key={item.id}
             type="button"
             onClick={() => onSelect(item.id)}
             aria-pressed={selected}
-            className={`w-full rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${
-              selected
-                ? 'border-violet-400 bg-violet-50'
-                : 'border-slate-200 bg-white hover:bg-slate-50'
-            }`}
+            className={`legacy-job-card ${selected ? 'is-selected' : ''}`}
+            title={`${jobLabel} · ${platformLabel}${item.platform_name ? ` · ${item.platform_name}` : ''}`}
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">
-                  {item.tp_name || `Pipeline #${item.id}`}
-                </p>
-                <p className="mt-1 truncate text-xs text-slate-600">
-                  {item.platform_name || `Plateforme ${item.platform_id || 'non attribuée'}`}
-                </p>
+            <div className="legacy-job-card__body">
+              <div className="legacy-job-card__title-row">
+                <strong>{item.tp_name || `Pipeline #${item.id}`}</strong>
+                <span className="legacy-tag is-violet">{jobLabel}</span>
+                <span className="legacy-tag is-neutral">{platformLabel}</span>
               </div>
-              <span className="shrink-0 text-xs font-medium text-slate-500">#{item.id}</span>
+              <div className="legacy-job-card__platform">{item.platform_name || 'Plateforme sans nom'}</div>
+              <div className="legacy-job-card__meta">
+                <span>{item.total_hours || 0}h · {item.nb_days || 0} jour{Number(item.nb_days) > 1 ? 's' : ''}</span>
+                <span>RNCP {item.rncp_code || '—'}</span>
+                {item.created_at && <span>Créé le {formatCompactDate(item.created_at)}</span>}
+              </div>
             </div>
-            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
-              <span>RNCP {item.rncp_code || '—'}</span>
-              <span>{formatDate(item.updated_at || item.created_at)}</span>
+            <div className="legacy-job-card__status">
+              <span className={`legacy-tag is-${legacyStatusTone(item.status)}`}>
+                {String(item.status || 'inconnu').replace(/_/g, ' ')}
+              </span>
+              <Icon name="chevron_right" />
             </div>
           </button>
         )
@@ -1001,7 +1023,6 @@ export default function FormationPipeline() {
   const status = statusView(job, autoPilotState)
   const resumable = canResumePipeline(job, autoPilotState)
   const errorMessage = pipelineError(job, autoPilotState)
-  const activeStep = formatStep(autoPilotState?.step || autoPilotState?.next_step)
   const healthBlocking = diagnostic?.health?.blocking || []
   const healthWarnings = diagnostic?.health?.warnings || []
   const activeMajorIndex = MAJOR_STEP_ORDER.indexOf(normalizeDetailedStep(
@@ -1016,33 +1037,20 @@ export default function FormationPipeline() {
   const pageError = jobsError || detailError
 
   return (
-    <div className="formation-pipeline-page min-h-screen bg-slate-50 text-slate-900" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex min-h-16 max-w-[1480px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center text-violet-400">
-              <Icon name="school" className="text-2xl" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="truncate text-lg font-semibold tracking-tight text-slate-950">Pipeline formation</h1>
-              <p className="truncate text-xs text-slate-600">Suivi automatique des professeurs IA commandés</p>
-            </div>
-          </div>
-          <a
-            href="/dashboard-centre"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-          >
-            <Icon name="arrow_back" className="text-lg" />
-            <span className="hidden sm:inline">Retour aux professeurs IA</span>
-          </a>
-        </div>
+    <div className="formation-pipeline-page">
+      <header className="legacy-pipeline-topbar">
+        <span className="legacy-pipeline-topbar__icon"><Icon name="school" /></span>
+        <h1>Pipeline Formation</h1>
+        <div className="legacy-pipeline-topbar__spacer" />
+        <a href="/dashboard-centre" className="legacy-ghost-button">
+          <Icon name="add" /> Nouveau pipeline
+        </a>
       </header>
 
       <main className="formation-pipeline-main">
         <section className="pipeline-history" aria-labelledby="pipeline-history-title">
           <div className="pipeline-history__heading">
             <h2 id="pipeline-history-title"><Icon name="history" /> Pipelines existants</h2>
-            <span>{jobs.length} pipeline{jobs.length > 1 ? 's' : ''}</span>
           </div>
           <PipelineList
             jobs={jobs}
@@ -1077,38 +1085,32 @@ export default function FormationPipeline() {
 
           {job && (
             <div className="space-y-5">
-              <section className="pipeline-job-summary rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-                <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-medium text-slate-500">Pipeline #{job.id}</span>
-                      <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${status.className}`}>
-                        <Icon name={status.icon} className="text-sm" />
-                        {status.label}
-                      </span>
+              <section className="pipeline-job-summary">
+                <div className="pipeline-job-summary__inner">
+                  <div className="pipeline-job-summary__body">
+                    <h2>{job.tp_name || 'Formation sans titre'}</h2>
+                    <div className="pipeline-job-summary__tags">
+                      <span className="legacy-tag is-violet">{job.job_label || `Job #${job.id}`}</span>
+                      <span className="legacy-tag is-violet">{job.platform_label || `P${job.platform_id || '?'}`}</span>
+                      {job.created_at && <span className="legacy-tag is-violet">Créé le {formatCompactDate(job.created_at)}</span>}
                     </div>
-                    <h2 className="mt-3 text-xl font-semibold tracking-tight text-slate-950">
-                      {job.tp_name || 'Formation sans titre'}
-                    </h2>
-                    <p className="mt-1 text-sm text-slate-600">
-                      {job.platform_name || `Plateforme ${job.platform_id || 'non attribuée'}`}
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500">
-                      <span>RNCP {job.rncp_code || '—'}</span>
-                      <span>{job.nb_days || 0} journée{Number(job.nb_days) > 1 ? 's' : ''}</span>
-                      <span>Dernière mise à jour : {formatDate(job.updated_at || job.created_at)}</span>
+                    {job.platform_name && (
+                      <div className="pipeline-job-summary__platform"><Icon name="layers" /> {job.platform_name}</div>
+                    )}
+                    <div className="pipeline-job-summary__meta">
+                      RNCP {job.rncp_code || '—'} · {job.total_hours || 0}h · {job.nb_days || 0} journée{Number(job.nb_days) > 1 ? 's' : ''}
+                      {job.reac_length
+                        ? <span className="is-ok">✓ REAC {(job.reac_length / 1000).toFixed(0)}k</span>
+                        : <span>REAC non téléchargé</span>}
+                      {job.rc_length > 0 && <span className="is-ok">✓ RC {(job.rc_length / 1000).toFixed(0)}k</span>}
+                      {job.rome_length > 0 && <span className="is-ok">✓ ROME {(job.rome_length / 1000).toFixed(0)}k</span>}
                     </div>
                   </div>
-                  <div className="min-w-[220px] rounded-xl bg-slate-50 px-4 py-3">
-                    <p className="text-xs font-medium text-slate-500">Étape actuelle</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-900">{activeStep}</p>
-                    <p className="mt-1 text-xs leading-5 text-slate-600">
-                      {autoPilotState?.queue?.status === 'retry_scheduled'
-                        ? 'Une nouvelle tentative automatique est déjà planifiée.'
-                        : 'La progression est enregistrée dans PostgreSQL après chaque étape.'}
-                    </p>
-                  </div>
+                  <span className={`legacy-tag is-${legacyStatusTone(job.status)}`}>
+                    <Icon name={status.icon} /> {status.label}
+                  </span>
                 </div>
+                {job.error_message && <div className="pipeline-job-summary__error"><strong>Erreur :</strong> {job.error_message}</div>}
               </section>
 
               {resumable && (
@@ -1143,10 +1145,8 @@ export default function FormationPipeline() {
               )}
 
               <section className="legacy-overview-panel" aria-labelledby="overview-title">
-                <div className="legacy-overview-panel__header">
-                  <h3 id="overview-title">Avancement automatique</h3>
-                  <p>Les étapes s’enchaînent dans la file durable, sans validation ou relance intermédiaire.</p>
-                </div>
+                <h3 id="overview-title" className="sr-only">Avancement automatique</h3>
+                <p className="sr-only">Les étapes s’enchaînent dans la file durable, sans validation ou relance intermédiaire.</p>
                 <LegacyOverviewProgress
                   job={job}
                   autoPilotState={autoPilotState}
