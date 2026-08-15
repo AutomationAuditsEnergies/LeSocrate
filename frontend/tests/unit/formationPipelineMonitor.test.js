@@ -7,66 +7,45 @@ const source = readFileSync(
   'utf8',
 )
 
-test('keeps the Formation3 pipeline page read-only apart from global resume', () => {
-  assert.match(source, /Reprendre la pipeline/)
-  assert.match(source, /\/run-auto\/resume/)
-
-  assert.doesNotMatch(source, /\/api\/formation\/init/)
-  assert.doesNotMatch(source, /continue-after-text/)
-  assert.doesNotMatch(source, /generate-audio/)
-  assert.doesNotMatch(source, /resume-content/)
-  assert.match(source, /href="\/dashboard-centre" className="legacy-ghost-button"/)
+test('restores the complete historical pipeline interface', () => {
+  assert.match(source, /Pipeline Formation/)
   assert.match(source, /Nouveau pipeline/)
-  assert.doesNotMatch(source, /Stopper auto-pilot/)
-  assert.doesNotMatch(source, /Reprendre depuis une étape/)
-})
-
-test('keeps the selected pipeline and URL in sync', () => {
-  assert.match(source, /url\.searchParams\.set\('job', String\(selectedJobId\)\)/)
-  assert.match(source, /\}, \[selectedJobId\]\)/)
-})
-
-test('does not disguise a server failure as a missing pipeline', () => {
-  assert.match(source, /response\.status >= 500/)
-  assert.match(source, /Le job existe toujours et peut être repris/)
-  assert.doesNotMatch(source, /Pipeline introuvable\./)
-})
-
-test('does not report future health checks as current blockers', () => {
-  assert.match(source, /healthChecksPending/)
-  assert.match(source, /Contrôles à venir/)
-})
-
-test('explains that teacher orders are the only pipeline entry point', () => {
-  assert.match(
-    source,
-    /déclenchés automatiquement après la validation d’une commande de professeur IA/,
-  )
-  assert.match(source, /sans validation ou relance intermédiaire/)
-})
-
-test('restores the detailed 17-step auto-pilot roadmap', () => {
+  assert.match(source, /Pipelines existants/)
+  assert.match(source, /Stepper currentStep/)
+  assert.match(source, /PipelineVisualMap/)
   assert.match(source, /Roadmap auto-pilot API/)
-  assert.match(source, /DETAILED_PIPELINE_STAGES/)
-  assert.match(source, /Plan JSON verrouillé/)
-  assert.match(source, /Micro-conformité éthique/)
-  assert.match(source, /Curation IA des slides/)
-  assert.match(source, /Slides anchor-first/)
-  assert.match(source, /stages\.length/)
 })
 
-test('shows durable queue, health checks and matching stage events for debugging', () => {
-  assert.match(source, /File durable/)
-  assert.match(source, /queue\.attempt/)
-  assert.match(source, /Contrôles de santé/)
-  assert.match(source, /Événements correspondants/)
-  assert.match(source, /folder_resolution/)
-  assert.match(source, /volume_audit/)
+test('restores every detailed debugging surface', () => {
+  assert.match(source, /Recherche RNCP & initialisation/)
+  assert.match(source, /Téléchargement REAC/)
+  assert.match(source, /Enrichissement Knowledge Base/)
+  assert.match(source, /Programme global/)
+  assert.match(source, /Programmes journée/)
+  assert.match(source, /Génération des cours \(texte\)/)
+  assert.match(source, /Rapport conformité/)
+  assert.match(source, /Reprendre depuis une étape/)
 })
 
-test('detects an active job left without a durable work item', () => {
+test('keeps the current authenticated API client and durable resume', () => {
+  assert.match(source, /import \{ apiDownload, apiFetch \} from '\.\.\/api'/)
+  assert.match(source, /\/run-auto\/status/)
+  assert.match(source, /\/run-auto\/resume/)
+  assert.match(source, /\/diagnostic\?events_limit=80/)
   assert.match(source, /hasDetachedQueue/)
-  assert.match(source, /QUEUE_TERMINAL_STATUSES/)
-  assert.match(source, /Worker sans tâche active/)
-  assert.match(source, /Utilisez « Reprendre la pipeline »/)
+  assert.match(source, /aucune tâche durable ne traite actuellement cette étape/)
+})
+
+test('restores document, slides and audio inspection controls', () => {
+  assert.match(source, /Word 2/)
+  assert.match(source, /Slides anchor-first/)
+  assert.match(source, /Slide2/)
+  assert.match(source, /Fish \+ synchro/)
+  assert.match(source, /Edge \+ synchro/)
+  assert.match(source, /FolderTextModal/)
+})
+
+test('keeps the selected pipeline in the URL', () => {
+  assert.match(source, /setPipelineJobInUrl/)
+  assert.match(source, /url\.searchParams\.set\('job'/)
 })
