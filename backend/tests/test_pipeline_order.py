@@ -398,6 +398,24 @@ class PipelineOrderTest(unittest.TestCase):
         ):
             self.assertEqual(fr._determine_next_ap_step(99), "kb")
 
+    def test_legacy_kb_ready_status_cannot_hide_a_failed_competence(self):
+        job = _job(
+            status="kb_ready",
+            global_program=None,
+            daily_programs="[]",
+        )
+        with patch.object(fr, "get_job", return_value=job), patch(
+            "services.knowledge_base_service.kb_stats",
+            return_value={
+                "total": 7,
+                "completed": 6,
+                "pending": 0,
+                "processing": 0,
+                "error": 1,
+            },
+        ):
+            self.assertEqual(fr._determine_next_ap_step(99), "kb")
+
     def test_kb_and_global_steps_run_inside_the_durable_work_item(self):
         job = _job(
             platform_id=1,

@@ -251,9 +251,12 @@ def _deepseek_post(messages, max_tokens=8000, model=None):
 def _parse_json_response(text: str) -> dict:
     """
     Extrait un JSON depuis une réponse DeepSeek (```json ... ``` ou JSON brut).
-    Tolère les réponses tronquées (max_tokens atteint) en réparant le JSON :
-    on coupe au dernier champ complet et on ferme les structures ouvertes.
+    Répare les erreurs de syntaxe courantes des LLM et, en dernier recours,
+    une réponse tronquée au dernier champ complet.
     """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Réponse JSON vide ou non textuelle")
+
     text = text.strip()
     if "```json" in text:
         start = text.find("```json") + len("```json")
@@ -268,18 +271,105 @@ def _parse_json_response(text: str) -> dict:
         if text.startswith("json"):
             text = text[4:].strip()
 
+    # Certains fournisseurs ajoutent un court préambule malgré la consigne.
+    # On isole alors l'objet JSON au lieu de confier tout le texte au parser.
+    first_object = text.find("{")
+    if first_object > 0:
+        text = text[first_object:]
+
     try:
-        return json.loads(text)
+        result = json.loads(text)
     except json.JSONDecodeError as first_err:
-        logger.warning(f"⚠️ JSON malformé ({first_err}), tentative de réparation (troncature probable)")
-        repaired = _repair_truncated_json(text)
+        logger.warning("⚠️ JSON malformé (%s), tentative de réparation tolérante", first_err)
+
+        # json-repair couvre les erreurs de syntaxe courantes des LLM : clé ou
+        # guillemet manquant, virgule finale, échappement invalide, mais aussi
+        # une réponse coupée. L'ancien réparateur ne traitait que la troncature
+        # et laissait précisément passer l'erreur « property name ... quotes ».
         try:
-            result = json.loads(repaired)
-            logger.info(f"✅ JSON réparé avec succès ({len(text)} → {len(repaired)} chars)")
-            return result
-        except json.JSONDecodeError as second_err:
-            logger.error(f"❌ Réparation JSON échouée : {second_err}")
-            raise first_err  # on remonte l'erreur originale
+            from json_repair import repair_json
+
+            repaired = repair_json(text)
+            result = repaired if isinstance(repaired, dict) else json.loads(repaired)
+            logger.info("✅ JSON réparé avec succès (%s caractères)", len(text))
+        except Exception as repair_err:
+            # Fallback conservateur pour une troncature franche : ne garder que
+            # les champs entièrement reçus, puis fermer les structures.
+            truncated = _repair_truncated_json(text)
+            try:
+                result = json.loads(truncated)
+                logger.info(
+                    "✅ JSON tronqué réparé avec succès (%s → %s caractères)",
+                    len(text),
+                    len(truncated),
+                )
+            except (TypeError, ValueError, json.JSONDecodeError) as truncated_err:
+                logger.error(
+                    "❌ Réparation JSON échouée : json-repair=%s ; troncature=%s",
+                    repair_err,
+                    truncated_err,
+                )
+                raise ValueError(f"Réponse JSON invalide : {first_err}") from first_err
+
+    if not isinstance(result, dict):
+        raise ValueError(
+            f"Réponse JSON invalide : objet attendu, {type(result).__name__} reçu"
+        )
+    return result
+
+
+def _require_string(value, path: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Réponse KB invalide : {path} doit être un texte non vide")
+
+
+def _validate_extracted_competences(data: dict) -> list[dict]:
+    """Refuse une extraction réparée mais structurellement incomplète."""
+    competences = data.get("competences")
+    if not isinstance(competences, list) or not competences:
+        raise ValueError("Réponse DeepSeek sans compétences")
+    for index, competence in enumerate(competences):
+        if not isinstance(competence, dict):
+            raise ValueError(f"Réponse KB invalide : competences[{index}] doit être un objet")
+        for field in ("bloc", "competence_title", "competence_key", "raw_source"):
+            _require_string(competence.get(field), f"competences[{index}].{field}")
+    return competences
+
+
+def _validate_enriched_competence(data: dict) -> dict:
+    """Valide le contrat consommé par le stockage et le programme global."""
+    _require_string(data.get("definition_pedagogique"), "definition_pedagogique")
+    _require_string(data.get("contexte_terrain"), "contexte_terrain")
+
+    cases = data.get("etudes_de_cas")
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("Réponse KB invalide : etudes_de_cas doit être une liste non vide")
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            raise ValueError(f"Réponse KB invalide : etudes_de_cas[{index}] doit être un objet")
+        for field in ("titre", "situation", "enjeu", "resolution_attendue"):
+            _require_string(case.get(field), f"etudes_de_cas[{index}].{field}")
+
+    traps = data.get("pieges_frequents")
+    if not isinstance(traps, list) or not traps:
+        raise ValueError("Réponse KB invalide : pieges_frequents doit être une liste non vide")
+    for index, trap in enumerate(traps):
+        if not isinstance(trap, dict):
+            raise ValueError(f"Réponse KB invalide : pieges_frequents[{index}] doit être un objet")
+        for field in ("piege", "pourquoi_frequent", "comment_eviter"):
+            _require_string(trap.get(field), f"pieges_frequents[{index}].{field}")
+
+    vocabulary = data.get("vocabulaire_metier")
+    if not isinstance(vocabulary, dict) or not vocabulary:
+        raise ValueError("Réponse KB invalide : vocabulaire_metier doit être un objet non vide")
+    for term, definition in vocabulary.items():
+        _require_string(term, "vocabulaire_metier.<terme>")
+        _require_string(definition, f"vocabulaire_metier.{term}")
+
+    links = data.get("liens_connexes")
+    if not isinstance(links, list) or any(not isinstance(link, str) for link in links):
+        raise ValueError("Réponse KB invalide : liens_connexes doit être une liste de textes")
+    return data
 
 
 def _repair_truncated_json(text: str) -> str:
@@ -453,9 +543,7 @@ def extract_competences(
         model=model,
     )
     data = _parse_json_response(response)
-    competences = data.get("competences", [])
-    if not competences:
-        raise ValueError("Réponse DeepSeek sans compétences")
+    competences = _validate_extracted_competences(data)
     if checkpoint:
         checkpoint()
     logger.info(f"✅ {len(competences)} compétences extraites du REAC")
@@ -488,7 +576,7 @@ def enrich_competence(
         max_tokens=12000,
         model=model,
     )
-    result = _parse_json_response(response)
+    result = _validate_enriched_competence(_parse_json_response(response))
     if checkpoint:
         checkpoint()
     return result
@@ -549,7 +637,7 @@ def build_knowledge_base(
         existing = list_kb(job_id)
         completed_count = sum(1 for e in existing if e["status"] == "completed")
 
-        if existing and completed_count > 0:
+        if existing:
             logger.info(
                 f"🔁 Reprise Job {job_id} : {completed_count}/{len(existing)} compétences déjà enrichies, "
                 f"on ne retraite que les pending/error"
@@ -590,8 +678,6 @@ def build_knowledge_base(
         total_words_kb = sum(e["total_words"] for e in existing if e["status"] == "completed")
         to_enrich = [c for c in competences if c["_status_in_db"] != "completed"]
         skipped = len(competences) - len(to_enrich)
-        errors = 0
-
         def _enrich_one(c):
             """Enrichit une compétence unique (exécuté dans un worker)."""
             idx = c["competence_index"]
@@ -639,14 +725,32 @@ def build_knowledge_base(
                         status, words = fut.result()
                         if status == "ok":
                             total_words_kb += words
-                        else:
-                            errors += 1
                 if checkpoint:
                     checkpoint()
 
-        completed_final = len(competences) - errors
-        if completed_final == 0:
-            raise Exception(f"Toutes les compétences ({errors}) ont échoué à l'enrichissement")
+        # La DB est la source de vérité. Une seule compétence en erreur doit
+        # faire échouer cette tentative durable : le worker la rejouera avec
+        # backoff, tandis que les compétences déjà complétées resteront intactes.
+        final_stats = kb_stats(job_id)
+        completed_final = int(final_stats.get("completed") or 0)
+        total_final = int(final_stats.get("total") or 0)
+        failed_final = int(final_stats.get("error") or 0)
+        pending_final = (
+            int(final_stats.get("pending") or 0)
+            + int(final_stats.get("processing") or 0)
+        )
+        if (
+            total_final <= 0
+            or completed_final != total_final
+            or failed_final > 0
+            or pending_final > 0
+        ):
+            raise RuntimeError(
+                "Knowledge Base incomplète : "
+                f"{completed_final}/{total_final} compétences terminées, "
+                f"{failed_final} en erreur, {pending_final} en attente. "
+                "La file durable relancera uniquement les compétences non terminées."
+            )
 
         if checkpoint:
             checkpoint()

@@ -2592,11 +2592,11 @@ def _determine_next_ap_step(job_id: int) -> str | None:
         return "reac"
 
     # 2. KB
-    kb_done = bool(j.get("global_program")) or j.get("status") in (
-        "kb_ready", "global_ready", "global_validated", "daily_ready",
-        "daily_validated", "text_ready", "tts_launched", "audio_running",
-        "audio_completed", "audio_launched",
-    )
+    # Tant que le programme global n'existe pas, la table KB est la source de
+    # vérité. Un ancien run pouvait avoir status=kb_ready avec seulement 6/7
+    # entrées complétées ; faire confiance au statut seul sautait définitivement
+    # la compétence en erreur et détachait la suite du pipeline.
+    kb_done = bool(j.get("global_program"))
     if not kb_done:
         try:
             from services.knowledge_base_service import kb_stats as _kb_stats
@@ -2604,9 +2604,12 @@ def _determine_next_ap_step(job_id: int) -> str | None:
             kb_done = (
                 int(stats.get("total") or 0) > 0
                 and int(stats.get("completed") or 0) == int(stats.get("total") or 0)
+                and int(stats.get("error") or 0) == 0
+                and int(stats.get("pending") or 0) == 0
+                and int(stats.get("processing") or 0) == 0
             )
         except Exception:
-            pass
+            kb_done = False
     if not kb_done:
         return "kb"
 
