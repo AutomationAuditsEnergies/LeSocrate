@@ -355,7 +355,7 @@ class DurableFoundationStagesTest(unittest.TestCase):
         )
         self.assertFalse(hasattr(fps, "launch_global_program_generation"))
 
-    def test_global_program_delegates_invalid_activity_to_durable_retry(self):
+    def test_global_program_repairs_invalid_activity_before_persisting(self):
         job = {
             "id": 42,
             "tp_name": "TP Test",
@@ -364,6 +364,51 @@ class DurableFoundationStagesTest(unittest.TestCase):
             "nb_days": 2,
         }
         invalid_program = "### MODULE 1.1 : Cas pratique guidé"
+        repaired_program = "### MODULE 1.1 : Exemple professionnel commenté"
+        with patch.object(fps, "get_job", return_value=job), patch.object(
+            fps,
+            "update_job",
+        ) as update, patch.object(
+            fps,
+            "_v2_schedule_days",
+            return_value=[],
+        ), patch(
+            "services.knowledge_base_service.build_kb_context",
+            return_value="Base enrichie",
+        ), patch.object(
+            fps,
+            "_build_global_program_prompt",
+            return_value="Prompt",
+        ), patch.object(
+            fps,
+            "_deepseek_post",
+            side_effect=[invalid_program, repaired_program],
+        ) as deepseek:
+            fps.generate_global_program(42)
+
+        self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(
+            update.call_args_list,
+            [
+                call(42, status="global_generating"),
+                call(
+                    42,
+                    status="global_ready",
+                    global_program=repaired_program,
+                    global_program_generated_via="api",
+                ),
+            ],
+        )
+
+    def test_global_program_delegates_failed_semantic_repair_to_durable_retry(self):
+        job = {
+            "id": 42,
+            "tp_name": "TP Test",
+            "rncp_code": "RNCP1",
+            "reac_text": "Référentiel complet",
+            "nb_days": 2,
+        }
+        invalid_program = "### MODULE 1.1 : Mise en situation guidée"
         with patch.object(fps, "get_job", return_value=job), patch.object(
             fps,
             "update_job",
@@ -386,21 +431,10 @@ class DurableFoundationStagesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "activité apprenant interdite"):
                 fps.generate_global_program(42)
 
-        self.assertEqual(deepseek.call_count, 1)
-        self.assertEqual(
-            update.call_args_list,
-            [
-                call(42, status="global_generating"),
-                call(
-                    42,
-                    status="error",
-                    error_message=(
-                        "Le programme global contient une activité apprenant "
-                        "interdite : cas pratique"
-                    ),
-                ),
-            ],
-        )
+        self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(update.call_args_list[0], call(42, status="global_generating"))
+        self.assertEqual(update.call_args_list[-1][0], (42,))
+        self.assertEqual(update.call_args_list[-1].kwargs["status"], "error")
 
     def test_global_program_failure_is_propagated_to_the_durable_worker(self):
         job = {

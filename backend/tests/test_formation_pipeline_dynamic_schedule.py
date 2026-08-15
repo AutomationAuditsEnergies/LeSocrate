@@ -209,7 +209,9 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         legitimate = (
             "Les conditions d'exercice du métier et les modalités d’exercice "
             "de la profession sont expliquées par le professeur. "
-            "La clôture de l'exercice comptable est ensuite détaillée."
+            "La clôture de l'exercice comptable est ensuite détaillée. "
+            "Aucune mise en situation n'est prévue et les jeux de rôle sont exclus. "
+            "Le cours se déroule sans atelier pédagogique ni QCM."
         )
         self.assertEqual(fps._learner_activity_violations(legitimate), [])
 
@@ -287,12 +289,43 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertNotIn("EXACTEMENT 7", captured["prompt"])
         self.assertIn("exclusivement un cours magistral", captured["prompt"])
 
-    def test_daily_split_delegates_invalid_activity_to_durable_retry(self):
+    def test_daily_split_repairs_invalid_activity_before_returning(self):
         schedule_days = fps._v2_schedule_days(
             _v2_job([self.day_four])
         )
         invalid_day = _raw_generated_day(1, 4)
         invalid_day["sub_parts"][0]["name"] = "Cours 1 — Cas pratique guidé"
+        repaired_day = _raw_generated_day(1, 4)
+        repaired_day["sub_parts"][0]["name"] = "Cours 1 — Exemple professionnel commenté"
+
+        with patch.object(
+            fps,
+            "_deepseek_post",
+            side_effect=[
+                json.dumps({"days": [invalid_day]}),
+                json.dumps({"days": [repaired_day]}),
+            ],
+        ) as deepseek:
+            days = fps._split_batch(
+                tp_name="TP dynamique",
+                nb_days=1,
+                global_program="Programme",
+                day_start=1,
+                day_end=1,
+                model="test-model",
+                schedule_days=schedule_days,
+            )
+
+        self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(
+            days[0]["sub_parts"][0]["name"],
+            "Cours 1 — Exemple professionnel commenté",
+        )
+
+    def test_daily_split_delegates_failed_semantic_repair_to_durable_retry(self):
+        schedule_days = fps._v2_schedule_days(_v2_job([self.day_four]))
+        invalid_day = _raw_generated_day(1, 4)
+        invalid_day["sub_parts"][0]["name"] = "Cours 1 — Mise en situation"
 
         with patch.object(
             fps,
@@ -313,7 +346,7 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
                     schedule_days=schedule_days,
                 )
 
-        self.assertEqual(deepseek.call_count, 1)
+        self.assertEqual(deepseek.call_count, 2)
 
     def test_run_daily_split_never_persists_a_fallback_after_failure(self):
         job = _v2_job([self.day_five])

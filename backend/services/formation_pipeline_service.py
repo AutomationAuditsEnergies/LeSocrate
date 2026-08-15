@@ -730,11 +730,38 @@ _LEGITIMATE_EXERCISE_CONTEXT_RE = re.compile(
 def _learner_activity_violations(text: str) -> list[str]:
     """Détecte les activités apprenant, sans confondre l'exercice d'un métier."""
     scan_text = _LEGITIMATE_EXERCISE_CONTEXT_RE.sub("", str(text or ""))
-    return [
-        label
-        for label, pattern in _LEARNER_ACTIVITY_PATTERNS
-        if pattern.search(scan_text)
-    ]
+    violations = []
+    for label, pattern in _LEARNER_ACTIVITY_PATTERNS:
+        matches = pattern.finditer(scan_text)
+        if any(not _activity_match_is_negated(scan_text, match) for match in matches):
+            violations.append(label)
+    return violations
+
+
+_ACTIVITY_NEGATION_PREFIX_RE = re.compile(
+    r"(?:\baucun(?:e|s|es)?|\bsans|\bpas\s+de|\bni|"
+    r"\babsence\s+de|\bexclusion\s+de)\s+"
+    r"(?:[\wÀ-ÿ'’.-]+\s+){0,3}$",
+    re.IGNORECASE,
+)
+
+_ACTIVITY_NEGATION_SUFFIX_RE = re.compile(
+    r"^\s*(?:est\s+|sont\s+)?(?:strictement\s+)?"
+    r"(?:interdit(?:e|s|es)?|exclu(?:e|s|es)?|proscrit(?:e|s|es)?|"
+    r"absent(?:e|s|es)?|non\s+pr[ée]vu(?:e|s|es)?|"
+    r"n['’]est\s+pas\s+pr[ée]vu(?:e)?|ne\s+sont\s+pas\s+pr[ée]vu(?:e|s|es)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _activity_match_is_negated(text: str, match) -> bool:
+    """Ignore seulement une négation qui qualifie directement l'activité."""
+    prefix = text[max(0, match.start() - 100):match.start()]
+    suffix = text[match.end():match.end() + 80]
+    return bool(
+        _ACTIVITY_NEGATION_PREFIX_RE.search(prefix)
+        or _ACTIVITY_NEGATION_SUFFIX_RE.search(suffix)
+    )
 
 
 def _assert_lecture_only_program(text: str, *, context: str) -> None:
@@ -744,6 +771,58 @@ def _assert_lecture_only_program(text: str, *, context: str) -> None:
             f"{context} contient une activité apprenant interdite : "
             + ", ".join(violations)
         )
+
+
+def _repair_lecture_only_output(
+    text: str,
+    *,
+    context: str,
+    model: str,
+    max_tokens: int,
+    json_output: bool = False,
+    checkpoint: Callable[[], None] | None = None,
+) -> str:
+    """Effectue au plus une correction sémantique avant le retry durable."""
+    violations = _learner_activity_violations(text)
+    if not violations:
+        return text
+
+    output_contract = (
+        "Réponds uniquement avec le JSON corrigé, sans balise Markdown."
+        if json_output
+        else "Réponds uniquement avec le programme corrigé, sans préambule."
+    )
+    prompt = f"""Tu corriges un programme de formation destiné à un cours audio magistral.
+
+Le contenu ci-dessous viole le contrat car il contient : {', '.join(violations)}.
+
+RÈGLES DE CORRECTION :
+- Conserve exactement la structure, les titres professionnels, les compétences, l'ordre et les volumes du programme.
+- Supprime toute consigne ou activité à réaliser par l'apprenant.
+- Transforme chaque activité détectée en explication, démonstration verbale ou exemple professionnel fictif raconté et commenté par le professeur.
+- N'utilise nulle part les expressions détectées, même pour dire qu'elles sont interdites.
+- N'ajoute aucun exercice, atelier, cas pratique, étude de cas, simulation, jeu de rôle, QCM ou quiz.
+- {output_contract}
+
+=== CONTENU À CORRIGER ===
+{text}
+"""
+    logger.warning(
+        "PIPELINE_LECTURE_ONLY_REPAIR context=%s violations=%s",
+        context,
+        ",".join(violations),
+    )
+    if checkpoint:
+        checkpoint()
+    repaired = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+        model=model,
+    )
+    if checkpoint:
+        checkpoint()
+    _assert_lecture_only_program(repaired, context=context)
+    return repaired
 
 
 def _iter_daily_teaching_text(days: list[dict]):
@@ -1364,9 +1443,12 @@ def generate_global_program(
             max_tokens=16000,
             model=used_model,
         )
-        _assert_lecture_only_program(
+        program = _repair_lecture_only_output(
             program,
             context="Le programme global",
+            model=used_model,
+            max_tokens=16000,
+            checkpoint=checkpoint,
         )
         if checkpoint:
             checkpoint()
@@ -1795,7 +1877,24 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
             tp_name,
             schedule_days=schedule_days,
         )
-        _assert_lecture_only_days(days)
+        try:
+            _assert_lecture_only_days(days)
+        except ValueError:
+            repaired_raw = _repair_lecture_only_output(
+                json.dumps({"days": days}, ensure_ascii=False),
+                context="Le programme journée",
+                model=model,
+                max_tokens=DAILY_SPLIT_MAX_TOKENS,
+                json_output=True,
+            )
+            days = _normalize_daily_payload(
+                _clean_json(repaired_raw),
+                day_start,
+                day_end,
+                tp_name,
+                schedule_days=schedule_days,
+            )
+            _assert_lecture_only_days(days)
         return days
     except (LeaseLostError, DeepSeekRateLimitError, DeepSeekAPIError):
         raise
