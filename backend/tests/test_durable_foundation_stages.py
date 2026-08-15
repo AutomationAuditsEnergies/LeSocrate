@@ -88,6 +88,24 @@ class DurableFoundationStagesTest(unittest.TestCase):
         )
         self.assertEqual(kb_post.call_args.kwargs["http_max_attempts"], 1)
 
+    def test_long_foundation_generation_can_enable_bounded_transport_retry(self):
+        with patch.object(
+            fps,
+            "_post_deepseek_message",
+            return_value="programme",
+        ) as formation_post:
+            result = fps._deepseek_post(
+                [],
+                model="deepseek-v4-flash",
+                http_max_attempts=2,
+            )
+
+        self.assertEqual(result, "programme")
+        self.assertEqual(
+            formation_post.call_args.kwargs["http_max_attempts"],
+            2,
+        )
+
     def test_kb_extraction_calls_the_model_once_per_durable_attempt(self):
         with patch.object(
             kbs,
@@ -387,6 +405,12 @@ class DurableFoundationStagesTest(unittest.TestCase):
             fps.generate_global_program(42)
 
         self.assertEqual(deepseek.call_count, 2)
+        self.assertTrue(
+            all(
+                call_item.kwargs["http_max_attempts"] == 2
+                for call_item in deepseek.call_args_list
+            )
+        )
         self.assertEqual(
             update.call_args_list,
             [

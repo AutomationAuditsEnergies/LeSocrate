@@ -781,6 +781,7 @@ def _repair_lecture_only_output(
     max_tokens: int,
     json_output: bool = False,
     checkpoint: Callable[[], None] | None = None,
+    http_max_attempts: int = 1,
 ) -> str:
     """Effectue au plus une correction sémantique avant le retry durable."""
     violations = _learner_activity_violations(text)
@@ -818,6 +819,7 @@ RÈGLES DE CORRECTION :
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
         model=model,
+        http_max_attempts=http_max_attempts,
     )
     if checkpoint:
         checkpoint()
@@ -1372,13 +1374,18 @@ def fetch_rome_data(rncp_code: str) -> str:
 
 # ─── Appel DeepSeek ───────────────────────────────────────────────────────────
 
-def _deepseek_post(messages, max_tokens=16000, model=None):
-    """Un seul appel HTTP ; la file durable possède la politique de retry."""
+def _deepseek_post(
+    messages,
+    max_tokens=16000,
+    model=None,
+    http_max_attempts: int = 1,
+):
+    """Appel DeepSeek avec retry HTTP borné, puis retry durable au-dessus."""
     return _post_deepseek_message(
         messages,
         max_tokens=max_tokens,
         model=model or DEEPSEEK_MODEL,
-        http_max_attempts=1,
+        http_max_attempts=http_max_attempts,
     )
 
 
@@ -1435,6 +1442,12 @@ def generate_global_program(
             sources,
             schedule_days=schedule_days,
         )
+        transport_attempts = _env_int(
+            "FORMATION_FOUNDATION_HTTP_ATTEMPTS",
+            2,
+            min_value=1,
+            max_value=3,
+        )
 
         if checkpoint:
             checkpoint()
@@ -1442,6 +1455,7 @@ def generate_global_program(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=16000,
             model=used_model,
+            http_max_attempts=transport_attempts,
         )
         program = _repair_lecture_only_output(
             program,
@@ -1449,6 +1463,7 @@ def generate_global_program(
             model=used_model,
             max_tokens=16000,
             checkpoint=checkpoint,
+            http_max_attempts=transport_attempts,
         )
         if checkpoint:
             checkpoint()
@@ -1863,11 +1878,18 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
         )
         .replace("{GLOBAL_PROGRAM}", global_program[:20000] + enrichment)
     )
+    transport_attempts = _env_int(
+        "FORMATION_FOUNDATION_HTTP_ATTEMPTS",
+        2,
+        min_value=1,
+        max_value=3,
+    )
     try:
         raw = _deepseek_post(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=DAILY_SPLIT_MAX_TOKENS,
             model=model,
+            http_max_attempts=transport_attempts,
         )
         data = _clean_json(raw)
         days = _normalize_daily_payload(
@@ -1886,6 +1908,7 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
                 model=model,
                 max_tokens=DAILY_SPLIT_MAX_TOKENS,
                 json_output=True,
+                http_max_attempts=transport_attempts,
             )
             days = _normalize_daily_payload(
                 _clean_json(repaired_raw),

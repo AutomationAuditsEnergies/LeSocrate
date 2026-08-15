@@ -317,6 +317,12 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
             )
 
         self.assertEqual(deepseek.call_count, 2)
+        self.assertTrue(
+            all(
+                call_item.kwargs["http_max_attempts"] == 2
+                for call_item in deepseek.call_args_list
+            )
+        )
         self.assertEqual(
             days[0]["sub_parts"][0]["name"],
             "Cours 1 — Exemple professionnel commenté",
