@@ -330,14 +330,15 @@ function formatDuration(ms) {
   return `${hours}h${rest ? ` ${rest}m` : ''}`
 }
 
+function parseBackendDate(value) {
+  const raw = String(value || '').trim()
+  const sqliteUtc = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)
+  return new Date(sqliteUtc ? `${raw.replace(' ', 'T')}Z` : raw)
+}
+
 function formatEventTime(value) {
   if (!value) return ''
-  // SQLite CURRENT_TIMESTAMP est en UTC. La string arrive sans timezone
-  // ("2026-05-05 11:01:23") — on force le parsing UTC en ajoutant 'Z',
-  // sinon JS l'interprète comme heure locale et l'affichage est décalé.
-  const isoLike = String(value).replace(' ', 'T')
-  const hasTz = isoLike.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(isoLike)
-  const date = new Date(hasTz ? isoLike : `${isoLike}Z`)
+  const date = parseBackendDate(value)
   if (Number.isNaN(date.getTime())) return String(value).slice(11, 16) || String(value)
   return date.toLocaleTimeString('fr-FR', {
     hour: '2-digit',
@@ -348,9 +349,7 @@ function formatEventTime(value) {
 
 function formatJobTimestamp(value) {
   if (!value) return ''
-  const isoLike = String(value).replace(' ', 'T')
-  const hasTz = isoLike.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(isoLike)
-  const date = new Date(hasTz ? isoLike : `${isoLike}Z`)
+  const date = parseBackendDate(value)
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleString('fr-FR', {
     day: '2-digit',
