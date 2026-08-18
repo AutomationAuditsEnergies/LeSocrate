@@ -1244,7 +1244,7 @@ export default function HRDashboard() {
         <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white ${
           showCreateModal
             ? 'overflow-hidden'
-            : `px-4 sm:px-6 lg:px-8 ${teacherRosterVisible || recruitmentAssistantVisible || scheduleTemplatesVisible || aiVoicesVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`
+            : `px-4 sm:px-6 lg:px-8 ${scheduleTemplatesVisible ? 'overflow-hidden' : teacherRosterVisible || recruitmentAssistantVisible || aiVoicesVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`
         }`}>
           <div className={`mx-auto flex h-full min-h-0 w-full flex-col ${
             showCreateModal ? 'max-w-none' : 'max-w-[1480px] pt-4 md:pt-6'
