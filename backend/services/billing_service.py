@@ -11,8 +11,10 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from config import FRANCE_TZ
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
 from repositories.billing_repository import (
+    approve_order_review,
     apply_stripe_webhook_event,
     attach_checkout_session,
     create_order,
@@ -21,7 +23,9 @@ from repositories.billing_repository import (
     get_order,
     get_reusable_module,
     list_center_billing_orders,
+    mark_order_notification_sent,
     record_webhook_failure,
+    reject_order_review,
     retry_order_fulfillment,
 )
 from repositories.day_schedule_repository import get_template, mark_template_used
@@ -31,6 +35,11 @@ from services.dynamic_day_schedule_service import (
     compile_module_schedule,
     validate_new_module_lead_time,
 )
+from services.billing_email_service import send_payment_link, send_review_request
+from utils.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class BillingError(RuntimeError):
@@ -43,14 +52,10 @@ PRODUCTS = {
     "new_teacher": {
         "pricing_key": "new_teacher",
         "label": "Nouveau professeur IA",
-        "multiplier_numerator": 2,
-        "multiplier_denominator": 1,
     },
     "reuse_teacher": {
         "pricing_key": "reuse_teacher",
         "label": "Réutilisation d’un professeur IA",
-        "multiplier_numerator": 3,
-        "multiplier_denominator": 2,
     },
 }
 
@@ -409,23 +414,32 @@ def _production_cost_per_day_cents() -> int:
     return value
 
 
+def _selling_price_per_day_cents() -> int:
+    """Return the temporary fixed public price for one training day."""
+    raw = os.getenv("AI_TEACHER_PRICE_PER_DAY_CENTS", "2000").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise BillingError("Le tarif journalier est invalide.", status_code=503)
+    if value <= 0:
+        raise BillingError("Le tarif journalier doit être positif.", status_code=503)
+    return value
+
+
 def get_product_catalog(*, allow_fallback: bool = True) -> dict[str, dict[str, Any]]:
     del allow_fallback  # kept for compatibility with older callers
     production_cost = _production_cost_per_day_cents()
+    selling_price = _selling_price_per_day_cents()
     stripe_configured = _stripe_checkout_configured()
     catalog = {}
     for operation_type, product in PRODUCTS.items():
-        unit_amount = (
-            production_cost
-            * int(product["multiplier_numerator"])
-            // int(product["multiplier_denominator"])
-        )
         catalog[operation_type] = {
             "operation_type": operation_type,
             "label": product["label"],
             "pricing_key": product["pricing_key"],
+            "stripe_price_id": os.getenv("AI_TEACHER_STRIPE_PRICE_ID", "").strip() or None,
             "production_cost_per_day_cents": production_cost,
-            "unit_amount_cents": unit_amount,
+            "unit_amount_cents": selling_price,
             "currency": "eur",
             "configured": stripe_configured,
         }
@@ -445,6 +459,7 @@ def serialize_order(order: dict[str, Any], *, include_project: bool = False) -> 
         "currency": order.get("currency") or "eur",
         "authorization_kind": order.get("authorization_kind"),
         "payment_status": order.get("payment_status"),
+        "review_status": order.get("review_status"),
         "fulfillment_status": order.get("fulfillment_status"),
         "platform_id": order.get("platform_id"),
         "pipeline_job_id": order.get("pipeline_job_id"),
@@ -737,6 +752,147 @@ def _enqueue_fulfillment(order: dict[str, Any]) -> dict[str, Any]:
     return enqueue_order_fulfillment(int(order["id"])) or order
 
 
+def _review_serializer() -> URLSafeTimedSerializer:
+    secret = os.getenv("SECRET_KEY", "fallback_secret_key_for_dev")
+    return URLSafeTimedSerializer(secret, salt="ai-teacher-order-review-v1")
+
+
+def create_review_token(public_id: str) -> str:
+    return _review_serializer().dumps({"order": str(public_id)})
+
+
+def validate_review_token(public_id: str, token: str) -> None:
+    try:
+        payload = _review_serializer().loads(token, max_age=14 * 24 * 60 * 60)
+    except SignatureExpired as exc:
+        raise BillingError("Ce lien de validation a expiré.", status_code=410) from exc
+    except BadSignature as exc:
+        raise BillingError("Lien de validation invalide.", status_code=403) from exc
+    if str(payload.get("order") or "") != str(public_id):
+        raise BillingError("Lien de validation invalide.", status_code=403)
+
+
+def get_review_order(public_id: str, token: str) -> dict[str, Any]:
+    validate_review_token(public_id, token)
+    order = get_order(public_id)
+    if not order:
+        raise BillingError("Demande introuvable.", status_code=404)
+    center = get_center_billing_account(int(order["center_account_id"]))
+    if not center:
+        raise BillingError("Centre introuvable.", status_code=404)
+    return {"order": order, "center": center}
+
+
+def training_days_for_order(order: Mapping[str, Any]) -> int:
+    project = order.get("request_payload_json") or {}
+    schedule = (project.get("new_formation") or {}).get("schedule") or project.get("schedule") or {}
+    return max(
+        1,
+        int(
+            schedule.get("day_count")
+            or schedule.get("total_training_days")
+            or len(schedule.get("selected_dates") or [])
+            or ((int(order.get("total_hours") or 7) + 6) // 7)
+        ),
+    )
+
+
+def _create_checkout_for_order(order: dict[str, Any], center: dict[str, Any]) -> dict[str, Any]:
+    stripe = _stripe()
+    existing_session_id = order.get("stripe_checkout_session_id")
+    if existing_session_id:
+        existing = stripe.checkout.Session.retrieve(existing_session_id)
+        if getattr(existing, "status", None) == "open" and getattr(existing, "url", None):
+            return {"order": order, "checkout_url": existing.url}
+
+    training_days = training_days_for_order(order)
+    total_amount = int(order.get("catalog_amount_cents") or 0)
+    unit_amount = total_amount // training_days
+    if unit_amount <= 0 or unit_amount * training_days != total_amount:
+        raise BillingError("Le montant approuvé est invalide.", status_code=409)
+
+    frontend_url = os.getenv("PLATFORM_1_FRONTEND_URL", "").strip().rstrip("/")
+    if not frontend_url:
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").strip().rstrip("/")
+    public_id = str(order["public_id"])
+    stripe_price_id = str(order.get("stripe_price_id") or "").strip()
+    line_item = (
+        {"price": stripe_price_id, "quantity": training_days}
+        if stripe_price_id
+        else {
+            "price_data": {
+                "currency": order.get("currency") or "eur",
+                "unit_amount": unit_amount,
+                "product_data": {
+                    "name": "Professeur IA · journée de formation",
+                    "description": f"{training_days} journée(s) de formation IA",
+                },
+            },
+            "quantity": training_days,
+        }
+    )
+    checkout_params = dict(
+        mode="payment",
+        locale="fr",
+        submit_type="pay",
+        invoice_creation={"enabled": True},
+        payment_method_types=["card", "link"],
+        line_items=[line_item],
+        client_reference_id=public_id,
+        billing_address_collection="required",
+        tax_id_collection={"enabled": True},
+        metadata={"ai_teacher_order_id": str(order["id"]), "order_public_id": public_id},
+        payment_intent_data={"metadata": {"ai_teacher_order_id": str(order["id"]), "order_public_id": public_id}},
+        success_url=f"{frontend_url}/dashboard-centre?checkout=success&order={public_id}",
+        cancel_url=f"{frontend_url}/dashboard-centre?checkout=cancelled&order={public_id}",
+        idempotency_key=f"ai-teacher-order-{order['id']}-checkout-{int(order.get('checkout_attempt_count') or 0) + 1}",
+    )
+    if "@" in str(center.get("username") or ""):
+        checkout_params["customer_email"] = center["username"]
+    checkout = stripe.checkout.Session.create(**checkout_params)
+    expires_at = datetime.fromtimestamp(checkout.expires_at, tz=timezone.utc) if checkout.expires_at else None
+    stored = attach_checkout_session(
+        int(order["id"]),
+        checkout_session_id=checkout.id,
+        payment_intent_id=getattr(checkout, "payment_intent", None),
+        expires_at=expires_at,
+    )
+    return {"order": stored, "checkout_url": checkout.url}
+
+
+def approve_teacher_order_review(public_id: str, token: str) -> dict[str, Any]:
+    validate_review_token(public_id, token)
+    order = approve_order_review(public_id, os.getenv("BILLING_REVIEW_NOTIFICATION_EMAIL", "secretariat@saleshacking.fr"))
+    if not order:
+        raise BillingError("Demande introuvable.", status_code=404)
+    if order.get("review_status") != "approved":
+        raise BillingError("Cette demande ne peut plus être approuvée.", status_code=409)
+    center = get_center_billing_account(int(order["center_account_id"]))
+    if not center:
+        raise BillingError("Centre introuvable.", status_code=404)
+    result = _create_checkout_for_order(order, center)
+    payment_email_sent = bool(order.get("payment_email_sent_at"))
+    if not payment_email_sent:
+        payment_email_sent = send_payment_link(
+            result["order"], center, result["checkout_url"]
+        )
+        if payment_email_sent:
+            mark_order_notification_sent(int(order["id"]), "payment_email_sent_at")
+    return {**result, "payment_email_sent": payment_email_sent}
+
+
+def reject_teacher_order_review(public_id: str, token: str, note: str = "") -> dict[str, Any]:
+    validate_review_token(public_id, token)
+    order = reject_order_review(
+        public_id,
+        os.getenv("BILLING_REVIEW_NOTIFICATION_EMAIL", "secretariat@saleshacking.fr"),
+        note,
+    )
+    if not order:
+        raise BillingError("Demande introuvable.", status_code=404)
+    return order
+
+
 def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[str, Any]:
     center = get_center_billing_account(center_account_id)
     if not center or not center.get("is_active"):
@@ -745,6 +901,9 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
     product = get_product_catalog()[operation_type]
     training_days = int(details["training_days"])
     catalog_amount_cents = int(product["unit_amount_cents"]) * training_days
+    internal_api_cost_cents = int(
+        product.get("production_cost_per_day_cents") or _production_cost_per_day_cents()
+    ) * training_days
     exempt = _center_is_exempt(center)
     if not exempt and not product["configured"]:
         raise BillingError("Le paiement de ce service n’est pas encore configuré.", status_code=503)
@@ -753,8 +912,9 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
         "center_account_id": int(center_account_id),
         "operation_type": operation_type,
         "source_module_id": details["source_module_id"],
-        "status": "authorized" if exempt else "awaiting_payment",
-        "payment_status": "not_required" if exempt else "awaiting_payment",
+        "status": "authorized" if exempt else "awaiting_review",
+        "payment_status": "not_required" if exempt else "not_requested",
+        "review_status": "not_required" if exempt else "pending",
         "training_title": details["training_title"],
         "rncp_code": details["rncp_code"],
         "total_hours": details["total_hours"],
@@ -762,8 +922,9 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
         "creation_request_id": details["creation_request_id"],
         "request_fingerprint": details["request_fingerprint"],
         "pricing_key": product["pricing_key"],
-        "stripe_price_id": None,
+        "stripe_price_id": product.get("stripe_price_id"),
         "catalog_amount_cents": catalog_amount_cents,
+        "internal_api_cost_cents": internal_api_cost_cents,
         "charged_amount_cents": 0 if exempt else None,
         "currency": product["currency"],
         "authorization_kind": "center_exemption" if exempt else "stripe",
@@ -802,55 +963,19 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
         return {"order": order, "next_action": "track"}
     if order.get("payment_status") in {"paid", "not_required"}:
         return {"order": _enqueue_fulfillment(order), "next_action": "track"}
-
-    stripe = _stripe()
-    existing_session_id = order.get("stripe_checkout_session_id")
-    if existing_session_id:
-        existing = stripe.checkout.Session.retrieve(existing_session_id)
-        if getattr(existing, "status", None) == "open" and getattr(existing, "url", None):
-            return {"order": order, "next_action": "redirect", "checkout_url": existing.url}
-
-    frontend_url = os.getenv("PLATFORM_1_FRONTEND_URL", "").strip().rstrip("/")
-    if not frontend_url:
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").strip().rstrip("/")
-    public_id = str(order["public_id"])
-    checkout_params = dict(
-        mode="payment",
-        invoice_creation={"enabled": True},
-        # Keep the first production rollout synchronous and predictable.
-        # Card wallets such as Apple Pay/Google Pay still use the card rail.
-        payment_method_types=["card"],
-        line_items=[{
-            "price_data": {
-                "currency": order["currency"],
-                "unit_amount": int(product["unit_amount_cents"]),
-                "product_data": {
-                    "name": product["label"],
-                    "description": f"{training_days} journée(s) de formation IA",
-                },
-            },
-            "quantity": training_days,
-        }],
-        client_reference_id=public_id,
-        billing_address_collection="required",
-        tax_id_collection={"enabled": True},
-        metadata={"ai_teacher_order_id": str(order["id"]), "order_public_id": public_id},
-        payment_intent_data={"metadata": {"ai_teacher_order_id": str(order["id"]), "order_public_id": public_id}},
-        success_url=f"{frontend_url}/dashboard-centre?checkout=success&order={public_id}",
-        cancel_url=f"{frontend_url}/dashboard-centre?checkout=cancelled&order={public_id}",
-        idempotency_key=f"ai-teacher-order-{order['id']}-checkout-{int(order.get('checkout_attempt_count') or 0) + 1}",
-    )
-    if "@" in str(center["username"]):
-        checkout_params["customer_email"] = center["username"]
-    checkout = stripe.checkout.Session.create(**checkout_params)
-    expires_at = datetime.fromtimestamp(checkout.expires_at, tz=timezone.utc) if checkout.expires_at else None
-    order = attach_checkout_session(
-        int(order["id"]),
-        checkout_session_id=checkout.id,
-        payment_intent_id=getattr(checkout, "payment_intent", None),
-        expires_at=expires_at,
-    )
-    return {"order": order, "next_action": "redirect", "checkout_url": checkout.url}
+    if order.get("review_status") == "approved":
+        checkout = _create_checkout_for_order(order, center)
+        return {**checkout, "next_action": "redirect"}
+    if not order.get("review_email_sent_at"):
+        base_url = os.getenv(
+            "BILLING_REVIEW_BASE_URL",
+            "http://localhost:5000",
+        ).strip().rstrip("/")
+        token = create_review_token(str(order["public_id"]))
+        review_url = f"{base_url}/billing/review/{order['public_id']}?token={token}"
+        if send_review_request(order, center, review_url):
+            mark_order_notification_sent(int(order["id"]), "review_email_sent_at")
+    return {"order": order, "next_action": "pending_review"}
 
 
 def process_stripe_webhook(raw_payload: bytes, signature: str) -> None:

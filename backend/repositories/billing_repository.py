@@ -243,19 +243,22 @@ def create_order(values: dict[str, Any]) -> tuple[dict[str, Any], bool]:
                 """
                 INSERT INTO ai_teacher_orders (
                     center_account_id, operation_type, source_module_id, status,
-                    payment_status, fulfillment_status, training_title, rncp_code,
+                    payment_status, review_status, fulfillment_status, training_title, rncp_code,
                     total_hours, request_payload_json, creation_request_id,
                     request_fingerprint, pricing_key, stripe_price_id,
-                    quoted_amount_cents, catalog_amount_cents, charged_amount_cents,
+                    quoted_amount_cents, catalog_amount_cents, internal_api_cost_cents,
+                    charged_amount_cents,
                     currency, authorization_kind, authorized_at
                 )
                 VALUES (
                     %(center_account_id)s, %(operation_type)s, %(source_module_id)s,
-                    %(status)s, %(payment_status)s, 'not_started', %(training_title)s,
+                    %(status)s, %(payment_status)s, %(review_status)s,
+                    'not_started', %(training_title)s,
                     %(rncp_code)s, %(total_hours)s, %(request_payload_json)s::jsonb,
                     %(creation_request_id)s, %(request_fingerprint)s, %(pricing_key)s,
                     %(stripe_price_id)s, %(catalog_amount_cents)s,
-                    %(catalog_amount_cents)s, %(charged_amount_cents)s, %(currency)s,
+                    %(catalog_amount_cents)s, %(internal_api_cost_cents)s,
+                    %(charged_amount_cents)s, %(currency)s,
                     %(authorization_kind)s,
                     CASE WHEN %(payment_status)s = 'not_required' THEN NOW() ELSE NULL END
                 )
@@ -281,6 +284,66 @@ def create_order(values: dict[str, Any]) -> tuple[dict[str, Any], bool]:
             if row and row.get("payment_status") == "not_required":
                 row = _enqueue_fulfillment_in_transaction(cur, row)
             return row, created
+
+
+def mark_order_notification_sent(order_id: int, column: str) -> None:
+    if column not in {"review_email_sent_at", "payment_email_sent_at"}:
+        raise ValueError("Colonne de notification invalide")
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE ai_teacher_orders SET {column} = NOW(), updated_at = NOW() WHERE id = %s",
+                (int(order_id),),
+            )
+
+
+def approve_order_review(public_id: str, reviewed_by: str) -> dict[str, Any] | None:
+    """Approve one request exactly once and open its Stripe payment phase."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE public_id = %s FOR UPDATE",
+                (str(public_id),),
+            )
+            order = cur.fetchone()
+            if not order:
+                return None
+            if order.get("review_status") == "approved":
+                return order
+            if order.get("review_status") != "pending":
+                return order
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET review_status = 'approved', status = 'awaiting_payment',
+                    payment_status = 'awaiting_payment', reviewed_at = NOW(),
+                    reviewed_by = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (str(reviewed_by or "secretariat")[:160], int(order["id"])),
+            )
+            return cur.fetchone()
+
+
+def reject_order_review(public_id: str, reviewed_by: str, note: str = "") -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET review_status = 'rejected', status = 'rejected',
+                    payment_status = 'not_requested', reviewed_at = NOW(),
+                    reviewed_by = %s, review_note = %s, updated_at = NOW()
+                WHERE public_id = %s AND review_status = 'pending'
+                RETURNING *
+                """,
+                (str(reviewed_by or "secretariat")[:160], str(note or "")[:1000], str(public_id)),
+            )
+            if cur.rowcount:
+                return cur.fetchone()
+            cur.execute("SELECT * FROM ai_teacher_orders WHERE public_id = %s", (str(public_id),))
+            return cur.fetchone()
 
 
 def enqueue_order_fulfillment(order_id: int) -> dict[str, Any] | None:

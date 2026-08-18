@@ -445,7 +445,20 @@ export default function HRDashboard() {
         const data = await response.json()
         if (!response.ok || !data.success || stopped) return
         const order = data.order
-        if (order.fulfillment_status === 'fulfilled') {
+        if (order.review_status === 'pending') {
+          setOrderNotice({
+            tone: 'info',
+            title: 'Demande en cours d’étude',
+            message: 'Notre équipe vérifie votre projet et les crédits API nécessaires. Vous recevrez le lien de paiement par e-mail après validation.',
+          })
+        } else if (order.review_status === 'rejected') {
+          setOrderNotice({
+            tone: 'warning',
+            title: 'Demande non retenue',
+            message: 'Aucun paiement ne sera demandé. Contactez notre équipe si vous souhaitez ajuster votre projet.',
+          })
+          setActiveTeacherOrderId(null)
+        } else if (order.fulfillment_status === 'fulfilled') {
           setNewlyCreatedPlatformId(order.platform_id || null)
           setFailedTeacherOrderId(null)
           setOrderNotice({
@@ -1021,11 +1034,16 @@ export default function HRDashboard() {
           window.location.assign(data.checkout_url)
           return
         }
-        setActiveTeacherOrderId(data.order.id)
+        const pendingReview = data.next_action === 'pending_review'
+        setActiveTeacherOrderId(pendingReview ? null : data.order.id)
         setOrderNotice({
           tone: 'info',
-          title: billing?.payment_required === false ? 'Préparation lancée' : 'Paiement confirmé',
-          message: 'Votre professeur IA va apparaître dans Mes professeurs IA et se préparer en arrière-plan.',
+          title: pendingReview
+            ? 'Demande envoyée'
+            : billing?.payment_required === false ? 'Préparation lancée' : 'Paiement confirmé',
+          message: pendingReview
+            ? 'Notre équipe va vérifier les crédits API nécessaires. Après validation, vous recevrez votre lien de paiement Stripe par e-mail.'
+            : 'Votre professeur IA va apparaître dans Mes professeurs IA et se préparer en arrière-plan.',
         })
         setShowCreateModal(false)
         resetCreateForm()
@@ -4767,14 +4785,14 @@ export function CreatePlatformView({
 
           <footer className="create-platform-workspace__footer">
             <div className="create-platform-workspace__price">
-              <p className="text-xs font-medium text-[#64748B]">{paymentRequired ? 'Paiement unique' : 'Compte interne'}</p>
+              <p className="text-xs font-medium text-[#64748B]">{paymentRequired ? 'Tarif après validation' : 'Compte interne'}</p>
               <p className="mt-0.5 text-base font-bold text-[#0F172A]">{paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}</p>
               {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && <p className="mt-0.5 text-xs text-[#64748B]">{formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}</p>}
             </div>
             <div className="create-platform-workspace__actions">
               <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 py-2 text-sm font-semibold text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 disabled:opacity-50">Annuler</button>
               <button type="button" onClick={handleLaunchRequest} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A1A1AA] disabled:opacity-60">
-                {creating ? 'Préparation de la commande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer` : 'Paiement temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
+                {creating ? 'Envoi de la demande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? 'Envoyer la demande' : 'Service temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
               </button>
             </div>
           </footer>

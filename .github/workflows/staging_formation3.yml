@@ -101,6 +101,7 @@ jobs:
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_STORAGE_CONNECTION_STRING || secrets.AZURE_STORAGE_CONNECTION_STRING }}
       STRIPE_SECRET_KEY: ${{ secrets.SAAS_STRIPE_SECRET_KEY || secrets.STRIPE_SECRET_KEY }}
       STRIPE_WEBHOOK_SECRET: ${{ secrets.SAAS_STRIPE_WEBHOOK_SECRET || secrets.STRIPE_WEBHOOK_SECRET }}
+      AI_TEACHER_STRIPE_PRICE_ID: ${{ vars.AI_TEACHER_STRIPE_PRICE_ID }}
       REMINDER_WEBHOOK_URL: ${{ secrets.SAAS_REMINDER_WEBHOOK_URL || secrets.REMINDER_WEBHOOK_URL }}
       REMINDER_WEBHOOK_KEY: ${{ secrets.SAAS_REMINDER_WEBHOOK_KEY || secrets.REMINDER_WEBHOOK_KEY }}
       EMAIL_USERNAME: ${{ secrets.SAAS_EMAIL_USERNAME || secrets.EMAIL_USERNAME }}
@@ -380,6 +381,12 @@ jobs:
               ALLOW_LEGACY_BULK_AUDIO=0 \
               TEACHER_ASSET_GENERATOR_VERSION=pipeline-v1 \
               AI_TEACHER_COST_PER_DAY_CENTS=1500 \
+              AI_TEACHER_PRICE_PER_DAY_CENTS=2000 \
+              AI_TEACHER_STRIPE_PRICE_ID="${AI_TEACHER_STRIPE_PRICE_ID}" \
+              BILLING_REVIEW_NOTIFICATION_EMAIL=secretariat@saleshacking.fr \
+              BILLING_REVIEW_BASE_URL=https://formation3-cpdhezh4cdcqecfy.francecentral-01.azurewebsites.net \
+              AI_TEXT_API_RECHARGE_URL=https://platform.deepseek.com/top_up \
+              AI_AUDIO_API_RECHARGE_URL=https://fish.audio/app/credits/ \
               PIPELINE_ARTIFACTS_REQUIRED=1 \
               PIPELINE_BLOB_MAX_ATTEMPTS=3 \
               AZURE_PIPELINE_ARTIFACT_CONTAINER=pipeline-artifacts \

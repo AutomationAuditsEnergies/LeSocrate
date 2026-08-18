@@ -609,6 +609,7 @@ CREATE TABLE IF NOT EXISTS ai_teacher_orders (
     source_module_id BIGINT,
     status TEXT NOT NULL DEFAULT 'awaiting_payment',
     payment_status TEXT NOT NULL DEFAULT 'awaiting_payment',
+    review_status TEXT NOT NULL DEFAULT 'not_required',
     fulfillment_status TEXT NOT NULL DEFAULT 'not_started',
     training_title TEXT NOT NULL,
     rncp_code TEXT,
@@ -620,6 +621,7 @@ CREATE TABLE IF NOT EXISTS ai_teacher_orders (
     stripe_price_id TEXT,
     quoted_amount_cents INTEGER,
     catalog_amount_cents INTEGER,
+    internal_api_cost_cents INTEGER,
     charged_amount_cents INTEGER,
     currency TEXT NOT NULL DEFAULT 'eur',
     authorization_kind TEXT NOT NULL DEFAULT 'stripe',
@@ -628,6 +630,11 @@ CREATE TABLE IF NOT EXISTS ai_teacher_orders (
     stripe_payment_intent_id TEXT,
     checkout_expires_at TIMESTAMPTZ,
     authorized_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by TEXT,
+    review_note TEXT,
+    review_email_sent_at TIMESTAMPTZ,
+    payment_email_sent_at TIMESTAMPTZ,
     paid_at TIMESTAMPTZ,
     refunded_at TIMESTAMPTZ,
     fulfilled_at TIMESTAMPTZ,
@@ -644,6 +651,7 @@ ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS pipeline_job_id BIGINT;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS operation_type TEXT NOT NULL DEFAULT 'new_teacher';
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS source_module_id BIGINT;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'awaiting_payment';
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'not_required';
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS fulfillment_status TEXT NOT NULL DEFAULT 'not_started';
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS request_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS creation_request_id TEXT;
@@ -651,10 +659,16 @@ ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS request_fingerprint TEXT;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS pricing_key TEXT;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS stripe_price_id TEXT;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS catalog_amount_cents INTEGER;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS internal_api_cost_cents INTEGER;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS charged_amount_cents INTEGER;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS authorization_kind TEXT NOT NULL DEFAULT 'stripe';
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS checkout_expires_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS authorized_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS review_email_sent_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS payment_email_sent_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ;

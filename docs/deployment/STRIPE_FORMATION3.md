@@ -4,14 +4,25 @@
 
 Le backend calcule le montant, jamais le navigateur :
 
-- coût de production provisoire : `15 €` par journée ;
-- nouveau professeur IA : `15 € × 2 = 30 €` par journée ;
-- réutilisation : `15 € × 1,5 = 22,50 €` par journée ;
-- montant Stripe : tarif journalier × nombre de journées.
+- tarif public provisoire : `20 €` par journée, quel que soit le type de commande ;
+- coût de production interne par défaut : `15 €` par journée ;
+- montant Stripe : `20 € × nombre de journées`.
 
-Le workflow Formation3 configure `AI_TEACHER_COST_PER_DAY_CENTS=1500`. Modifier
-cette valeur suffit pour faire évoluer les deux tarifs en conservant les mêmes
-multiplicateurs.
+`AI_TEACHER_PRICE_PER_DAY_CENTS=2000` permet de modifier plus tard le tarif
+public sans exposer ni modifier le coût interne. Le coût interne reste configuré
+séparément par `AI_TEACHER_COST_PER_DAY_CENTS=1500`.
+
+La demande n'ouvre pas immédiatement Stripe. Elle est enregistrée avec l'état
+`awaiting_review`, puis un e-mail est envoyé à `secretariat@saleshacking.fr`.
+La page de revue interne présente le coût API estimé et les liens de recharge
+DeepSeek et Fish Audio. Le bouton de confirmation crée Checkout et envoie son
+lien au centre demandeur.
+
+L’envoi utilise le SMTP déjà prévu par Formation3. Configurer les secrets GitHub
+`SAAS_EMAIL_USERNAME` et `SAAS_EMAIL_PASSWORD` (Infomaniak par défaut), ainsi
+que `EMAIL_FROM` si l’adresse d’expédition diffère du compte SMTP. La destination
+de revue reste `secretariat@saleshacking.fr` via
+`BILLING_REVIEW_NOTIFICATION_EMAIL`.
 
 ## Secrets GitHub
 
@@ -45,10 +56,10 @@ Copier ensuite le **Signing secret** `whsec_...` dans le secret GitHub
 Utiliser le même mode des deux côtés : clés `sk_test_...` avec webhook test, ou
 clés `sk_live_...` avec webhook live.
 
-La première mise en production accepte uniquement les paiements par carte dans
-Stripe Checkout. Apple Pay et Google Pay peuvent rester proposés lorsqu'ils
-reposent sur le rail carte. Les moyens de paiement asynchrones pourront être
-activés dans une passe ultérieure.
+Stripe Checkout accepte la carte et Link. Apple Pay et Google Pay peuvent être
+proposés automatiquement lorsqu'ils reposent sur le rail carte et que l'appareil,
+le navigateur et le compte Stripe sont éligibles. Link doit également être activé
+dans les réglages des moyens de paiement du Dashboard Stripe.
 
 Le retour navigateur `success_url` n’autorise jamais la création. Seul le
 webhook signé le fait. Le backend commit dans une même transaction PostgreSQL :

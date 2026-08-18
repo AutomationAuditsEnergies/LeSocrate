@@ -35,6 +35,16 @@ def _project():
 
 
 class BillingServiceTest(unittest.TestCase):
+    def test_training_days_uses_the_frozen_schedule_snapshot(self):
+        order = {
+            "total_hours": 70,
+            "request_payload_json": {
+                "new_formation": {"schedule": {"day_count": 54}},
+            },
+        }
+
+        self.assertEqual(billing_service.training_days_for_order(order), 54)
+
     def test_teacher_description_is_trimmed_and_bounded_in_order_payload(self):
         payload = _project()
         payload["project"]["teacher_description"] = f"  {'x' * 700}  "
@@ -44,15 +54,17 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(len(project["teacher_description"]), 600)
         self.assertFalse(project["teacher_description"].startswith(" "))
 
-    def test_catalog_applies_margin_to_daily_production_cost(self):
+    def test_catalog_uses_fixed_daily_selling_price(self):
         with patch.dict(os.environ, {
             "AI_TEACHER_COST_PER_DAY_CENTS": "1500",
+            "AI_TEACHER_PRICE_PER_DAY_CENTS": "2000",
             "STRIPE_SECRET_KEY": "sk_test",
             "STRIPE_WEBHOOK_SECRET": "whsec_test",
         }):
             catalog = billing_service.get_product_catalog()
-        self.assertEqual(catalog["new_teacher"]["unit_amount_cents"], 3000)
-        self.assertEqual(catalog["reuse_teacher"]["unit_amount_cents"], 2250)
+        self.assertEqual(catalog["new_teacher"]["unit_amount_cents"], 2000)
+        self.assertEqual(catalog["reuse_teacher"]["unit_amount_cents"], 2000)
+        self.assertEqual(catalog["new_teacher"]["production_cost_per_day_cents"], 1500)
         self.assertTrue(catalog["new_teacher"]["configured"])
 
     def test_catalog_refuses_checkout_without_signed_webhook(self):
@@ -272,7 +284,7 @@ class BillingServiceTest(unittest.TestCase):
     @patch.object(billing_service, "create_order")
     @patch.object(billing_service, "get_product_catalog")
     @patch.object(billing_service, "get_center_billing_account")
-    def test_stripe_checkout_uses_server_price_not_browser_amount(
+    def test_paid_center_order_waits_for_internal_review_before_checkout(
         self, get_center, get_catalog, create_order, stripe_client, attach,
     ):
         get_center.return_value = {
@@ -295,9 +307,14 @@ class BillingServiceTest(unittest.TestCase):
             "id": 11,
             "public_id": uuid4(),
             "request_fingerprint": "unused",
-            "payment_status": "awaiting_payment",
+            "payment_status": "not_requested",
+            "review_status": "pending",
+            "review_email_sent_at": None,
             "fulfillment_status": "not_started",
             "currency": "eur",
+            "catalog_amount_cents": 30000,
+            "total_hours": 70,
+            "request_payload_json": {},
             "stripe_price_id": None,
             "stripe_checkout_session_id": None,
             "checkout_attempt_count": 0,
@@ -320,19 +337,95 @@ class BillingServiceTest(unittest.TestCase):
         payload = _project()
         payload["quoted_amount_cents"] = 1
 
-        with patch.dict(os.environ, {"PLATFORM_1_FRONTEND_URL": "https://formation.test"}):
+        with patch.dict(os.environ, {"PLATFORM_1_FRONTEND_URL": "https://formation.test"}), patch.object(
+            billing_service, "send_review_request", return_value=False,
+        ):
             result = billing_service.create_teacher_order(9, payload)
 
-        self.assertEqual(result["next_action"], "redirect")
+        self.assertEqual(result["next_action"], "pending_review")
+        stripe_client.assert_not_called()
+        attach.assert_not_called()
+
+    @patch.object(billing_service, "attach_checkout_session")
+    @patch.object(billing_service, "_stripe")
+    def test_approved_order_checkout_uses_frozen_server_price(self, stripe_client, attach):
+        order = {
+            "id": 11,
+            "public_id": uuid4(),
+            "payment_status": "awaiting_payment",
+            "review_status": "approved",
+            "fulfillment_status": "not_started",
+            "currency": "eur",
+            "catalog_amount_cents": 30000,
+            "total_hours": 70,
+            "request_payload_json": {},
+            "stripe_price_id": None,
+            "stripe_checkout_session_id": None,
+            "checkout_attempt_count": 0,
+        }
+        checkout_create = Mock(return_value=SimpleNamespace(
+            id="cs_test_1", url="https://checkout.stripe.test/session",
+            expires_at=None, payment_intent=None,
+        ))
+        stripe_client.return_value = SimpleNamespace(
+            checkout=SimpleNamespace(Session=SimpleNamespace(create=checkout_create, retrieve=Mock())),
+        )
+        attach.return_value = order
+        center = {"username": "centre@example.com"}
+        with patch.dict(os.environ, {"PLATFORM_1_FRONTEND_URL": "https://formation.test"}):
+            result = billing_service._create_checkout_for_order(order, center)
+
+        self.assertEqual(result["checkout_url"], "https://checkout.stripe.test/session")
         checkout_args = checkout_create.call_args.kwargs
         line_items = checkout_args["line_items"]
         self.assertEqual(line_items[0]["price_data"]["unit_amount"], 3000)
         self.assertEqual(line_items[0]["quantity"], 10)
         self.assertEqual(checkout_args["mode"], "payment")
         self.assertEqual(checkout_args["invoice_creation"], {"enabled": True})
-        self.assertEqual(checkout_args["payment_method_types"], ["card"])
+        self.assertEqual(checkout_args["payment_method_types"], ["card", "link"])
+        self.assertEqual(checkout_args["locale"], "fr")
+        self.assertEqual(checkout_args["submit_type"], "pay")
         self.assertIn(str(order["public_id"]), checkout_args["success_url"])
         self.assertIn(str(order["public_id"]), checkout_args["cancel_url"])
+
+    @patch.object(billing_service, "mark_order_notification_sent")
+    @patch.object(billing_service, "send_payment_link", return_value=True)
+    @patch.object(billing_service, "_create_checkout_for_order")
+    @patch.object(billing_service, "get_center_billing_account")
+    @patch.object(billing_service, "approve_order_review")
+    @patch.object(billing_service, "validate_review_token")
+    def test_review_approval_reports_payment_email_delivery(
+        self,
+        validate_token,
+        approve_order,
+        get_center,
+        create_checkout,
+        send_payment,
+        mark_sent,
+    ):
+        order = {
+            "id": 11,
+            "public_id": uuid4(),
+            "center_account_id": 9,
+            "review_status": "approved",
+            "payment_email_sent_at": None,
+        }
+        center = {"id": 9, "username": "centre@example.com"}
+        approve_order.return_value = order
+        get_center.return_value = center
+        create_checkout.return_value = {
+            "order": order,
+            "checkout_url": "https://checkout.stripe.test/session",
+        }
+
+        result = billing_service.approve_teacher_order_review(
+            str(order["public_id"]), "signed-token"
+        )
+
+        self.assertTrue(result["payment_email_sent"])
+        validate_token.assert_called_once()
+        send_payment.assert_called_once()
+        mark_sent.assert_called_once_with(11, "payment_email_sent_at")
 
     @patch.object(billing_service, "_stripe")
     @patch.object(billing_service, "get_center_order")

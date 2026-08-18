@@ -7,7 +7,13 @@ const source = readFileSync(
   'utf8',
 )
 
-test('redirects paid teacher orders to hosted Stripe Checkout', () => {
+test('submits teacher orders for review before opening Stripe Checkout', () => {
+  assert.match(source, /data\.next_action === 'pending_review'/)
+  assert.match(source, /Demande envoyée/)
+  assert.match(source, /lien de paiement Stripe par e-mail/)
+})
+
+test('still follows a hosted Stripe Checkout URL returned by the backend', () => {
   assert.match(source, /data\.next_action === 'redirect' && data\.checkout_url/)
   assert.match(source, /window\.location\.assign\(data\.checkout_url\)/)
 })
