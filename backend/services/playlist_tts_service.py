@@ -729,7 +729,7 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
                     logger.info(f"   ⏭️ {filename}: bloc {bloc_num} vide, skip")
                     continue
 
-                audio_bytes = convert_to_speech(bloc_text)
+                audio_bytes = convert_to_speech(bloc_text, platform_id=platform_id)
                 duration_ms = _measure_duration_ms(audio_bytes)
                 logger.info(f"   TTS brut: {duration_ms/1000:.1f}s (cible: {duration_sec}s)")
                 final_bytes = _pad_audio_to_duration(audio_bytes, duration_sec)

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowUp,
+  AudioWaveform,
   CalendarDays,
   ChevronLeft,
   ChevronsUpDown,
@@ -28,6 +29,7 @@ import { clearSupabaseSession, getSupabaseClient } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
 import DayScheduleTemplates from './DayScheduleTemplates.jsx'
+import AIVoicesView from './AIVoicesView.jsx'
 import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
 import './CreatePlatformView.css'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
@@ -126,13 +128,15 @@ export default function HRDashboard() {
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
   const [initialScheduleV2, setInitialScheduleV2] = useState(null)
+  const [aiVoices, setAiVoices] = useState([])
+  const [selectedAiVoiceId, setSelectedAiVoiceId] = useState('')
   const creatingRef = useRef(false)
   const creationRequestRef = useRef({ fingerprint: '', id: '' })
   const [cardPage, setCardPage] = useState(0)
   const [teacherRosterFilter, setTeacherRosterFilter] = useState('all')
   const [workspaceSection, setWorkspaceSection] = useState(() => {
     const savedSection = localStorage.getItem('center_workspace_section')
-    return ['recruit', 'teachers', 'schedule-templates'].includes(savedSection)
+    return ['recruit', 'teachers', 'schedule-templates', 'ai-voices'].includes(savedSection)
       ? savedSection
       : 'recruit'
   })
@@ -202,6 +206,16 @@ export default function HRDashboard() {
     } finally {
       window.clearTimeout(timeoutId)
       setLoading(false)
+    }
+  }
+
+  const fetchAiVoices = async () => {
+    try {
+      const response = await apiFetch('/api/hr/ai-voices')
+      const data = await response.json().catch(() => ({}))
+      if (response.ok && data.success) setAiVoices(data.voices || [])
+    } catch (error) {
+      console.warn('Chargement des voix IA indisponible.', error)
     }
   }
 
@@ -338,6 +352,7 @@ export default function HRDashboard() {
 
   useEffect(() => {
     fetchPlatforms()
+    fetchAiVoices()
   }, [])
 
   useEffect(() => {
@@ -396,6 +411,7 @@ export default function HRDashboard() {
           setFormationMode(data.order.operation_type === 'reuse_teacher' ? 'existing' : 'new')
           setTeacherFirstName(project.teacher_name || '')
           setTeacherColor(project.teacher_color || 'violet')
+          setSelectedAiVoiceId(String(project.ai_voice_id || ''))
           setNewPlatformName(project.name || '')
           if (project.module_id) setSelectedModuleId(String(project.module_id))
           if (project.new_formation) {
@@ -841,6 +857,7 @@ export default function HRDashboard() {
     setNewFormRncp('')
     setNewFormHours('')
     setInitialScheduleV2(null)
+    setSelectedAiVoiceId('')
     setCreateOrderError('')
     creationRequestRef.current = { fingerprint: '', id: '' }
   }
@@ -884,6 +901,14 @@ export default function HRDashboard() {
 
   const showScheduleTemplatesView = () => {
     setWorkspaceSection('schedule-templates')
+    setShowModulesModal(false)
+    setShowCreateModal(false)
+    setRecruitmentPrefilled(false)
+    setModuleSearchQuery('')
+  }
+
+  const showAiVoicesView = () => {
+    setWorkspaceSection('ai-voices')
     setShowModulesModal(false)
     setShowCreateModal(false)
     setRecruitmentPrefilled(false)
@@ -940,6 +965,7 @@ export default function HRDashboard() {
       teacher_name: teacherName,
       teacher_color: teacherColor || 'violet',
       teacher_description: String(teacherDescription || '').trim(),
+      ai_voice_id: selectedAiVoiceId ? Number(selectedAiVoiceId) : null,
     }
     let operationType = 'new_teacher'
     const scheduleVersion = Number(
@@ -1133,6 +1159,7 @@ export default function HRDashboard() {
   const teacherRosterVisible = !showModulesModal && !showCreateModal && workspaceSection === 'teachers'
   const recruitmentAssistantVisible = !showModulesModal && !showCreateModal && workspaceSection === 'recruit'
   const scheduleTemplatesVisible = !showModulesModal && !showCreateModal && workspaceSection === 'schedule-templates'
+  const aiVoicesVisible = !showModulesModal && !showCreateModal && workspaceSection === 'ai-voices'
   const centerAccountEmail = localStorage.getItem('center_account_email') || 'Compte centre'
   const centerAccountName = localStorage.getItem('center_account_name') || 'Centre de formation'
 
@@ -1146,6 +1173,7 @@ export default function HRDashboard() {
           onShowTeachers={showDashboardView}
           onShowRecruit={showRecruitView}
           onShowScheduleTemplates={showScheduleTemplatesView}
+          onShowAiVoices={showAiVoicesView}
           onLogout={handleLogout}
           loggingOut={loggingOut}
         />
@@ -1157,6 +1185,8 @@ export default function HRDashboard() {
                 ? 'Mes professeurs'
                 : workspaceSection === 'schedule-templates'
                   ? 'Organisation des cours'
+                  : workspaceSection === 'ai-voices'
+                    ? 'Mes voix IA'
                   : 'Recruter un professeur'}
             </span>
             <div className="flex shrink-0 items-center gap-1">
@@ -1192,6 +1222,16 @@ export default function HRDashboard() {
               </button>
               <button
                 type="button"
+                onClick={showAiVoicesView}
+                className="flex h-11 w-11 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+                aria-label="Mes voix IA"
+                aria-current={workspaceSection === 'ai-voices' ? 'page' : undefined}
+                style={{ color: '#3F3F46', backgroundColor: workspaceSection === 'ai-voices' ? '#E9E9E7' : 'transparent' }}
+              >
+                <Icon name="graphic_eq" className="text-lg" />
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowMobileSettings(true)}
                 className="flex h-11 w-11 items-center justify-center rounded-lg text-[#3F3F46] transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
                 aria-label="Paramètres du compte"
@@ -1204,7 +1244,7 @@ export default function HRDashboard() {
         <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white ${
           showCreateModal
             ? 'overflow-hidden'
-            : `px-4 sm:px-6 lg:px-8 ${teacherRosterVisible || recruitmentAssistantVisible || scheduleTemplatesVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`
+            : `px-4 sm:px-6 lg:px-8 ${scheduleTemplatesVisible ? 'overflow-hidden' : teacherRosterVisible || recruitmentAssistantVisible || aiVoicesVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`
         }`}>
           <div className={`mx-auto flex h-full min-h-0 w-full flex-col ${
             showCreateModal ? 'max-w-none' : 'max-w-[1480px] pt-4 md:pt-6'
@@ -1328,6 +1368,9 @@ export default function HRDashboard() {
               setNewFormRncp={setNewFormRncp}
               newFormHours={newFormHours}
               initialScheduleV2={initialScheduleV2}
+              aiVoices={aiVoices}
+              selectedAiVoiceId={selectedAiVoiceId}
+              setSelectedAiVoiceId={setSelectedAiVoiceId}
               creating={creating}
               billing={billing}
               billingLoading={billingLoading}
@@ -1345,6 +1388,8 @@ export default function HRDashboard() {
             />
           ) : workspaceSection === 'schedule-templates' ? (
             <DayScheduleTemplates />
+          ) : workspaceSection === 'ai-voices' ? (
+            <AIVoicesView onVoicesChange={setAiVoices} />
           ) : (
             <PlatformCardsView
               platforms={platforms}
@@ -1830,6 +1875,7 @@ function CenterWorkspaceSidebar({
   onShowTeachers,
   onShowRecruit,
   onShowScheduleTemplates,
+  onShowAiVoices,
   onLogout,
   loggingOut,
 }) {
@@ -1853,6 +1899,7 @@ function CenterWorkspaceSidebar({
     { id: 'recruit', label: 'Recruter un professeur', icon: UserPlus, onClick: onShowRecruit },
     { id: 'teachers', label: 'Mes professeurs', icon: UsersRound, onClick: onShowTeachers },
     { id: 'schedule-templates', label: 'Organisation des cours', icon: CalendarDays, onClick: onShowScheduleTemplates },
+    { id: 'ai-voices', label: 'Mes voix IA', icon: AudioWaveform, onClick: onShowAiVoices },
   ]
 
   useEffect(() => {
@@ -4417,6 +4464,9 @@ export function CreatePlatformView({
   setNewFormRncp,
   newFormHours,
   initialScheduleV2,
+  aiVoices,
+  selectedAiVoiceId,
+  setSelectedAiVoiceId,
   creating,
   billing,
   billingLoading,
@@ -4822,6 +4872,26 @@ export function CreatePlatformView({
             <div>
               <label htmlFor="teacher-first-name">Prénom</label>
               <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Lina" autoFocus className={inputClassName} />
+            </div>
+
+            <div>
+              <label htmlFor="teacher-ai-voice">Voix du professeur</label>
+              <select
+                id="teacher-ai-voice"
+                value={selectedAiVoiceId}
+                onChange={(event) => setSelectedAiVoiceId(event.target.value)}
+                className={inputClassName}
+              >
+                <option value="">Voix Fish Audio par défaut</option>
+                {(aiVoices || []).map((voice) => (
+                  <option key={voice.id} value={voice.id}>
+                    {voice.name}{voice.measured_wpm ? ` · ${Math.round(voice.measured_wpm)} mots/min` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-xs leading-5 text-[#64748B]">
+                La vitesse calibrée de cette voix sera appliquée aux cours générés.
+              </p>
             </div>
 
             {formationMode === 'existing' ? (

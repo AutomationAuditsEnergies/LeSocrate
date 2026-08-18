@@ -33,6 +33,23 @@ PIPELINE_REQUIRED_SCHEMA = {
         "onboarding_completed_at",
         "pipeline_access_enabled",
     },
+    "ai_voices": {
+        "id",
+        "center_account_id",
+        "name",
+        "fish_reference_id",
+        "source",
+        "status",
+        "consent_statement",
+        "consent_recording_sha256",
+        "consent_recording_duration_sec",
+        "sample_sha256",
+        "sample_duration_sec",
+        "measured_wpm",
+        "playback_speed",
+        "language",
+        "fish_state",
+    },
     "platform_config": {
         "id",
         "center_account_id",
@@ -44,6 +61,7 @@ PIPELINE_REQUIRED_SCHEMA = {
         "completed_at",
         "archived_at",
         "asset_binding_mode",
+        "ai_voice_id",
     },
     "formation_pipeline_jobs": {
         "id",
@@ -324,6 +342,7 @@ PIPELINE_REQUIRED_SCHEMA = {
 }
 
 PIPELINE_REQUIRED_INDEXES = {
+    "idx_ai_voices_center_status",
     "uq_cours_folders_job_name",
     "uq_ai_teacher_orders_creation_request",
     "uq_ai_teacher_orders_public_id",

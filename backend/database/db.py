@@ -594,6 +594,35 @@ def init_database(_recovered_from_corruption: bool = False):
         except sqlite3.IntegrityError:
             logger.warning("⚠️ Impossible de créer l'index unique centre slug : doublons existants")
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_voices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                center_account_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                fish_reference_id TEXT NOT NULL,
+                source TEXT NOT NULL CHECK (source IN ('clone', 'import')),
+                status TEXT NOT NULL DEFAULT 'ready',
+                consent_statement TEXT NOT NULL,
+                consent_recording_sha256 TEXT,
+                consent_recording_duration_sec REAL,
+                sample_sha256 TEXT,
+                sample_duration_sec REAL,
+                measured_wpm REAL,
+                playback_speed REAL NOT NULL DEFAULT 1.0,
+                language TEXT NOT NULL DEFAULT 'fr',
+                fish_state TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(center_account_id, fish_reference_id)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ai_voices_center_status "
+            "ON ai_voices(center_account_id, status, updated_at DESC)"
+        )
+
         # Seed plateformes si la table est vide
         cursor.execute("SELECT COUNT(*) FROM platform_config")
         pc_count = cursor.fetchone()[0]
@@ -704,6 +733,9 @@ def init_database(_recovered_from_corruption: bool = False):
                 "ALTER TABLE platform_config ADD COLUMN asset_binding_mode TEXT NOT NULL DEFAULT 'canonical'"
             )
             logger.info("✅ Colonne asset_binding_mode ajoutée à platform_config")
+        if "ai_voice_id" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN ai_voice_id INTEGER")
+            logger.info("✅ Colonne ai_voice_id ajoutée à platform_config")
         cursor.execute(
             "SELECT id, center_account_id FROM platform_config "
             "WHERE center_account_id IS NOT NULL "

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 170" role="img" aria-labelledby="title">
+  <title id="title">Microphone illustré</title>
+  <g transform="rotate(-22 60 85)">
+    <circle cx="60" cy="44" r="35" fill="#202124" stroke="#111" stroke-width="3"/>
+    <path d="M31 43c13 8 44 8 58-4" fill="none" stroke="#8CC2FF" stroke-width="14" stroke-linecap="round"/>
+    <path d="M39 67c12 5 29 5 42-2" fill="none" stroke="#FFD51F" stroke-width="12" stroke-linecap="round"/>
+    <rect x="41" y="70" width="38" height="17" rx="8.5" fill="#222"/>
+    <path d="M45 83h30l-4 76H49z" fill="#8BC0F4" stroke="#569DE0" stroke-width="3"/>
+    <path d="M55 91h7l-2 57h-6z" fill="#B7DAFF" opacity=".9"/>
+    <rect x="59" y="103" width="7" height="25" rx="3.5" fill="#fff" opacity=".9"/>
+    <path d="M43 25c5-8 13-13 22-14" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".95"/>
+  </g>
+</svg>
