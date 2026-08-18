@@ -35,6 +35,7 @@ from services.dynamic_day_schedule_service import (
 )
 from services.formation_pipeline_service import update_job
 from repositories.center_workspace_repository import set_platform_asset_binding_mode
+from repositories.ai_voice_repository import assign_voice_to_platform, get_voice
 from services.teacher_asset_service import ensure_module_asset_manifest
 from services.canonical_teacher_service import resolve_compatible_canonical_teacher
 from services.platform_storage_service import ensure_platform_storage
@@ -234,6 +235,15 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
     platform_name = str(payload.get("name") or order.get("training_title") or "Professeur IA").strip()
     teacher_name = str(payload.get("teacher_name") or "").strip() or None
     teacher_color = str(payload.get("teacher_color") or "violet").strip().lower()
+    ai_voice_id = int(payload.get("ai_voice_id") or 0) or None
+    if ai_voice_id is not None and get_voice(center_id, ai_voice_id) is None:
+        raise PermanentWorkError("La voix IA de cette commande n’est plus disponible")
+
+    def assign_order_voice(platform_id: int) -> None:
+        if ai_voice_id is None:
+            return
+        if not assign_voice_to_platform(center_id, platform_id, ai_voice_id):
+            raise PermanentWorkError("Impossible d’associer la voix IA au professeur")
     creation_request_id = f"teacher-order-{order['public_id']}"
     lease.checkpoint()
 
@@ -289,6 +299,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                     canonical_match = None
                 else:
                     platform_id = int(platform["id"])
+                    assign_order_voice(platform_id)
                     ensure_platform_storage(platform)
                     clone_canonical_module_course_structure(
                         target_platform_id=platform_id,
@@ -333,6 +344,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                 creation_request_id=creation_request_id,
             )
             platform_id = int(aggregate["platform"]["id"])
+            assign_order_voice(platform_id)
             pipeline_job_id = int(aggregate["job_id"])
             if v2_schedule:
                 try:
@@ -445,6 +457,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             source_module_id=module_id,
         )
         platform_id = int(platform["id"])
+        assign_order_voice(platform_id)
         ensure_platform_storage(platform)
         clone = clone_postgres_course_structure(
             target_platform_id=platform_id,

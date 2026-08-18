@@ -571,6 +571,267 @@ def create_hr_blueprint():
             return _tenant_resource_not_found()
         return jsonify({"success": True, "deleted": True}), 200
 
+    def _voice_center_id():
+        denied = _require_admin()
+        if denied:
+            return None, denied
+        center_account_id = _training_center_account_id()
+        if _admin_account_type() != "training_center" or center_account_id is None:
+            return None, (
+                jsonify({"success": False, "error": "Compte centre requis"}),
+                403,
+            )
+        return center_account_id, None
+
+    def _voice_error_response(exc):
+        from services.fish_voice_service import FishVoiceError
+
+        if isinstance(exc, FishVoiceError):
+            return jsonify({
+                "success": False,
+                "error": str(exc),
+                "code": exc.code,
+            }), exc.status_code
+        raise exc
+
+    @hr_bp.route("/api/hr/ai-voices", methods=["GET"])
+    def list_ai_voices_route():
+        center_account_id, denied = _voice_center_id()
+        if denied:
+            return denied
+        from repositories.ai_voice_repository import list_voices
+
+        return jsonify({"success": True, "voices": list_voices(center_account_id)}), 200
+
+    @hr_bp.route("/api/hr/ai-voices/clone", methods=["POST"])
+    def clone_ai_voice_route():
+        center_account_id, denied = _voice_center_id()
+        if denied:
+            return denied
+        from repositories.ai_voice_repository import create_voice
+        from services.fish_voice_service import (
+            CONSENT_STATEMENT,
+            MAX_CLONE_BYTES,
+            MAX_CONSENT_BYTES,
+            audio_sha256,
+            create_instant_clone,
+            validate_audio,
+        )
+
+        name = str(request.form.get("name") or "").strip()[:80]
+        transcript = str(request.form.get("transcript") or "").strip()[:5000]
+        consent_confirmed = str(request.form.get("consent_confirmed") or "").lower() == "true"
+        voice_sample = request.files.get("voice_sample")
+        consent_sample = request.files.get("consent_sample")
+        if not name:
+            return jsonify({"success": False, "error": "Donnez un nom à la voix."}), 400
+        if not consent_confirmed or not consent_sample:
+            return jsonify({
+                "success": False,
+                "error": "Le consentement vocal et sa confirmation sont obligatoires.",
+                "code": "voice_consent_required",
+            }), 400
+        if not voice_sample:
+            return jsonify({"success": False, "error": "Ajoutez un échantillon vocal."}), 400
+
+        consent_bytes = consent_sample.read(MAX_CONSENT_BYTES + 1)
+        sample_bytes = voice_sample.read(MAX_CLONE_BYTES + 1)
+        try:
+            consent_duration = validate_audio(
+                consent_bytes,
+                consent_sample.filename or "consent.webm",
+                min_seconds=2,
+                max_seconds=30,
+                max_bytes=MAX_CONSENT_BYTES,
+            )
+            sample_duration = validate_audio(
+                sample_bytes,
+                voice_sample.filename or "voix.webm",
+                min_seconds=10,
+                max_seconds=90,
+                max_bytes=MAX_CLONE_BYTES,
+            )
+            fish_voice = create_instant_clone(
+                name=name,
+                audio_bytes=sample_bytes,
+                filename=voice_sample.filename or "voix.webm",
+                mime_type=voice_sample.mimetype,
+                transcript=transcript or None,
+            )
+            voice = create_voice(
+                center_account_id,
+                name=name,
+                fish_reference_id=fish_voice["reference_id"],
+                source="clone",
+                consent_statement=CONSENT_STATEMENT,
+                consent_recording_sha256=audio_sha256(consent_bytes),
+                consent_recording_duration_sec=consent_duration,
+                sample_sha256=audio_sha256(sample_bytes),
+                sample_duration_sec=sample_duration,
+                language="fr",
+                fish_state=fish_voice.get("state"),
+            )
+        except Exception as exc:
+            return _voice_error_response(exc)
+        return jsonify({"success": True, "voice": voice}), 201
+
+    @hr_bp.route("/api/hr/ai-voices/import", methods=["POST"])
+    def import_ai_voice_route():
+        center_account_id, denied = _voice_center_id()
+        if denied:
+            return denied
+        from repositories.ai_voice_repository import create_voice
+        from services.fish_voice_service import (
+            CONSENT_STATEMENT,
+            MAX_CONSENT_BYTES,
+            audio_sha256,
+            validate_audio,
+            verify_reference_id,
+        )
+
+        name = str(request.form.get("name") or "").strip()[:80]
+        reference_id = str(request.form.get("fish_reference_id") or "").strip()
+        consent_confirmed = str(request.form.get("consent_confirmed") or "").lower() == "true"
+        consent_sample = request.files.get("consent_sample")
+        if not name or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", reference_id):
+            return jsonify({"success": False, "error": "Nom ou identifiant Fish Audio invalide."}), 400
+        if not consent_confirmed or not consent_sample:
+            return jsonify({
+                "success": False,
+                "error": "Le consentement vocal et sa confirmation sont obligatoires.",
+                "code": "voice_consent_required",
+            }), 400
+        consent_bytes = consent_sample.read(MAX_CONSENT_BYTES + 1)
+        try:
+            consent_duration = validate_audio(
+                consent_bytes,
+                consent_sample.filename or "consent.webm",
+                min_seconds=2,
+                max_seconds=30,
+                max_bytes=MAX_CONSENT_BYTES,
+            )
+            fish_voice = verify_reference_id(reference_id)
+            voice = create_voice(
+                center_account_id,
+                name=name,
+                fish_reference_id=fish_voice["reference_id"],
+                source="import",
+                consent_statement=CONSENT_STATEMENT,
+                consent_recording_sha256=audio_sha256(consent_bytes),
+                consent_recording_duration_sec=consent_duration,
+                language="fr",
+                fish_state=fish_voice.get("state"),
+            )
+        except Exception as exc:
+            return _voice_error_response(exc)
+        return jsonify({"success": True, "voice": voice}), 201
+
+    @hr_bp.route("/api/hr/ai-voices/<int:voice_id>/calibrate", methods=["POST"])
+    def calibrate_ai_voice_route(voice_id):
+        center_account_id, denied = _voice_center_id()
+        if denied:
+            return denied
+        from repositories.ai_voice_repository import get_voice, update_calibration
+        from services.fish_voice_service import (
+            MAX_CALIBRATION_BYTES,
+            transcribe_and_measure_wpm,
+            validate_audio,
+        )
+
+        if get_voice(center_account_id, voice_id) is None:
+            return _tenant_resource_not_found()
+        sample = request.files.get("calibration_sample")
+        if not sample:
+            return jsonify({"success": False, "error": "Ajoutez un enregistrement de calibrage."}), 400
+        sample_bytes = sample.read(MAX_CALIBRATION_BYTES + 1)
+        try:
+            validate_audio(
+                sample_bytes,
+                sample.filename or "calibrage.webm",
+                min_seconds=60,
+                max_seconds=600,
+                max_bytes=MAX_CALIBRATION_BYTES,
+            )
+            analysis = transcribe_and_measure_wpm(
+                audio_bytes=sample_bytes,
+                filename=sample.filename or "calibrage.webm",
+                mime_type=sample.mimetype,
+                language="fr",
+            )
+            requested_speed = request.form.get("playback_speed")
+            playback_speed = float(requested_speed or 1.0)
+            if not 0.5 <= playback_speed <= 2.0:
+                raise ValueError("Vitesse invalide")
+            voice = update_calibration(
+                center_account_id,
+                voice_id,
+                measured_wpm=analysis["words_per_minute"],
+                playback_speed=playback_speed,
+            )
+        except ValueError:
+            return jsonify({"success": False, "error": "La vitesse doit être comprise entre 0,5 et 2."}), 400
+        except Exception as exc:
+            return _voice_error_response(exc)
+        return jsonify({"success": True, "voice": voice, "analysis": analysis}), 200
+
+    @hr_bp.route("/api/hr/ai-voices/<int:voice_id>", methods=["PATCH"])
+    def update_ai_voice_route(voice_id):
+        center_account_id, denied = _voice_center_id()
+        if denied:
+            return denied
+        from repositories.ai_voice_repository import update_speed
+
+        data = request.get_json(silent=True) or {}
+        try:
+            speed = float(data.get("playback_speed"))
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Vitesse invalide."}), 400
+        if not 0.5 <= speed <= 2.0:
+            return jsonify({"success": False, "error": "La vitesse doit être comprise entre 0,5 et 2."}), 400
+        voice = update_speed(center_account_id, voice_id, speed)
+        if voice is None:
+            return _tenant_resource_not_found()
+        return jsonify({"success": True, "voice": voice}), 200
+
+    @hr_bp.route("/api/hr/ai-voices/<int:voice_id>/preview", methods=["POST"])
+    def preview_ai_voice_route(voice_id):
+        center_account_id, denied = _voice_center_id()
+        if denied:
+            return denied
+        from repositories.ai_voice_repository import get_voice
+        from services.fish_voice_service import synthesize_preview
+
+        voice = get_voice(center_account_id, voice_id)
+        if voice is None:
+            return _tenant_resource_not_found()
+        data = request.get_json(silent=True) or {}
+        text = str(data.get("text") or "Bonjour, voici un aperçu de ma voix pour vos prochains cours.").strip()[:500]
+        try:
+            speed = float(data.get("playback_speed") or voice.get("playback_speed") or 1.0)
+            if not 0.5 <= speed <= 2.0:
+                raise ValueError
+            audio = synthesize_preview(
+                reference_id=voice["fish_reference_id"],
+                speed=speed,
+                text=text,
+            )
+        except ValueError:
+            return jsonify({"success": False, "error": "Vitesse invalide."}), 400
+        except Exception as exc:
+            return _voice_error_response(exc)
+        return send_file(io.BytesIO(audio), mimetype="audio/mpeg", download_name="apercu-voix.mp3")
+
+    @hr_bp.route("/api/hr/ai-voices/<int:voice_id>", methods=["DELETE"])
+    def archive_ai_voice_route(voice_id):
+        center_account_id, denied = _voice_center_id()
+        if denied:
+            return denied
+        from repositories.ai_voice_repository import archive_voice
+
+        if not archive_voice(center_account_id, voice_id):
+            return _tenant_resource_not_found()
+        return jsonify({"success": True, "archived": True}), 200
+
     @hr_bp.before_request
     def check_hr_enabled():
         from flask import request as req
@@ -1816,6 +2077,11 @@ def create_hr_blueprint():
         new_formation = data.get("new_formation") # mode pipeline
         teacher_name = str(data.get("teacher_name") or "").strip()[:80] or None
         teacher_color = str(data.get("teacher_color") or "").strip().lower() or None
+        raw_ai_voice_id = data.get("ai_voice_id")
+        try:
+            ai_voice_id = int(raw_ai_voice_id) if raw_ai_voice_id not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Voix IA invalide"}), 400
         creation_request_id = str(data.get("creation_request_id") or "").strip() or None
 
         if not name:
@@ -1826,6 +2092,16 @@ def create_hr_blueprint():
             return jsonify({"success": False, "error": "Identifiant de création invalide"}), 400
         if new_formation and not teacher_name:
             return jsonify({"success": False, "error": "Le prénom du professeur IA est requis"}), 400
+        if ai_voice_id is not None:
+            from repositories.ai_voice_repository import get_voice
+
+            owner_center_id = _training_center_account_id()
+            if (
+                _admin_account_type() != "training_center"
+                or owner_center_id is None
+                or get_voice(owner_center_id, ai_voice_id) is None
+            ):
+                return jsonify({"success": False, "error": "Voix IA introuvable"}), 404
 
         # A browser retry or double click must resolve to the same professor.
         # The key is looked up inside the current centre only, so it cannot be
@@ -2369,6 +2645,17 @@ def create_hr_blueprint():
 
             logger.info(f"✅ Plateforme {new_id} '{name}' créée (status={initial_status}) avec containers: {containers_created}")
 
+            if ai_voice_id is not None and center_account_id is not None:
+                from repositories.ai_voice_repository import assign_voice_to_platform
+
+                if not assign_voice_to_platform(center_account_id, new_id, ai_voice_id):
+                    logger.warning(
+                        "AI_VOICE_PLATFORM_ASSIGNMENT_FAILED platform_id=%s voice_id=%s center_account_id=%s",
+                        new_id,
+                        ai_voice_id,
+                        center_account_id,
+                    )
+
             return jsonify({
                 "success": True,
                 "platform": {
@@ -2385,6 +2672,7 @@ def create_hr_blueprint():
                     "pipeline_job_id": linked_job_id,
                     "teacher_name": teacher_name or "",
                     "teacher_color": teacher_color or "violet",
+                    "ai_voice_id": ai_voice_id,
                     "creation_request_id": creation_request_id or "",
                     "schedule": schedule_config_result,
                     "audio_container": audio_container,

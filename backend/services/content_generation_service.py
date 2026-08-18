@@ -14061,6 +14061,17 @@ def generate_audio_from_script(
         raise ValueError(f"Aucun script TTS pour le dossier {folder_id}")
 
     platform_id = job["platform_id"]
+    base_convert_to_speech = convert_to_speech
+    base_convert_to_speech_with_timestamps = convert_to_speech_with_timestamps
+
+    def convert_to_speech(text, *args, **kwargs):
+        kwargs["platform_id"] = platform_id
+        return base_convert_to_speech(text, *args, **kwargs)
+
+    def convert_to_speech_with_timestamps(text, *args, **kwargs):
+        kwargs["platform_id"] = platform_id
+        return base_convert_to_speech_with_timestamps(text, *args, **kwargs)
+
     job_id = job["id"]
     formation_job_id = job.get("formation_job_id")
     playlist_items = _playlist_items_for_platform(

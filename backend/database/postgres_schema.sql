@@ -68,6 +68,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_training_center_accounts_auth_user_id
     ON training_center_accounts(auth_user_id)
     WHERE auth_user_id IS NOT NULL;
 
+-- Voix Fish Audio privées, isolées par centre. Les enregistrements ne sont pas
+-- conservés ici : seuls leurs empreintes et les métadonnées de consentement le
+-- sont afin de limiter l'exposition de données biométriques.
+CREATE TABLE IF NOT EXISTS ai_voices (
+    id BIGSERIAL PRIMARY KEY,
+    center_account_id BIGINT NOT NULL
+        REFERENCES training_center_accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    fish_reference_id TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('clone', 'import')),
+    status TEXT NOT NULL DEFAULT 'ready'
+        CHECK (status IN ('processing', 'ready', 'failed', 'archived')),
+    consent_statement TEXT NOT NULL,
+    consent_recording_sha256 TEXT,
+    consent_recording_duration_sec DOUBLE PRECISION,
+    sample_sha256 TEXT,
+    sample_duration_sec DOUBLE PRECISION,
+    measured_wpm DOUBLE PRECISION,
+    playback_speed DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    language TEXT NOT NULL DEFAULT 'fr',
+    fish_state TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(center_account_id, fish_reference_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_voices_center_status
+    ON ai_voices(center_account_id, status, updated_at DESC);
+
 DO $$
 BEGIN
     IF to_regclass('auth.users') IS NOT NULL THEN
@@ -109,6 +138,7 @@ CREATE TABLE IF NOT EXISTS platform_config (
     completed_at TIMESTAMPTZ,
     archived_at TIMESTAMPTZ,
     asset_binding_mode TEXT NOT NULL DEFAULT 'canonical',
+    ai_voice_id BIGINT REFERENCES ai_voices(id) ON DELETE SET NULL,
     UNIQUE(center_account_id, slug)
 );
 
@@ -126,6 +156,8 @@ ALTER TABLE platform_config
     ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE platform_config
     ADD COLUMN IF NOT EXISTS asset_binding_mode TEXT NOT NULL DEFAULT 'canonical';
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS ai_voice_id BIGINT REFERENCES ai_voices(id) ON DELETE SET NULL;
 ALTER TABLE platform_config
     ADD COLUMN IF NOT EXISTS center_platform_number INTEGER;
 
@@ -1424,6 +1456,7 @@ CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_auto_pilot_resume
 -- With no anon/authenticated policies, RLS denies direct Data API access while
 -- the Postgres owner and Supabase service role used by the backend keep access.
 ALTER TABLE training_center_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_voices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_schema_migrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE platform_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE deletion_requests ENABLE ROW LEVEL SECURITY;
