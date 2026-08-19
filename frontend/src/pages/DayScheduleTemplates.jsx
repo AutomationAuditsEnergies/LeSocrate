@@ -452,6 +452,7 @@ function TemplateList({
   loading,
   search,
   onSearchChange,
+  onCreate,
   onRetry,
   onEdit,
   onDuplicate,
@@ -467,25 +468,28 @@ function TemplateList({
   }, [search, templates])
 
   return (
-    <section className="day-schedule-library" aria-labelledby="day-schedule-library-title">
+    <section className="day-schedule-library" aria-label="Mes templates">
       <div className="day-schedule-library-toolbar">
-        <div>
-          <h2 id="day-schedule-library-title">Mes templates</h2>
-          <p>{templates.length} organisation{templates.length > 1 ? 's' : ''} enregistrée{templates.length > 1 ? 's' : ''}</p>
+        <p>{templates.length} organisation{templates.length > 1 ? 's' : ''} enregistrée{templates.length > 1 ? 's' : ''}</p>
+        <div className="day-schedule-library-actions">
+          {templates.length > 3 && (
+            <label className="relative block">
+              <span className="sr-only">Rechercher un template</span>
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#71717A]" aria-hidden="true" />
+              <input
+                type="search"
+                className="day-schedule-search pl-9"
+                placeholder="Rechercher un template"
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+              />
+            </label>
+          )}
+          <button type="button" className={BUTTON_PRIMARY} onClick={onCreate}>
+            <Plus size={16} aria-hidden="true" />
+            Créer un template
+          </button>
         </div>
-        {templates.length > 3 && (
-          <label className="relative block">
-            <span className="sr-only">Rechercher un template</span>
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#71717A]" aria-hidden="true" />
-            <input
-              type="search"
-              className="day-schedule-search pl-9"
-              placeholder="Rechercher un template"
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-            />
-          </label>
-        )}
       </div>
 
       {loading ? (
@@ -739,7 +743,7 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
 
   return (
     <section
-      className={`day-schedule-page pb-12${mode === 'edit' ? ' day-schedule-page--editor' : ''}`}
+      className={`day-schedule-page pb-12${mode === 'edit' ? ' day-schedule-page--editor' : ' day-schedule-page--overview'}`}
       aria-labelledby="day-schedule-title"
     >
       <header className="day-schedule-page-header">
@@ -763,14 +767,17 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
                 {saving ? 'Enregistrement…' : 'Enregistrer'}
               </button>
             </>
-          ) : templates.length > 0 && (
-            <button type="button" className={BUTTON_PRIMARY} onClick={startCreate}>
-              <Plus size={16} aria-hidden="true" />
-              Créer un template
-            </button>
-          )}
+          ) : null}
         </div>
       </header>
+
+      {mode !== 'edit' && (
+        <div className="day-schedule-section-divider" aria-hidden="true">
+          <span />
+          <strong>Mes templates</strong>
+          <span />
+        </div>
+      )}
 
       {feedback && (
         <div
@@ -828,6 +835,7 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
             loading={loading}
             search={search}
             onSearchChange={setSearch}
+            onCreate={startCreate}
             onRetry={loadTemplates}
             onEdit={startEdit}
             onDuplicate={startDuplicate}

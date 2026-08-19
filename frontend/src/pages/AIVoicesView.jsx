@@ -35,16 +35,6 @@ function durationLabel(seconds) {
 }
 
 
-function calibrationLabel(voice) {
-  if (voice.calibration_status === 'completed' && voice.measured_wpm) {
-    return `${Math.round(voice.measured_wpm)} mots/min`
-  }
-  if (voice.calibration_status === 'running') return 'Calibration en cours'
-  if (voice.calibration_status === 'failed') return 'À recalibrer'
-  return 'Après paiement'
-}
-
-
 function AudioInput({ label, hint, value, onChange, accept = 'audio/*', maxSeconds = 600 }) {
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -335,11 +325,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
 
           {step === 2 && (
             <div className="mt-7 space-y-5">
-              <div><h3 className="text-lg font-bold text-[#18181B]">Testez et validez la voix</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Écoutez le résultat et choisissez sa vitesse définitive. Après le paiement d’un professeur, nous lirons automatiquement un texte éducatif de référence de 7 069 mots avec ces réglages, avant de lancer la génération de ses cours.</p></div>
-              <div className="rounded-xl bg-[#F7F7F6] p-4 sm:p-5">
-                <p className="text-sm font-semibold text-[#18181B]">Calibration automatique des cours</p>
-                <p className="mt-2 text-sm leading-6 text-[#52525B]">La durée réelle de cette lecture permettra de calculer le débit de la voix en mots par minute. Tous les objectifs de mots des modules seront ensuite ajustés proportionnellement pour remplir leur durée prévue.</p>
-              </div>
+              <div><h3 className="text-lg font-bold text-[#18181B]">Testez et validez la voix</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Écoutez le résultat et choisissez sa vitesse définitive. Une fois la voix validée, cette vitesse ne pourra plus être modifiée.</p></div>
               <div className="rounded-xl border border-[#D9D9DE] p-4">
                 <div className="flex items-center justify-between gap-3"><label htmlFor="voice-speed" className="text-sm font-semibold text-[#18181B]">Vitesse finale</label><span className="rounded-full bg-[#F1F1F0] px-2.5 py-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</span></div>
                 <input id="voice-speed" type="range" min="0.75" max="1.35" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} className="mt-4 w-full accent-[#18181B]" />
@@ -367,24 +353,13 @@ function VoiceWizard({ mode, onClose, onCreated }) {
 }
 
 
-function VoiceCard({ voice, onUpdated, onDeleted }) {
-  const [speed, setSpeed] = useState(Number(voice.playback_speed || 1))
-  const [saving, setSaving] = useState(false)
+function VoiceCard({ voice, onDeleted }) {
+  const speed = Number(voice.playback_speed || 1)
   const [previewing, setPreviewing] = useState(false)
   const [audioUrl, setAudioUrl] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => () => audioUrl && URL.revokeObjectURL(audioUrl), [audioUrl])
-
-  const saveSpeed = async () => {
-    setSaving(true)
-    setError('')
-    try {
-      const response = await apiFetch(`/api/hr/ai-voices/${voice.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playback_speed: speed }) })
-      const payload = await responsePayload(response)
-      onUpdated(payload.voice)
-    } catch (requestError) { setError(requestError.message) } finally { setSaving(false) }
-  }
 
   const preview = async () => {
     setPreviewing(true)
@@ -404,9 +379,8 @@ function VoiceCard({ voice, onUpdated, onDeleted }) {
         <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate text-base font-bold text-[#18181B]">{voice.name}</h3><span className="rounded-full bg-[#F1F1F0] px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#52525B]">{voice.source === 'clone' ? 'Clonée' : 'Importée'}</span></div><p className="mt-1 truncate font-mono text-xs text-[#71717A]">{voice.fish_reference_id}</p></div>
         <button type="button" onClick={() => onDeleted(voice)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[#71717A] hover:bg-[#FEF2F2] hover:text-[#B42318]" aria-label={`Supprimer ${voice.name}`}><Trash2 size={17} /></button>
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Débit de référence</p><p className="mt-1 text-sm font-bold text-[#18181B]">{calibrationLabel(voice)}</p></div><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Vitesse appliquée</p><p className="mt-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</p></div></div>
-      <div className="mt-4"><input type="range" min="0.75" max="1.35" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} onMouseUp={saveSpeed} onTouchEnd={saveSpeed} className="w-full accent-[#18181B]" /></div>
-      <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={preview} disabled={previewing} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] px-3.5 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={16} /> {previewing ? 'Génération…' : 'Écouter'}</button>{saving && <span className="self-center text-xs text-[#71717A]">Enregistrement…</span>}</div>
+      <div className="mt-5 rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Vitesse appliquée</p><p className="mt-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</p></div>
+      <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={preview} disabled={previewing} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] px-3.5 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={16} /> {previewing ? 'Génération…' : 'Écouter'}</button></div>
       {audioUrl && <audio controls autoPlay src={audioUrl} className="mt-4 w-full" />}
       {error && <p className="mt-3 text-xs font-medium text-[#B42318]" role="alert">{error}</p>}
     </article>
@@ -444,7 +418,7 @@ export default function AIVoicesView({ onVoicesChange }) {
   }
 
   const hasVoices = voices.length > 0
-  const subtitle = useMemo(() => 'Créez, calibrez et mesurez les voix utilisées par vos professeurs.', [])
+  const subtitle = useMemo(() => 'Créez et écoutez les voix utilisées par vos professeurs.', [])
 
   return (
     <section className="h-full overflow-y-auto pb-14" aria-labelledby="ai-voices-title">
@@ -461,7 +435,7 @@ export default function AIVoicesView({ onVoicesChange }) {
             <div className="mt-6 flex flex-wrap justify-center gap-3"><button type="button" onClick={() => setWizardMode('clone')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] bg-white px-4 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5]"><PenLine size={16} /> Créer une voix</button><button type="button" onClick={() => setWizardMode('import')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] bg-white px-4 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5]"><Download size={16} /> Importer une voix</button></div>
           </div>
         ) : (
-          <div><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-[#6B6B72]">{voices.length} voix disponible{voices.length > 1 ? 's' : ''}</p><div className="flex gap-2"><button type="button" onClick={() => setWizardMode('import')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#D4D4D8] px-3.5 py-2 text-sm font-semibold text-[#27272A] hover:bg-[#F4F4F5]"><Download size={16} /> Importer</button><button type="button" onClick={() => setWizardMode('clone')} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]"><Plus size={16} /> Créer une voix</button></div></div><div className="grid gap-4 lg:grid-cols-2">{voices.map((voice) => <VoiceCard key={voice.id} voice={voice} onUpdated={updateVoice} onDeleted={deleteVoice} />)}</div></div>
+          <div><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-[#6B6B72]">{voices.length} voix disponible{voices.length > 1 ? 's' : ''}</p><div className="flex gap-2"><button type="button" onClick={() => setWizardMode('import')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#D4D4D8] px-3.5 py-2 text-sm font-semibold text-[#27272A] hover:bg-[#F4F4F5]"><Download size={16} /> Importer</button><button type="button" onClick={() => setWizardMode('clone')} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]"><Plus size={16} /> Créer une voix</button></div></div><div className="grid gap-4 lg:grid-cols-2">{voices.map((voice) => <VoiceCard key={voice.id} voice={voice} onDeleted={deleteVoice} />)}</div></div>
         )}
       </div>
       {wizardMode && <VoiceWizard mode={wizardMode} onClose={() => { setWizardMode(null); loadVoices() }} onCreated={updateVoice} />}
