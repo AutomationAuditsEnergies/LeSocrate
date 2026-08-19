@@ -15,6 +15,60 @@
   grid-template-columns: minmax(320px, 0.5fr) minmax(0, 1fr);
 }
 
+.create-platform-workspace--template-redirecting .create-platform-workspace__layout {
+  pointer-events: none;
+  animation: create-platform-draft-exit 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.create-platform-workspace__draft-transition {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #18181b;
+  text-align: center;
+  animation: create-platform-draft-enter 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.create-platform-workspace__draft-transition-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  margin-bottom: 5px;
+  border-radius: 50%;
+  background: #18181b;
+  color: #fff;
+}
+
+.create-platform-workspace__draft-transition strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.create-platform-workspace__draft-transition > span:last-child {
+  color: #52525b;
+  font-size: 12px;
+}
+
+@keyframes create-platform-draft-exit {
+  to {
+    opacity: 0.72;
+    transform: scale(0.992);
+  }
+}
+
+@keyframes create-platform-draft-enter {
+  from {
+    opacity: 0;
+  }
+}
+
 .create-platform-workspace__preview {
   position: relative;
   display: flex;
@@ -455,5 +509,12 @@
 
   .create-platform-workspace__actions {
     flex-direction: column-reverse;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-platform-workspace--template-redirecting .create-platform-workspace__layout,
+  .create-platform-workspace__draft-transition {
+    animation: none;
   }
 }

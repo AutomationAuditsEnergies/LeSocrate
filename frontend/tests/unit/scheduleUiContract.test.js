@@ -38,6 +38,37 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.match(dashboardSource, /Associez un template à/)
 })
 
+test('creates a missing template without losing the current formation draft', async () => {
+  const plannerSource = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+  const templateSource = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
+    'utf8',
+  )
+  const dashboardSource = await readFile(
+    new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
+    'utf8',
+  )
+  const createPlatformStyles = await readFile(
+    new URL('../../src/pages/CreatePlatformView.css', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal((plannerSource.match(/Créer un template/g) || []).length >= 2, true)
+  assert.match(plannerSource, /onCreateTemplate\?\.\(\{/)
+  assert.match(templateSource, /createOnMount \? createEmptyScheduleTemplateDraft\(\) : null/)
+  assert.match(templateSource, /createdNow && onUseTemplate/)
+  assert.match(dashboardSource, /teacher_creation_draft/)
+  assert.match(dashboardSource, /useState\(loadTeacherCreationDraft\)/)
+  assert.match(dashboardSource, /createTemplateFromFormationDraft/)
+  assert.match(dashboardSource, /resumeFormationDraftWithTemplate/)
+  assert.match(dashboardSource, /Brouillon enregistré/)
+  assert.match(dashboardSource, /prefers-reduced-motion: reduce/)
+  assert.match(createPlatformStyles, /create-platform-draft-enter/)
+})
+
 test('uses locked sequence drops and resize handles instead of per-block forms', async () => {
   const source = await readFile(new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url), 'utf8')
 

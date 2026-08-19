@@ -17,6 +17,7 @@ import { apiFetch } from '../api'
 
 const CONSENT_COPY = 'Je confirme être propriétaire de cette voix ou disposer de son autorisation expresse pour créer et utiliser cette voix IA.'
 const PREVIEW_TEXT = 'Bonjour, voici un aperçu de ma voix pour vos prochains cours.'
+const VOICE_READING_TEXT = 'Les abeilles jouent un rôle essentiel dans notre environnement. En transportant le pollen d’une fleur à l’autre, elles permettent à de nombreuses plantes de produire des fruits et des graines. Ce travail discret contribue directement à la diversité de notre alimentation. Une colonie peut visiter plusieurs millions de fleurs au cours d’une saison. Pour protéger ces pollinisateurs, chacun peut agir simplement : planter des espèces locales, éviter les pesticides et laisser quelques zones sauvages dans les jardins. Les abeilles ne fabriquent donc pas seulement du miel. Elles participent aussi à l’équilibre des écosystèmes et nous rappellent que, dans la nature, les actions les plus petites peuvent avoir de grandes conséquences.'
 
 
 async function responsePayload(response) {
@@ -168,7 +169,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
   const [referenceId, setReferenceId] = useState('')
-  const [transcript, setTranscript] = useState('')
+  const [transcript, setTranscript] = useState(VOICE_READING_TEXT)
   const [consentConfirmed, setConsentConfirmed] = useState(false)
   const [consentAudio, setConsentAudio] = useState(null)
   const [voiceAudio, setVoiceAudio] = useState(null)
@@ -304,8 +305,16 @@ function VoiceWizard({ mode, onClose, onCreated }) {
           {step === 1 && mode === 'clone' && (
             <div className="mt-7 space-y-5">
               <div><h3 className="text-lg font-bold text-[#18181B]">Enregistrez la voix à cloner</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">10 secondes minimum, 90 secondes maximum. Pour un résultat naturel, visez 30 à 60 secondes dans une pièce calme.</p></div>
+              <div className="rounded-xl bg-[#F7F7F6] p-4 sm:p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-[#18181B]">Texte à lire</p>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#52525B]">Environ 50 secondes</span>
+                </div>
+                <p className="mt-3 max-w-[70ch] text-sm leading-6 text-[#3F3F46]">« {VOICE_READING_TEXT} »</p>
+                <p className="mt-3 text-xs leading-5 text-[#6B6B72]">Lisez naturellement, sans accélérer, en marquant de courtes pauses à la ponctuation.</p>
+              </div>
               <AudioInput label="Échantillon vocal" hint="Une seule personne, sans musique ni écho, avec un débit naturel." value={voiceAudio} onChange={(file, duration) => setVoiceAudio({ file, duration })} maxSeconds={90} />
-              <div><label htmlFor="voice-transcript" className="mb-2 block text-sm font-semibold text-[#27272A]">Transcription exacte <span className="font-normal text-[#71717A]">(facultatif)</span></label><textarea id="voice-transcript" value={transcript} onChange={(event) => setTranscript(event.target.value)} rows={4} placeholder="Collez ici ce qui est prononcé dans l’échantillon…" className="w-full rounded-lg border border-[#D4D4D8] px-3.5 py-3 text-sm outline-none focus:border-[#18181B] focus:ring-2 focus:ring-[#18181B]/10" /></div>
+              <div><label htmlFor="voice-transcript" className="mb-2 block text-sm font-semibold text-[#27272A]">Transcription envoyée avec l’audio</label><textarea id="voice-transcript" value={transcript} onChange={(event) => setTranscript(event.target.value)} rows={4} className="w-full rounded-lg border border-[#D4D4D8] px-3.5 py-3 text-sm leading-6 outline-none focus:border-[#18181B] focus:ring-2 focus:ring-[#18181B]/10" /><p className="mt-2 text-xs leading-5 text-[#6B6B72]">Le texte proposé est déjà renseigné. Modifiez cette transcription uniquement si vous lisez un autre passage.</p></div>
             </div>
           )}
 
