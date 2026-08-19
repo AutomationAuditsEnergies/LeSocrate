@@ -562,11 +562,13 @@ function TemplateList({
   )
 }
 
-export default function DayScheduleTemplates({ onUseTemplate }) {
+export default function DayScheduleTemplates({ onUseTemplate, createOnMount = false }) {
   const [templates, setTemplates] = useState([])
   const [selectedId, setSelectedId] = useState(null)
-  const [draft, setDraft] = useState(null)
-  const [mode, setMode] = useState('preview')
+  const [draft, setDraft] = useState(() => (
+    createOnMount ? createEmptyScheduleTemplateDraft() : null
+  ))
+  const [mode, setMode] = useState(() => (createOnMount ? 'edit' : 'preview'))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -657,6 +659,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     setSaving(true)
     setFeedback(null)
     try {
+      const createdNow = !draft.id
       const saved = draft.id
         ? await updateDayScheduleTemplate(result.template)
         : await createDayScheduleTemplate(result.template)
@@ -670,6 +673,10 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
       setMode('preview')
       setDraft(null)
       setFeedback({ tone: 'success', message: 'Template enregistré.' })
+      if (createdNow && onUseTemplate) {
+        window.sessionStorage.setItem('selected_day_schedule_template_id', String(saved.id))
+        onUseTemplate(saved)
+      }
     } catch (saveError) {
       setFeedback({
         tone: 'error',

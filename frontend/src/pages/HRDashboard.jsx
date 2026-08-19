@@ -69,6 +69,14 @@ const todayDateInput = () => {
   const offset = now.getTimezoneOffset() * 60000
   return new Date(now.getTime() - offset).toISOString().slice(0, 10)
 }
+const loadTeacherCreationDraft = () => {
+  try {
+    return JSON.parse(window.sessionStorage.getItem('teacher_creation_draft') || 'null')
+  } catch {
+    window.sessionStorage.removeItem('teacher_creation_draft')
+    return null
+  }
+}
 const formatPrice = (amountCents, currency = 'eur') => (
   typeof amountCents === 'number'
     ? new Intl.NumberFormat('fr-FR', { style: 'currency', currency: currency.toUpperCase() }).format(amountCents / 100)
@@ -128,6 +136,9 @@ export default function HRDashboard() {
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
   const [initialScheduleV2, setInitialScheduleV2] = useState(null)
+  const [templateCreationDraft, setTemplateCreationDraft] = useState(loadTeacherCreationDraft)
+  const [templateRedirecting, setTemplateRedirecting] = useState(false)
+  const templateRedirectTimerRef = useRef(null)
   const [aiVoices, setAiVoices] = useState([])
   const [selectedAiVoiceId, setSelectedAiVoiceId] = useState('')
   const creatingRef = useRef(false)
@@ -915,6 +926,75 @@ export default function HRDashboard() {
     setModuleSearchQuery('')
   }
 
+  const createTemplateFromFormationDraft = (calendarState) => {
+    if (templateRedirectTimerRef.current) return
+    const scheduleDraft = {
+      schedule_schema_version: 2,
+      selected_dates: calendarState.selected_dates || [],
+      template_assignments: calendarState.template_assignments || {},
+    }
+    const draft = {
+      teacherFirstName,
+      teacherColor,
+      weeklyCourseCount,
+      teachingDays,
+      scheduleStartDate: calendarState.start_date || scheduleStartDate,
+      newFormTpName,
+      newFormRncp,
+      newFormHours,
+      formationMode,
+      selectedModuleId,
+      selectedAiVoiceId,
+      schedule: scheduleDraft,
+    }
+    window.sessionStorage.setItem('teacher_creation_draft', JSON.stringify(draft))
+    setInitialScheduleV2(scheduleDraft)
+    setTemplateCreationDraft(draft)
+    setTemplateRedirecting(true)
+
+    const openTemplateEditor = () => {
+      templateRedirectTimerRef.current = null
+      setTemplateRedirecting(false)
+      showScheduleTemplatesView()
+    }
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reduceMotion) {
+      openTemplateEditor()
+      return
+    }
+    templateRedirectTimerRef.current = window.setTimeout(openTemplateEditor, 220)
+  }
+
+  const resumeFormationDraftWithTemplate = () => {
+    const draft = templateCreationDraft || loadTeacherCreationDraft()
+    if (draft) {
+      setTeacherFirstName(draft.teacherFirstName || '')
+      setTeacherColor(draft.teacherColor || 'violet')
+      setWeeklyCourseCount(String(draft.weeklyCourseCount || '2'))
+      setTeachingDays(Array.isArray(draft.teachingDays) ? draft.teachingDays : ['mardi', 'jeudi'])
+      setScheduleStartDate(draft.scheduleStartDate || todayDateInput())
+      setNewFormTpName(draft.newFormTpName || '')
+      setNewFormRncp(draft.newFormRncp || '')
+      setNewFormHours(String(draft.newFormHours || ''))
+      setFormationMode(draft.formationMode || 'new')
+      setSelectedModuleId(String(draft.selectedModuleId || ''))
+      setSelectedAiVoiceId(String(draft.selectedAiVoiceId || ''))
+      setInitialScheduleV2(draft.schedule || null)
+    }
+    window.sessionStorage.removeItem('teacher_creation_draft')
+    setTemplateCreationDraft(null)
+    setTemplateRedirecting(false)
+    setWorkspaceSection('recruit')
+    setShowModulesModal(false)
+    setShowCreateModal(true)
+  }
+
+  useEffect(() => () => {
+    if (templateRedirectTimerRef.current) {
+      window.clearTimeout(templateRedirectTimerRef.current)
+    }
+  }, [])
+
   useEffect(() => {
     localStorage.setItem('center_workspace_section', workspaceSection)
   }, [workspaceSection])
@@ -1371,6 +1451,8 @@ export default function HRDashboard() {
               aiVoices={aiVoices}
               selectedAiVoiceId={selectedAiVoiceId}
               setSelectedAiVoiceId={setSelectedAiVoiceId}
+              onCreateTemplate={createTemplateFromFormationDraft}
+              templateRedirecting={templateRedirecting}
               creating={creating}
               billing={billing}
               billingLoading={billingLoading}
@@ -1387,7 +1469,10 @@ export default function HRDashboard() {
               onManualCreate={openCreateModal}
             />
           ) : workspaceSection === 'schedule-templates' ? (
-            <DayScheduleTemplates />
+            <DayScheduleTemplates
+              createOnMount={Boolean(templateCreationDraft)}
+              onUseTemplate={templateCreationDraft ? resumeFormationDraftWithTemplate : undefined}
+            />
           ) : workspaceSection === 'ai-voices' ? (
             <AIVoicesView onVoicesChange={setAiVoices} />
           ) : (
@@ -4467,6 +4552,8 @@ export function CreatePlatformView({
   aiVoices,
   selectedAiVoiceId,
   setSelectedAiVoiceId,
+  onCreateTemplate,
+  templateRedirecting = false,
   creating,
   billing,
   billingLoading,
@@ -4625,7 +4712,10 @@ export function CreatePlatformView({
   const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#E1E5EA] bg-white px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
   return (
-    <section className={`create-platform-workspace${identityEditorOpen ? ' create-platform-workspace--identity-open' : ''}`}>
+    <section
+      className={`create-platform-workspace${identityEditorOpen ? ' create-platform-workspace--identity-open' : ''}${templateRedirecting ? ' create-platform-workspace--template-redirecting' : ''}`}
+      aria-busy={templateRedirecting || undefined}
+    >
       <div className="create-platform-workspace__layout">
         <aside
           className="create-platform-workspace__preview"
@@ -4810,6 +4900,7 @@ export function CreatePlatformView({
                 approximateDayCount={formationMode === 'existing' ? trainingDays : newFormHours}
                 daysPerWeekHint={weeklyCourseCount}
                 preferredWeekdaysHint={teachingDays}
+                onCreateTemplate={onCreateTemplate}
                 onChange={handleSchedulePlanChange}
               />
             )}
@@ -4924,6 +5015,16 @@ export function CreatePlatformView({
           )}
 
         </section>
+      )}
+
+      {templateRedirecting && (
+        <div className="create-platform-workspace__draft-transition" role="status" aria-live="polite">
+          <span className="create-platform-workspace__draft-transition-icon" aria-hidden="true">
+            <Icon name="check" />
+          </span>
+          <strong>Brouillon enregistré</strong>
+          <span>Ouverture de l’organisation des cours…</span>
+        </div>
       )}
 
       {scheduleReviewOpen && createPortal(
