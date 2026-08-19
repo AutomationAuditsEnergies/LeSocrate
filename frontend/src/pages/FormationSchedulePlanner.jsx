@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Menu,
+  PlusCircle,
+  Search,
   WandSparkles,
 } from 'lucide-react'
 
@@ -30,6 +34,10 @@ const FRENCH_WEEKDAY_TO_ISO = Object.freeze({
   samedi: 6,
   dimanche: 7,
 })
+
+const CALENDAR_DAY_ART = Object.freeze(
+  Array.from({ length: 7 }, (_, index) => `/figma-calendar/day-${index + 1}.png`),
+)
 
 function localToday() {
   const parts = Object.fromEntries(
@@ -154,7 +162,9 @@ export default function FormationSchedulePlanner({
     () => weekStart(initialDates[0] || today),
   )
   const [activeDateKey, setActiveDateKey] = useState(initialDates[0] || '')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   const didInitialPrefill = useRef(false)
+  const helperRef = useRef(null)
 
   const loadTemplates = useCallback(async () => {
     if (reuse) return
@@ -393,6 +403,11 @@ export default function FormationSchedulePlanner({
     }))
   }
 
+  const openPrefill = () => {
+    if (helperRef.current) helperRef.current.open = true
+    helperRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+
   return (
     <section className="formation-schedule" aria-labelledby="formation-schedule-title">
       <div className="formation-schedule__heading">
@@ -405,7 +420,7 @@ export default function FormationSchedulePlanner({
         </span>
       </div>
 
-      <details className="formation-schedule__helper">
+      <details ref={helperRef} className="formation-schedule__helper">
         <summary>
           <span>
             <WandSparkles size={16} aria-hidden="true" />
@@ -493,16 +508,62 @@ export default function FormationSchedulePlanner({
         </div>
       </details>
 
-      <div className="formation-schedule__workspace">
-        <div className="formation-schedule__dates">
+      <div className="formation-schedule__workspace" data-sidebar-open={sidebarOpen}>
+        <aside className="formation-schedule__dates" aria-label="Agenda de la formation">
+          <div className="formation-schedule__side-month">
+            {monthLabel(month.year, month.month).replace(/\s+\d{4}$/, '')}
+          </div>
+          <div className="formation-schedule__mini-weekdays" aria-hidden="true">
+            {TRAINING_WEEKDAYS.map((day) => <span key={day.id}>{day.short.slice(0, 1)}</span>)}
+          </div>
+          <div className="formation-schedule__mini-grid">
+            {calendarDays.map((day) => {
+              const selected = selectedSet.has(day.date)
+              return (
+                <button
+                  key={day.date}
+                  type="button"
+                  disabled={day.date < today}
+                  data-outside={!day.inMonth}
+                  aria-pressed={selected}
+                  aria-label={`${selected ? 'Retirer' : 'Ajouter'} le ${formatLongDate(day.date)}`}
+                  onClick={() => toggleDate(day.date)}
+                >
+                  {String(day.day).padStart(2, '0')}
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="formation-schedule__agenda-section">
+            <h3><span aria-hidden="true">🗓️</span> Journées planifiées</h3>
+            {scheduleDays.length ? (
+              <div className="formation-schedule__agenda-list">
+                {scheduleDays.slice(0, 5).map((day) => (
+                  <button
+                    key={day.date}
+                    type="button"
+                    data-active={activeDate === day.date}
+                    onClick={() => {
+                      setActiveDateKey(day.date)
+                      setMonth(initialMonth(day.date))
+                    }}
+                  >
+                    <span><i /> Journée {day.dayNumber}</span>
+                    <time>{day.date.slice(5).split('-').reverse().join('/')}</time>
+                  </button>
+                ))}
+                {scheduleDays.length > 5 && <p>+ {scheduleDays.length - 5} autres journées</p>}
+              </div>
+            ) : (
+              <p className="formation-schedule__agenda-empty">Cliquez sur une date pour commencer.</p>
+            )}
+          </div>
+
           <div className="formation-schedule__dates-header">
             <div>
-              <h3>Organisation de la journée</h3>
-              <p>
-                {activeDateIndex >= 0
-                  ? `Journée ${activeDateIndex + 1} sur ${normalizedDates.length}`
-                  : 'Sélectionnez une date dans le calendrier.'}
-              </p>
+              <h3><span aria-hidden="true">📋</span> Organisation</h3>
+              <p>{activeDateIndex >= 0 ? `Journée ${activeDateIndex + 1} sur ${normalizedDates.length}` : 'Aucune date sélectionnée'}</p>
             </div>
           </div>
 
@@ -621,12 +682,41 @@ export default function FormationSchedulePlanner({
               )}
             </div>
           )}
-        </div>
+        </aside>
 
         <div className="formation-schedule__calendar">
           <header>
-            <h3>{monthLabel(month.year, month.month)}</h3>
+            <button
+              type="button"
+              className="formation-schedule__sidebar-toggle"
+              onClick={() => setSidebarOpen((current) => !current)}
+              aria-label={sidebarOpen ? 'Masquer l’agenda' : 'Afficher l’agenda'}
+              aria-expanded={sidebarOpen}
+            >
+              <Menu size={16} aria-hidden="true" />
+            </button>
+            <h3>
+              <strong>{monthLabel(month.year, month.month).replace(/\s+\d{4}$/, '')}</strong>{' '}
+              <span>{month.year}</span>
+            </h3>
             <span className="formation-schedule__view-label">Mois</span>
+            <div className="formation-schedule__toolbar-actions">
+              <button
+                type="button"
+                className="formation-schedule__search"
+                onClick={() => activeDate && setMonth(initialMonth(activeDate))}
+                aria-label="Afficher la journée active"
+              >
+                <Search size={15} aria-hidden="true" />
+              </button>
+              <button type="button" className="formation-schedule__add" onClick={openPrefill} aria-label="Préremplir rapidement">
+                <span>Préremplir</span>
+                <PlusCircle size={15} aria-hidden="true" />
+              </button>
+              <button type="button" className="formation-schedule__mobile-date" onClick={openPrefill} aria-label="Préremplir le calendrier">
+                <CalendarDays size={16} aria-hidden="true" />
+              </button>
+            </div>
             <div className="formation-schedule__calendar-navigation">
               <button type="button" onClick={() => moveMonth(-1)} aria-label="Mois précédent">
                 <ChevronLeft size={18} aria-hidden="true" />
@@ -637,8 +727,11 @@ export default function FormationSchedulePlanner({
             </div>
           </header>
           <div className="formation-schedule__weekday-labels" aria-hidden="true">
-            {TRAINING_WEEKDAYS.map((day) => (
-              <span key={day.id}>{day.short.replace('.', '')}</span>
+            {TRAINING_WEEKDAYS.map((day, index) => (
+              <span key={day.id}>
+                <img src={CALENDAR_DAY_ART[index]} alt="" />
+                {day.short.replace('.', '')}
+              </span>
             ))}
           </div>
           <div className="formation-schedule__month-grid">
@@ -664,9 +757,10 @@ export default function FormationSchedulePlanner({
                   {scheduledDay && (
                     <span className="formation-schedule__calendar-event" aria-hidden="true">
                       <span className="formation-schedule__calendar-event-title">
-                        <i /> Journée {scheduledDay.dayNumber}
+                        <i /> {scheduledDay.templateName || `Journée ${scheduledDay.dayNumber}`}
                       </span>
-                      <span>{scheduledDay.templateName || 'Déroulé à définir'}</span>
+                      <span className="formation-schedule__calendar-event-time">08:00</span>
+                      <span className="formation-schedule__calendar-event-more">Journée {scheduledDay.dayNumber}</span>
                     </span>
                   )}
                 </button>
