@@ -136,6 +136,12 @@ class DynamicDayScheduleTest(unittest.TestCase):
                 math.floor((duration - 0.5) * 165.7),
             )
 
+    def test_course_word_budget_accepts_a_voice_specific_rate(self):
+        self.assertEqual(
+            calculate_course_word_budget(60, words_per_minute=120),
+            math.floor(59.5 * 120),
+        )
+
     def test_final_short_pause_is_optional(self):
         without_final = compile_day_schedule(_valid_day(final_pause=False))
         with_final = compile_day_schedule(_valid_day(final_pause=True))

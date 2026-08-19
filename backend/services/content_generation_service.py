@@ -656,13 +656,26 @@ def _playlist_course_word_budget(
     bloc_number,
     *,
     dynamic_schedule: bool,
+    calibrated_wpm: float | None = None,
 ) -> int:
+    if calibrated_wpm is not None:
+        return max(
+            0,
+            int(
+                _course_voice_window_sec(duration_sec, dynamic_schedule)
+                * float(calibrated_wpm)
+                / 60.0
+            ),
+        )
     if dynamic_schedule:
         from services.dynamic_day_schedule_service import (
             calculate_course_word_budget,
         )
 
-        return calculate_course_word_budget(int(duration_sec) // 60)
+        return calculate_course_word_budget(
+            int(duration_sec) // 60,
+            words_per_minute=(calibrated_wpm or _course_words_per_minute()),
+        )
     return _estimated_words_budget_for_course(
         duration_sec,
         api_speed,
@@ -670,7 +683,33 @@ def _playlist_course_word_budget(
     )
 
 
-def get_course_day_word_budget(playlist_spec=None) -> dict:
+def _platform_calibrated_words_per_minute(platform_id: int | None) -> float | None:
+    if platform_id in (None, ""):
+        return None
+    try:
+        from repositories.ai_voice_repository import get_platform_voice_settings
+
+        voice = get_platform_voice_settings(int(platform_id))
+        if not voice or voice.get("calibration_status") != "completed":
+            return None
+        measured = float(voice.get("measured_wpm") or 0.0)
+        calibrated_speed = float(voice.get("calibration_playback_speed") or 0.0)
+        playback_speed = float(voice.get("playback_speed") or 1.0)
+        if (
+            60 <= measured <= 300
+            and abs(calibrated_speed - playback_speed) <= 0.0001
+        ):
+            return measured
+    except Exception:
+        logger.warning(
+            "VOICE_CALIBRATED_WPM_LOOKUP_FAILED platform_id=%s",
+            platform_id,
+            exc_info=True,
+        )
+    return None
+
+
+def get_course_day_word_budget(playlist_spec=None, *, platform_id=None) -> dict:
     """Budget mots quotidien dérivé des seuls créneaux `cours`.
 
     Les Q&A/pauses ne sont pas intégrées au texte de cours et ne doivent donc
@@ -688,6 +727,7 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
         if file_type == "cours"
     ]
     dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
     per_course = []
     target_words = 0
     speakable_seconds = 0.0
@@ -701,6 +741,7 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
             _DEFAULT_TTS_SPEED,
             bloc_num,
             dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
         )
         target_words += words
         speakable_seconds += voice_window
@@ -709,7 +750,10 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
             "bloc_number": bloc_num,
             "duration_sec": duration_sec,
             "speakable_sec": round(voice_window, 3),
-            "words_per_minute": round(_course_words_per_minute_for_bloc(bloc_num), 3),
+            "words_per_minute": round(
+                calibrated_wpm or _course_words_per_minute_for_bloc(bloc_num),
+                3,
+            ),
             "target_words": words,
         })
 
@@ -754,6 +798,7 @@ def _course_block_for_generation_context(generation_context=None) -> dict | None
     for block in _course_audio_block_plan(
         (generation_context or {}).get("playlist_spec"),
         folder_position=generation_context.get("folder_position"),
+        platform_id=generation_context.get("platform_id"),
     ):
         if int(block.get("bloc_number") or 0) == bloc_number:
             return block
@@ -764,7 +809,8 @@ def get_course_segment_generation_budget(segment_count: int = NUM_SUB_PARTS * 3,
                                          generation_context=None) -> dict:
     """Budget indicatif par segment pour que la journée tombe juste après review."""
     day_budget = get_course_day_word_budget(
-        (generation_context or {}).get("playlist_spec")
+        (generation_context or {}).get("playlist_spec"),
+        platform_id=(generation_context or {}).get("platform_id"),
     )
     reserve_ratio = _env_float(
         "FORMATION_TTS_GENERATION_REVIEW_RESERVE_RATIO",
@@ -1943,7 +1989,11 @@ def _course_slot_prompt_profile(
 
 def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_items: list, sub_parts: list) -> dict:
     """Valide et complète les plans JSON. Les budgets serveur font autorité."""
-    block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
+    block_plan = _course_audio_block_plan(
+        playlist_items,
+        folder_position=job.get("folder_position"),
+        platform_id=job.get("platform_id"),
+    )
     budgets_by_course = {int(b["bloc_number"]): b for b in block_plan}
     course_numbers = [int(block["bloc_number"]) for block in block_plan]
     if not course_numbers:
@@ -2213,7 +2263,11 @@ def _build_structured_course_plan_prompt(
     plan_contract = prompt_parts["plan_contract"]
     slide_template_catalog = _slide_template_catalog_prompt()
     skeleton_mode = planning_mode == "skeleton"
-    block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
+    block_plan = _course_audio_block_plan(
+        playlist_items,
+        folder_position=job.get("folder_position"),
+        platform_id=job.get("platform_id"),
+    )
     course_count = len(block_plan)
     if course_count <= 0:
         raise ValueError("Le planning audio ne contient aucun cours")
@@ -3437,11 +3491,17 @@ def _structured_section_min_words(word_budget: int) -> int:
     return max(0, int(int(word_budget or 0) * ratio))
 
 
-def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> list[dict]:
+def _course_audio_block_plan(
+    playlist_spec=None,
+    *,
+    folder_position=None,
+    platform_id=None,
+) -> list[dict]:
     if playlist_spec is None:
         from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
     api_speed = _course_tts_speed()
     dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
     total_courses = sum(
         1
         for item in playlist_spec
@@ -3458,6 +3518,7 @@ def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> lis
             api_speed,
             bloc_num,
             dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
         )
         min_words = _block_min_words(word_budget)
         next_item = _next_playlist_item_after_index(playlist_spec, idx)
@@ -3489,6 +3550,7 @@ def _build_audio_day_plan_context(generation_context=None) -> str:
     blocks = _course_audio_block_plan(
         (generation_context or {}).get("playlist_spec"),
         folder_position=folder_position,
+        platform_id=(generation_context or {}).get("platform_id"),
     )
     lines = [
         "═══════════════════════════════════════════════════════════════════",
@@ -3579,7 +3641,10 @@ def compute_course_day_word_budget_audit(folder_id: int, job: dict | None = None
             int(job["platform_id"]),
             folder_id=int(folder_id),
         )
-    budget = get_course_day_word_budget(playlist_spec)
+    budget = get_course_day_word_budget(
+        playlist_spec,
+        platform_id=(job or {}).get("platform_id"),
+    )
     if not job:
         return {
             "ok": False,
@@ -5950,9 +6015,11 @@ def _build_course_blocs_from_marked_blocks(
     segments,
     force_all=False,
     folder_position=None,
+    platform_id=None,
 ):
     api_speed = _course_tts_speed()
     dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
     total_courses = sum(
         1
         for item in playlist_spec
@@ -5973,6 +6040,7 @@ def _build_course_blocs_from_marked_blocks(
             api_speed,
             bloc_num,
             dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
         )
         main_word_budget = (
             word_budget
@@ -6018,6 +6086,8 @@ def _build_course_blocs_from_segments(
     is_last_folder=False,
     model=None,
     preview=False,
+    platform_id=None,
+    folder_position=None,
 ):
     """Découpe le script selon les cours de la playlist effective.
 
@@ -6043,6 +6113,8 @@ def _build_course_blocs_from_segments(
             playlist_spec,
             segments=segments,
             force_all=force_all,
+            folder_position=folder_position,
+            platform_id=platform_id,
         )
         logger.info("   🎚️ Découpage blocs audio persisté détecté (%s mots)", total_marked_words)
         return blocs, total_marked_words, ""
@@ -6065,6 +6137,7 @@ def _build_course_blocs_from_segments(
     cumulative_duration = 0
     course_count = len(course_numbers)
     dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
 
     for course_position, bloc_num in enumerate(course_numbers, start=1):
         duration = float(cours_durations_min[bloc_num])
@@ -6078,6 +6151,7 @@ def _build_course_blocs_from_segments(
             api_speed,
             bloc_num,
             dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
         )
         main_word_budget = (
             word_budget
@@ -6507,9 +6581,16 @@ def run_audio_block_word_calibration(
         folder_id=int(folder_id),
     ) or list(PLAYLIST_SPEC)
     cours_durations_min = _course_durations_min_from_playlist(playlist_spec)
-    plan = _course_audio_block_plan(playlist_spec, folder_position=job.get("folder_position"))
+    plan = _course_audio_block_plan(
+        playlist_spec,
+        folder_position=job.get("folder_position"),
+        platform_id=job.get("platform_id"),
+    )
     plan_by_bloc = {int(block["bloc_number"]): block for block in plan}
-    day_context = _build_audio_day_plan_context({"folder_position": job.get("folder_position")})
+    day_context = _build_audio_day_plan_context({
+        "folder_position": job.get("folder_position"),
+        "platform_id": job.get("platform_id"),
+    })
 
     segments = _load_segments_for_course_plan(job, sync_slides=False)
     if not segments:
@@ -6526,6 +6607,8 @@ def run_audio_block_word_calibration(
         is_last_folder=next_folder_id is None,
         model=model,
         preview=True,
+        platform_id=job.get("platform_id"),
+        folder_position=job.get("folder_position"),
     )
 
     total = len(blocs)
@@ -13020,6 +13103,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                             "passe": passe,
                             "total_courses": progress_total,
                             "playlist_spec": effective_playlist,
+                            "platform_id": job.get("platform_id"),
                         },
                     )
                 else:
@@ -13036,6 +13120,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                             "passe": passe,
                             "total_courses": progress_total,
                             "playlist_spec": effective_playlist,
+                            "platform_id": job.get("platform_id"),
                         },
                     )
 
@@ -14217,6 +14302,8 @@ def generate_audio_from_script(
         next_folder_id=next_folder_id,
         is_last_folder=is_last_folder,
         model=llm_model,
+        platform_id=platform_id,
+        folder_position=job.get("folder_position"),
     )
     from services.adaptive_playback_service import course_playback_cap_seconds
 
@@ -15706,6 +15793,8 @@ def _build_course_blocs_preview(folder_id: int, job: dict) -> list:
         next_folder_id=next_folder_id,
         is_last_folder=next_folder_id is None,
         preview=True,
+        platform_id=job.get("platform_id"),
+        folder_position=job.get("folder_position"),
     )
     course_count = sum(1 for item in playlist_items if item[2] == "cours")
     for bloc in blocs:

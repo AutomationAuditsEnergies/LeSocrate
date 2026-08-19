@@ -15,6 +15,7 @@ AUDIO_TASK_TYPES = frozenset(
     {
         "hr_playlist_generate",
         "hr_playlist_item",
+        "voice_reference_calibration",
     }
 )
 WORKER_KINDS = frozenset({"general", "ai", "audio"})

@@ -156,6 +156,32 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             (35 * 60) - 30,
         )
 
+    def test_voice_reference_wpm_replaces_default_budget_for_every_course(self):
+        playlist = [
+            ("cours_9h00_10h00.mp3", 60 * 60, "cours", 1),
+            ("qa_01.mp3", 10 * 60, "qa", 1),
+            ("cours_13h00_14h00.mp3", 60 * 60, "cours", 2),
+        ]
+
+        with patch.object(
+            cgs,
+            "_platform_calibrated_words_per_minute",
+            return_value=120.0,
+        ):
+            budget = cgs.get_course_day_word_budget(playlist, platform_id=7)
+
+        self.assertEqual(
+            [item["target_words"] for item in budget["course_items"]],
+            [
+                int(cgs._course_voice_window_sec(3600, False) * 120 / 60),
+                int(cgs._course_voice_window_sec(3600, False) * 120 / 60),
+            ],
+        )
+        self.assertEqual(
+            [item["words_per_minute"] for item in budget["course_items"]],
+            [120.0, 120.0],
+        )
+
     def test_dynamic_voice_gate_keeps_natural_audio_for_runtime_timeline(self):
         target_sec = 35 * 60
         bloc = {

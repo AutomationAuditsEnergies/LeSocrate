@@ -362,7 +362,11 @@ def _validate_duration(block: Mapping[str, Any], *, chronological_index: int) ->
             )
 
 
-def calculate_course_word_budget(duration_minutes: int) -> int:
+def calculate_course_word_budget(
+    duration_minutes: int,
+    *,
+    words_per_minute: float = WORDS_PER_MINUTE,
+) -> int:
     """Return the exact text budget for a course, with a 30-second margin."""
 
     duration = _whole_minute(duration_minutes, path="duration_minutes")
@@ -373,8 +377,22 @@ def calculate_course_word_budget(duration_minutes: int) -> int:
             f"{MAX_COURSE_MINUTES} minutes.",
             path="duration_minutes",
         )
+    try:
+        calibrated_wpm = float(words_per_minute)
+    except (TypeError, ValueError):
+        _raise(
+            "invalid_words_per_minute",
+            "Le débit vocal doit être un nombre.",
+            path="words_per_minute",
+        )
+    if not math.isfinite(calibrated_wpm) or not 60 <= calibrated_wpm <= 300:
+        _raise(
+            "invalid_words_per_minute",
+            "Le débit vocal doit être compris entre 60 et 300 mots par minute.",
+            path="words_per_minute",
+        )
     return math.floor(
-        (duration - COURSE_AUDIO_MARGIN_MINUTES) * WORDS_PER_MINUTE
+        (duration - COURSE_AUDIO_MARGIN_MINUTES) * calibrated_wpm
     )
 
 
