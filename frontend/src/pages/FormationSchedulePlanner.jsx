@@ -279,6 +279,10 @@ export default function FormationSchedulePlanner({
       }
     })
   }, [cleanAssignments, normalizedDates, reuse, templates])
+  const scheduleDayByDate = useMemo(
+    () => new Map(scheduleDays.map((day) => [day.date, day])),
+    [scheduleDays],
+  )
 
   useEffect(() => {
     onChange?.({
@@ -490,47 +494,6 @@ export default function FormationSchedulePlanner({
       </details>
 
       <div className="formation-schedule__workspace">
-        <div className="formation-schedule__calendar">
-          <header>
-            <h3>{monthLabel(month.year, month.month)}</h3>
-            <button type="button" onClick={() => moveMonth(-1)} aria-label="Mois précédent">
-              <ChevronLeft size={18} aria-hidden="true" />
-            </button>
-            <button type="button" onClick={() => moveMonth(1)} aria-label="Mois suivant">
-              <ChevronRight size={18} aria-hidden="true" />
-            </button>
-          </header>
-          <div className="formation-schedule__weekday-labels" aria-hidden="true">
-            {TRAINING_WEEKDAYS.map((day) => (
-              <span key={day.id}>{day.short.slice(0, 2).toLocaleLowerCase('fr-FR')}</span>
-            ))}
-          </div>
-          <div className="formation-schedule__month-grid">
-            {calendarDays.map((day) => {
-              const selected = selectedSet.has(day.date)
-              const disabled = day.date < today
-              const focused = day.date >= focusedWeekStart
-                && day.date <= addCalendarDays(focusedWeekStart, 6)
-              return (
-                <button
-                  key={day.date}
-                  type="button"
-                  disabled={disabled}
-                  data-outside={!day.inMonth}
-                  data-focused-week={focused}
-                  data-week-start={focused && day.isoWeekday === 1}
-                  data-week-end={focused && day.isoWeekday === 7}
-                  aria-pressed={selected}
-                  aria-label={`${selected ? 'Retirer' : 'Ajouter'} le ${formatLongDate(day.date)}`}
-                  onClick={() => toggleDate(day.date)}
-                >
-                  <span>{day.day}</span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
         <div className="formation-schedule__dates">
           <div className="formation-schedule__dates-header">
             <div>
@@ -658,6 +621,58 @@ export default function FormationSchedulePlanner({
               )}
             </div>
           )}
+        </div>
+
+        <div className="formation-schedule__calendar">
+          <header>
+            <h3>{monthLabel(month.year, month.month)}</h3>
+            <span className="formation-schedule__view-label">Mois</span>
+            <div className="formation-schedule__calendar-navigation">
+              <button type="button" onClick={() => moveMonth(-1)} aria-label="Mois précédent">
+                <ChevronLeft size={18} aria-hidden="true" />
+              </button>
+              <button type="button" onClick={() => moveMonth(1)} aria-label="Mois suivant">
+                <ChevronRight size={18} aria-hidden="true" />
+              </button>
+            </div>
+          </header>
+          <div className="formation-schedule__weekday-labels" aria-hidden="true">
+            {TRAINING_WEEKDAYS.map((day) => (
+              <span key={day.id}>{day.short.replace('.', '')}</span>
+            ))}
+          </div>
+          <div className="formation-schedule__month-grid">
+            {calendarDays.map((day) => {
+              const selected = selectedSet.has(day.date)
+              const disabled = day.date < today
+              const focused = day.date >= focusedWeekStart
+                && day.date <= addCalendarDays(focusedWeekStart, 6)
+              const scheduledDay = scheduleDayByDate.get(day.date)
+              return (
+                <button
+                  key={day.date}
+                  type="button"
+                  disabled={disabled}
+                  data-active={activeDate === day.date}
+                  data-outside={!day.inMonth}
+                  data-focused-week={focused}
+                  aria-pressed={selected}
+                  aria-label={`${selected ? 'Retirer' : 'Ajouter'} le ${formatLongDate(day.date)}`}
+                  onClick={() => toggleDate(day.date)}
+                >
+                  <span className="formation-schedule__day-number">{day.day}</span>
+                  {scheduledDay && (
+                    <span className="formation-schedule__calendar-event" aria-hidden="true">
+                      <span className="formation-schedule__calendar-event-title">
+                        <i /> Journée {scheduledDay.dayNumber}
+                      </span>
+                      <span>{scheduledDay.templateName || 'Déroulé à définir'}</span>
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
     </section>
