@@ -53,7 +53,10 @@ class AIVoiceRoutesTest(unittest.TestCase):
         }
         with (
             patch("routes.hr_routes.HR_ENABLED", True),
-            patch("services.fish_voice_service.validate_audio", side_effect=[4.0, 32.0]),
+            patch(
+                "services.fish_voice_service.validate_audio",
+                side_effect=[4.0, 32.0],
+            ) as validate_audio,
             patch(
                 "services.fish_voice_service.create_instant_clone",
                 return_value={"reference_id": "fish-reference-8", "state": "created"},
@@ -69,7 +72,9 @@ class AIVoiceRoutesTest(unittest.TestCase):
                     "name": "Sophie",
                     "consent_confirmed": "true",
                     "consent_sample": (io.BytesIO(b"consent-audio"), "consent.wav"),
+                    "consent_sample_duration_sec": "4.0",
                     "voice_sample": (io.BytesIO(b"voice-audio"), "voice.wav"),
+                    "voice_sample_duration_sec": "32.0",
                 },
                 content_type="multipart/form-data",
             )
@@ -80,6 +85,14 @@ class AIVoiceRoutesTest(unittest.TestCase):
         self.assertEqual(len(kwargs["sample_sha256"]), 64)
         self.assertNotIn("consent-audio", repr(kwargs))
         self.assertNotIn("voice-audio", repr(kwargs))
+        self.assertEqual(
+            validate_audio.call_args_list[0].kwargs["duration_hint"],
+            "4.0",
+        )
+        self.assertEqual(
+            validate_audio.call_args_list[1].kwargs["duration_hint"],
+            "32.0",
+        )
 
 
 if __name__ == "__main__":

@@ -643,6 +643,7 @@ def create_hr_blueprint():
                 min_seconds=2,
                 max_seconds=30,
                 max_bytes=MAX_CONSENT_BYTES,
+                duration_hint=request.form.get("consent_sample_duration_sec"),
             )
             sample_duration = validate_audio(
                 sample_bytes,
@@ -650,6 +651,7 @@ def create_hr_blueprint():
                 min_seconds=10,
                 max_seconds=90,
                 max_bytes=MAX_CLONE_BYTES,
+                duration_hint=request.form.get("voice_sample_duration_sec"),
             )
             fish_voice = create_instant_clone(
                 name=name,
@@ -709,6 +711,7 @@ def create_hr_blueprint():
                 min_seconds=2,
                 max_seconds=30,
                 max_bytes=MAX_CONSENT_BYTES,
+                duration_hint=request.form.get("consent_sample_duration_sec"),
             )
             fish_voice = verify_reference_id(reference_id)
             voice = create_voice(
@@ -751,6 +754,7 @@ def create_hr_blueprint():
                 min_seconds=60,
                 max_seconds=600,
                 max_bytes=MAX_CALIBRATION_BYTES,
+                duration_hint=request.form.get("calibration_sample_duration_sec"),
             )
             analysis = transcribe_and_measure_wpm(
                 audio_bytes=sample_bytes,

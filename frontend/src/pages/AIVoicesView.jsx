@@ -207,8 +207,10 @@ function VoiceWizard({ mode, onClose, onCreated }) {
       form.append('name', name.trim())
       form.append('consent_confirmed', 'true')
       form.append('consent_sample', consentAudio.file)
+      form.append('consent_sample_duration_sec', String(consentAudio.duration || ''))
       if (mode === 'clone') {
         form.append('voice_sample', voiceAudio.file)
+        form.append('voice_sample_duration_sec', String(voiceAudio.duration || ''))
         if (transcript.trim()) form.append('transcript', transcript.trim())
       } else {
         form.append('fish_reference_id', referenceId.trim())
@@ -234,6 +236,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
     try {
       const form = new FormData()
       form.append('calibration_sample', calibrationAudio.file)
+      form.append('calibration_sample_duration_sec', String(calibrationAudio.duration || ''))
       form.append('playback_speed', String(speed))
       const response = await apiFetch(`/api/hr/ai-voices/${createdVoice.id}/calibrate`, { method: 'POST', body: form, timeoutMs: 360000 })
       const payload = await responsePayload(response)
