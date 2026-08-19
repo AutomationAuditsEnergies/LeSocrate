@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import os
 import re
 from typing import Any
@@ -74,6 +75,14 @@ def audio_sha256(audio_bytes: bytes) -> str:
     return hashlib.sha256(audio_bytes).hexdigest()
 
 
+def _matches_browser_audio_container(audio_bytes: bytes, suffix: str) -> bool:
+    if suffix == "webm":
+        return audio_bytes.startswith(b"\x1a\x45\xdf\xa3")
+    if suffix in {"m4a", "mp4"}:
+        return len(audio_bytes) >= 12 and audio_bytes[4:8] == b"ftyp"
+    return False
+
+
 def audio_duration_seconds(audio_bytes: bytes, filename: str = "audio") -> float:
     if not audio_bytes:
         raise FishVoiceError("Le fichier audio est vide.", status_code=400, code="empty_audio")
@@ -99,6 +108,7 @@ def validate_audio(
     min_seconds: float,
     max_seconds: float,
     max_bytes: int,
+    duration_hint: float | str | None = None,
 ) -> float:
     if len(audio_bytes) > max_bytes:
         raise FishVoiceError(
@@ -106,7 +116,26 @@ def validate_audio(
             status_code=413,
             code="audio_too_large",
         )
-    duration = audio_duration_seconds(audio_bytes, filename)
+    try:
+        duration = audio_duration_seconds(audio_bytes, filename)
+    except FishVoiceError as exc:
+        suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        try:
+            hinted_duration = float(duration_hint) if duration_hint not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            hinted_duration = 0.0
+        if (
+            exc.code != "unsupported_audio"
+            or suffix not in {"webm", "m4a", "mp4"}
+            or not _matches_browser_audio_container(audio_bytes, suffix)
+            or not math.isfinite(hinted_duration)
+            or hinted_duration <= 0
+        ):
+            raise
+        # MediaRecorder produces valid Opus/WebM files that Fish Audio accepts,
+        # while the App Service image may not include an FFmpeg WebM decoder.
+        # The browser has already decoded the same blob to display its duration.
+        duration = round(hinted_duration, 3)
     if duration < min_seconds or duration > max_seconds:
         raise FishVoiceError(
             f"La durée doit être comprise entre {int(min_seconds)} et {int(max_seconds)} secondes.",

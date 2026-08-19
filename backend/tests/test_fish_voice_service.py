@@ -71,6 +71,69 @@ class FishVoiceServiceTest(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "audio_duration_invalid")
 
+    def test_browser_webm_uses_measured_duration_when_decoder_is_unavailable(self):
+        with patch.object(
+            service,
+            "audio_duration_seconds",
+            side_effect=service.FishVoiceError(
+                "unsupported",
+                status_code=422,
+                code="unsupported_audio",
+            ),
+        ):
+            duration = service.validate_audio(
+                b"\x1a\x45\xdf\xa3browser-webm",
+                "enregistrement.webm",
+                min_seconds=10,
+                max_seconds=90,
+                max_bytes=10 * 1024 * 1024,
+                duration_hint="76.2",
+            )
+
+        self.assertEqual(duration, 76.2)
+
+    def test_duration_hint_rejects_a_fake_webm_file(self):
+        with patch.object(
+            service,
+            "audio_duration_seconds",
+            side_effect=service.FishVoiceError(
+                "unsupported",
+                status_code=422,
+                code="unsupported_audio",
+            ),
+        ), self.assertRaises(service.FishVoiceError) as raised:
+            service.validate_audio(
+                b"not-a-webm-container",
+                "enregistrement.webm",
+                min_seconds=10,
+                max_seconds=90,
+                max_bytes=10 * 1024 * 1024,
+                duration_hint="76.2",
+            )
+
+        self.assertEqual(raised.exception.code, "unsupported_audio")
+
+    def test_duration_hint_does_not_bypass_unsupported_arbitrary_files(self):
+        with patch.object(
+            service,
+            "audio_duration_seconds",
+            side_effect=service.FishVoiceError(
+                "unsupported",
+                status_code=422,
+                code="unsupported_audio",
+            ),
+        ), self.assertRaises(service.FishVoiceError) as raised:
+            service.validate_audio(
+                b"not-audio",
+                "document.txt",
+                min_seconds=10,
+                max_seconds=90,
+                max_bytes=10 * 1024 * 1024,
+                duration_hint="76.2",
+            )
+
+        self.assertEqual(raised.exception.code, "unsupported_audio")
+
 
 if __name__ == "__main__":
     unittest.main()
