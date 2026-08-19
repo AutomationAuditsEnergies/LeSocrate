@@ -4571,8 +4571,6 @@ export function CreatePlatformView({
   selectedModuleId,
   teacherFirstName,
   setTeacherFirstName,
-  teacherColor,
-  setTeacherColor,
   weeklyCourseCount,
   setWeeklyCourseCount,
   teachingDays,
@@ -4599,13 +4597,6 @@ export function CreatePlatformView({
   onCreate,
   onCancel,
 }) {
-  const teacherColors = [
-    { id: 'violet', label: 'Violet', swatch: '#8B5CF6', image: '/robot-violet.png' },
-    { id: 'blue', label: 'Bleu', swatch: '#3B82F6', image: '/robot-blue.png' },
-    { id: 'pink', label: 'Rose', swatch: '#EC4899', image: '/robot-pink.png' },
-    { id: 'green', label: 'Vert', swatch: '#10B981', image: '/robot-green.png' },
-    { id: 'amber', label: 'Ambre', swatch: '#F59E0B', image: '/robot-amber.png' },
-  ]
   const weekDays = [
     { id: 'lundi', label: 'Lun.' },
     { id: 'mardi', label: 'Mar.' },
@@ -4613,7 +4604,6 @@ export function CreatePlatformView({
     { id: 'jeudi', label: 'Jeu.' },
     { id: 'vendredi', label: 'Ven.' },
   ]
-  const selectedColor = teacherColors.find((color) => color.id === teacherColor) || teacherColors[0]
   const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
   const usesLegacyReuseSchedule = (
     formationMode === 'existing'
@@ -4627,7 +4617,6 @@ export function CreatePlatformView({
     [trainingTitle],
   )
   const [teacherDescription, setTeacherDescription] = useState(generatedDescription)
-  const [colorPickerOpen, setColorPickerOpen] = useState(false)
   const [identityEditorOpen, setIdentityEditorOpen] = useState(false)
   const [schedulePlan, setSchedulePlan] = useState({
     payload: null,
@@ -4754,103 +4743,7 @@ export function CreatePlatformView({
       aria-busy={templateRedirecting || undefined}
     >
       <div className="create-platform-workspace__layout">
-        <aside
-          className="create-platform-workspace__preview"
-          style={{ backgroundImage: "url('/teacher-studio-background.webp')" }}
-        >
-          <div className="create-platform-workspace__preview-shade" aria-hidden="true" />
-
-          <div className="create-platform-workspace__customize">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setIdentityEditorOpen(false)
-                  setColorPickerOpen((open) => !open)
-                }}
-                aria-expanded={colorPickerOpen}
-                aria-controls="teacher-color-picker"
-                className="create-platform-workspace__customize-button"
-              >
-                <Icon name="palette" className="text-base" />
-                Personnaliser
-              </button>
-
-              {colorPickerOpen && (
-                <div id="teacher-color-picker" className="absolute right-0 top-full z-30 mt-2 w-52 rounded-xl bg-white p-2 shadow-[0_6px_8px_rgba(15,23,42,0.16)]" role="group" aria-label="Couleur du professeur">
-                  {teacherColors.map((color) => {
-                    const selected = teacherColor === color.id
-                    return (
-                      <button
-                        key={color.id}
-                        type="button"
-                        onClick={() => {
-                          setTeacherColor(color.id)
-                          setColorPickerOpen(false)
-                        }}
-                        aria-pressed={selected}
-                        className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium text-[#334155] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40"
-                      >
-                        <span className="h-4 w-4 rounded-full" style={{ backgroundColor: color.swatch }} aria-hidden="true" />
-                        <span className="flex-1 text-left">{color.label}</span>
-                        {selected && <Icon name="check" className="text-base text-[#18181B]" />}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="create-platform-workspace__avatar-stage">
-            <img
-              key={selectedColor.id}
-              src={selectedColor.image}
-              alt={`Aperçu du professeur en ${selectedColor.label.toLowerCase()}`}
-              className="teacher-identity-avatar create-platform-workspace__avatar"
-              draggable="false"
-            />
-          </div>
-
-          <div className="create-platform-workspace__preview-copy" aria-hidden={identityEditorOpen}>
-            <p className="text-sm font-medium text-white/70">{trainingTitle || 'Formation à renseigner'}</p>
-            <div className="create-platform-workspace__preview-name">
-              <h2>{teacherFirstName.trim() || 'Votre professeur'}</h2>
-              <button
-                type="button"
-                onClick={() => {
-                  setColorPickerOpen(false)
-                  setIdentityEditorOpen(true)
-                }}
-                aria-label="Modifier l’identité du professeur"
-                aria-expanded={identityEditorOpen}
-                aria-controls="teacher-identity-editor"
-              >
-                <PenLine size={17} aria-hidden="true" />
-              </button>
-            </div>
-            <p className="create-platform-workspace__description">
-              {teacherDescription || 'La description du professeur apparaîtra ici dès que vous aurez renseigné la formation.'}
-            </p>
-            <div className="create-platform-workspace__preview-meta">
-              {(formationMode === 'existing' ? selectedModule?.rncp_code : newFormRncp.trim()) && (
-                <span>RNCP {formationMode === 'existing' ? selectedModule.rncp_code : newFormRncp.trim()}</span>
-              )}
-              {trainingDays > 0 && <span>{trainingDays} journée{trainingDays > 1 ? 's' : ''}</span>}
-            </div>
-          </div>
-        </aside>
-
         <div className="create-platform-workspace__editor">
-          <button
-            type="button"
-            className="create-platform-workspace__mobile-identity-button"
-            onClick={() => setIdentityEditorOpen(true)}
-          >
-            <PenLine size={16} aria-hidden="true" />
-            Renseigner le professeur
-          </button>
-
           <div className="create-platform-workspace__schedule">
             {usesLegacyReuseSchedule ? (
               <section className="create-platform-workspace__legacy" aria-labelledby="legacy-schedule-title">
@@ -4937,6 +4830,11 @@ export function CreatePlatformView({
                 approximateDayCount={formationMode === 'existing' ? trainingDays : newFormHours}
                 daysPerWeekHint={weeklyCourseCount}
                 preferredWeekdaysHint={teachingDays}
+                identityComplete={Boolean(
+                  teacherFirstName.trim()
+                  && (formationMode === 'existing' ? selectedModule : newFormTpName.trim() && newFormRncp.trim())
+                )}
+                onRequestIdentity={() => setIdentityEditorOpen(true)}
                 onCreateTemplate={onCreateTemplate}
                 onChange={handleSchedulePlanChange}
               />
@@ -4961,19 +4859,6 @@ export function CreatePlatformView({
             </div>
           )}
 
-          <footer className="create-platform-workspace__footer">
-            <div className="create-platform-workspace__price">
-              <p className="text-xs font-medium text-[#64748B]">{paymentRequired ? 'Tarif après validation' : 'Compte interne'}</p>
-              <p className="mt-0.5 text-base font-bold text-[#0F172A]">{paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}</p>
-              {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && <p className="mt-0.5 text-xs text-[#64748B]">{formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}</p>}
-            </div>
-            <div className="create-platform-workspace__actions">
-              <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 py-2 text-sm font-semibold text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 disabled:opacity-50">Annuler</button>
-              <button type="button" onClick={handleLaunchRequest} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A1A1AA] disabled:opacity-60">
-                {creating ? 'Envoi de la demande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? 'Envoyer la demande' : 'Service temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
-              </button>
-            </div>
-          </footer>
         </div>
       </div>
 
@@ -5050,6 +4935,19 @@ export function CreatePlatformView({
               Informations préremplies
             </p>
           )}
+
+          <footer className="create-platform-workspace__identity-actions">
+            <div>
+              <p>{paymentRequired ? 'Tarif après validation' : 'Compte interne'}</p>
+              <strong>{paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}</strong>
+            </div>
+            <div>
+              <button type="button" onClick={onCancel} disabled={creating}>Annuler</button>
+              <button type="button" onClick={handleLaunchRequest} disabled={creating || !canCreateTeacher}>
+                {creating ? 'Envoi de la demande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? 'Envoyer la demande' : 'Service temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
+              </button>
+            </div>
+          </footer>
 
         </section>
       )}

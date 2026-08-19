@@ -748,3 +748,72 @@
     transform: none;
   }
 }
+
+/* Full-page manual recruitment calendar, based on the Figma week view. */
+.create-platform-workspace__layout {
+  display: block;
+}
+
+.create-platform-workspace__editor {
+  height: 100%;
+  border-left: 0;
+}
+
+.create-platform-workspace__schedule {
+  padding: 16px;
+}
+
+.create-platform-workspace__identity-panel {
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  left: auto;
+  width: min(390px, calc(100% - 32px));
+  min-width: 0;
+  max-height: none;
+  overflow-y: auto;
+  border: 1px solid #d4d4d8;
+  border-radius: 10px;
+  background: #fff;
+  color: #18181b;
+  padding: 16px;
+  box-shadow: 0 6px 8px rgba(24, 24, 27, 0.16);
+}
+
+.create-platform-workspace__identity-panel h2 { text-shadow: none; }
+.create-platform-workspace__identity-panel header p,
+.create-platform-workspace__identity-fields label,
+.create-platform-workspace__existing-module > span,
+.create-platform-workspace__prefilled { color: #52525b; text-shadow: none; }
+.create-platform-workspace__identity-panel header > button {
+  border-color: #d4d4d8;
+  background: #fff;
+  color: #3f3f46;
+}
+.create-platform-workspace__identity-panel header > button:hover { background: #f4f4f5; }
+.create-platform-workspace__identity-fields { grid-template-columns: 1fr; }
+.create-platform-workspace__identity-fields input,
+.create-platform-workspace__identity-fields select { border: 1px solid #d4d4d8; background: #fff; }
+
+.create-platform-workspace__identity-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 22px;
+  border-top: 1px solid #e4e4e7;
+  padding-top: 14px;
+}
+.create-platform-workspace__identity-actions p { margin: 0; color: #71717a; font-size: 10px; }
+.create-platform-workspace__identity-actions strong { display: block; margin-top: 3px; font-size: 13px; }
+.create-platform-workspace__identity-actions > div:last-child { display: flex; gap: 6px; }
+.create-platform-workspace__identity-actions button { min-height: 38px; border: 1px solid #d4d4d8; border-radius: 6px; background: #fff; color: #3f3f46; cursor: pointer; padding: 7px 10px; font-size: 10px; font-weight: 650; }
+.create-platform-workspace__identity-actions button:last-child { border-color: #18181b; background: #18181b; color: #fff; }
+.create-platform-workspace__identity-actions button:disabled { cursor: not-allowed; opacity: .5; }
+
+@media (max-width: 720px) {
+  .create-platform-workspace__schedule { padding: 8px; }
+  .create-platform-workspace__identity-panel { inset: 8px; width: auto; }
+  .create-platform-workspace__identity-actions { align-items: stretch; flex-direction: column; }
+  .create-platform-workspace__identity-actions > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
+}
