@@ -9,14 +9,17 @@ import {
   Copy,
   CreditCard,
   ExternalLink,
+  FileCheck2,
   Globe2,
   KeyRound,
+  LayoutTemplate,
   LogIn,
   LogOut,
   Mail,
   PanelLeft,
   PenLine,
   ReceiptText,
+  RotateCcw,
   Settings,
   ShieldCheck,
   Trash2,
@@ -958,11 +961,10 @@ export default function HRDashboard() {
       showScheduleTemplatesView()
     }
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    if (reduceMotion) {
-      openTemplateEditor()
-      return
-    }
-    templateRedirectTimerRef.current = window.setTimeout(openTemplateEditor, 220)
+    templateRedirectTimerRef.current = window.setTimeout(
+      openTemplateEditor,
+      reduceMotion ? 1100 : 1750,
+    )
   }
 
   const resumeFormationDraftWithTemplate = () => {
@@ -987,6 +989,12 @@ export default function HRDashboard() {
     setWorkspaceSection('recruit')
     setShowModulesModal(false)
     setShowCreateModal(true)
+  }
+
+  const startNewManualRecruitment = () => {
+    window.sessionStorage.removeItem('teacher_creation_draft')
+    setTemplateCreationDraft(null)
+    openCreateModal()
   }
 
   useEffect(() => () => {
@@ -1466,7 +1474,9 @@ export default function HRDashboard() {
               colors={colors}
               modules={modules}
               onComplete={handleAssistantComplete}
-              onManualCreate={openCreateModal}
+              hasSavedDraft={Boolean(templateCreationDraft)}
+              onResumeDraft={resumeFormationDraftWithTemplate}
+              onManualCreate={startNewManualRecruitment}
             />
           ) : workspaceSection === 'schedule-templates' ? (
             <DayScheduleTemplates
@@ -2641,7 +2651,14 @@ function getRecruitmentAssistantText(step, draft, matchingModule) {
   return step.question
 }
 
-function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
+function RecruitmentAssistant({
+  colors,
+  modules,
+  onComplete,
+  onManualCreate,
+  hasSavedDraft = false,
+  onResumeDraft,
+}) {
   const [started, setStarted] = useState(false)
   const [brief, setBrief] = useState('')
   const [stepIndex, setStepIndex] = useState(0)
@@ -3069,15 +3086,35 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
             </div>
           </form>
 
-          <div className="mx-auto mt-3 flex max-w-[760px] flex-col gap-3 rounded-lg bg-[#F7F7F5] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div
+            className={`recruitment-draft-actions mx-auto mt-3 flex max-w-[760px] flex-col gap-3 rounded-lg bg-[#F7F7F5] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between${hasSavedDraft ? ' recruitment-draft-actions--saved' : ''}`}
+          >
             <div>
-              <p className="text-[13px] font-medium text-[#191918]">Vous préférez renseigner les informations vous-même ?</p>
-              <p className="mt-0.5 text-xs text-[#73736F]">Ouvrez directement le formulaire complet.</p>
+              <p className="text-[13px] font-medium text-[#191918]">
+                {hasSavedDraft ? 'Une progression est enregistrée' : 'Vous préférez renseigner les informations vous-même ?'}
+              </p>
+              <p className="mt-0.5 text-xs text-[#73736F]">
+                {hasSavedDraft
+                  ? 'Reprenez votre recrutement ou recommencez avec un nouveau formulaire.'
+                  : 'Ouvrez directement le formulaire complet.'}
+              </p>
             </div>
-            <button type="button" onClick={onManualCreate} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-3 text-[13px] font-medium text-[#191918] transition-colors duration-150 hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
-              <PenLine size={15} strokeWidth={1.6} aria-hidden="true" />
-              <span>Recruter manuellement</span>
-            </button>
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+              {hasSavedDraft && (
+                <button
+                  type="button"
+                  onClick={onResumeDraft}
+                  className="recruitment-draft-actions__resume inline-flex min-h-9 items-center justify-center gap-2 rounded-md bg-[#191918] px-3 text-[13px] font-medium text-white transition-[background-color,transform] duration-150 hover:bg-[#2C2C2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/45 focus-visible:ring-offset-2 active:scale-[0.98]"
+                >
+                  <RotateCcw size={15} strokeWidth={1.7} aria-hidden="true" />
+                  <span>Reprendre ma progression</span>
+                </button>
+              )}
+              <button type="button" onClick={onManualCreate} className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-3 text-[13px] font-medium text-[#191918] transition-colors duration-150 hover:bg-[#ECEBE8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/35 focus-visible:ring-offset-2">
+                <PenLine size={15} strokeWidth={1.6} aria-hidden="true" />
+                <span>Recruter manuellement</span>
+              </button>
+            </div>
           </div>
 
           <div className="mx-auto mt-5 max-w-[760px]">
@@ -5019,11 +5056,34 @@ export function CreatePlatformView({
 
       {templateRedirecting && (
         <div className="create-platform-workspace__draft-transition" role="status" aria-live="polite">
-          <span className="create-platform-workspace__draft-transition-icon" aria-hidden="true">
-            <Icon name="check" />
-          </span>
-          <strong>Brouillon enregistré</strong>
-          <span>Ouverture de l’organisation des cours…</span>
+          <div className="create-platform-workspace__draft-transition-content">
+            <span className="create-platform-workspace__draft-transition-icon" aria-hidden="true">
+              <FileCheck2 size={26} strokeWidth={1.8} />
+            </span>
+            <p className="create-platform-workspace__draft-transition-kicker">Brouillon sauvegardé</p>
+            <h2>Votre progression est enregistrée</h2>
+            <p className="create-platform-workspace__draft-transition-copy">
+              Vous pourrez reprendre votre progression après avoir créé votre template.
+            </p>
+
+            <div className="create-platform-workspace__draft-route" aria-hidden="true">
+              <span className="create-platform-workspace__draft-route-node create-platform-workspace__draft-route-node--saved">
+                <FileCheck2 size={17} strokeWidth={1.8} />
+                Brouillon
+              </span>
+              <span className="create-platform-workspace__draft-route-track">
+                <span />
+              </span>
+              <span className="create-platform-workspace__draft-route-node create-platform-workspace__draft-route-node--target">
+                <LayoutTemplate size={17} strokeWidth={1.8} />
+                Organisation des cours
+              </span>
+            </div>
+
+            <p className="create-platform-workspace__draft-transition-status">
+              Ouverture de l’éditeur de template…
+            </p>
+          </div>
         </div>
       )}
 
