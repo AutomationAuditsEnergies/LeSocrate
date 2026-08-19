@@ -1,11 +1,13 @@
 import sys
 import types
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from services.pipeline_queue.contracts import PermanentWorkError, WorkItem
 from services.pipeline_queue.handlers import (
     handle_auto_pilot_work_item,
+    handle_voice_reference_calibration_work_item,
     mark_auto_pilot_dead_letter,
 )
 from utils.deepseek_client import DeepSeekAPIError
@@ -268,6 +270,40 @@ class PipelineQueueHandlerTest(unittest.TestCase):
 
         self.assertEqual(calls[0][0], "job")
         self.assertEqual(calls[1], ("order", 73, "attempts exhausted"))
+
+    def test_voice_reference_calibration_runs_before_first_auto_pilot_step(self):
+        routes_module = types.SimpleNamespace(
+            get_job=lambda _job_id: {"id": 42, "platform_id": 120},
+            _determine_next_ap_step=lambda _job_id: "content",
+        )
+        routes_package = types.ModuleType("routes")
+        routes_package.formation_routes = routes_module
+        calibration = types.ModuleType("services.voice_reference_calibration_service")
+        calibration.calibrate_platform_voice = lambda platform_id: {
+            "status": "completed",
+            "platform_id": platform_id,
+            "words_per_minute": 157.089,
+        }
+        item = replace(
+            _item({"teacher_order_id": 73}),
+            task_type="voice_reference_calibration",
+        )
+        lease = _Lease()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.voice_reference_calibration_service": calibration,
+            },
+        ):
+            result = handle_voice_reference_calibration_work_item(item, lease)
+
+        self.assertEqual(lease.checkpoints, 2)
+        self.assertEqual(result.result["words_per_minute"], 157.089)
+        self.assertEqual(result.next_items[0].task_type, "auto_pilot_tick")
+        self.assertEqual(result.next_items[0].payload["expected_step"], "content")
+        self.assertEqual(result.next_items[0].payload["teacher_order_id"], 73)
 
 
 if __name__ == "__main__":

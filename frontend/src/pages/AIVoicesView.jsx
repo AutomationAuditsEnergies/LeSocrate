@@ -35,6 +35,16 @@ function durationLabel(seconds) {
 }
 
 
+function calibrationLabel(voice) {
+  if (voice.calibration_status === 'completed' && voice.measured_wpm) {
+    return `${Math.round(voice.measured_wpm)} mots/min`
+  }
+  if (voice.calibration_status === 'running') return 'Calibration en cours'
+  if (voice.calibration_status === 'failed') return 'À recalibrer'
+  return 'Après paiement'
+}
+
+
 function AudioInput({ label, hint, value, onChange, accept = 'audio/*', maxSeconds = 600 }) {
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -150,8 +160,8 @@ function AudioInput({ label, hint, value, onChange, accept = 'audio/*', maxSecon
 
 function ProgressSteps({ step, mode }) {
   const labels = mode === 'clone'
-    ? ['Consentement', 'Échantillon vocal', 'Calibrage']
-    : ['Consentement', 'Identifiant Fish Audio', 'Calibrage']
+    ? ['Consentement', 'Échantillon vocal', 'Validation']
+    : ['Consentement', 'Identifiant Fish Audio', 'Validation']
   return (
     <ol className="grid grid-cols-3 gap-2" aria-label="Progression">
       {labels.map((label, index) => (
@@ -173,9 +183,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
   const [consentConfirmed, setConsentConfirmed] = useState(false)
   const [consentAudio, setConsentAudio] = useState(null)
   const [voiceAudio, setVoiceAudio] = useState(null)
-  const [calibrationAudio, setCalibrationAudio] = useState(null)
   const [createdVoice, setCreatedVoice] = useState(null)
-  const [analysis, setAnalysis] = useState(null)
   const [speed, setSpeed] = useState(1)
   const [busy, setBusy] = useState(false)
   const [validating, setValidating] = useState(false)
@@ -221,30 +229,6 @@ function VoiceWizard({ mode, onClose, onCreated }) {
       const payload = await responsePayload(response)
       setCreatedVoice(payload.voice)
       setStep(2)
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const calibrate = async () => {
-    if (!calibrationAudio?.file) {
-      setError('Ajoutez un enregistrement continu d’au moins une minute.')
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      const form = new FormData()
-      form.append('calibration_sample', calibrationAudio.file)
-      form.append('calibration_sample_duration_sec', String(calibrationAudio.duration || ''))
-      form.append('playback_speed', String(speed))
-      const response = await apiFetch(`/api/hr/ai-voices/${createdVoice.id}/calibrate`, { method: 'POST', body: form, timeoutMs: 360000 })
-      const payload = await responsePayload(response)
-      setCreatedVoice(payload.voice)
-      setAnalysis(payload.analysis)
-      onCreated(payload.voice)
     } catch (requestError) {
       setError(requestError.message)
     } finally {
@@ -351,14 +335,16 @@ function VoiceWizard({ mode, onClose, onCreated }) {
 
           {step === 2 && (
             <div className="mt-7 space-y-5">
-              <div><h3 className="text-lg font-bold text-[#18181B]">Testez et validez la voix</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Écoutez le résultat et ajustez sa vitesse. L’analyse du débit est facultative : vous pouvez enregistrer un extrait de 2 à 10 minutes ou valider directement la voix.</p></div>
-              <AudioInput label="Échantillon de calibrage" hint="Au moins 1 minute, idéalement 2 à 5 minutes de parole naturelle." value={calibrationAudio} onChange={(file, duration) => setCalibrationAudio({ file, duration })} maxSeconds={600} />
+              <div><h3 className="text-lg font-bold text-[#18181B]">Testez et validez la voix</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Écoutez le résultat et choisissez sa vitesse définitive. Après le paiement d’un professeur, nous lirons automatiquement un texte éducatif de référence de 7 069 mots avec ces réglages, avant de lancer la génération de ses cours.</p></div>
+              <div className="rounded-xl bg-[#F7F7F6] p-4 sm:p-5">
+                <p className="text-sm font-semibold text-[#18181B]">Calibration automatique des cours</p>
+                <p className="mt-2 text-sm leading-6 text-[#52525B]">La durée réelle de cette lecture permettra de calculer le débit de la voix en mots par minute. Tous les objectifs de mots des modules seront ensuite ajustés proportionnellement pour remplir leur durée prévue.</p>
+              </div>
               <div className="rounded-xl border border-[#D9D9DE] p-4">
                 <div className="flex items-center justify-between gap-3"><label htmlFor="voice-speed" className="text-sm font-semibold text-[#18181B]">Vitesse finale</label><span className="rounded-full bg-[#F1F1F0] px-2.5 py-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</span></div>
                 <input id="voice-speed" type="range" min="0.75" max="1.35" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} className="mt-4 w-full accent-[#18181B]" />
                 <div className="mt-1 flex justify-between text-xs text-[#8A8A92]"><span>Plus posé</span><span>Naturel</span><span>Plus dynamique</span></div>
               </div>
-              {analysis && <div className="grid grid-cols-2 gap-3"><div className="rounded-xl bg-[#F7F7F6] p-4"><p className="text-xs font-medium text-[#71717A]">Débit mesuré</p><p className="mt-1 text-2xl font-bold text-[#18181B]">{analysis.words_per_minute} <span className="text-sm font-medium">mots/min</span></p></div><div className="rounded-xl bg-[#F7F7F6] p-4"><p className="text-xs font-medium text-[#71717A]">Mots analysés</p><p className="mt-1 text-2xl font-bold text-[#18181B]">{analysis.word_count}</p></div></div>}
               {previewUrl && <audio controls autoPlay src={previewUrl} className="w-full" />}
             </div>
           )}
@@ -366,12 +352,11 @@ function VoiceWizard({ mode, onClose, onCreated }) {
           {error && <p className="mt-5 rounded-lg bg-[#FEF2F2] px-3.5 py-3 text-sm font-medium text-[#B42318]" role="alert">{error}</p>}
 
           <footer className="mt-7 flex flex-wrap items-center justify-between gap-3 border-t border-[#E9E9EC] pt-5">
-            <button type="button" onClick={step === 0 ? onClose : () => setStep((current) => Math.max(0, current - 1))} disabled={busy || (step === 2 && Boolean(analysis))} className="min-h-11 rounded-lg border border-[#D4D4D8] px-4 py-2 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-40">{step === 0 ? 'Annuler' : 'Retour'}</button>
+            <button type="button" onClick={step === 0 ? onClose : () => setStep((current) => Math.max(0, current - 1))} disabled={busy} className="min-h-11 rounded-lg border border-[#D4D4D8] px-4 py-2 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-40">{step === 0 ? 'Annuler' : 'Retour'}</button>
             <div className="flex flex-wrap gap-2">
               {step === 2 && createdVoice && <button type="button" onClick={preview} disabled={busy} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] px-4 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={16} /> Tester la voix</button>}
               {step === 0 && <button type="button" onClick={advanceConsent} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]">Continuer</button>}
               {step === 1 && <button type="button" onClick={createVoice} disabled={busy} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A] disabled:cursor-wait disabled:bg-[#A1A1AA]">{busy ? 'Création en cours…' : mode === 'clone' ? 'Cloner la voix' : 'Importer la voix'}</button>}
-              {step === 2 && !analysis && <button type="button" onClick={calibrate} disabled={busy} className="min-h-11 rounded-lg border border-[#18181B] bg-white px-5 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:cursor-wait disabled:opacity-50">Analyser le débit</button>}
               {step === 2 && createdVoice && <button type="button" onClick={confirmVoice} disabled={busy} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A] disabled:cursor-wait disabled:bg-[#A1A1AA]"><Check size={16} /> {validating ? 'Validation…' : 'Valider la voix'}</button>}
             </div>
           </footer>
@@ -419,7 +404,7 @@ function VoiceCard({ voice, onUpdated, onDeleted }) {
         <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate text-base font-bold text-[#18181B]">{voice.name}</h3><span className="rounded-full bg-[#F1F1F0] px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#52525B]">{voice.source === 'clone' ? 'Clonée' : 'Importée'}</span></div><p className="mt-1 truncate font-mono text-xs text-[#71717A]">{voice.fish_reference_id}</p></div>
         <button type="button" onClick={() => onDeleted(voice)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[#71717A] hover:bg-[#FEF2F2] hover:text-[#B42318]" aria-label={`Supprimer ${voice.name}`}><Trash2 size={17} /></button>
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Débit naturel</p><p className="mt-1 text-sm font-bold text-[#18181B]">{voice.measured_wpm ? `${Math.round(voice.measured_wpm)} mots/min` : 'Non mesuré'}</p></div><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Vitesse appliquée</p><p className="mt-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</p></div></div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Débit de référence</p><p className="mt-1 text-sm font-bold text-[#18181B]">{calibrationLabel(voice)}</p></div><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Vitesse appliquée</p><p className="mt-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</p></div></div>
       <div className="mt-4"><input type="range" min="0.75" max="1.35" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} onMouseUp={saveSpeed} onTouchEnd={saveSpeed} className="w-full accent-[#18181B]" /></div>
       <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={preview} disabled={previewing} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] px-3.5 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={16} /> {previewing ? 'Génération…' : 'Écouter'}</button>{saving && <span className="self-center text-xs text-[#71717A]">Enregistrement…</span>}</div>
       {audioUrl && <audio controls autoPlay src={audioUrl} className="mt-4 w-full" />}

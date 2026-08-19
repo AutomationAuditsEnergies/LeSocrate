@@ -609,6 +609,13 @@ def init_database(_recovered_from_corruption: bool = False):
                 sample_sha256 TEXT,
                 sample_duration_sec REAL,
                 measured_wpm REAL,
+                calibration_status TEXT NOT NULL DEFAULT 'pending',
+                calibration_reference_key TEXT,
+                calibration_word_count INTEGER,
+                calibration_duration_sec REAL,
+                calibration_playback_speed REAL,
+                calibration_error TEXT,
+                calibrated_at TEXT,
                 playback_speed REAL NOT NULL DEFAULT 1.0,
                 language TEXT NOT NULL DEFAULT 'fr',
                 fish_state TEXT,
@@ -618,6 +625,22 @@ def init_database(_recovered_from_corruption: bool = False):
             )
             """
         )
+        ai_voice_columns = {
+            row[1] for row in cursor.execute("PRAGMA table_info(ai_voices)").fetchall()
+        }
+        for column_name, column_sql in (
+            ("calibration_status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("calibration_reference_key", "TEXT"),
+            ("calibration_word_count", "INTEGER"),
+            ("calibration_duration_sec", "REAL"),
+            ("calibration_playback_speed", "REAL"),
+            ("calibration_error", "TEXT"),
+            ("calibrated_at", "TEXT"),
+        ):
+            if column_name not in ai_voice_columns:
+                cursor.execute(
+                    f"ALTER TABLE ai_voices ADD COLUMN {column_name} {column_sql}"
+                )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_ai_voices_center_status "
             "ON ai_voices(center_account_id, status, updated_at DESC)"

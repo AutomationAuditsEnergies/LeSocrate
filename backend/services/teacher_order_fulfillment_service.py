@@ -274,7 +274,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             tp_name = str(formation.get("tp_name") or order["training_title"])
             rncp_code = str(formation.get("rncp_code") or order.get("rncp_code") or "")
             canonical_match = None
-            if not v2_schedule:
+            if not v2_schedule and ai_voice_id is None:
                 canonical_match = resolve_compatible_canonical_teacher(
                     rncp_code=rncp_code,
                     tp_name=tp_name,
@@ -401,6 +401,24 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                         f"Commande professeur IA {order_id} impossible à finaliser"
                     )
                 return WorkResult(result={"status": "fulfilled", "platform_id": platform_id})
+            if ai_voice_id is not None:
+                first_task_type = "voice_reference_calibration"
+                first_dedupe_key = (
+                    f"teacher-order:{order['public_id']}:voice-reference-calibration:"
+                    f"{ai_voice_id}"
+                )
+                first_payload = {"teacher_order_id": order_id}
+                first_max_attempts = 3
+            else:
+                first_task_type = "auto_pilot_tick"
+                first_dedupe_key = (
+                    f"teacher-order:{order['public_id']}:auto-pilot:{next_step}"
+                )
+                first_payload = {
+                    "expected_step": next_step,
+                    "teacher_order_id": order_id,
+                }
+                first_max_attempts = 5
             return WorkResult(
                 result={
                     "status": "preparing",
@@ -411,12 +429,12 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                     WorkItemSpec(
                         pipeline_job_id=pipeline_job_id,
                         run_id=f"teacher-order-{order['public_id']}",
-                        task_type="auto_pilot_tick",
+                        task_type=first_task_type,
                         scope_key="pipeline",
-                        dedupe_key=f"teacher-order:{order['public_id']}:auto-pilot:{next_step}",
-                        payload={"expected_step": next_step, "teacher_order_id": order_id},
+                        dedupe_key=first_dedupe_key,
+                        payload=first_payload,
                         priority=10,
-                        max_attempts=5,
+                        max_attempts=first_max_attempts,
                     ),
                 ),
             )

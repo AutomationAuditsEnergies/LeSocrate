@@ -24,7 +24,47 @@ def handle_pipeline_work_item(item: WorkItem, lease) -> WorkResult:
         from services.teacher_order_fulfillment_service import fulfill_teacher_order
 
         return fulfill_teacher_order(item, lease)
+    if item.task_type == "voice_reference_calibration":
+        return handle_voice_reference_calibration_work_item(item, lease)
     raise PermanentWorkError(f"task_type inconnu: {item.task_type}")
+
+
+def handle_voice_reference_calibration_work_item(item: WorkItem, lease) -> WorkResult:
+    """Calibrate the selected voice before the first content pipeline tick."""
+
+    from routes import formation_routes as routes
+    from services.voice_reference_calibration_service import calibrate_platform_voice
+
+    job = routes.get_job(item.pipeline_job_id)
+    if not job:
+        raise PermanentWorkError(f"Job pipeline {item.pipeline_job_id} introuvable")
+    platform_id = int(job.get("platform_id") or 0)
+    if not platform_id:
+        raise PermanentWorkError("Plateforme absente de la calibration vocale")
+    lease.checkpoint()
+    result = calibrate_platform_voice(platform_id)
+    lease.checkpoint()
+    next_step = routes._determine_next_ap_step(item.pipeline_job_id)
+    if next_step is None:
+        raise PermanentWorkError("Le pipeline ne possède aucune étape après la calibration")
+    return WorkResult(
+        result={**result, "next_step": next_step},
+        next_items=(
+            WorkItemSpec(
+                pipeline_job_id=item.pipeline_job_id,
+                run_id=item.run_id,
+                task_type="auto_pilot_tick",
+                scope_key="pipeline",
+                dedupe_key=f"{item.run_id}:auto_pilot:{next_step}",
+                payload={
+                    "expected_step": next_step,
+                    **_teacher_order_chain_payload(item),
+                },
+                priority=item.priority,
+                max_attempts=5,
+            ),
+        ),
+    )
 
 
 def _log_event(item: WorkItem, event_type: str, **kwargs) -> None:
@@ -304,3 +344,9 @@ def mark_pipeline_dead_letter(item: WorkItem, error: str) -> None:
         from services.teacher_order_fulfillment_service import mark_teacher_order_dead_letter
 
         mark_teacher_order_dead_letter(item, error)
+        return
+    if item.task_type == "voice_reference_calibration":
+        if item.payload.get("teacher_order_id"):
+            from services.teacher_order_fulfillment_service import fail_teacher_order_pipeline
+
+            fail_teacher_order_pipeline(item, error)

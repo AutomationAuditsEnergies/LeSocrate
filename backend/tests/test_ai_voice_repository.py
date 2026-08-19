@@ -25,6 +25,13 @@ class AIVoiceRepositoryTest(unittest.TestCase):
                 sample_sha256 TEXT,
                 sample_duration_sec REAL,
                 measured_wpm REAL,
+                calibration_status TEXT NOT NULL DEFAULT 'pending',
+                calibration_reference_key TEXT,
+                calibration_word_count INTEGER,
+                calibration_duration_sec REAL,
+                calibration_playback_speed REAL,
+                calibration_error TEXT,
+                calibrated_at TEXT,
                 playback_speed REAL,
                 language TEXT,
                 fish_state TEXT,
@@ -74,6 +81,32 @@ class AIVoiceRepositoryTest(unittest.TestCase):
         settings = repository.get_platform_voice_settings(7)
         self.assertEqual(settings["fish_reference_id"], "fish-ref-42")
         self.assertEqual(settings["playback_speed"], 1.1)
+
+    def test_reference_calibration_is_persisted_and_speed_change_invalidates_it(self):
+        voice = repository.create_voice(
+            42,
+            name="Voix calibrée",
+            fish_reference_id="fish-ref-calibrated",
+            source="import",
+            consent_statement="consentement",
+        )
+        completed = repository.complete_reference_calibration(
+            42,
+            voice["id"],
+            reference_key="reference-v1",
+            word_count=7069,
+            duration_sec=2700,
+            measured_wpm=157.089,
+            playback_speed=1.0,
+        )
+        self.assertEqual(completed["calibration_status"], "completed")
+        self.assertEqual(completed["calibration_word_count"], 7069)
+
+        unchanged = repository.update_speed(42, voice["id"], 1.0)
+        self.assertEqual(unchanged["calibration_status"], "completed")
+        changed = repository.update_speed(42, voice["id"], 1.1)
+        self.assertEqual(changed["calibration_status"], "pending")
+        self.assertIsNone(changed["measured_wpm"])
 
 
 if __name__ == "__main__":

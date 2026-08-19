@@ -48,7 +48,7 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
         self.ensure_storage = self.storage_patcher.start()
         self.addCleanup(self.storage_patcher.stop)
 
-    def test_new_pipeline_order_stays_running_until_auto_pilot_text_is_ready(self):
+    def test_custom_voice_is_calibrated_before_auto_pilot_text_starts(self):
         order = {
             "id": 7,
             "public_id": "order-public-id",
@@ -60,6 +60,7 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
             "total_hours": 14,
             "request_payload_json": {
                 "name": "Maya · Employé commercial",
+                "ai_voice_id": 12,
                 "new_formation": {
                     "tp_name": "Employé commercial",
                     "rncp_code": "RNCP-TEST",
@@ -75,8 +76,12 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
         with patch.dict(sys.modules, {"routes": routes_package}), patch.object(
             service, "claim_order_for_fulfillment", return_value=order
         ), patch.object(
-            service, "resolve_compatible_canonical_teacher", return_value=None
+            service, "get_voice", return_value={"id": 12}
         ), patch.object(
+            service, "assign_voice_to_platform", return_value=True
+        ) as assign_voice, patch.object(
+            service, "resolve_compatible_canonical_teacher", return_value=None
+        ) as resolve_canonical, patch.object(
             service,
             "create_postgres_pipeline_aggregate",
             return_value={"platform": {"id": 120}, "job_id": 420},
@@ -88,7 +93,11 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
             result = service.fulfill_teacher_order(_work_item(), _Lease())
 
         self.assertEqual(result.result["status"], "preparing")
+        self.assertEqual(result.next_items[0].task_type, "voice_reference_calibration")
         self.assertEqual(result.next_items[0].payload["teacher_order_id"], 7)
+        self.assertNotIn("expected_step", result.next_items[0].payload)
+        assign_voice.assert_called_once_with(42, 120, 12)
+        resolve_canonical.assert_not_called()
         self.ensure_storage.assert_called_once_with({"id": 120})
         self.assertEqual(create_aggregate.call_args.kwargs["model"], "flash")
         self.assertEqual(update_job.call_args.kwargs["auto_pilot_model"], "flash")

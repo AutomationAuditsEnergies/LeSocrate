@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS ai_voices (
     sample_sha256 TEXT,
     sample_duration_sec DOUBLE PRECISION,
     measured_wpm DOUBLE PRECISION,
+    calibration_status TEXT NOT NULL DEFAULT 'pending',
+    calibration_reference_key TEXT,
+    calibration_word_count INTEGER,
+    calibration_duration_sec DOUBLE PRECISION,
+    calibration_playback_speed DOUBLE PRECISION,
+    calibration_error TEXT,
+    calibrated_at TIMESTAMPTZ,
     playback_speed DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     language TEXT NOT NULL DEFAULT 'fr',
     fish_state TEXT,
@@ -93,6 +100,14 @@ CREATE TABLE IF NOT EXISTS ai_voices (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(center_account_id, fish_reference_id)
 );
+
+ALTER TABLE ai_voices ADD COLUMN IF NOT EXISTS calibration_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE ai_voices ADD COLUMN IF NOT EXISTS calibration_reference_key TEXT;
+ALTER TABLE ai_voices ADD COLUMN IF NOT EXISTS calibration_word_count INTEGER;
+ALTER TABLE ai_voices ADD COLUMN IF NOT EXISTS calibration_duration_sec DOUBLE PRECISION;
+ALTER TABLE ai_voices ADD COLUMN IF NOT EXISTS calibration_playback_speed DOUBLE PRECISION;
+ALTER TABLE ai_voices ADD COLUMN IF NOT EXISTS calibration_error TEXT;
+ALTER TABLE ai_voices ADD COLUMN IF NOT EXISTS calibrated_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_ai_voices_center_status
     ON ai_voices(center_account_id, status, updated_at DESC);
