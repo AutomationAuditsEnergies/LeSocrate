@@ -178,6 +178,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
   const [analysis, setAnalysis] = useState(null)
   const [speed, setSpeed] = useState(1)
   const [busy, setBusy] = useState(false)
+  const [validating, setValidating] = useState(false)
   const [error, setError] = useState('')
   const [previewUrl, setPreviewUrl] = useState('')
 
@@ -271,6 +272,28 @@ function VoiceWizard({ mode, onClose, onCreated }) {
     }
   }
 
+  const confirmVoice = async () => {
+    if (!createdVoice?.id) return
+    setBusy(true)
+    setValidating(true)
+    setError('')
+    try {
+      const response = await apiFetch(`/api/hr/ai-voices/${createdVoice.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playback_speed: speed }),
+      })
+      const payload = await responsePayload(response)
+      onCreated(payload.voice)
+      onClose()
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+      setValidating(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/35 p-0 sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-labelledby="voice-wizard-title">
       <div className="max-h-[96dvh] w-full overflow-y-auto rounded-t-2xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-2xl">
@@ -328,7 +351,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
 
           {step === 2 && (
             <div className="mt-7 space-y-5">
-              <div><h3 className="text-lg font-bold text-[#18181B]">Mesurez le débit naturel</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Enregistrez un extrait continu de 2 à 10 minutes. Fish Audio le transcrit pour calculer les mots par minute.</p></div>
+              <div><h3 className="text-lg font-bold text-[#18181B]">Testez et validez la voix</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Écoutez le résultat et ajustez sa vitesse. L’analyse du débit est facultative : vous pouvez enregistrer un extrait de 2 à 10 minutes ou valider directement la voix.</p></div>
               <AudioInput label="Échantillon de calibrage" hint="Au moins 1 minute, idéalement 2 à 5 minutes de parole naturelle." value={calibrationAudio} onChange={(file, duration) => setCalibrationAudio({ file, duration })} maxSeconds={600} />
               <div className="rounded-xl border border-[#D9D9DE] p-4">
                 <div className="flex items-center justify-between gap-3"><label htmlFor="voice-speed" className="text-sm font-semibold text-[#18181B]">Vitesse finale</label><span className="rounded-full bg-[#F1F1F0] px-2.5 py-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</span></div>
@@ -348,8 +371,8 @@ function VoiceWizard({ mode, onClose, onCreated }) {
               {step === 2 && createdVoice && <button type="button" onClick={preview} disabled={busy} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] px-4 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={16} /> Tester la voix</button>}
               {step === 0 && <button type="button" onClick={advanceConsent} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]">Continuer</button>}
               {step === 1 && <button type="button" onClick={createVoice} disabled={busy} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A] disabled:cursor-wait disabled:bg-[#A1A1AA]">{busy ? 'Création en cours…' : mode === 'clone' ? 'Cloner la voix' : 'Importer la voix'}</button>}
-              {step === 2 && !analysis && <button type="button" onClick={calibrate} disabled={busy} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A] disabled:cursor-wait disabled:bg-[#A1A1AA]">{busy ? 'Analyse en cours…' : 'Analyser le débit'}</button>}
-              {step === 2 && analysis && <button type="button" onClick={onClose} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]"><Check size={16} /> Terminer</button>}
+              {step === 2 && !analysis && <button type="button" onClick={calibrate} disabled={busy} className="min-h-11 rounded-lg border border-[#18181B] bg-white px-5 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:cursor-wait disabled:opacity-50">Analyser le débit</button>}
+              {step === 2 && createdVoice && <button type="button" onClick={confirmVoice} disabled={busy} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A] disabled:cursor-wait disabled:bg-[#A1A1AA]"><Check size={16} /> {validating ? 'Validation…' : 'Valider la voix'}</button>}
             </div>
           </footer>
         </div>
