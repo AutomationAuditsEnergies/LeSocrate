@@ -64,9 +64,15 @@ test('creates a missing template without losing the current formation draft', as
   assert.match(dashboardSource, /useState\(loadTeacherCreationDraft\)/)
   assert.match(dashboardSource, /createTemplateFromFormationDraft/)
   assert.match(dashboardSource, /resumeFormationDraftWithTemplate/)
-  assert.match(dashboardSource, /Brouillon enregistré/)
+  assert.match(dashboardSource, /Votre progression est enregistrée/)
+  assert.match(dashboardSource, /Vous pourrez reprendre votre progression après avoir créé votre template/)
+  assert.match(dashboardSource, /Reprendre ma progression/)
+  assert.match(dashboardSource, /Recruter manuellement/)
+  assert.match(dashboardSource, /startNewManualRecruitment/)
+  assert.match(dashboardSource, /hasSavedDraft=\{Boolean\(templateCreationDraft\)\}/)
   assert.match(dashboardSource, /prefers-reduced-motion: reduce/)
-  assert.match(createPlatformStyles, /create-platform-draft-enter/)
+  assert.match(createPlatformStyles, /create-platform-draft-travel/)
+  assert.match(createPlatformStyles, /recruitment-saved-draft-enter/)
 })
 
 test('uses locked sequence drops and resize handles instead of per-block forms', async () => {
