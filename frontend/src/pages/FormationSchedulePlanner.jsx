@@ -32,11 +32,6 @@ const FRENCH_WEEKDAY_TO_ISO = Object.freeze({
   dimanche: 7,
 })
 
-const CALENDAR_DAY_ART = Object.freeze(
-  Array.from({ length: 7 }, (_, index) => `/figma-week/day-${index + 1}.png`),
-)
-const CALENDAR_EVENT_ART = '/figma-week/event.png'
-
 const FIGMA_WEEKDAY_LABELS = Object.freeze([
   'Mon', 'Tue', 'Wed', 'Thur', 'Fri', 'Sat', 'Sun',
 ])
@@ -69,7 +64,6 @@ const FIGMA_DEMO_EVENTS = Object.freeze([
     label: 'Team Drinks',
     time: '08:00',
     tone: 7,
-    icon: CALENDAR_DAY_ART[5],
   },
 ])
 
@@ -654,7 +648,7 @@ export default function FormationSchedulePlanner({
 
         <div className="formation-schedule__day-headings" aria-hidden="true">
           <span />
-          {FIGMA_WEEKDAY_LABELS.map((label, index) => <span key={label}><img src={CALENDAR_DAY_ART[index]} alt="" />{label}</span>)}
+          {FIGMA_WEEKDAY_LABELS.map((label) => <span key={label}>{label}</span>)}
         </div>
 
         <div ref={timelineRef} className="formation-schedule__timeline">
@@ -707,7 +701,7 @@ export default function FormationSchedulePlanner({
                       }}
                     >
                       <span className="formation-schedule__week-event-heading">
-                        <span><img src={event.icon || CALENDAR_EVENT_ART} alt="" />{event.label}</span>
+                        <span>{event.label}</span>
                         <time>{event.time}</time>
                       </span>
                       {event.description && <span className="formation-schedule__week-event-description">{event.description}</span>}

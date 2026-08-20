@@ -18,6 +18,35 @@ test('keeps the planning and template UI strictly monochrome', async () => {
   }
 })
 
+test('keeps emoji artwork out of the formation planner', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.doesNotMatch(source, /\/figma-week\//)
+  assert.doesNotMatch(source, /<img/)
+})
+
+test('aligns the template overview with the centered workspace page hierarchy', async () => {
+  const templateSource = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
+    'utf8',
+  )
+  const templateStyles = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.css', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(templateSource, /day-schedule-page--overview/)
+  assert.match(templateSource, /day-schedule-section-divider/)
+  assert.match(templateSource, /<strong>Mes templates<\/strong>/)
+  assert.match(templateSource, /day-schedule-library-actions/)
+  assert.match(templateSource, /onCreate=\{startCreate\}/)
+  assert.match(templateStyles, /\.day-schedule-page--overview \.day-schedule-page-header\s*\{[\s\S]*?text-align: center/)
+  assert.match(templateStyles, /\.day-schedule-section-divider\s*\{[\s\S]*?align-items: center/)
+})
+
 test('reviews the definitive schedule only when preparation is requested', async () => {
   const plannerSource = await readFile(
     new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
