@@ -100,7 +100,8 @@ test('creates a missing template without losing the current formation draft', as
     'utf8',
   )
 
-  assert.equal((plannerSource.match(/Créer un template/g) || []).length >= 2, true)
+  assert.equal((plannerSource.match(/Créer un template/g) || []).length, 1)
+  assert.match(plannerSource, /value=\{applyAllDays \? bulkTemplateId : activeAssignment\}/)
   assert.match(plannerSource, /onCreateTemplate\?\.\(\{/)
   assert.match(templateSource, /createOnMount \? createEmptyScheduleTemplateDraft\(\) : null/)
   assert.match(templateSource, /createdNow && onUseTemplate/)

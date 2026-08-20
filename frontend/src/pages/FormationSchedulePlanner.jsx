@@ -231,7 +231,7 @@ export default function FormationSchedulePlanner({
       }
       setBulkTemplateId((current) => (
         current
-        || (retainedExists ? String(retainedTemplateId) : String(loaded[0]?.id || ''))
+        || (retainedExists ? String(retainedTemplateId) : '')
       ))
     } catch (error) {
       setTemplatesError(error.message || 'Impossible de charger les templates.')
@@ -553,25 +553,47 @@ export default function FormationSchedulePlanner({
           )}
         </div>
 
-        <section className="formation-schedule__organisation" aria-labelledby="formation-organisation-title">
-          <header>
-            <h2 id="formation-organisation-title">Organisation de la journée</h2>
-            <p>{`Journée ${displayedDateIndex + 1} sur ${displayedDayCount}`}</p>
-          </header>
-          <div className="formation-schedule__organisation-body">
-            <div className="formation-schedule__active-day-copy">
+        <section className="formation-schedule__organisation" aria-label="Organisation des journées">
+          <nav className="formation-schedule__day-navigation" aria-label="Naviguer entre les journées">
+            <button
+              type="button"
+              aria-label="Journée précédente"
+              onClick={() => setActiveDateKey(normalizedDates[activeDateIndex - 1])}
+              disabled={activeDateIndex <= 0}
+            >
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <div className="formation-schedule__active-day-copy" aria-live="polite">
               <strong>{formatLongDate(displayedDate)}</strong>
-              <span>Journée {displayedDateIndex + 1}</span>
+              <span>Journée {displayedDateIndex + 1} sur {displayedDayCount}</span>
             </div>
+            <button
+              type="button"
+              aria-label="Journée suivante"
+              onClick={() => setActiveDateKey(normalizedDates[activeDateIndex + 1])}
+              disabled={activeDateIndex < 0 || activeDateIndex >= normalizedDates.length - 1}
+            >
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </nav>
+          <div className="formation-schedule__organisation-body">
             {reuse ? (
               <span className="formation-schedule__locked-layout">Déroulé conservé</span>
             ) : (
-              <label>
-                <span>Template de la journée</span>
+              <label className="formation-schedule__template-field">
+                <span>Template</span>
                 <select
-                  value={activeAssignment}
-                  disabled={templatesLoading || applyAllDays}
+                  value={applyAllDays ? bulkTemplateId : activeAssignment}
+                  disabled={templatesLoading}
                   onChange={(event) => {
+                    if (applyAllDays) {
+                      if (event.target.value === '__create__') {
+                        assignTemplate(activeDate || helperStartDate, '__create__')
+                      } else {
+                        setBulkTemplateId(event.target.value)
+                      }
+                      return
+                    }
                     if (!activeDate) {
                       setSelectedDates([displayedDate])
                       setActiveDateKey(displayedDate)
@@ -586,36 +608,21 @@ export default function FormationSchedulePlanner({
                 </select>
               </label>
             )}
-            <nav className="formation-schedule__day-navigation" aria-label="Naviguer entre les journées">
-              <button type="button" onClick={() => setActiveDateKey(normalizedDates[activeDateIndex - 1])} disabled={activeDateIndex <= 0}>Précédente</button>
-              <span>{displayedDateIndex + 1} / {displayedDayCount}</span>
-              <button type="button" onClick={() => setActiveDateKey(normalizedDates[activeDateIndex + 1])} disabled={activeDateIndex < 0 || activeDateIndex >= normalizedDates.length - 1}>Suivante</button>
-            </nav>
-          </div>
-          {!reuse && normalizedDates.length > 1 && (
-            <div className="formation-schedule__bulk">
+            {!reuse && normalizedDates.length > 1 && (
               <label className="formation-schedule__bulk-toggle">
-                <input type="checkbox" checked={applyAllDays} onChange={(event) => setApplyAllDays(event.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={applyAllDays}
+                  onChange={(event) => {
+                    const checked = event.target.checked
+                    setApplyAllDays(checked)
+                    if (checked) setBulkTemplateId(activeAssignment)
+                  }}
+                />
                 <span>Appliquer le même template à toutes les journées</span>
               </label>
-              {applyAllDays && (
-                <select
-                  value={bulkTemplateId}
-                  aria-label="Template à appliquer à toutes les journées"
-                  onChange={(event) => {
-                    if (event.target.value === '__create__') {
-                      assignTemplate(activeDate || helperStartDate, '__create__')
-                    } else {
-                      setBulkTemplateId(event.target.value)
-                    }
-                  }}
-                >
-                  {templates.map((template) => <option key={template.id} value={String(template.id)}>{template.name}</option>)}
-                  <option value="__create__">Créer un template</option>
-                </select>
-              )}
-            </div>
-          )}
+            )}
+          </div>
         </section>
 
         <section className="formation-schedule__sequence" aria-labelledby="formation-sequence-title">

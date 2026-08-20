@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-08-20
+
+### refactor(ui): simplification du sélecteur de journée
+
+Le panneau d’organisation regroupe désormais la date et les commandes
+précédente/suivante dans une navigation compacte. Le choix du template et son
+application à toutes les journées partagent un seul sélecteur, sans carte
+imbriquée ni progression répétée.
+
 ## 2026-08-13
 
 ### refactor(pipeline): retrait définitif de l'état d'humanisation séparé
