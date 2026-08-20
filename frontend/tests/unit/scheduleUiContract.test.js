@@ -18,6 +18,16 @@ test('keeps the planning and template UI strictly monochrome', async () => {
   }
 })
 
+test('keeps emoji artwork out of the formation planner', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.doesNotMatch(source, /\/figma-week\//)
+  assert.doesNotMatch(source, /<img/)
+})
+
 test('aligns the template overview with the centered workspace page hierarchy', async () => {
   const templateSource = await readFile(
     new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
