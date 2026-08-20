@@ -40,6 +40,28 @@ test('keeps time labels in a clean gutter before the weekly grid', async () => {
   assert.doesNotMatch(styles, /\.formation-schedule__week-column:first-child\s*\{[^}]*border-left/)
 })
 
+test('uses compact month names and a short calendar fill action', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /function monthLabel[\s\S]*?month: 'short'/)
+  assert.match(source, /\{prefillOpen \? 'Retour' : 'Remplir'\}/)
+  assert.match(source, /Remplir automatiquement les dates/)
+})
+
+test('gives the sidebar calendar a little more room', async () => {
+  const styles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(styles, /--fsp-sidebar-width: 272px/)
+  assert.match(styles, /grid-template-columns: var\(--fsp-sidebar-width\) minmax\(0, 1fr\)/)
+  assert.match(styles, /@media \(max-width: 980px\)[\s\S]*?--fsp-sidebar-width: 240px/)
+})
+
 test('aligns the template overview with the centered workspace page hierarchy', async () => {
   const templateSource = await readFile(
     new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
