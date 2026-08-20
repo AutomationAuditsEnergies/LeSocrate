@@ -101,7 +101,7 @@ test('creates a missing template without losing the current formation draft', as
   )
 
   assert.equal((plannerSource.match(/Créer un template/g) || []).length, 1)
-  assert.match(plannerSource, /value=\{applyAllDays \? bulkTemplateId : activeAssignment\}/)
+  assert.match(plannerSource, /activeCustomBlocks \? '__custom__' : activeAssignment/)
   assert.match(plannerSource, /onCreateTemplate\?\.\(\{/)
   assert.match(templateSource, /createOnMount \? createEmptyScheduleTemplateDraft\(\) : null/)
   assert.match(templateSource, /createdNow && onUseTemplate/)
@@ -150,6 +150,21 @@ test('uses locked sequence drops and resize handles instead of per-block forms',
   assert.match(source, /deltaSteps \* 5/)
   assert.doesNotMatch(source, /schedule-duration-/)
   assert.doesNotMatch(source, /Déplacer le début du bloc/)
+})
+
+test('adds pedagogical sequences directly to formation days', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /draggable=\{!reuse\}/)
+  assert.match(source, /setData\('application\/x-day-sequence', 'course-qa-pause'\)/)
+  assert.match(source, /onDrop=\{\(event\) => \{/)
+  assert.match(source, /addSequenceToDay\(date\)/)
+  assert.match(source, /onClick=\{\(\) => addSequenceToDay\(activeDate \|\| displayedDate\)\}/)
+  assert.match(source, /onClick=\{\(\) => removeSequenceFromDay\(activeDate\)\}/)
+  assert.doesNotMatch(source, /onClick=\{\(\) => assignTemplate\(activeDate \|\| helperStartDate, '__create__'\)\}/)
 })
 
 test('locks the template editor page and scrolls only the calendar', async () => {

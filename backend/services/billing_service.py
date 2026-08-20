@@ -161,6 +161,29 @@ def _normalize_template_hashes(
     return normalized
 
 
+def _normalize_custom_days(custom_days: Any) -> dict[Any, dict[str, Any]]:
+    if custom_days in (None, {}):
+        return {}
+    if not isinstance(custom_days, Mapping):
+        raise BillingError("Les journées personnalisées doivent être indexées par date.")
+
+    normalized: dict[Any, dict[str, Any]] = {}
+    for raw_date, raw_definition in custom_days.items():
+        if not isinstance(raw_definition, Mapping):
+            raise BillingError("Le déroulé d’une journée personnalisée est invalide.")
+        blocks = raw_definition.get("blocks")
+        if (
+            isinstance(blocks, (str, bytes))
+            or not isinstance(blocks, Sequence)
+        ):
+            raise BillingError("Les séquences d’une journée personnalisée sont invalides.")
+        normalized[raw_date] = {
+            "name": str(raw_definition.get("name") or "Journée personnalisée"),
+            "blocks": list(blocks),
+        }
+    return normalized
+
+
 def _day_start_at(day: Mapping[str, Any]) -> datetime:
     try:
         day_date = datetime.strptime(str(day["date"]), "%Y-%m-%d").date()
@@ -192,6 +215,12 @@ def _normalize_v2_new_schedule(
     assignments = _normalize_template_assignments(
         schedule.get("template_assignments")
     )
+    custom_days = _normalize_custom_days(schedule.get("custom_days"))
+    overlapping_dates = set(assignments).intersection(custom_days)
+    if overlapping_dates:
+        raise BillingError(
+            "Une journée ne peut pas utiliser un template et un déroulé personnalisé."
+        )
     template_ids = sorted(set(assignments.values()))
     template_hashes = _normalize_template_hashes(
         schedule.get("template_hashes"),
@@ -217,10 +246,15 @@ def _normalize_v2_new_schedule(
             "name": template.get("name"),
             "blocks": template.get("blocks") or [],
         }
+    compiled_assignments: dict[Any, Any] = dict(assignments)
+    for custom_index, (raw_date, definition) in enumerate(custom_days.items(), start=1):
+        custom_key = f"custom-day-{custom_index}"
+        compiled_assignments[raw_date] = custom_key
+        templates[custom_key] = definition
     try:
         snapshot = compile_module_schedule(
             selected_dates,
-            assignments,
+            compiled_assignments,
             templates,
         )
         validate_new_module_lead_time(
@@ -237,10 +271,17 @@ def _normalize_v2_new_schedule(
         "template_assignments": {
             day["date"]: int(day["template_key"])
             for day in snapshot["days"]
+            if isinstance(day["template_key"], int)
         },
         "template_hashes": {
             str(template_id): blocks_hash
             for template_id, blocks_hash in template_hashes.items()
+        },
+        "custom_days": {
+            day["date"]: {"blocks": day["blocks"]}
+            for day in snapshot["days"]
+            if isinstance(day["template_key"], str)
+            and day["template_key"].startswith("custom-day-")
         },
     }
 

@@ -3,10 +3,19 @@ import {
   ChevronLeft,
   ChevronRight,
   Menu,
+  Minus,
   PlusCircle,
   Search,
 } from 'lucide-react'
 
+import {
+  DAY_SCHEDULE_RULES,
+  addScheduleSequence,
+  getScheduleStats,
+  normalizeScheduleTemplate,
+  removeLastScheduleSequence,
+  setSchedulePauseKind,
+} from '../dayScheduleTemplates.js'
 import { listDayScheduleTemplates } from '../dayScheduleTemplateApi.js'
 import {
   TRAINING_WEEKDAYS,
@@ -16,6 +25,7 @@ import {
   isValidCalendarDate,
   normalizeSelectedTrainingDates,
   prefillTrainingDates,
+  reconcileCustomDays,
   reconcileTemplateAssignments,
   serializeFormationScheduleV2,
   validateFormationScheduleV2,
@@ -34,37 +44,6 @@ const FRENCH_WEEKDAY_TO_ISO = Object.freeze({
 
 const FIGMA_WEEKDAY_LABELS = Object.freeze([
   'Mon', 'Tue', 'Wed', 'Thur', 'Fri', 'Sat', 'Sun',
-])
-
-const FIGMA_DEMO_EVENTS = Object.freeze([
-  ...Array.from({ length: 5 }, (_, dayIndex) => ({
-    dayIndex,
-    start: 9,
-    duration: 0.34,
-    label: 'Daily Standup',
-    time: '08:00',
-    tone: 1,
-  })),
-  { dayIndex: 0, start: 10, duration: 0.34, label: 'Event Name', time: '08:00', tone: 1 },
-  { dayIndex: 0, start: 10.34, duration: 0.34, label: 'Event Name', time: '08:00', tone: 3 },
-  { dayIndex: 0, start: 10.68, duration: 0.34, label: 'Event Name', time: '08:00', tone: 4 },
-  { dayIndex: 1, start: 10, duration: 0.5, label: 'Event Name', time: '08:00', tone: 2 },
-  { dayIndex: 1, start: 10.5, duration: 0.5, label: 'Event Name', time: '08:00', tone: 5 },
-  { dayIndex: 1, start: 11.5, duration: 2, label: 'Event Name', time: '08:00', tone: 2 },
-  { dayIndex: 1, start: 14.5, duration: 1, label: 'Event Name', time: '08:00', tone: 1 },
-  { dayIndex: 2, start: 12, duration: 1, label: 'Event Name', time: '08:00', tone: 5 },
-  { dayIndex: 2, start: 13, duration: 1, label: 'Event Name', time: '08:00', tone: 4 },
-  { dayIndex: 2, start: 15, duration: 0.5, label: 'Event Name', time: '08:00', tone: 4 },
-  { dayIndex: 2, start: 15.5, duration: 0.5, label: 'Event Name', time: '08:00', tone: 5 },
-  { dayIndex: 3, start: 11.5, duration: 3, label: 'Event Name', time: '08:00', description: 'Description', tone: 6 },
-  {
-    dayIndex: 4,
-    start: 17,
-    duration: 1,
-    label: 'Team Drinks',
-    time: '08:00',
-    tone: 7,
-  },
 ])
 
 function localToday() {
@@ -145,6 +124,31 @@ function normalizeInitialAssignments(schedule) {
   )
 }
 
+function normalizeInitialCustomDays(schedule) {
+  return Object.fromEntries(
+    Object.entries(schedule?.custom_days || {}).map(([date, definition]) => [
+      date,
+      normalizeScheduleTemplate({
+        name: date,
+        blocks: Array.isArray(definition) ? definition : definition?.blocks,
+      }).blocks,
+    ]),
+  )
+}
+
+function addSequenceWithDefaultLunch(blocks) {
+  const next = addScheduleSequence(blocks)
+  const stats = getScheduleStats(next)
+  if (stats.courseCount < DAY_SCHEDULE_RULES.minCourses || stats.lunchCount) return next
+  const pauseIndexes = next.flatMap((block, index) => (
+    block.block_type === 'pause' ? [index] : []
+  ))
+  const lunchIndex = pauseIndexes[Math.floor((pauseIndexes.length - 1) / 2)]
+  return Number.isInteger(lunchIndex)
+    ? setSchedulePauseKind(next, lunchIndex, 'lunch')
+    : next
+}
+
 export default function FormationSchedulePlanner({
   reuse = false,
   expectedDayCount = null,
@@ -188,6 +192,9 @@ export default function FormationSchedulePlanner({
   const [assignments, setAssignments] = useState(
     () => normalizeInitialAssignments(initialSchedule),
   )
+  const [customDays, setCustomDays] = useState(
+    () => normalizeInitialCustomDays(initialSchedule),
+  )
   const [bulkTemplateId, setBulkTemplateId] = useState('')
   const [applyAllDays, setApplyAllDays] = useState(false)
   const [helperStartDate, setHelperStartDate] = useState(
@@ -208,6 +215,7 @@ export default function FormationSchedulePlanner({
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [prefillOpen, setPrefillOpen] = useState(false)
   const [calendarFillCycle, setCalendarFillCycle] = useState(0)
+  const [dropDate, setDropDate] = useState('')
   const didInitialPrefill = useRef(false)
   const timelineRef = useRef(null)
 
@@ -293,6 +301,10 @@ export default function FormationSchedulePlanner({
     () => reconcileTemplateAssignments(assignments, normalizedDates),
     [assignments, normalizedDates],
   )
+  const cleanCustomDays = useMemo(
+    () => reconcileCustomDays(customDays, normalizedDates),
+    [customDays, normalizedDates],
+  )
   const validation = useMemo(() => validateFormationScheduleV2({
     selectedDates: normalizedDates,
     assignments: cleanAssignments,
@@ -300,8 +312,10 @@ export default function FormationSchedulePlanner({
     reuse,
     expectedDayCount,
     now: validationNow,
+    customDays: cleanCustomDays,
   }), [
     cleanAssignments,
+    cleanCustomDays,
     expectedDayCount,
     normalizedDates,
     reuse,
@@ -313,7 +327,8 @@ export default function FormationSchedulePlanner({
     assignments: cleanAssignments,
     templates,
     reuse,
-  }), [cleanAssignments, normalizedDates, reuse, templates])
+    customDays: cleanCustomDays,
+  }), [cleanAssignments, cleanCustomDays, normalizedDates, reuse, templates])
   const calendarDays = useMemo(
     () => getCalendarMonthDays(month.year, month.month),
     [month],
@@ -328,6 +343,7 @@ export default function FormationSchedulePlanner({
     : normalizedDates[0] || ''
   const activeDateIndex = activeDate ? normalizedDates.indexOf(activeDate) : -1
   const activeAssignment = activeDate ? cleanAssignments[activeDate] || '' : ''
+  const activeCustomBlocks = activeDate ? cleanCustomDays[activeDate] || null : null
   const displayedDate = activeDate || helperStartDate
   const displayedDateIndex = activeDateIndex >= 0 ? activeDateIndex : 0
   const displayedDayCount = normalizedDates.length || Math.max(2, targetDayCount || 2)
@@ -337,18 +353,21 @@ export default function FormationSchedulePlanner({
     ))
     return normalizedDates.map((date, index) => {
       const templateId = cleanAssignments[date] || ''
+      const customBlocks = cleanCustomDays[date]
       return {
         date,
         dayNumber: index + 1,
         label: formatLongDate(date),
         templateId,
-        blocks: templatesById.get(templateId)?.blocks || [],
-        templateName: reuse
-          ? 'Déroulé conservé'
-          : String(templatesById.get(templateId)?.name || ''),
+        blocks: customBlocks || templatesById.get(templateId)?.blocks || [],
+        templateName: customBlocks
+          ? 'Journée personnalisée'
+          : (reuse
+            ? 'Déroulé conservé'
+            : String(templatesById.get(templateId)?.name || '')),
       }
     })
-  }, [cleanAssignments, normalizedDates, reuse, templates])
+  }, [cleanAssignments, cleanCustomDays, normalizedDates, reuse, templates])
   const scheduleDayByDate = useMemo(
     () => new Map(scheduleDays.map((day) => [day.date, day])),
     [scheduleDays],
@@ -358,9 +377,8 @@ export default function FormationSchedulePlanner({
     [focusedWeekStart],
   )
   const visibleWeekLabel = weekLabel(visibleWeekDates[0], visibleWeekDates[6])
-  const hasVisibleTemplateBlocks = visibleWeekDates.some(
-    (date) => (scheduleDayByDate.get(date)?.blocks || []).length > 0,
-  )
+  const activeBlocks = scheduleDayByDate.get(activeDate)?.blocks || []
+  const activeSequenceCount = getScheduleStats(activeBlocks).courseCount
 
   useEffect(() => {
     onChange?.({
@@ -385,6 +403,7 @@ export default function FormationSchedulePlanner({
   useEffect(() => {
     if (!applyAllDays || !bulkTemplateId || !normalizedDates.length) return
     setAssignments(assignTemplateToAll(normalizedDates, bulkTemplateId))
+    setCustomDays({})
   }, [applyAllDays, bulkTemplateId, normalizedDates])
 
   const togglePreferredWeekday = (weekday) => {
@@ -423,6 +442,7 @@ export default function FormationSchedulePlanner({
     }
     setSelectedDates(generated)
     setAssignments((current) => reconcileTemplateAssignments(current, generated))
+    setCustomDays((current) => reconcileCustomDays(current, generated))
     setMonth(initialMonth(generated[0]))
     setFocusedWeekStart(weekStart(generated[0]))
     setActiveDateKey(generated[0])
@@ -446,14 +466,18 @@ export default function FormationSchedulePlanner({
       delete next[date]
       return next
     })
+    setCustomDays((current) => {
+      if (!current[date]) return current
+      const next = { ...current }
+      delete next[date]
+      return next
+    })
   }
 
   const assignTemplate = (date, templateId) => {
     if (templateId === '__create__') {
       onCreateTemplate?.({
-        schedule_schema_version: 2,
-        selected_dates: normalizedDates,
-        template_assignments: cleanAssignments,
+        ...payload,
         start_date: helperStartDate,
         days_per_week: Number(helperDaysPerWeek),
         preferred_weekdays: preferredWeekdays,
@@ -464,6 +488,42 @@ export default function FormationSchedulePlanner({
       ...current,
       [date]: String(templateId),
     }))
+    setCustomDays((current) => {
+      if (!current[date]) return current
+      const next = { ...current }
+      delete next[date]
+      return next
+    })
+  }
+
+  const updateCustomDay = (date, update) => {
+    if (reuse || !date || date < today) return
+    const existing = scheduleDayByDate.get(date)?.blocks || []
+    const nextBlocks = update(existing)
+    setSelectedDates((current) => (
+      current.includes(date) ? current : [...current, date]
+    ))
+    setActiveDateKey(date)
+    setApplyAllDays(false)
+    setAssignments((current) => {
+      if (!current[date]) return current
+      const next = { ...current }
+      delete next[date]
+      return next
+    })
+    setCustomDays((current) => ({ ...current, [date]: nextBlocks }))
+  }
+
+  const addSequenceToDay = (date) => {
+    const blocks = scheduleDayByDate.get(date)?.blocks || []
+    if (getScheduleStats(blocks).courseCount >= DAY_SCHEDULE_RULES.maxCourses) return
+    updateCustomDay(date, addSequenceWithDefaultLunch)
+  }
+
+  const removeSequenceFromDay = (date) => {
+    const blocks = scheduleDayByDate.get(date)?.blocks || []
+    if (!getScheduleStats(blocks).courseCount) return
+    updateCustomDay(date, removeLastScheduleSequence)
   }
 
   const shiftMonth = (offset) => {
@@ -583,7 +643,9 @@ export default function FormationSchedulePlanner({
               <label className="formation-schedule__template-field">
                 <span>Template</span>
                 <select
-                  value={applyAllDays ? bulkTemplateId : activeAssignment}
+                  value={applyAllDays
+                    ? bulkTemplateId
+                    : (activeCustomBlocks ? '__custom__' : activeAssignment)}
                   disabled={templatesLoading}
                   onChange={(event) => {
                     if (applyAllDays) {
@@ -600,9 +662,14 @@ export default function FormationSchedulePlanner({
                     }
                     assignTemplate(displayedDate, event.target.value)
                   }}
-                  aria-invalid={Boolean(activeDate && (!activeAssignment || !selectedTemplateIds.has(activeAssignment)))}
+                  aria-invalid={Boolean(
+                    activeDate
+                    && !activeCustomBlocks
+                    && (!activeAssignment || !selectedTemplateIds.has(activeAssignment)),
+                  )}
                 >
                   <option value="">Choisir un template</option>
+                  {activeCustomBlocks && <option value="__custom__">Journée personnalisée</option>}
                   {templates.map((template) => <option key={template.id} value={String(template.id)}>{template.name}</option>)}
                   <option value="__create__">Créer un template</option>
                 </select>
@@ -631,13 +698,31 @@ export default function FormationSchedulePlanner({
               <h2 id="formation-sequence-title">Séquence</h2>
               <p>À glisser dans le calendrier</p>
             </div>
-            <span>0/10</span>
+            <span>{activeSequenceCount}/{DAY_SCHEDULE_RULES.maxCourses}</span>
           </header>
-          <button type="button" onClick={() => assignTemplate(activeDate || helperStartDate, '__create__')}>
+          <button
+            type="button"
+            className="formation-schedule__sequence-source"
+            draggable={!reuse}
+            disabled={reuse}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'copy'
+              event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
+            }}
+            onDragEnd={() => setDropDate('')}
+            onClick={() => addSequenceToDay(activeDate || displayedDate)}
+          >
             <PlusCircle size={14} aria-hidden="true" />
             Séquence pédagogique
           </button>
-          <button type="button" disabled>Retirer la dernière séquence</button>
+          <button
+            type="button"
+            disabled={reuse || activeSequenceCount === 0}
+            onClick={() => removeSequenceFromDay(activeDate)}
+          >
+            <Minus size={13} aria-hidden="true" />
+            Retirer la dernière séquence
+          </button>
         </section>
       </aside>
 
@@ -673,16 +758,20 @@ export default function FormationSchedulePlanner({
           <div className="formation-schedule__week-grid" key={`week-${calendarFillCycle}`} data-animate={calendarFillCycle > 0 || undefined}>
             {visibleWeekDates.map((date, dayIndex) => {
               const scheduledDay = scheduleDayByDate.get(date)
-              const events = hasVisibleTemplateBlocks
-                ? (scheduledDay?.blocks || []).map((block, blockIndex) => ({
-                  dayIndex,
-                  start: Number(block.start_minute || 0) / 60,
-                  duration: Math.max(5, Number(block.duration_minutes || 0)) / 60,
-                  label: block.label || scheduledDay.templateName || `Journée ${scheduledDay.dayNumber}`,
-                  time: `${String(Math.floor(Number(block.start_minute || 0) / 60)).padStart(2, '0')}:${String(Number(block.start_minute || 0) % 60).padStart(2, '0')}`,
-                  tone: (blockIndex % 5) + 1,
-                }))
-                : FIGMA_DEMO_EVENTS.filter((event) => event.dayIndex === dayIndex)
+              const blocks = scheduledDay?.blocks || []
+              const canDropSequence = (
+                !reuse
+                && date >= today
+                && getScheduleStats(blocks).courseCount < DAY_SCHEDULE_RULES.maxCourses
+              )
+              const events = blocks.map((block, blockIndex) => ({
+                dayIndex,
+                start: Number(block.start_minute || 0) / 60,
+                duration: Math.max(5, Number(block.duration_minutes || 0)) / 60,
+                label: block.label || scheduledDay.templateName || `Journée ${scheduledDay.dayNumber}`,
+                time: `${String(Math.floor(Number(block.start_minute || 0) / 60)).padStart(2, '0')}:${String(Number(block.start_minute || 0) % 60).padStart(2, '0')}`,
+                tone: (blockIndex % 5) + 1,
+              }))
               return (
                 <button
                   key={date}
@@ -690,9 +779,33 @@ export default function FormationSchedulePlanner({
                   className="formation-schedule__week-column"
                   data-weekend={dayIndex > 4}
                   data-active={activeDate === date}
+                  data-drop-active={dropDate === date || undefined}
                   aria-pressed={selectedSet.has(date)}
                   aria-label={`${selectedSet.has(date) ? 'Retirer' : 'Ajouter'} le ${formatLongDate(date)}`}
                   onClick={() => toggleDate(date)}
+                  onDragEnter={(event) => {
+                    if (!canDropSequence) return
+                    if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+                    event.preventDefault()
+                    setDropDate(date)
+                  }}
+                  onDragOver={(event) => {
+                    if (!canDropSequence) return
+                    if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = 'copy'
+                  }}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) setDropDate('')
+                  }}
+                  onDrop={(event) => {
+                    if (!canDropSequence) return
+                    if (event.dataTransfer.getData('application/x-day-sequence') !== 'course-qa-pause') return
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setDropDate('')
+                    addSequenceToDay(date)
+                  }}
                 >
                   {Array.from({ length: 24 }, (_, hourIndex) => <span key={hourIndex} className="formation-schedule__hour-slot" />)}
                   {events.map((event, eventIndex) => (
@@ -700,7 +813,6 @@ export default function FormationSchedulePlanner({
                       key={`${date}:${event.start}:${eventIndex}`}
                       className="formation-schedule__week-event"
                       data-tone={event.tone}
-                      data-preview={!hasVisibleTemplateBlocks || undefined}
                       style={{
                         '--event-start': event.start,
                         '--event-duration': event.duration,

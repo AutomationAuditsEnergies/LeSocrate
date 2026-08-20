@@ -2,6 +2,14 @@
 
 ## 2026-08-20
 
+### feat(ui): séquences personnalisées directement dans le planning
+
+La carte « Séquence pédagogique » peut désormais être déposée sur une journée
+du calendrier, ou ajoutée par clic à la journée active, sans ouvrir l’éditeur
+de templates. Les journées personnalisées sont validées et enregistrées dans
+le planning V2 ; seule l’option explicite « Créer un template » ouvre encore
+« Organisation des cours ».
+
 ### refactor(ui): simplification du sélecteur de journée
 
 Le panneau d’organisation regroupe désormais la date et les commandes

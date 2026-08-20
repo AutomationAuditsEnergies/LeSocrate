@@ -2,6 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  addScheduleSequence,
+  setSchedulePauseKind,
+} from '../../src/dayScheduleTemplates.js'
+import {
   assignTemplateToAll,
   dateTimeInTimeZone,
   fillUnassignedTemplate,
@@ -15,6 +19,10 @@ import {
 } from '../../src/formationScheduleV2.js'
 
 const templateHash = 'a'.repeat(64)
+
+let customBlocks = []
+for (let index = 0; index < 4; index += 1) customBlocks = addScheduleSequence(customBlocks)
+customBlocks = setSchedulePauseKind(customBlocks, 5, 'lunch')
 
 const template = {
   id: 12,
@@ -165,7 +173,29 @@ test('serializes only the command contract for a new module', () => {
     selected_dates: ['2026-08-03'],
     template_assignments: { '2026-08-03': '12' },
     template_hashes: { 12: templateHash },
+    custom_days: {},
   })
+})
+
+test('accepts and serializes a complete custom day without creating a template', () => {
+  const result = validateFormationScheduleV2({
+    selectedDates: ['2026-08-03'],
+    assignments: {},
+    templates: [],
+    customDays: { '2026-08-03': customBlocks },
+    now: new Date('2026-08-01T06:59:00Z'),
+  })
+  assert.equal(result.valid, true)
+
+  const payload = serializeFormationScheduleV2({
+    selectedDates: ['2026-08-03'],
+    assignments: {},
+    customDays: { '2026-08-03': customBlocks },
+  })
+  assert.deepEqual(payload.template_assignments, {})
+  assert.deepEqual(payload.template_hashes, {})
+  assert.equal(payload.custom_days['2026-08-03'].blocks.length, 12)
+  assert.equal(payload.custom_days['2026-08-03'].blocks[5].pause_kind, 'lunch')
 })
 
 test('builds a complete six-week calendar grid', () => {

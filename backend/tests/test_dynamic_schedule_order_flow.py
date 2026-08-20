@@ -76,6 +76,17 @@ def _new_v2_payload(dates):
     }
 
 
+def _new_v2_custom_payload(date_value):
+    payload = _new_v2_payload([date_value])
+    schedule = payload["project"]["new_formation"]["schedule"]
+    schedule["template_assignments"] = {}
+    schedule["template_hashes"] = {}
+    schedule["custom_days"] = {
+        date_value: {"blocks": _valid_blocks()},
+    }
+    return payload
+
+
 class DynamicBillingScheduleTest(unittest.TestCase):
     def test_new_v2_uses_checked_dates_and_server_template_as_authority(self):
         now = FRANCE_TZ.localize(datetime(2026, 7, 26, 8, 0))
@@ -136,6 +147,28 @@ class DynamicBillingScheduleTest(unittest.TestCase):
                     _new_v2_payload(["2026-07-28"]),
                     42,
                 )
+
+    def test_new_v2_compiles_a_custom_day_without_creating_a_template(self):
+        now = FRANCE_TZ.localize(datetime(2026, 7, 26, 8, 0))
+        with patch.object(
+            billing_service,
+            "_billing_now",
+            return_value=now,
+        ), patch.object(
+            billing_service,
+            "get_template",
+        ) as get_template:
+            _, project, details = billing_service._normalize_project(
+                _new_v2_custom_payload("2026-07-30"),
+                42,
+            )
+
+        schedule = project["new_formation"]["schedule"]
+        self.assertEqual(details["training_days"], 1)
+        self.assertEqual(schedule["template_assignments"], {})
+        self.assertEqual(len(schedule["custom_days"]["2026-07-30"]["blocks"]), 11)
+        self.assertEqual(schedule["days"][0]["template_name"], "Journée personnalisée")
+        get_template.assert_not_called()
 
     def test_new_v2_rejects_a_template_changed_after_confirmation(self):
         payload = _new_v2_payload(["2030-08-02"])

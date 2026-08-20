@@ -1,4 +1,8 @@
-import { normalizeScheduleTemplate } from './dayScheduleTemplates.js'
+import {
+  normalizeScheduleTemplate,
+  serializeScheduleTemplate,
+  validateScheduleTemplate,
+} from './dayScheduleTemplates.js'
 
 export const TRAINING_WEEKDAYS = Object.freeze([
   Object.freeze({ id: 1, short: 'Lun.', label: 'Lundi' }),
@@ -185,9 +189,16 @@ export function getFirstSessionDateTime(
   assignments,
   templates,
   timeZone = 'Europe/Paris',
+  customDays = {},
 ) {
   const [firstDate] = normalizeSelectedTrainingDates(selectedDates)
   if (!firstDate) return null
+  const customBlocks = Array.isArray(customDays?.[firstDate])
+    ? customDays[firstDate]
+    : customDays?.[firstDate]?.blocks
+  if (customBlocks?.length) {
+    return dateTimeInTimeZone(firstDate, Number(customBlocks[0].start_minute), timeZone)
+  }
   const templateId = assignments?.[firstDate]
   const template = (Array.isArray(templates) ? templates : []).find(
     (item) => String(item.id) === String(templateId),
@@ -202,8 +213,15 @@ export function hasMinimumLeadTime(
   templates,
   now = new Date(),
   minimumHours = 48,
+  customDays = {},
 ) {
-  const firstSession = getFirstSessionDateTime(selectedDates, assignments, templates)
+  const firstSession = getFirstSessionDateTime(
+    selectedDates,
+    assignments,
+    templates,
+    'Europe/Paris',
+    customDays,
+  )
   if (!firstSession) return false
   return firstSession.getTime() - now.getTime() >= minimumHours * 60 * 60 * 1000
 }
@@ -239,6 +257,21 @@ export function reconcileTemplateAssignments(assignments, selectedDates) {
   )
 }
 
+export function reconcileCustomDays(customDays, selectedDates) {
+  const allowedDates = new Set(normalizeSelectedTrainingDates(selectedDates))
+  return Object.fromEntries(
+    Object.entries(customDays || {})
+      .filter(([date]) => allowedDates.has(date))
+      .map(([date, blocks]) => [
+        date,
+        normalizeScheduleTemplate({
+          name: `Journée personnalisée du ${date}`,
+          blocks: Array.isArray(blocks) ? blocks : blocks?.blocks,
+        }).blocks,
+      ]),
+  )
+}
+
 export function validateFormationScheduleV2({
   selectedDates,
   assignments,
@@ -246,9 +279,11 @@ export function validateFormationScheduleV2({
   reuse = false,
   expectedDayCount = null,
   now = new Date(),
+  customDays = {},
 }) {
   const dates = normalizeSelectedTrainingDates(selectedDates)
   const normalizedAssignments = reconcileTemplateAssignments(assignments, dates)
+  const normalizedCustomDays = reconcileCustomDays(customDays, dates)
   const errors = []
 
   if (!dates.length) errors.push('Sélectionnez au moins une date de formation.')
@@ -262,7 +297,9 @@ export function validateFormationScheduleV2({
     const templateIds = new Set((Array.isArray(templates) ? templates : []).map(
       (template) => String(template.id),
     ))
-    const missingDates = dates.filter((date) => !normalizedAssignments[date])
+    const missingDates = dates.filter(
+      (date) => !normalizedAssignments[date] && !normalizedCustomDays[date],
+    )
     const unknownDates = dates.filter(
       (date) => normalizedAssignments[date] && !templateIds.has(normalizedAssignments[date]),
     )
@@ -284,7 +321,25 @@ export function validateFormationScheduleV2({
     if (unhashedDates.length) {
       errors.push('Rechargez la bibliothèque avant de confirmer le planning.')
     }
-    if (dates.length && !hasMinimumLeadTime(dates, normalizedAssignments, templates, now)) {
+    const invalidCustomDates = dates.filter((date) => {
+      const blocks = normalizedCustomDays[date]
+      if (!blocks) return false
+      return !validateScheduleTemplate({
+        name: `Journée personnalisée du ${date}`,
+        blocks,
+      }).valid
+    })
+    if (invalidCustomDates.length) {
+      errors.push(`Complétez le déroulé personnalisé de ${invalidCustomDates.length} journée${invalidCustomDates.length > 1 ? 's' : ''}.`)
+    }
+    if (dates.length && !hasMinimumLeadTime(
+      dates,
+      normalizedAssignments,
+      templates,
+      now,
+      48,
+      normalizedCustomDays,
+    )) {
       errors.push('La première journée doit commencer au moins 48 h après la validation.')
     }
   }
@@ -294,6 +349,7 @@ export function validateFormationScheduleV2({
     errors,
     selectedDates: dates,
     assignments: normalizedAssignments,
+    customDays: normalizedCustomDays,
   }
 }
 
@@ -302,6 +358,7 @@ export function serializeFormationScheduleV2({
   assignments,
   templates = [],
   reuse = false,
+  customDays = {},
 }) {
   const dates = normalizeSelectedTrainingDates(selectedDates)
   const payload = {
@@ -310,6 +367,7 @@ export function serializeFormationScheduleV2({
   }
   if (!reuse) {
     const normalizedAssignments = reconcileTemplateAssignments(assignments, dates)
+    const normalizedCustomDays = reconcileCustomDays(customDays, dates)
     payload.template_assignments = normalizedAssignments
     const assignedIds = new Set(Object.values(normalizedAssignments).map(String))
     payload.template_hashes = Object.fromEntries(
@@ -319,6 +377,12 @@ export function serializeFormationScheduleV2({
           String(template.id),
           String(template.blocks_hash || '').trim(),
         ]),
+    )
+    payload.custom_days = Object.fromEntries(
+      Object.entries(normalizedCustomDays).map(([date, blocks]) => [
+        date,
+        { blocks: serializeScheduleTemplate({ name: date, blocks }).blocks },
+      ]),
     )
   }
   return payload
