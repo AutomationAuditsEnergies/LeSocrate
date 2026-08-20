@@ -28,6 +28,18 @@ test('keeps emoji artwork out of the formation planner', async () => {
   assert.doesNotMatch(source, /<img/)
 })
 
+test('keeps time labels in a clean gutter before the weekly grid', async () => {
+  const styles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(styles, /--fsp-time-axis-width: 64px/)
+  assert.match(styles, /\.formation-schedule__time-axis\s*\{[^}]*border-right: 1px solid var\(--fsp-border\)[^}]*background: #fff/)
+  assert.match(styles, /\.formation-schedule__time-axis span\s*\{[^}]*width: 100%[^}]*justify-content: flex-end[^}]*background: #fff/)
+  assert.doesNotMatch(styles, /\.formation-schedule__week-column:first-child\s*\{[^}]*border-left/)
+})
+
 test('aligns the template overview with the centered workspace page hierarchy', async () => {
   const templateSource = await readFile(
     new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),

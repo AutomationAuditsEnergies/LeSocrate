@@ -5,6 +5,7 @@
   --fsp-canvas: #f5f5f5;
   --fsp-surface: #ffffff;
   --fsp-accent: #0c41ff;
+  --fsp-time-axis-width: 64px;
   display: grid;
   width: 100%;
   height: 100%;
@@ -141,16 +142,16 @@
 .formation-schedule__icon-button:hover,
 .formation-schedule__search:hover { background: #ececec; }
 
-.formation-schedule__day-headings { display: grid; min-width: 780px; min-height: 25px; flex: none; grid-template-columns: 56px repeat(7, minmax(100px, 1fr)); border-bottom: 1px solid var(--fsp-border); }
+.formation-schedule__day-headings { display: grid; min-width: 780px; min-height: 25px; flex: none; grid-template-columns: var(--fsp-time-axis-width) repeat(7, minmax(100px, 1fr)); border-bottom: 1px solid var(--fsp-border); }
 .formation-schedule__day-headings span { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--fsp-ink); font-size: 10px; font-weight: 500; }
-.formation-schedule__timeline { display: grid; min-width: 780px; min-height: 0; flex: 1; grid-template-columns: 56px minmax(0, 1fr); overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
-.formation-schedule__time-axis { position: sticky; left: 0; z-index: 4; height: calc(var(--fsp-hour-size) * 24); border-top: 1px solid var(--fsp-border); background-color: #fff; }
-.formation-schedule__time-axis span { position: absolute; top: calc(var(--hour-index) * var(--fsp-hour-size)); right: 6px; display: block; background: #fff; color: var(--fsp-ink); padding: 0 2px; font-size: 10px; line-height: 16px; text-align: right; transform: translateY(-50%); }
+.formation-schedule__day-headings > span:first-child { border-right: 1px solid var(--fsp-border); background: #fff; }
+.formation-schedule__timeline { display: grid; min-width: 780px; min-height: 0; flex: 1; grid-template-columns: var(--fsp-time-axis-width) minmax(0, 1fr); overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
+.formation-schedule__time-axis { position: sticky; left: 0; z-index: 4; height: calc(var(--fsp-hour-size) * 24); border-right: 1px solid var(--fsp-border); background: #fff; isolation: isolate; }
+.formation-schedule__time-axis span { position: absolute; top: calc(var(--hour-index) * var(--fsp-hour-size)); right: 0; display: flex; width: 100%; height: 18px; align-items: center; justify-content: flex-end; background: #fff; color: var(--fsp-ink); padding: 0 12px 0 6px; font-size: 10px; line-height: 18px; text-align: right; transform: translateY(-50%); }
 .formation-schedule__time-axis span[data-first="true"] { transform: translateY(0); }
 .formation-schedule__time-axis span[data-last="true"] { transform: translateY(-100%); }
 .formation-schedule__week-grid { display: grid; height: calc(var(--fsp-hour-size) * 24); min-width: 724px; grid-template-columns: repeat(7, minmax(100px, 1fr)); }
 .formation-schedule__week-column { position: relative; display: grid; min-width: 0; height: calc(var(--fsp-hour-size) * 24); grid-template-rows: repeat(24, var(--fsp-hour-size)); border: 0; border-top: 1px solid var(--fsp-border); background-color: #fff; background-image: linear-gradient(to bottom, transparent calc(var(--fsp-hour-size) - 1px), var(--fsp-border) calc(var(--fsp-hour-size) - 1px)); background-size: 100% var(--fsp-hour-size); cursor: pointer; padding: 0; text-align: left; }
-.formation-schedule__week-column:first-child { border-left: 1px solid var(--fsp-border); }
 .formation-schedule__week-column[data-weekend="true"] { background-color: #f2f2f2; }
 .formation-schedule__week-column[data-active="true"] { box-shadow: inset 0 0 0 2px var(--fsp-accent); z-index: 2; }
 .formation-schedule__week-grid[data-animate="true"] .formation-schedule__week-column[aria-pressed="true"] { animation: fsp-column-fill 520ms cubic-bezier(0.22, 1, 0.36, 1) both; }
@@ -173,13 +174,10 @@
 }
 
 @media (max-width: 720px) {
-  .formation-schedule { min-height: 680px; grid-template-columns: 1fr; }
+  .formation-schedule { --fsp-time-axis-width: 52px; min-height: 680px; grid-template-columns: 1fr; }
   .formation-schedule__sidebar { display: none; }
   .formation-schedule__toolbar { min-height: 58px; gap: 7px; padding: 8px; }
   .formation-schedule__toolbar h1 { max-width: 160px; overflow: hidden; font-size: 16px; text-overflow: ellipsis; }
-  .formation-schedule__day-headings { grid-template-columns: 42px repeat(7, minmax(88px, 1fr)); }
-  .formation-schedule__day-headings img { display: none; }
-  .formation-schedule__timeline { grid-template-columns: 42px minmax(0, 1fr); }
   .formation-schedule__week-grid { min-width: 616px; }
 }
 
