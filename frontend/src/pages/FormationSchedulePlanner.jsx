@@ -94,8 +94,7 @@ function formatLongDate(value) {
 
 function monthLabel(year, monthIndex) {
   return new Intl.DateTimeFormat('fr-FR', {
-    month: 'long',
-    year: 'numeric',
+    month: 'short',
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(year, monthIndex, 1)))
 }
@@ -483,19 +482,19 @@ export default function FormationSchedulePlanner({
         <div className="formation-schedule__side-header">
           <div className="formation-schedule__month-tools">
             <div className="formation-schedule__side-month">
-              {monthLabel(month.year, month.month).replace(/\s+\d{4}$/, '')}
+              {monthLabel(month.year, month.month)}
             </div>
             <button
               type="button"
               className="formation-schedule__prefill-toggle"
               aria-expanded={prefillOpen}
-              aria-label={prefillOpen ? 'Retour au calendrier' : 'Préremplir les dates'}
+              aria-label={prefillOpen ? 'Retour au calendrier' : 'Remplir automatiquement les dates'}
               onClick={() => {
                 setPrefillOpen((current) => !current)
                 setHelperError('')
               }}
             >
-              {prefillOpen ? 'Retour' : 'Préremplir'}
+              {prefillOpen ? 'Retour' : 'Remplir'}
             </button>
           </div>
           <div className="formation-schedule__month-navigation" aria-label="Changer de mois">
@@ -510,7 +509,7 @@ export default function FormationSchedulePlanner({
 
         <div className="formation-schedule__mini-stage" data-prefill={prefillOpen}>
           {prefillOpen ? (
-            <section className="formation-schedule__prefill-panel" aria-label="Préremplir les dates">
+            <section className="formation-schedule__prefill-panel" aria-label="Remplissage automatique des dates">
               <div className="formation-schedule__helper-content">
                 <label><span>Date de début</span><input type="date" min={earliestSuggestedDate} value={helperStartDate} onChange={(event) => { setHelperStartDate(event.target.value); setHelperError('') }} /></label>
                 <div className="formation-schedule__helper-numbers">
