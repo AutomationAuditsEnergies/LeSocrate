@@ -1,19 +1,20 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import {
-  CENTER_ONBOARDING_VERSION,
   getActiveTeachers,
   getReusableTeacherDefaults,
-  shouldShowCenterOnboarding,
 } from '../../src/centerWorkspace.js'
 
-test('shows the versioned onboarding only when the centre has not completed it', () => {
-  assert.equal(shouldShowCenterOnboarding({ success: true, onboarding_version: 0 }), true)
-  assert.equal(
-    shouldShowCenterOnboarding({ success: true, onboarding_version: CENTER_ONBOARDING_VERSION }),
-    false,
-  )
+const dashboardSource = readFileSync(
+  new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
+  'utf8',
+)
+
+test('opens the centre workspace without a first-login onboarding', () => {
+  assert.doesNotMatch(dashboardSource, /\/api\/hr\/onboarding/)
+  assert.doesNotMatch(dashboardSource, /CenterOnboarding/)
 })
 
 test('keeps only active and preparing teachers in Mes professeurs IA', () => {

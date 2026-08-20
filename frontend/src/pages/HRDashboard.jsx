@@ -37,11 +37,7 @@ import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
 import './CreatePlatformView.css'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
-import {
-  CENTER_ONBOARDING_VERSION,
-  getReusableTeacherDefaults,
-  shouldShowCenterOnboarding,
-} from '../centerWorkspace'
+import { getReusableTeacherDefaults } from '../centerWorkspace'
 import { validateRecruitmentAnswer } from '../recruitmentConversation'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
@@ -167,10 +163,7 @@ export default function HRDashboard() {
   const [failedTeacherOrderId, setFailedTeacherOrderId] = useState(null)
   const [retryingTeacherOrderId, setRetryingTeacherOrderId] = useState(null)
   const [orderNotice, setOrderNotice] = useState(null)
-  const [showOnboarding, setShowOnboarding] = useState(false)
   const [showMobileSettings, setShowMobileSettings] = useState(false)
-  const [onboardingStep, setOnboardingStep] = useState(0)
-  const [onboardingSaving, setOnboardingSaving] = useState(false)
   const CARDS_PER_PAGE = 10
 
   const handleLogout = async () => {
@@ -367,20 +360,6 @@ export default function HRDashboard() {
   useEffect(() => {
     fetchPlatforms()
     fetchAiVoices()
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    apiFetch('/api/hr/onboarding')
-      .then(async (response) => ({ response, data: await response.json().catch(() => ({})) }))
-      .then(({ response, data }) => {
-        if (!cancelled && response.ok && shouldShowCenterOnboarding(data)) {
-          setOnboardingStep(0)
-          setShowOnboarding(true)
-        }
-      })
-      .catch((error) => console.error('Chargement onboarding centre impossible:', error))
-    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -662,32 +641,6 @@ export default function HRDashboard() {
       rncpCode: mod.rncp_code,
       confirmKey,
     })
-  }
-
-  const completeOnboarding = async () => {
-    if (onboardingSaving) return
-    setOnboardingSaving(true)
-    try {
-      const response = await apiFetch('/api/hr/onboarding/complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ version: CENTER_ONBOARDING_VERSION }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok || !data.success) throw new Error(data.error || 'Enregistrement impossible')
-      setShowOnboarding(false)
-      setOnboardingStep(0)
-    } catch (error) {
-      console.error('Enregistrement onboarding impossible:', error)
-      setOrderNotice({
-        tone: 'error',
-        title: 'Guide non enregistré',
-        message: 'Vous pouvez continuer à utiliser la plateforme et relancer le guide avec le bouton d’aide.',
-      })
-      setShowOnboarding(false)
-    } finally {
-      setOnboardingSaving(false)
-    }
   }
 
   const handleSetCourseTime = async (dateCours, heureCours, weekdays = null) => {
@@ -1936,18 +1889,6 @@ export default function HRDashboard() {
           </div>
         )
       })()}
-
-      {showOnboarding && (
-        <CenterOnboarding
-          colors={colors}
-          darkMode={darkMode}
-          step={onboardingStep}
-          onStepChange={setOnboardingStep}
-          onClose={() => setShowOnboarding(false)}
-          onComplete={completeOnboarding}
-          saving={onboardingSaving}
-        />
-      )}
 
       {showMobileSettings && createPortal(
         <CenterSettingsModal
@@ -3320,130 +3261,6 @@ function RecruitmentAssistant({
         ) : null}
       </div>
     </section>
-  )
-}
-
-const CENTER_ONBOARDING_STEPS = [
-  {
-    icon: 'school',
-    eyebrow: 'Votre espace actif',
-    title: 'Suivez vos professeurs IA en cours',
-    description: 'Mes professeurs IA regroupe les professeurs en préparation et les promotions actives. La préparation continue en arrière-plan : vous pouvez quitter la page sans l’interrompre.',
-    detail: 'Chaque carte donne accès au planning, aux cours, aux audios, aux élèves et aux présences.',
-  },
-  {
-    icon: 'person_add',
-    eyebrow: 'Création',
-    title: 'Créez un nouveau professeur IA',
-    description: 'Renseignez son identité, sa formation et son calendrier. Après le paiement Stripe confirmé par le serveur, la plateforme prépare ses cours de manière durable.',
-    detail: 'Le prix est calculé selon le nombre de journées avant l’ouverture du paiement hébergé.',
-  },
-  {
-    icon: 'content_copy',
-    eyebrow: 'Réutilisation optimisée',
-    title: 'Réutilisez un professeur sans dupliquer ses ressources',
-    description: 'La bibliothèque conserve l’identité, les cours et les audios du professeur. Une nouvelle promotion partage le module Azure d’origine, avec une copie uniquement si vous modifiez un fichier.',
-    detail: 'Cette architecture réduit le stockage, accélère la remise en service et reste adaptée à un grand nombre de centres.',
-  },
-  {
-    icon: 'event_available',
-    eyebrow: 'Exploitation',
-    title: 'Planifiez et générez les supports à J-1',
-    description: 'Le planning pilote les séances et la génération audio à J-1. À la fin d’une promotion, le professeur, ses cours et ses audios restent disponibles dans votre bibliothèque.',
-    detail: 'Les ressources durables restent conservées pour les prochaines promotions.',
-  },
-]
-
-function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onComplete, saving }) {
-  const current = CENTER_ONBOARDING_STEPS[step] || CENTER_ONBOARDING_STEPS[0]
-  const isLast = step === CENTER_ONBOARDING_STEPS.length - 1
-
-  return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(15, 23, 42, 0.66)' }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="center-onboarding-title"
-    >
-      <div
-        className="w-full max-w-xl overflow-hidden rounded-2xl shadow-2xl"
-        style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-      >
-        <div className="flex items-center justify-between gap-4 px-5 py-4 sm:px-6" style={{ borderBottom: `1px solid ${colors.border}` }}>
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
-              Guide de l’espace centre
-            </p>
-            <p className="mt-1 text-xs tabular-nums" style={{ color: colors.textSecondary }}>
-              Étape {step + 1} sur {CENTER_ONBOARDING_STEPS.length}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-            style={{ color: colors.textMuted }}
-            aria-label="Fermer le guide"
-          >
-            <Icon name="close" className="text-lg" />
-          </button>
-        </div>
-
-        <div className="px-5 py-6 sm:px-8 sm:py-8">
-          <div className="mb-6 flex gap-2" aria-hidden="true">
-            {CENTER_ONBOARDING_STEPS.map((_, index) => (
-              <span
-                key={index}
-                className="h-1.5 flex-1 rounded-full"
-                style={{ backgroundColor: index <= step ? '#8B5CF6' : colors.border }}
-              />
-            ))}
-          </div>
-          <div
-            className="flex h-12 w-12 items-center justify-center rounded-xl"
-            style={{ backgroundColor: darkMode ? 'rgba(139, 92, 246, 0.15)' : '#f5f3ff', color: darkMode ? '#c4b5fd' : '#7c3aed' }}
-          >
-            <Icon name={current.icon} className="text-2xl" />
-          </div>
-          <p className="mt-5 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: '#8B5CF6' }}>
-            {current.eyebrow}
-          </p>
-          <h2 id="center-onboarding-title" className="mt-2 text-2xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            {current.title}
-          </h2>
-          <p className="mt-4 text-sm leading-6" style={{ color: colors.textSecondary }}>
-            {current.description}
-          </p>
-          <div className="mt-5 flex items-start gap-3 rounded-xl px-4 py-3" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
-            <Icon name="info_outline" className="mt-0.5 text-base" style={{ color: colors.textMuted }} />
-            <p className="text-xs leading-5" style={{ color: colors.textMuted }}>{current.detail}</p>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-3 px-5 py-4 sm:px-6" style={{ borderTop: `1px solid ${colors.border}` }}>
-          <button
-            type="button"
-            onClick={() => onStepChange(Math.max(0, step - 1))}
-            disabled={step === 0 || saving}
-            className="rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-0"
-            style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-          >
-            Précédent
-          </button>
-          <button
-            type="button"
-            onClick={() => (isLast ? onComplete() : onStepChange(step + 1))}
-            disabled={saving}
-            className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-wait disabled:opacity-60"
-            style={{ backgroundColor: '#8B5CF6' }}
-          >
-            {saving ? 'Enregistrement…' : isLast ? 'Terminer le guide' : 'Continuer'}
-            {!saving && <Icon name={isLast ? 'check' : 'arrow_forward'} className="text-base" />}
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }
 
