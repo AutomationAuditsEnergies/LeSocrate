@@ -474,6 +474,15 @@ export default function FormationSchedulePlanner({
     })
   }
 
+  const activateDate = (date) => {
+    if (date < today) return
+    setFocusedWeekStart(weekStart(date))
+    setActiveDateKey(date)
+    setSelectedDates((current) => (
+      current.includes(date) ? current : [...current, date]
+    ))
+  }
+
   const assignTemplate = (date, templateId) => {
     if (templateId === '__create__') {
       onCreateTemplate?.({
@@ -781,8 +790,8 @@ export default function FormationSchedulePlanner({
                   data-active={activeDate === date}
                   data-drop-active={dropDate === date || undefined}
                   aria-pressed={selectedSet.has(date)}
-                  aria-label={`${selectedSet.has(date) ? 'Retirer' : 'Ajouter'} le ${formatLongDate(date)}`}
-                  onClick={() => toggleDate(date)}
+                  aria-label={`${selectedSet.has(date) ? 'Afficher' : 'Ajouter'} le ${formatLongDate(date)}`}
+                  onClick={() => activateDate(date)}
                   onDragEnter={(event) => {
                     if (!canDropSequence) return
                     if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return

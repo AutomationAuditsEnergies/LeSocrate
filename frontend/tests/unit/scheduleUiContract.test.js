@@ -167,6 +167,18 @@ test('adds pedagogical sequences directly to formation days', async () => {
   assert.doesNotMatch(source, /onClick=\{\(\) => assignTemplate\(activeDate \|\| helperStartDate, '__create__'\)\}/)
 })
 
+test('keeps a scheduled day when its empty calendar area is clicked', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /const activateDate = \(date\) => \{[\s\S]*?current\.includes\(date\) \? current : \[\.\.\.current, date\]/)
+  assert.match(source, /aria-label=\{`\$\{selectedSet\.has\(date\) \? 'Afficher' : 'Ajouter'\} le \$\{formatLongDate\(date\)\}`\}/)
+  assert.match(source, /onClick=\{\(\) => activateDate\(date\)\}/)
+  assert.equal((source.match(/onClick=\{\(\) => toggleDate\(day\.date\)\}/g) || []).length, 1)
+})
+
 test('locks the template editor page and scrolls only the calendar', async () => {
   const templateSource = await readFile(
     new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
