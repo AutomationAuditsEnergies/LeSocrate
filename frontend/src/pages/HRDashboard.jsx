@@ -1449,6 +1449,7 @@ export default function HRDashboard() {
                 setTeacherRosterFilter(value)
                 setCardPage(0)
               }}
+              onRecruit={showRecruitView}
               expandedPlatform={expandedPlatform}
               platformAudios={platformAudios}
               audiosLoading={audiosLoading}
@@ -3297,6 +3298,7 @@ function PlatformCardsView({
   cardsPerPage,
   rosterFilter,
   onRosterFilterChange,
+  onRecruit,
   expandedPlatform,
   platformAudios,
   audiosLoading,
@@ -3477,6 +3479,24 @@ function PlatformCardsView({
             style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
           >
             <Icon name="chevron_right" className="text-xl" />
+          </button>
+        </div>
+      )}
+
+      {platforms.length === 0 && (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center pb-16 pt-8 text-center sm:pb-20">
+          <img src="/robot-blue.png" alt="" className="h-24 w-24 object-contain" />
+          <h2 className="mt-3 text-xl font-bold" style={{ color: colors.text }}>Aucun professeur recruté</h2>
+          <p className="mt-2 max-w-xl text-sm leading-6" style={{ color: colors.textMuted }}>
+            Recrutez votre premier professeur IA pour préparer et dispenser une formation.
+          </p>
+          <button
+            type="button"
+            onClick={onRecruit}
+            className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] bg-white px-4 py-2 text-sm font-semibold text-[#18181B] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/35 focus-visible:ring-offset-2"
+          >
+            <UserPlus size={16} strokeWidth={1.8} aria-hidden="true" />
+            Recruter un professeur
           </button>
         </div>
       )}

@@ -42,3 +42,16 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.match(dashboardSource, /Prochaines diffusions/)
   assert.match(dashboardSource, /générées automatiquement 72 heures avant leur début/)
 })
+
+test('offers recruitment from the empty teacher roster', async () => {
+  const dashboardSource = await readFile(
+    new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(dashboardSource, /platforms\.length === 0/)
+  assert.match(dashboardSource, /Aucun professeur recruté/)
+  assert.match(dashboardSource, /onClick=\{onRecruit\}/)
+  assert.match(dashboardSource, />\s*Recruter un professeur\s*</)
+  assert.match(dashboardSource, /onRecruit=\{showRecruitView\}/)
+})
