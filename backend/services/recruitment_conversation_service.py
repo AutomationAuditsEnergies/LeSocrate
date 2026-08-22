@@ -35,6 +35,10 @@ FIELD_RULES = {
         "label": "le nombre total de journées de formation, entre 1 et 365",
         "example": "52 journées",
     },
+    "trainingWeeks": {
+        "label": "la durée prévue de la formation en semaines, entre 1 et 52",
+        "example": "8 semaines",
+    },
 }
 
 _UNCERTAIN = re.compile(
@@ -74,6 +78,7 @@ def _clarification(field: str, attempt: int = 0) -> str:
             "trainingName": "Quel est l’intitulé exact du titre professionnel qu’il devra dispenser ?",
             "rncpCode": "Quel est le code RNCP de cette formation ?",
             "trainingDays": "Combien de journées la formation doit-elle durer au total ?",
+            "trainingWeeks": "Combien de semaines prévoyez-vous que la formation dure ?",
         }
         return questions[field]
     return f"Pour continuer, j’ai besoin de {rule['label']}. Par exemple : « {rule['example']} »."
@@ -98,6 +103,10 @@ def _guidance(field: str) -> str:
         "trainingDays": (
             "Je vais vous guider. Indiquez maintenant la durée totale de la formation en "
             "journées, par exemple « 52 ». Combien de journées faut-il prévoir ?"
+        ),
+        "trainingWeeks": (
+            "Je vais vous guider. Indiquez la durée prévue de la formation en semaines, "
+            "par exemple « 8 ». Combien de semaines doit-elle durer ?"
         ),
     }
     return guidance[field]
@@ -133,6 +142,13 @@ def _validate_value(field: str, value: Any) -> str | int | None:
             return None
         days = int(match.group(1))
         return days if 1 <= days <= 365 else None
+
+    if field == "trainingWeeks":
+        match = re.search(r"\b(\d{1,2})\b", raw)
+        if not match:
+            return None
+        weeks = int(match.group(1))
+        return weeks if 1 <= weeks <= 52 else None
 
     return None
 
@@ -193,6 +209,7 @@ Règles absolues :
 - Pour teacherName, « un professeur » n’est pas un nom.
 - Pour rncpCode, retourne uniquement 4 à 6 chiffres.
 - Pour trainingDays, retourne un entier de 1 à 365.
+- Pour trainingWeeks, retourne un entier de 1 à 52.
 - Pour help, unclear et off_topic, value doit être null.
 
 Réponds uniquement avec ce JSON :

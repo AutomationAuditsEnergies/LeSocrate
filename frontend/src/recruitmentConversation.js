@@ -28,12 +28,19 @@ const GENERIC_TRAINING_LABELS = new Set([
 export const RECRUITMENT_STEPS = [
   { id: 'rncpCode', question: 'Quel est le code RNCP de la formation que vous souhaitez dispenser ?', placeholder: 'Ex. 37099', type: 'number' },
   { id: 'rncpConfirm', question: 'S’agit-il bien de ce titre professionnel ?', type: 'confirm' },
-  { id: 'trainingDays', question: 'Combien de journées de formation faut-il prévoir au total ?', placeholder: 'Ex. 52', type: 'number' },
-  { id: 'weeklyCourseCount', question: 'En moyenne, combien de journées de cours souhaitez-vous prévoir chaque semaine ?', type: 'frequency' },
+  { id: 'startDate', question: 'Quand débutera la formation ?', type: 'date' },
+  { id: 'weeklyCourseCount', question: 'Combien de journées de cours souhaitez-vous prévoir chaque semaine ?', type: 'frequency' },
+  { id: 'trainingWeeks', question: 'Combien de semaines prévoyez-vous que la formation dure ?', placeholder: 'Ex. 8', type: 'number' },
   { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous prévoir habituellement ?', type: 'days' },
-  { id: 'startDate', question: 'À quelle date la formation doit-elle commencer ?', type: 'date' },
   { id: 'teacherName', question: 'Pour terminer, comment souhaitez-vous appeler ce professeur IA ?', placeholder: 'Ex. Pierre, Lina, Sofia…', type: 'text' },
 ]
+
+export function calculateTrainingDays(trainingWeeks, weeklyCourseCount) {
+  const weeks = Number(trainingWeeks)
+  const daysPerWeek = Number(weeklyCourseCount)
+  if (!Number.isInteger(weeks) || weeks < 1 || !Number.isInteger(daysPerWeek) || daysPerWeek < 1) return 0
+  return weeks * daysPerWeek
+}
 
 export function validateRecruitmentAnswer(stepId, rawValue) {
   const value = String(rawValue || '').trim().replace(/\s+/g, ' ')
@@ -79,6 +86,16 @@ export function validateRecruitmentAnswer(stepId, rawValue) {
       return {
         valid: false,
         message: 'Indiquez un nombre de journées compris entre 1 et 365.',
+      }
+    }
+  }
+
+  if (stepId === 'trainingWeeks') {
+    const weeks = Number(normalized)
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > 52) {
+      return {
+        valid: false,
+        message: 'Indiquez une durée comprise entre 1 et 52 semaines.',
       }
     }
   }

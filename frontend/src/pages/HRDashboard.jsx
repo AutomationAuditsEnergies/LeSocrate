@@ -40,7 +40,7 @@ import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } fr
 import { getReusableTeacherDefaults } from '../centerWorkspace'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
-import { RECRUITMENT_STEPS } from '../recruitmentConversation'
+import { calculateTrainingDays, RECRUITMENT_STEPS } from '../recruitmentConversation'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -2578,7 +2578,7 @@ function getRecruitmentAssistantText(step, draft, matchingModule) {
   }
   if (step.id === 'weeklyCourseCount') return 'Choisissons maintenant le rythme hebdomadaire habituel de la formation. Pour l’instant, indiquez simplement un nombre moyen de jours par semaine. Ne vous inquiétez pas si certaines semaines diffèrent : même si vous choisissez deux jours, une semaine pourra n’en compter qu’un et la suivante trois. Vous pourrez ajuster précisément le calendrier plus tard.'
   if (step.id === 'teachingDays') return 'Choisissez maintenant les jours habituels de formation, ceux qui s’appliqueront pendant la majorité du parcours. Ne vous inquiétez pas pour les semaines particulières : en cas de jour férié ou d’exception, vous pourrez déplacer les séances sur d’autres jours lorsque vous préciserez le calendrier.'
-  if (step.id === 'startDate') return 'Il reste à fixer la date de démarrage de la formation.'
+  if (step.id === 'startDate') return 'Quand débutera la formation ?'
   return step.question
 }
 
@@ -2599,6 +2599,7 @@ function RecruitmentAssistant({
     trainingName: '',
     rncpCode: '',
     trainingDays: '',
+    trainingWeeks: '',
     weeklyCourseCount: 2,
     teachingDays: ['mardi', 'jeudi'],
     startDate: todayDateInput(),
@@ -2711,6 +2712,7 @@ function RecruitmentAssistant({
     if (step.id === 'teachingDays') return value.map((day) => RECRUITMENT_DAY_OPTIONS.find((option) => option.id === day)?.label || day).join(', ')
     if (step.id === 'weeklyCourseCount') return `${value} jour${Number(value) > 1 ? 's' : ''} par semaine`
     if (step.id === 'trainingDays') return `${value} journées`
+    if (step.id === 'trainingWeeks') return `${value} semaine${Number(value) > 1 ? 's' : ''}`
     if (step.id === 'rncpCode') return `RNCP ${String(value).replace(/\D/g, '')}`
     return String(value)
   }
@@ -2743,6 +2745,12 @@ function RecruitmentAssistant({
       nextDraft = {
         ...nextDraft,
         trainingName: verifiedCertification?.title || nextDraft.trainingName,
+      }
+    }
+    if (currentStep.id === 'trainingWeeks') {
+      nextDraft = {
+        ...nextDraft,
+        trainingDays: calculateTrainingDays(normalizedValue, nextDraft.weeklyCourseCount),
       }
     }
     const nextIndex = stepIndex + (
@@ -3123,7 +3131,7 @@ function RecruitmentAssistant({
               <div><dt style={{ color: colors.textMuted }}>Professeur</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.teacherName}</dd></div>
               <div><dt style={{ color: colors.textMuted }}>Formation</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingName}</dd></div>
               <div><dt style={{ color: colors.textMuted }}>Référence</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>RNCP {draft.rncpCode}</dd></div>
-              <div><dt style={{ color: colors.textMuted }}>Calendrier</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingDays} journées, {draft.weeklyCourseCount}/semaine</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Calendrier</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingWeeks} semaines, {draft.weeklyCourseCount} journée{Number(draft.weeklyCourseCount) > 1 ? 's' : ''}/semaine</dd></div>
             </dl>
             <button type="button" onClick={() => onComplete(draft)} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#191714] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#302D28]">
               Vérifier le professeur

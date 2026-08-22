@@ -87,6 +87,17 @@ class RecruitmentConversationServiceTest(unittest.TestCase):
         self.assertIsNone(result["value"])
         self.assertIn("ne peux pas interpréter", result["reply"])
 
+    @patch("services.recruitment_conversation_service._llm_post")
+    def test_extracts_the_training_duration_in_weeks(self, llm_post):
+        llm_post.return_value = '{"intent": "answer", "value": 8}'
+
+        result = interpret_recruitment_answer(
+            "trainingWeeks",
+            "Je pense que la formation durera huit semaines.",
+        )
+
+        self.assertEqual(result, {"answered": True, "value": 8, "reply": ""})
+
 
 if __name__ == "__main__":
     unittest.main()
