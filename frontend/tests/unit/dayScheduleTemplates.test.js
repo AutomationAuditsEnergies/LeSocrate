@@ -7,6 +7,8 @@ import {
   createEmptyScheduleTemplateDraft,
   createScheduleTemplateDraft,
   formatScheduleMinute,
+  getScheduleBlockDurationBounds,
+  getScheduleSequenceDropMinute,
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
@@ -104,6 +106,27 @@ test('allows the lunch break to be stretched to two hours', () => {
     120,
   )
   assert.equal(validateScheduleTemplate({ ...draft, blocks: stretched }).valid, true)
+})
+
+test('shares the same duration bounds between templates and formation days', () => {
+  assert.deepEqual(getScheduleBlockDurationBounds({ block_type: 'course' }), { min: 35, max: 90 })
+  assert.deepEqual(getScheduleBlockDurationBounds({ block_type: 'qa' }), { min: 5, max: 30 })
+  assert.deepEqual(
+    getScheduleBlockDurationBounds({ block_type: 'pause', pause_kind: 'short' }),
+    { min: 5, max: 30 },
+  )
+  assert.deepEqual(
+    getScheduleBlockDurationBounds({ block_type: 'pause', pause_kind: 'lunch' }),
+    { min: 60, max: 120 },
+  )
+})
+
+test('snaps the first dropped sequence to five minutes and appends later sequences', () => {
+  assert.equal(getScheduleSequenceDropMinute(8 * 60 + 17), 8 * 60 + 15)
+  assert.equal(getScheduleSequenceDropMinute(23 * 60 + 55), 22 * 60 + 30)
+
+  const existing = addScheduleSequence([])
+  assert.equal(getScheduleSequenceDropMinute(7 * 60, existing), 10 * 60 + 30)
 })
 
 test('reflows subsequent blocks after duration and boundary changes', () => {

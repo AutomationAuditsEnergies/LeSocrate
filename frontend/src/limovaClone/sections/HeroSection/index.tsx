@@ -1,5 +1,4 @@
 import { HeroPromptCard } from "@/sections/HeroSection/components/HeroPromptCard";
-import { HeroVideo } from "@/sections/HeroSection/components/HeroVideo";
 
 export const HeroSection = () => {
   return (
@@ -71,7 +70,6 @@ export const HeroSection = () => {
           </div>
           <HeroPromptCard />
         </div>
-        <HeroVideo />
       </div>
     </section>
   );

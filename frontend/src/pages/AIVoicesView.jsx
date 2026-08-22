@@ -15,7 +15,7 @@ import {
 import { apiFetch } from '../api'
 
 
-const CONSENT_COPY = 'Je confirme être propriétaire de cette voix ou disposer de son autorisation expresse pour créer et utiliser cette voix IA.'
+const RIGHTS_DECLARATION = 'Je certifie que cette voix est la mienne ou que je dispose d’une autorisation écrite, valide et suffisante de son titulaire pour la cloner et l’utiliser sur la plateforme. Je m’engage à ne pas l’utiliser de manière illicite, trompeuse ou portant atteinte aux droits d’un tiers. Je reconnais être responsable des fichiers fournis et de l’utilisation de cette voix, conformément aux conditions d’utilisation.'
 const PREVIEW_TEXT = 'Bonjour, voici un aperçu de ma voix pour vos prochains cours.'
 const VOICE_READING_TEXT = 'Les abeilles jouent un rôle essentiel dans notre environnement. En transportant le pollen d’une fleur à l’autre, elles permettent à de nombreuses plantes de produire des fruits et des graines. Ce travail discret contribue directement à la diversité de notre alimentation. Une colonie peut visiter plusieurs millions de fleurs au cours d’une saison. Pour protéger ces pollinisateurs, chacun peut agir simplement : planter des espèces locales, éviter les pesticides et laisser quelques zones sauvages dans les jardins. Les abeilles ne fabriquent donc pas seulement du miel. Elles participent aussi à l’équilibre des écosystèmes et nous rappellent que, dans la nature, les actions les plus petites peuvent avoir de grandes conséquences.'
 
@@ -138,18 +138,18 @@ function AudioInput({ label, hint, value, onChange, accept = 'audio/*', maxSecon
         )}
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
-        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-[#D4D4D8] bg-white px-3.5 py-2 text-sm font-semibold text-[#27272A] transition-colors hover:bg-[#F4F4F5] focus-within:ring-2 focus-within:ring-[#18181B]/40">
-          <Upload size={16} /> Télécharger un audio
-          <input type="file" accept={accept} className="sr-only" onChange={(event) => handleFile(event.target.files?.[0])} />
-        </label>
         <button
           type="button"
           onClick={recording ? () => recorderRef.current?.stop() : startRecording}
-          className={`inline-flex min-h-11 items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 ${recording ? 'border-[#18181B] bg-[#18181B] text-white' : 'border-[#D4D4D8] bg-white text-[#27272A] hover:bg-[#F4F4F5]'}`}
+          className={`inline-flex min-h-11 items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-semibold transition-[background-color,transform] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 focus-visible:ring-offset-2 active:scale-[0.98] ${recording ? 'border-[#18181B] bg-white text-[#18181B]' : 'border-[#18181B] bg-[#18181B] text-white hover:bg-[#27272A]'}`}
         >
           {recording ? <Pause size={16} /> : <Mic size={16} />}
           {recording ? `Arrêter · ${durationLabel(elapsed)}` : 'Enregistrer'}
         </button>
+        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-[#D4D4D8] bg-white px-3.5 py-2 text-sm font-semibold text-[#27272A] transition-colors hover:bg-[#F4F4F5] focus-within:ring-2 focus-within:ring-[#18181B]/40 focus-within:ring-offset-2">
+          <Upload size={16} /> Téléverser un audio existant
+          <input type="file" accept={accept} className="sr-only" onChange={(event) => handleFile(event.target.files?.[0])} />
+        </label>
       </div>
       {value?.file && <p className="mt-3 truncate text-xs text-[#71717A]">{value.file.name}</p>}
       {error && <p className="mt-3 text-xs font-medium text-[#B42318]" role="alert">{error}</p>}
@@ -160,8 +160,8 @@ function AudioInput({ label, hint, value, onChange, accept = 'audio/*', maxSecon
 
 function ProgressSteps({ step, mode }) {
   const labels = mode === 'clone'
-    ? ['Consentement', 'Échantillon vocal', 'Validation']
-    : ['Consentement', 'Identifiant Fish Audio', 'Validation']
+    ? ['Déclaration', 'Échantillon vocal', 'Validation']
+    : ['Déclaration', 'Identifiant Fish Audio', 'Validation']
   return (
     <ol className="grid grid-cols-3 gap-2" aria-label="Progression">
       {labels.map((label, index) => (
@@ -179,9 +179,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
   const [referenceId, setReferenceId] = useState('')
-  const [transcript, setTranscript] = useState(VOICE_READING_TEXT)
-  const [consentConfirmed, setConsentConfirmed] = useState(false)
-  const [consentAudio, setConsentAudio] = useState(null)
+  const [rightsDeclared, setRightsDeclared] = useState(false)
   const [voiceAudio, setVoiceAudio] = useState(null)
   const [createdVoice, setCreatedVoice] = useState(null)
   const [speed, setSpeed] = useState(1)
@@ -192,10 +190,10 @@ function VoiceWizard({ mode, onClose, onCreated }) {
 
   useEffect(() => () => previewUrl && URL.revokeObjectURL(previewUrl), [previewUrl])
 
-  const advanceConsent = () => {
+  const advanceDeclaration = () => {
     setError('')
-    if (!name.trim() || !consentConfirmed || !consentAudio?.file) {
-      setError('Renseignez le nom, confirmez le consentement et ajoutez sa preuve vocale.')
+    if (!name.trim() || !rightsDeclared) {
+      setError('Renseignez le nom de la voix et acceptez la déclaration obligatoire.')
       return
     }
     setStep(1)
@@ -215,13 +213,10 @@ function VoiceWizard({ mode, onClose, onCreated }) {
     try {
       const form = new FormData()
       form.append('name', name.trim())
-      form.append('consent_confirmed', 'true')
-      form.append('consent_sample', consentAudio.file)
-      form.append('consent_sample_duration_sec', String(consentAudio.duration || ''))
+      form.append('rights_declaration_confirmed', 'true')
       if (mode === 'clone') {
         form.append('voice_sample', voiceAudio.file)
         form.append('voice_sample_duration_sec', String(voiceAudio.duration || ''))
-        if (transcript.trim()) form.append('transcript', transcript.trim())
       } else {
         form.append('fish_reference_id', referenceId.trim())
       }
@@ -298,30 +293,47 @@ function VoiceWizard({ mode, onClose, onCreated }) {
                 <label htmlFor="voice-name" className="mb-2 block text-sm font-semibold text-[#27272A]">Nom de la voix</label>
                 <input id="voice-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} placeholder="Ex. Voix de Sophie" className="min-h-11 w-full rounded-lg border border-[#D4D4D8] px-3.5 text-sm outline-none focus:border-[#18181B] focus:ring-2 focus:ring-[#18181B]/10" />
               </div>
-              <div className="rounded-xl bg-[#F7F7F6] p-4">
-                <div className="flex gap-3"><ShieldCheck className="mt-0.5 shrink-0" size={20} /><div><p className="text-sm font-semibold text-[#18181B]">Phrase de consentement</p><p className="mt-2 text-sm leading-6 text-[#52525B]">« {CONSENT_COPY} »</p></div></div>
-              </div>
-              <AudioInput label="Preuve vocale du consentement" hint="Lisez clairement la phrase ci-dessus. Entre 2 et 30 secondes." value={consentAudio} onChange={(file, duration) => setConsentAudio({ file, duration })} maxSeconds={30} />
-              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#D9D9DE] p-4 text-sm leading-6 text-[#3F3F46]">
-                <input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} className="mt-1 h-4 w-4 accent-[#18181B]" />
-                <span>Je confirme que ce consentement est authentique et couvre la création ainsi que l’utilisation pédagogique de cette voix.</span>
+              <label htmlFor="voice-rights-declaration" className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#D9D9DE] p-4 text-sm leading-6 text-[#3F3F46] transition-colors hover:bg-[#FAFAFA]">
+                <input id="voice-rights-declaration" type="checkbox" checked={rightsDeclared} onChange={(event) => setRightsDeclared(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-[#18181B]" />
+                <span>
+                  <span className="mb-1 flex items-center gap-2 font-semibold text-[#18181B]"><ShieldCheck size={18} /> Déclaration obligatoire</span>
+                  {RIGHTS_DECLARATION}
+                </span>
               </label>
             </div>
           )}
 
           {step === 1 && mode === 'clone' && (
             <div className="mt-7 space-y-5">
-              <div><h3 className="text-lg font-bold text-[#18181B]">Enregistrez la voix à cloner</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">10 secondes minimum, 90 secondes maximum. Pour un résultat naturel, visez 30 à 60 secondes dans une pièce calme.</p></div>
+              <div>
+                <h3 className="text-lg font-bold text-[#18181B]">Ajoutez la voix à cloner</h3>
+                <p className="mt-1 text-sm leading-6 text-[#6B6B72]">
+                  Enregistrez-vous directement en disant ce que vous voulez, ou téléversez un échantillon vocal que vous avez déjà.
+                </p>
+                <p className="mt-2 text-xs leading-5 text-[#71717A]">
+                  10 secondes minimum, 90 secondes maximum. Pour un résultat naturel, visez 30 à 60 secondes dans une pièce calme.
+                </p>
+              </div>
+
+              <AudioInput
+                label="Votre échantillon vocal"
+                hint="Une seule personne, sans musique ni écho, avec un débit naturel. Vous pouvez prononcer le texte de votre choix."
+                value={voiceAudio}
+                onChange={(file, duration) => setVoiceAudio({ file, duration })}
+                maxSeconds={90}
+              />
+
               <div className="rounded-xl bg-[#F7F7F6] p-4 sm:p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-[#18181B]">Texte à lire</p>
-                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#52525B]">Environ 50 secondes</span>
+                  <div>
+                    <p className="text-sm font-semibold text-[#18181B]">Besoin d’inspiration&nbsp;?</p>
+                    <p className="mt-1 text-xs leading-5 text-[#6B6B72]">Si vous ne savez pas quoi dire, vous pouvez lire ce texte.</p>
+                  </div>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#52525B]">Texte facultatif · environ 50 secondes</span>
                 </div>
                 <p className="mt-3 max-w-[70ch] text-sm leading-6 text-[#3F3F46]">« {VOICE_READING_TEXT} »</p>
                 <p className="mt-3 text-xs leading-5 text-[#6B6B72]">Lisez naturellement, sans accélérer, en marquant de courtes pauses à la ponctuation.</p>
               </div>
-              <AudioInput label="Échantillon vocal" hint="Une seule personne, sans musique ni écho, avec un débit naturel." value={voiceAudio} onChange={(file, duration) => setVoiceAudio({ file, duration })} maxSeconds={90} />
-              <div><label htmlFor="voice-transcript" className="mb-2 block text-sm font-semibold text-[#27272A]">Transcription envoyée avec l’audio</label><textarea id="voice-transcript" value={transcript} onChange={(event) => setTranscript(event.target.value)} rows={4} className="w-full rounded-lg border border-[#D4D4D8] px-3.5 py-3 text-sm leading-6 outline-none focus:border-[#18181B] focus:ring-2 focus:ring-[#18181B]/10" /><p className="mt-2 text-xs leading-5 text-[#6B6B72]">Le texte proposé est déjà renseigné. Modifiez cette transcription uniquement si vous lisez un autre passage.</p></div>
             </div>
           )}
 
@@ -355,7 +367,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
             <button type="button" onClick={step === 0 ? onClose : () => setStep((current) => Math.max(0, current - 1))} disabled={busy} className="min-h-11 rounded-lg border border-[#D4D4D8] px-4 py-2 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-40">{step === 0 ? 'Annuler' : 'Retour'}</button>
             <div className="flex flex-wrap gap-2">
               {step === 2 && createdVoice && <button type="button" onClick={preview} disabled={busy} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] px-4 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={16} /> Tester la voix</button>}
-              {step === 0 && <button type="button" onClick={advanceConsent} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]">Continuer</button>}
+              {step === 0 && <button type="button" onClick={advanceDeclaration} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]">Continuer</button>}
               {step === 1 && <button type="button" onClick={createVoice} disabled={busy} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A] disabled:cursor-wait disabled:bg-[#A1A1AA]">{busy ? 'Création en cours…' : mode === 'clone' ? 'Cloner la voix' : 'Importer la voix'}</button>}
               {step === 2 && createdVoice && <button type="button" onClick={confirmVoice} disabled={busy} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white hover:bg-[#27272A] disabled:cursor-wait disabled:bg-[#A1A1AA]"><Check size={16} /> {validating ? 'Validation…' : 'Valider la voix'}</button>}
             </div>

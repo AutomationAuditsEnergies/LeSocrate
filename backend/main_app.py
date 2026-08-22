@@ -11,6 +11,7 @@ from config import (
     SECRET_KEY,
     sqlite_runtime_enabled,
 )
+from utils.env import env_bool
 from utils.logger import configure_logging, get_logger
 from utils.cors_config import configure_api_cors
 from services.pipeline_worker_health import (
@@ -40,18 +41,13 @@ from routes.billing_routes import billing_bp
 configure_logging()
 logger = get_logger(__name__)
 
-_COURSE_SCHEDULER_ENABLED = os.getenv("COURSE_SCHEDULER_ENABLED", "0").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_COURSE_SCHEDULER_ENABLED = env_bool("COURSE_SCHEDULER_ENABLED")
 _COURSE_SCHEDULER_STATE = {
     "started": False,
     "last_success_monotonic": None,
     "last_error": None,
 }
-_EMBEDDED_PIPELINE_WORKER_ENABLED = (
-    os.getenv("PIPELINE_EMBEDDED_WORKER", "0").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
+_EMBEDDED_PIPELINE_WORKER_ENABLED = env_bool("PIPELINE_EMBEDDED_WORKER")
 _worker_heartbeat_seconds = max(
     5.0,
     float(os.getenv("PIPELINE_WORK_HEARTBEAT_SECONDS", "60")),
@@ -137,9 +133,7 @@ def readiness_probe():
             finally:
                 conn.close()
 
-        if os.getenv("PIPELINE_ARTIFACTS_REQUIRED", "0").strip().lower() in {
-            "1", "true", "yes", "on",
-        } and not (
+        if env_bool("PIPELINE_ARTIFACTS_REQUIRED") and not (
             os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
             or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         ):
@@ -175,6 +169,7 @@ _ADMIN_AUTH_PREFIXES = (
     "/api/slides",
 )
 _PUBLIC_ADMIN_AUTH_PATHS = {
+    "/api/admin/dev-login",
     "/api/admin/login",
     "/api/admin/register",
     "/api/admin/forgot-password",

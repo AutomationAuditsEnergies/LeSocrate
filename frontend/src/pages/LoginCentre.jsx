@@ -47,6 +47,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
   const [notice, setNotice] = useState(initialPasswordRecoveryMode ? 'Choisissez un nouveau mot de passe.' : '')
   const [loading, setLoading] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
+  const [devAccessLoading, setDevAccessLoading] = useState(false)
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(initialPasswordRecoveryMode)
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false)
   const [checkingExistingSession, setCheckingExistingSession] = useState(
@@ -311,6 +312,31 @@ export default function LoginCentre({ preloadDashboardRoute }) {
     }
   }
 
+  const handleLocalDevAccess = async () => {
+    setError('')
+    setNotice('')
+    setDevAccessLoading(true)
+    try {
+      const response = await apiFetch('/api/admin/dev-login', {
+        method: 'POST',
+        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) {
+        setError(data.error || `Accès local indisponible (${response.status})`)
+        return
+      }
+      if (data.token) localStorage.setItem('admin_auth_token', data.token)
+      preloadDashboardRoute?.().catch(() => {})
+      navigate('/dashboard-centre')
+    } catch (err) {
+      console.error('Erreur accès local:', err)
+      setError("Impossible d'ouvrir l'environnement local.")
+    } finally {
+      setDevAccessLoading(false)
+    }
+  }
+
   if (checkingExistingSession) {
     return <AppLoader label="Reprise de votre session" />
   }
@@ -507,6 +533,19 @@ export default function LoginCentre({ preloadDashboardRoute }) {
                   ? (passwordRecoveryMode ? 'Modification…' : authMode === 'signup' ? 'Création…' : 'Connexion…')
                   : (passwordRecoveryMode ? 'Enregistrer le mot de passe' : authMode === 'signup' ? 'Créer mon espace' : 'Se connecter')}
               </button>
+
+              {import.meta.env.DEV && authMode === 'login' && !passwordRecoveryMode && !forgotPasswordMode && (
+                <div className="auth-dev-access">
+                  <span>Développement local</span>
+                  <button
+                    type="button"
+                    disabled={devAccessLoading}
+                    onClick={handleLocalDevAccess}
+                  >
+                    {devAccessLoading ? 'Ouverture…' : 'Accéder sans compte'}
+                  </button>
+                </div>
+              )}
 
               {forgotPasswordMode && (
                 <button

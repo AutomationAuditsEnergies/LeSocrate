@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
-import { BrowserRouter, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
+import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { apiUrl } from './runtimeConfig'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
@@ -216,17 +216,7 @@ function CenterSessionGuard() {
 }
 
 function PublicRoot() {
-  const [searchParams] = useSearchParams()
-
-  if (searchParams.get('p') === '3') return <Landing />
-
-  return (
-    <Index
-      preloadCourseRoutes={preloadCourseRoutes}
-      preloadAttenteRoute={preloadAttenteRoute}
-      preloadVideoRoute={preloadVideoRoute}
-    />
-  )
+  return <Landing />
 }
 
 function NotFound() {

@@ -30,7 +30,7 @@ class AIVoiceRoutesTest(unittest.TestCase):
         self.assertEqual(response.get_json()["voices"], voices)
         list_voices.assert_called_once_with(42)
 
-    def test_clone_requires_vocal_consent(self):
+    def test_clone_requires_rights_declaration(self):
         with patch("routes.hr_routes.HR_ENABLED", True):
             response = self.client.post(
                 "/api/hr/ai-voices/clone",
@@ -42,9 +42,9 @@ class AIVoiceRoutesTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 400, response.get_json())
-        self.assertEqual(response.get_json()["code"], "voice_consent_required")
+        self.assertEqual(response.get_json()["code"], "voice_rights_declaration_required")
 
-    def test_clone_persists_hashes_not_raw_biometric_audio(self):
+    def test_clone_persists_declaration_and_sample_hash(self):
         created = {
             "id": 8,
             "center_account_id": 42,
@@ -55,7 +55,7 @@ class AIVoiceRoutesTest(unittest.TestCase):
             patch("routes.hr_routes.HR_ENABLED", True),
             patch(
                 "services.fish_voice_service.validate_audio",
-                side_effect=[4.0, 32.0],
+                return_value=32.0,
             ) as validate_audio,
             patch(
                 "services.fish_voice_service.create_instant_clone",
@@ -70,9 +70,7 @@ class AIVoiceRoutesTest(unittest.TestCase):
                 "/api/hr/ai-voices/clone",
                 data={
                     "name": "Sophie",
-                    "consent_confirmed": "true",
-                    "consent_sample": (io.BytesIO(b"consent-audio"), "consent.wav"),
-                    "consent_sample_duration_sec": "4.0",
+                    "rights_declaration_confirmed": "true",
                     "voice_sample": (io.BytesIO(b"voice-audio"), "voice.wav"),
                     "voice_sample_duration_sec": "32.0",
                 },
@@ -81,18 +79,46 @@ class AIVoiceRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201, response.get_json())
         kwargs = create_voice.call_args.kwargs
-        self.assertEqual(len(kwargs["consent_recording_sha256"]), 64)
+        self.assertIn("Je certifie que cette voix est la mienne", kwargs["consent_statement"])
         self.assertEqual(len(kwargs["sample_sha256"]), 64)
-        self.assertNotIn("consent-audio", repr(kwargs))
         self.assertNotIn("voice-audio", repr(kwargs))
         self.assertEqual(
-            validate_audio.call_args_list[0].kwargs["duration_hint"],
-            "4.0",
-        )
-        self.assertEqual(
-            validate_audio.call_args_list[1].kwargs["duration_hint"],
+            validate_audio.call_args.kwargs["duration_hint"],
             "32.0",
         )
+
+    def test_import_accepts_declaration_without_consent_audio(self):
+        created = {
+            "id": 9,
+            "center_account_id": 42,
+            "name": "Sophie",
+            "fish_reference_id": "fish-reference-9",
+        }
+        with (
+            patch("routes.hr_routes.HR_ENABLED", True),
+            patch(
+                "services.fish_voice_service.verify_reference_id",
+                return_value={"reference_id": "fish-reference-9", "state": "created"},
+            ),
+            patch(
+                "repositories.ai_voice_repository.create_voice",
+                return_value=created,
+            ) as create_voice,
+        ):
+            response = self.client.post(
+                "/api/hr/ai-voices/import",
+                data={
+                    "name": "Sophie",
+                    "fish_reference_id": "fish-reference-9",
+                    "rights_declaration_confirmed": "true",
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 201, response.get_json())
+        kwargs = create_voice.call_args.kwargs
+        self.assertIn("Je certifie que cette voix est la mienne", kwargs["consent_statement"])
+        self.assertNotIn("consent_recording_sha256", kwargs)
 
 
 if __name__ == "__main__":

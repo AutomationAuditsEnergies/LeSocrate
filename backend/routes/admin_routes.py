@@ -74,6 +74,61 @@ def _internal_admin_password_valid(password: str) -> bool:
     return bool(password_secret and password and hmac.compare_digest(password_secret, password))
 
 
+def _local_dev_login_allowed() -> bool:
+    """Allow passwordless access only from this machine in explicit dev mode."""
+    local_dev = os.getenv("LOCAL_DEV", "").strip().lower() in {"1", "true", "yes", "on"}
+    return local_dev and request.remote_addr in {"127.0.0.1", "::1"}
+
+
+def _get_or_create_local_dev_center():
+    username = "local-dev@cadrenza.test"
+    now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, username, center_name, slug, is_active, pipeline_access_enabled
+            FROM training_center_accounts
+            WHERE username = ?
+            """,
+            (username,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            cursor.execute(
+                """
+                INSERT INTO training_center_accounts
+                    (username, password_hash, password_debug_plaintext, center_name,
+                     slug, is_active, created_at, updated_at, pipeline_access_enabled)
+                VALUES (?, ?, NULL, ?, ?, 1, ?, ?, 0)
+                """,
+                (
+                    username,
+                    generate_password_hash(_generate_temporary_password(32)),
+                    "Environnement local",
+                    "local-dev",
+                    now_str,
+                    now_str,
+                ),
+            )
+            conn.commit()
+            cursor.execute(
+                """
+                SELECT id, username, center_name, slug, is_active, pipeline_access_enabled
+                FROM training_center_accounts
+                WHERE id = ?
+                """,
+                (cursor.lastrowid,),
+            )
+            row = cursor.fetchone()
+
+        keys = ("id", "username", "center_name", "slug", "is_active", "pipeline_access_enabled")
+        return dict(zip(keys, row))
+    finally:
+        conn.close()
+
+
 def _create_admin_token(account_type, account_id=None, center_name=None):
     payload = {
         "account_type": account_type,
@@ -1013,6 +1068,36 @@ def create_admin_blueprint():
         except Exception as e:
             logger.error(f"❌ Erreur export Excel: {e}")
             return jsonify({"success": False, "error": "Erreur lors de l'export"}), 500
+
+    @admin_bp.route("/api/admin/dev-login", methods=["POST"])
+    def dev_login_admin():
+        """Create a local-only session for interface development."""
+        if not _local_dev_login_allowed():
+            return jsonify({"success": False, "error": "Accès local indisponible"}), 404
+
+        account = _get_or_create_local_dev_center()
+        session["is_admin"] = True
+        session["admin_account_type"] = "training_center"
+        session["admin_account_id"] = account["id"]
+        session["center_name"] = account["center_name"]
+        session.permanent = True
+        token = _create_admin_token(
+            "training_center",
+            account_id=account["id"],
+            center_name=account["center_name"],
+        )
+        logger.info("LOCAL_DEV_LOGIN_GRANTED remote_addr=%s", request.remote_addr)
+        return jsonify({
+            "success": True,
+            "token": token,
+            "account": {
+                "type": "training_center",
+                "id": account["id"],
+                "username": account["username"],
+                "center_name": account["center_name"],
+                "permissions": permissions_from_account("training_center", account),
+            },
+        }), 200
 
     @admin_bp.route("/api/admin/login", methods=["POST"])
     def login_admin():

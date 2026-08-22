@@ -610,9 +610,8 @@ def create_hr_blueprint():
             return denied
         from repositories.ai_voice_repository import create_voice
         from services.fish_voice_service import (
-            CONSENT_STATEMENT,
             MAX_CLONE_BYTES,
-            MAX_CONSENT_BYTES,
+            RIGHTS_DECLARATION,
             audio_sha256,
             create_instant_clone,
             validate_audio,
@@ -620,31 +619,21 @@ def create_hr_blueprint():
 
         name = str(request.form.get("name") or "").strip()[:80]
         transcript = str(request.form.get("transcript") or "").strip()[:5000]
-        consent_confirmed = str(request.form.get("consent_confirmed") or "").lower() == "true"
+        rights_declared = str(request.form.get("rights_declaration_confirmed") or "").lower() == "true"
         voice_sample = request.files.get("voice_sample")
-        consent_sample = request.files.get("consent_sample")
         if not name:
             return jsonify({"success": False, "error": "Donnez un nom à la voix."}), 400
-        if not consent_confirmed or not consent_sample:
+        if not rights_declared:
             return jsonify({
                 "success": False,
-                "error": "Le consentement vocal et sa confirmation sont obligatoires.",
-                "code": "voice_consent_required",
+                "error": "La déclaration relative aux droits sur la voix est obligatoire.",
+                "code": "voice_rights_declaration_required",
             }), 400
         if not voice_sample:
             return jsonify({"success": False, "error": "Ajoutez un échantillon vocal."}), 400
 
-        consent_bytes = consent_sample.read(MAX_CONSENT_BYTES + 1)
         sample_bytes = voice_sample.read(MAX_CLONE_BYTES + 1)
         try:
-            consent_duration = validate_audio(
-                consent_bytes,
-                consent_sample.filename or "consent.webm",
-                min_seconds=2,
-                max_seconds=30,
-                max_bytes=MAX_CONSENT_BYTES,
-                duration_hint=request.form.get("consent_sample_duration_sec"),
-            )
             sample_duration = validate_audio(
                 sample_bytes,
                 voice_sample.filename or "voix.webm",
@@ -665,9 +654,7 @@ def create_hr_blueprint():
                 name=name,
                 fish_reference_id=fish_voice["reference_id"],
                 source="clone",
-                consent_statement=CONSENT_STATEMENT,
-                consent_recording_sha256=audio_sha256(consent_bytes),
-                consent_recording_duration_sec=consent_duration,
+                consent_statement=RIGHTS_DECLARATION,
                 sample_sha256=audio_sha256(sample_bytes),
                 sample_duration_sec=sample_duration,
                 language="fr",
@@ -684,44 +671,29 @@ def create_hr_blueprint():
             return denied
         from repositories.ai_voice_repository import create_voice
         from services.fish_voice_service import (
-            CONSENT_STATEMENT,
-            MAX_CONSENT_BYTES,
-            audio_sha256,
-            validate_audio,
+            RIGHTS_DECLARATION,
             verify_reference_id,
         )
 
         name = str(request.form.get("name") or "").strip()[:80]
         reference_id = str(request.form.get("fish_reference_id") or "").strip()
-        consent_confirmed = str(request.form.get("consent_confirmed") or "").lower() == "true"
-        consent_sample = request.files.get("consent_sample")
+        rights_declared = str(request.form.get("rights_declaration_confirmed") or "").lower() == "true"
         if not name or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", reference_id):
             return jsonify({"success": False, "error": "Nom ou identifiant Fish Audio invalide."}), 400
-        if not consent_confirmed or not consent_sample:
+        if not rights_declared:
             return jsonify({
                 "success": False,
-                "error": "Le consentement vocal et sa confirmation sont obligatoires.",
-                "code": "voice_consent_required",
+                "error": "La déclaration relative aux droits sur la voix est obligatoire.",
+                "code": "voice_rights_declaration_required",
             }), 400
-        consent_bytes = consent_sample.read(MAX_CONSENT_BYTES + 1)
         try:
-            consent_duration = validate_audio(
-                consent_bytes,
-                consent_sample.filename or "consent.webm",
-                min_seconds=2,
-                max_seconds=30,
-                max_bytes=MAX_CONSENT_BYTES,
-                duration_hint=request.form.get("consent_sample_duration_sec"),
-            )
             fish_voice = verify_reference_id(reference_id)
             voice = create_voice(
                 center_account_id,
                 name=name,
                 fish_reference_id=fish_voice["reference_id"],
                 source="import",
-                consent_statement=CONSENT_STATEMENT,
-                consent_recording_sha256=audio_sha256(consent_bytes),
-                consent_recording_duration_sec=consent_duration,
+                consent_statement=RIGHTS_DECLARATION,
                 language="fr",
                 fish_state=fish_voice.get("state"),
             )

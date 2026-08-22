@@ -38,7 +38,6 @@ import './CreatePlatformView.css'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
 import { getReusableTeacherDefaults } from '../centerWorkspace'
-import { validateRecruitmentAnswer } from '../recruitmentConversation'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
 
@@ -2844,7 +2843,7 @@ function RecruitmentAssistant({
     }
   }
 
-  const interpretFreeTextAnswer = async (field, value, { initialBrief = false } = {}) => {
+  const interpretFreeTextAnswer = async (field, value) => {
     setIsThinking(true)
 
     let interpretation
@@ -2864,10 +2863,11 @@ function RecruitmentAssistant({
       if (!response.ok || !payload.success) throw new Error(payload.error || 'Analyse indisponible')
       interpretation = payload
     } catch {
-      const fallback = validateRecruitmentAnswer(field, value)
-      interpretation = fallback.valid
-        ? { answered: true, value: fallback.value || value }
-        : { answered: false, value: null, reply: fallback.message }
+      interpretation = {
+        answered: false,
+        value: null,
+        reply: 'Je ne peux pas interpréter votre réponse pour le moment. Réessayez dans quelques instants.',
+      }
     }
 
     if (!interpretation.answered) {
@@ -2877,9 +2877,7 @@ function RecruitmentAssistant({
       }))
       revealAssistantMessages([{
         role: 'assistant',
-        text: initialBrief
-          ? 'Très bien. Quel nom souhaitez-vous donner à ce professeur IA ?'
-          : interpretation.reply,
+        text: interpretation.reply || getRecruitmentAssistantText(currentStep, draft, matchingModule),
       }])
       return
     }
@@ -2910,7 +2908,7 @@ function RecruitmentAssistant({
     setStarted(true)
     setHistory([{ role: 'user', text: value }])
     setBrief('')
-    interpretFreeTextAnswer('teacherName', value, { initialBrief: true })
+    interpretFreeTextAnswer('teacherName', value)
   }
 
   const submitAnswer = (event) => {

@@ -25,6 +25,7 @@ import {
   createEmptyScheduleTemplateDraft,
   DAY_SCHEDULE_RULES,
   formatScheduleMinute,
+  getScheduleBlockDurationBounds,
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
@@ -52,11 +53,12 @@ const CALENDAR_PIXELS_PER_MINUTE = 1.05
 const CALENDAR_EDGE_PADDING = 24
 
 function TemplateState({ template }) {
-  const used = isScheduleTemplateUsed(template)
+  if (!isScheduleTemplateUsed(template)) return null
+
   return (
     <span className="inline-flex items-center gap-1 rounded-full border border-[#D4D4D8] bg-white px-2 py-1 text-[10px] font-semibold text-[#52525B]">
-      {used ? <LockKeyhole size={11} aria-hidden="true" /> : <PencilLine size={11} aria-hidden="true" />}
-      {used ? 'Utilisé' : 'Modifiable'}
+      <LockKeyhole size={11} aria-hidden="true" />
+      Utilisé
     </span>
   )
 }
@@ -109,14 +111,6 @@ function getValidationMessages(validation, blocks) {
   return messages
 }
 
-function durationBounds(block) {
-  if (block.block_type === 'course') return DAY_SCHEDULE_RULES.course
-  if (block.block_type === 'qa') return DAY_SCHEDULE_RULES.qa
-  return block.pause_kind === 'lunch'
-    ? DAY_SCHEDULE_RULES.lunchPause
-    : DAY_SCHEDULE_RULES.shortPause
-}
-
 function ScheduleTimeline({
   blocks,
   readOnly,
@@ -149,7 +143,7 @@ function ScheduleTimeline({
   const updateDuration = (blockIndex, duration) => {
     const block = blocks[blockIndex]
     if (!block) return
-    const bounds = durationBounds(block)
+    const bounds = getScheduleBlockDurationBounds(block)
     const snapped = Math.round(Number(duration) / 5) * 5
     const constrained = Math.min(bounds.max, Math.max(bounds.min, snapped))
     onBlocksChange(updateScheduleBlockDuration(blocks, blockIndex, constrained))
@@ -161,7 +155,7 @@ function ScheduleTimeline({
     const startY = event.clientY
     const original = blocks.map((block) => ({ ...block }))
     const initialDuration = original[blockIndex].duration_minutes
-    const bounds = durationBounds(original[blockIndex])
+    const bounds = getScheduleBlockDurationBounds(original[blockIndex])
     setActiveResizeIndex(blockIndex)
 
     const onMove = (pointerEvent) => {
@@ -294,7 +288,7 @@ function ScheduleTimeline({
             {blocks.map((block, index) => {
             const presentation = blockPresentation(block, counters)
             const BlockIcon = presentation.icon
-            const bounds = durationBounds(block)
+            const bounds = getScheduleBlockDurationBounds(block)
             const errors = blockErrors[block.block_key] || []
             const blockHeight = Math.max(12, block.duration_minutes * CALENDAR_PIXELS_PER_MINUTE)
             const blockTop = (
@@ -452,11 +446,11 @@ function TemplateList({
   loading,
   search,
   onSearchChange,
+  onCreate,
   onRetry,
   onEdit,
   onDuplicate,
   onDelete,
-  onUse,
   deleting,
   error,
 }) {
@@ -467,25 +461,28 @@ function TemplateList({
   }, [search, templates])
 
   return (
-    <section className="day-schedule-library" aria-labelledby="day-schedule-library-title">
+    <section className="day-schedule-library" aria-label="Mes templates">
       <div className="day-schedule-library-toolbar">
-        <div>
-          <h2 id="day-schedule-library-title">Mes templates</h2>
-          <p>{templates.length} organisation{templates.length > 1 ? 's' : ''} enregistrée{templates.length > 1 ? 's' : ''}</p>
+        <p>{templates.length} organisation{templates.length > 1 ? 's' : ''} enregistrée{templates.length > 1 ? 's' : ''}</p>
+        <div className="day-schedule-library-actions">
+          {templates.length > 3 && (
+            <label className="relative block">
+              <span className="sr-only">Rechercher un template</span>
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#71717A]" aria-hidden="true" />
+              <input
+                type="search"
+                className="day-schedule-search pl-9"
+                placeholder="Rechercher un template"
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+              />
+            </label>
+          )}
+          <button type="button" className={BUTTON_PRIMARY} onClick={onCreate}>
+            <Plus size={16} aria-hidden="true" />
+            Créer un template
+          </button>
         </div>
-        {templates.length > 3 && (
-          <label className="relative block">
-            <span className="sr-only">Rechercher un template</span>
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#71717A]" aria-hidden="true" />
-            <input
-              type="search"
-              className="day-schedule-search pl-9"
-              placeholder="Rechercher un template"
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-            />
-          </label>
-        )}
       </div>
 
       {loading ? (
@@ -520,7 +517,12 @@ function TemplateList({
             return (
               <article key={template.id} className="day-schedule-template-card">
                 <div className="day-schedule-template-card-heading">
-                  <h3>{template.name}</h3>
+                  <div className="day-schedule-template-card-title">
+                    <span className="day-schedule-template-calendar" aria-hidden="true">
+                      <img src="/assets/calendar-template.png" alt="" />
+                    </span>
+                    <h3>{template.name}</h3>
+                  </div>
                   <TemplateState template={template} />
                 </div>
                 <div className="day-schedule-template-card-stats">
@@ -548,9 +550,6 @@ function TemplateList({
                     title="Supprimer"
                   >
                     <Trash2 size={15} aria-hidden="true" />
-                  </button>
-                  <button type="button" className={BUTTON_PRIMARY} onClick={() => onUse(template)}>
-                    Utiliser
                   </button>
                 </div>
               </article>
@@ -718,17 +717,6 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
     }
   }
 
-  const useTemplate = (template = selectedTemplate) => {
-    if (!template) return
-    setSelectedId(template.id)
-    window.sessionStorage.setItem('selected_day_schedule_template_id', String(template.id))
-    setFeedback({
-      tone: 'success',
-      message: `« ${template.name} » est retenu pour la prochaine formation.`,
-    })
-    onUseTemplate?.(template)
-  }
-
   const updateDraftBlocks = (blocks) => {
     setDraft((current) => current ? { ...current, blocks } : current)
   }
@@ -739,7 +727,7 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
 
   return (
     <section
-      className={`day-schedule-page pb-12${mode === 'edit' ? ' day-schedule-page--editor' : ''}`}
+      className={`day-schedule-page pb-12${mode === 'edit' ? ' day-schedule-page--editor' : ' day-schedule-page--overview'}`}
       aria-labelledby="day-schedule-title"
     >
       <header className="day-schedule-page-header">
@@ -763,14 +751,17 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
                 {saving ? 'Enregistrement…' : 'Enregistrer'}
               </button>
             </>
-          ) : templates.length > 0 && (
-            <button type="button" className={BUTTON_PRIMARY} onClick={startCreate}>
-              <Plus size={16} aria-hidden="true" />
-              Créer un template
-            </button>
-          )}
+          ) : null}
         </div>
       </header>
+
+      {mode !== 'edit' && (
+        <div className="day-schedule-section-divider" aria-hidden="true">
+          <span />
+          <strong>Mes templates</strong>
+          <span />
+        </div>
+      )}
 
       {feedback && (
         <div
@@ -828,11 +819,11 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
             loading={loading}
             search={search}
             onSearchChange={setSearch}
+            onCreate={startCreate}
             onRetry={loadTemplates}
             onEdit={startEdit}
             onDuplicate={startDuplicate}
             onDelete={removeTemplate}
-            onUse={useTemplate}
             deleting={deleting}
             error={error}
           />

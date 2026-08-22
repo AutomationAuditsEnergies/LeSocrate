@@ -654,6 +654,41 @@
   font-size: 0.86rem;
 }
 
+.cadrenza-auth--center .auth-dev-access {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 5px;
+  border-top: 1px solid #e4e4e7;
+  padding-top: 15px;
+  color: #71717a;
+  font-size: 0.76rem;
+}
+
+.cadrenza-auth--center .auth-dev-access button {
+  min-height: 36px;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+  background: #fff;
+  color: #27272a;
+  cursor: pointer;
+  padding: 0 12px;
+  font-size: 0.76rem;
+  font-weight: 650;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.cadrenza-auth--center .auth-dev-access button:hover:not(:disabled) {
+  border-color: #a1a1aa;
+  background: #f4f4f5;
+}
+
+.cadrenza-auth--center .auth-dev-access button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .cadrenza-auth--center.cadrenza-auth--forgot .auth-panel__inner {
   width: min(100%, 416px);
 }

@@ -190,7 +190,7 @@ export function getScheduleStats(blocks) {
   }
 }
 
-function durationRuleForBlock(block) {
+export function getScheduleBlockDurationBounds(block) {
   if (block.block_type === 'course') return DAY_SCHEDULE_RULES.course
   if (block.block_type === 'qa') return DAY_SCHEDULE_RULES.qa
   return block.pause_kind === 'lunch'
@@ -227,7 +227,7 @@ export function validateScheduleTemplate(template) {
   blocks.forEach((block, index) => {
     const key = block.block_key || `block-${index + 1}`
     const blockMessages = []
-    const rule = durationRuleForBlock(block)
+    const rule = getScheduleBlockDurationBounds(block)
     const duration = finiteMinute(block.duration_minutes)
     if (duration < rule.min || duration > rule.max) {
       blockMessages.push(`Durée autorisée : ${rule.min} à ${rule.max} min.`)
@@ -348,6 +348,16 @@ export function addScheduleSequence(blocks) {
   }
   updated.push(...makeSequenceBlocks(stats.courseCount + 1))
   return reflowScheduleBlocks(updated, source[0]?.start_minute ?? DEFAULT_START_MINUTE)
+}
+
+export function getScheduleSequenceDropMinute(pointerMinute, blocks = []) {
+  const source = reflowScheduleBlocks(blocks)
+  if (source.length) return source.at(-1).end_minute
+
+  const sequenceMinutes = addScheduleSequence([])
+    .reduce((total, block) => total + finiteMinute(block.duration_minutes), 0)
+  const snapped = Math.round(finiteMinute(pointerMinute) / 5) * 5
+  return Math.min((24 * 60) - sequenceMinutes, Math.max(0, snapped))
 }
 
 export function removeLastScheduleSequence(blocks) {

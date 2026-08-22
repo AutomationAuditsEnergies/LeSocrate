@@ -1,22 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  BookmarkPlus,
+  Coffee,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  GripHorizontal,
   Menu,
   Minus,
   PlusCircle,
-  Search,
+  Utensils,
+  X,
 } from 'lucide-react'
 
 import {
   DAY_SCHEDULE_RULES,
   addScheduleSequence,
+  formatScheduleMinute,
+  getScheduleBlockDurationBounds,
+  getScheduleSequenceDropMinute,
   getScheduleStats,
   normalizeScheduleTemplate,
+  reflowScheduleBlocks,
   removeLastScheduleSequence,
   setSchedulePauseKind,
+  updateScheduleBlockDuration,
+  validateScheduleTemplate,
 } from '../dayScheduleTemplates.js'
-import { listDayScheduleTemplates } from '../dayScheduleTemplateApi.js'
+import {
+  createDayScheduleTemplate,
+  listDayScheduleTemplates,
+} from '../dayScheduleTemplateApi.js'
 import {
   TRAINING_WEEKDAYS,
   addCalendarDays,
@@ -42,8 +56,8 @@ const FRENCH_WEEKDAY_TO_ISO = Object.freeze({
   dimanche: 7,
 })
 
-const FIGMA_WEEKDAY_LABELS = Object.freeze([
-  'Mon', 'Tue', 'Wed', 'Thur', 'Fri', 'Sat', 'Sun',
+const WEEKDAY_LABELS = Object.freeze([
+  'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche',
 ])
 
 function localToday() {
@@ -73,7 +87,8 @@ function formatLongDate(value) {
 
 function monthLabel(year, monthIndex) {
   return new Intl.DateTimeFormat('fr-FR', {
-    month: 'short',
+    month: 'long',
+    year: 'numeric',
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(year, monthIndex, 1)))
 }
@@ -215,9 +230,17 @@ export default function FormationSchedulePlanner({
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [prefillOpen, setPrefillOpen] = useState(false)
   const [calendarFillCycle, setCalendarFillCycle] = useState(0)
-  const [dropDate, setDropDate] = useState('')
+  const [dropPreview, setDropPreview] = useState(null)
   const didInitialPrefill = useRef(false)
   const timelineRef = useRef(null)
+  const prefillDialogRef = useRef(null)
+  const templateSaveDialogRef = useRef(null)
+  const eventResizeRef = useRef(null)
+  const weekSwipeRef = useRef(null)
+  const weekWheelRef = useRef(0)
+  const pauseClickRef = useRef({ key: '', at: 0 })
+  const [resizingEventKey, setResizingEventKey] = useState('')
+  const [templateQuickSave, setTemplateQuickSave] = useState(null)
 
   const loadTemplates = useCallback(async () => {
     if (reuse) return
@@ -253,6 +276,20 @@ export default function FormationSchedulePlanner({
   }, [loadTemplates])
 
   useEffect(() => {
+    const dialog = prefillDialogRef.current
+    if (!dialog) return
+    if (prefillOpen && !dialog.open) dialog.showModal()
+    if (!prefillOpen && dialog.open) dialog.close()
+  }, [prefillOpen])
+
+  useEffect(() => {
+    const dialog = templateSaveDialogRef.current
+    if (!dialog) return
+    if (templateQuickSave && !dialog.open) dialog.showModal()
+    if (!templateQuickSave && dialog.open) dialog.close()
+  }, [templateQuickSave])
+
+  useEffect(() => {
     if (reuse) return undefined
     const intervalId = window.setInterval(
       () => setValidationNow(new Date()),
@@ -270,6 +307,14 @@ export default function FormationSchedulePlanner({
       }
     })
     return () => window.cancelAnimationFrame(frameId)
+  }, [])
+
+  useEffect(() => () => {
+    const resize = eventResizeRef.current
+    if (!resize) return
+    window.removeEventListener('pointermove', resize.onMove)
+    window.removeEventListener('pointerup', resize.onEnd)
+    window.removeEventListener('pointercancel', resize.onEnd)
   }, [])
 
   useEffect(() => {
@@ -377,6 +422,43 @@ export default function FormationSchedulePlanner({
     [focusedWeekStart],
   )
   const visibleWeekLabel = weekLabel(visibleWeekDates[0], visibleWeekDates[6])
+
+  const navigateWeek = (offset) => {
+    const nextWeekStart = addCalendarDays(focusedWeekStart, offset * 7)
+    setFocusedWeekStart(nextWeekStart)
+    setMonth(initialMonth(addCalendarDays(nextWeekStart, 3)))
+    setDropPreview(null)
+    setTemplateQuickSave(null)
+  }
+
+  const beginWeekSwipe = (event) => {
+    if (event.pointerType === 'mouse' || event.button !== 0) return
+    if (event.target.closest('button, input, select, textarea, [draggable="true"], .formation-schedule__week-event')) return
+    weekSwipeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    }
+  }
+
+  const finishWeekSwipe = (event) => {
+    const swipe = weekSwipeRef.current
+    weekSwipeRef.current = null
+    if (!swipe || swipe.pointerId !== event.pointerId) return
+    const deltaX = event.clientX - swipe.startX
+    const deltaY = event.clientY - swipe.startY
+    if (Math.abs(deltaX) < 60 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) return
+    navigateWeek(deltaX < 0 ? 1 : -1)
+  }
+
+  const handleWeekWheel = (event) => {
+    if (Math.abs(event.deltaX) < 40 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return
+    const now = Date.now()
+    if (now - weekWheelRef.current < 450) return
+    event.preventDefault()
+    weekWheelRef.current = now
+    navigateWeek(event.deltaX > 0 ? 1 : -1)
+  }
   const activeBlocks = scheduleDayByDate.get(activeDate)?.blocks || []
   const activeSequenceCount = getScheduleStats(activeBlocks).courseCount
 
@@ -415,7 +497,8 @@ export default function FormationSchedulePlanner({
     setHelperError('')
   }
 
-  const applyPrefill = () => {
+  const applyPrefill = (event) => {
+    event?.preventDefault()
     const weeklyCount = Number(helperDaysPerWeek)
     if (!helperStartDate) {
       setHelperError('Choisissez une date de début.')
@@ -475,12 +558,9 @@ export default function FormationSchedulePlanner({
   }
 
   const activateDate = (date) => {
-    if (date < today) return
+    if (date < today || !selectedDates.includes(date)) return
     setFocusedWeekStart(weekStart(date))
     setActiveDateKey(date)
-    setSelectedDates((current) => (
-      current.includes(date) ? current : [...current, date]
-    ))
   }
 
   const assignTemplate = (date, templateId) => {
@@ -523,16 +603,155 @@ export default function FormationSchedulePlanner({
     setCustomDays((current) => ({ ...current, [date]: nextBlocks }))
   }
 
-  const addSequenceToDay = (date) => {
+  const addSequenceToDay = (date, requestedStartMinute = null) => {
     const blocks = scheduleDayByDate.get(date)?.blocks || []
     if (getScheduleStats(blocks).courseCount >= DAY_SCHEDULE_RULES.maxCourses) return
-    updateCustomDay(date, addSequenceWithDefaultLunch)
+    updateCustomDay(date, (existing) => {
+      const next = addSequenceWithDefaultLunch(existing)
+      if (existing.length || requestedStartMinute === null) return next
+      return reflowScheduleBlocks(
+        next,
+        getScheduleSequenceDropMinute(requestedStartMinute),
+      )
+    })
   }
 
   const removeSequenceFromDay = (date) => {
     const blocks = scheduleDayByDate.get(date)?.blocks || []
     if (!getScheduleStats(blocks).courseCount) return
     updateCustomDay(date, removeLastScheduleSequence)
+  }
+
+  const openTemplateQuickSave = (date) => {
+    const blocks = scheduleDayByDate.get(date)?.blocks || []
+    if (!blocks.length) return
+    setActiveDateKey(date)
+    setTemplateQuickSave({
+      date,
+      name: `Journée ${formatLongDate(date)}`,
+      error: '',
+      saving: false,
+      saved: false,
+    })
+  }
+
+  const saveDayAsTemplate = async (event) => {
+    event.preventDefault()
+    if (!templateQuickSave || templateQuickSave.saving) return
+    const blocks = scheduleDayByDate.get(templateQuickSave.date)?.blocks || []
+    const result = validateScheduleTemplate({
+      name: templateQuickSave.name,
+      blocks,
+    })
+    if (!result.valid) {
+      setTemplateQuickSave((current) => ({
+        ...current,
+        error: result.errors[0] || 'Cette journée ne peut pas encore être enregistrée.',
+      }))
+      return
+    }
+
+    setTemplateQuickSave((current) => ({ ...current, saving: true, error: '' }))
+    try {
+      const saved = await createDayScheduleTemplate(result.template)
+      setTemplates((current) => [
+        saved,
+        ...current.filter((template) => String(template.id) !== String(saved.id)),
+      ])
+      setTemplateQuickSave((current) => ({
+        ...current,
+        name: saved.name,
+        saving: false,
+        saved: true,
+      }))
+    } catch (error) {
+      setTemplateQuickSave((current) => ({
+        ...current,
+        saving: false,
+        error: error.message || 'Impossible d’enregistrer ce template.',
+      }))
+    }
+  }
+
+  const toggleLunchForDay = (event, date, blocks, blockIndex) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const block = blocks[blockIndex]
+    if (reuse || date < today || block?.block_type !== 'pause') return
+    updateCustomDay(date, () => setSchedulePauseKind(
+      blocks,
+      blockIndex,
+      block.pause_kind === 'lunch' ? 'short' : 'lunch',
+    ))
+  }
+
+  const handleLunchPointerDown = (event, date, blocks, blockIndex) => {
+    const block = blocks[blockIndex]
+    const key = `${date}:${block?.block_key || blockIndex}`
+    const now = event.timeStamp
+    const previous = pauseClickRef.current
+
+    if (previous.key === key && now - previous.at <= 500) {
+      pauseClickRef.current = { key: '', at: 0 }
+      toggleLunchForDay(event, date, blocks, blockIndex)
+      return
+    }
+
+    pauseClickRef.current = { key, at: now }
+  }
+
+  const updateEventDuration = (date, blocks, blockIndex, duration) => {
+    const block = blocks[blockIndex]
+    if (reuse || date < today || !block) return
+    const bounds = getScheduleBlockDurationBounds(block)
+    const snapped = Math.round(Number(duration) / 5) * 5
+    const constrained = Math.min(bounds.max, Math.max(bounds.min, snapped))
+    updateCustomDay(date, () => updateScheduleBlockDuration(
+      blocks,
+      blockIndex,
+      constrained,
+    ))
+  }
+
+  const beginEventResize = (event, date, blocks, blockIndex) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (reuse || date < today || !blocks[blockIndex]) return
+
+    const hourSlot = event.currentTarget
+      .closest('.formation-schedule__week-column')
+      ?.querySelector('.formation-schedule__hour-slot')
+    const pixelsPerMinute = Math.max(0.25, (hourSlot?.getBoundingClientRect().height || 60) / 60)
+    const startY = event.clientY
+    const original = blocks.map((block) => ({ ...block }))
+    const initialDuration = original[blockIndex].duration_minutes
+    const bounds = getScheduleBlockDurationBounds(original[blockIndex])
+    const eventKey = `${date}:${original[blockIndex].block_key || blockIndex}`
+    setResizingEventKey(eventKey)
+
+    const onMove = (pointerEvent) => {
+      const deltaSteps = Math.round(
+        (pointerEvent.clientY - startY) / (pixelsPerMinute * 5),
+      )
+      const requestedDuration = initialDuration + (deltaSteps * 5)
+      const nextDuration = Math.min(bounds.max, Math.max(bounds.min, requestedDuration))
+      updateCustomDay(date, () => updateScheduleBlockDuration(
+        original,
+        blockIndex,
+        nextDuration,
+      ))
+    }
+    const onEnd = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+      eventResizeRef.current = null
+      setResizingEventKey('')
+    }
+    eventResizeRef.current = { onMove, onEnd }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onEnd, { once: true })
+    window.addEventListener('pointercancel', onEnd, { once: true })
   }
 
   const shiftMonth = (offset) => {
@@ -549,77 +768,43 @@ export default function FormationSchedulePlanner({
     <section className="formation-schedule" aria-label="Calendrier hebdomadaire de la formation">
       <aside className="formation-schedule__sidebar" data-open={sidebarOpen}>
         <div className="formation-schedule__side-header">
-          <div className="formation-schedule__month-tools">
-            <div className="formation-schedule__side-month">
-              {monthLabel(month.year, month.month)}
-            </div>
-            <button
-              type="button"
-              className="formation-schedule__prefill-toggle"
-              aria-expanded={prefillOpen}
-              aria-label={prefillOpen ? 'Retour au calendrier' : 'Remplir automatiquement les dates'}
-              onClick={() => {
-                setPrefillOpen((current) => !current)
-                setHelperError('')
-              }}
-            >
-              {prefillOpen ? 'Retour' : 'Remplir'}
-            </button>
-          </div>
           <div className="formation-schedule__month-navigation" aria-label="Changer de mois">
             <button type="button" aria-label="Mois précédent" onClick={() => shiftMonth(-1)}>
-              <ChevronLeft size={13} aria-hidden="true" />
+              <ChevronLeft size={18} strokeWidth={1.75} aria-hidden="true" />
             </button>
+            <div className="formation-schedule__side-month" aria-live="polite">
+              {monthLabel(month.year, month.month)}
+            </div>
             <button type="button" aria-label="Mois suivant" onClick={() => shiftMonth(1)}>
-              <ChevronRight size={13} aria-hidden="true" />
+              <ChevronRight size={18} strokeWidth={1.75} aria-hidden="true" />
             </button>
           </div>
         </div>
 
-        <div className="formation-schedule__mini-stage" data-prefill={prefillOpen}>
-          {prefillOpen ? (
-            <section className="formation-schedule__prefill-panel" aria-label="Remplissage automatique des dates">
-              <div className="formation-schedule__helper-content">
-                <label><span>Date de début</span><input type="date" min={earliestSuggestedDate} value={helperStartDate} onChange={(event) => { setHelperStartDate(event.target.value); setHelperError('') }} /></label>
-                <div className="formation-schedule__helper-numbers">
-                  <label><span>Semaines</span><input type="number" min="1" max="104" value={helperWeeks} onChange={(event) => setHelperWeeks(event.target.value)} /></label>
-                  <label><span>Jours / semaine</span><input type="number" min="1" max="7" value={helperDaysPerWeek} onChange={(event) => setHelperDaysPerWeek(event.target.value)} /></label>
-                </div>
-                <fieldset>
-                  <legend>Jours préférés</legend>
-                  <div className="formation-schedule__weekdays">
-                    {TRAINING_WEEKDAYS.map((day) => <button key={day.id} type="button" aria-pressed={preferredWeekdays.includes(day.id)} onClick={() => togglePreferredWeekday(day.id)}>{day.short}</button>)}
-                  </div>
-                </fieldset>
-                <button type="button" className="formation-schedule__prefill-action" onClick={applyPrefill}>Appliquer</button>
-                {helperError && <p className="formation-schedule__inline-error" role="alert">{helperError}</p>}
-              </div>
-            </section>
-          ) : (
-            <div className="formation-schedule__sidebar-calendar" key={`calendar-${calendarFillCycle}`}>
-              <div className="formation-schedule__mini-calendar">
-                <div className="formation-schedule__mini-weekdays" aria-hidden="true">
-                  {TRAINING_WEEKDAYS.map((day) => <span key={day.id}>{day.short.slice(0, 1)}</span>)}
-              </div>
-              <div className="formation-schedule__mini-grid" data-animate={calendarFillCycle > 0 || undefined}>
-                {calendarDays.map((day, dayIndex) => (
-                  <button
-                    key={day.date}
-                    type="button"
-                    disabled={day.date < today}
-                    data-outside={!day.inMonth}
-                    aria-pressed={selectedSet.has(day.date)}
-                    aria-label={`${selectedSet.has(day.date) ? 'Retirer' : 'Ajouter'} le ${formatLongDate(day.date)}`}
-                    style={{ '--calendar-day-index': dayIndex }}
-                    onClick={() => toggleDate(day.date)}
-                  >
-                    {String(day.day).padStart(2, '0')}
-                  </button>
-                  ))}
-                </div>
+        <div className="formation-schedule__mini-stage">
+          <div className="formation-schedule__sidebar-calendar" key={`calendar-${calendarFillCycle}`}>
+            <div className="formation-schedule__mini-calendar">
+              <div className="formation-schedule__mini-weekdays" aria-hidden="true">
+                {TRAINING_WEEKDAYS.map((day) => <span key={day.id}>{day.short.slice(0, 1)}</span>)}
+            </div>
+            <div className="formation-schedule__mini-grid" data-animate={calendarFillCycle > 0 || undefined}>
+              {calendarDays.map((day, dayIndex) => (
+                <button
+                  key={day.date}
+                  type="button"
+                  disabled={day.date < today}
+                  data-outside={!day.inMonth}
+                  aria-pressed={selectedSet.has(day.date)}
+                  aria-label={`${selectedSet.has(day.date) ? 'Retirer' : 'Ajouter'} le ${formatLongDate(day.date)}`}
+                  style={{ '--calendar-day-index': dayIndex }}
+                  onClick={() => toggleDate(day.date)}
+                >
+                  {String(day.day).padStart(2, '0')}
+                </button>
+                ))}
               </div>
             </div>
-          )}
+          </div>
         </div>
 
         <section className="formation-schedule__organisation" aria-label="Organisation des journées">
@@ -630,7 +815,7 @@ export default function FormationSchedulePlanner({
               onClick={() => setActiveDateKey(normalizedDates[activeDateIndex - 1])}
               disabled={activeDateIndex <= 0}
             >
-              <ChevronLeft size={16} aria-hidden="true" />
+              <ChevronLeft size={17} strokeWidth={1.8} aria-hidden="true" />
             </button>
             <div className="formation-schedule__active-day-copy" aria-live="polite">
               <strong>{formatLongDate(displayedDate)}</strong>
@@ -642,7 +827,7 @@ export default function FormationSchedulePlanner({
               onClick={() => setActiveDateKey(normalizedDates[activeDateIndex + 1])}
               disabled={activeDateIndex < 0 || activeDateIndex >= normalizedDates.length - 1}
             >
-              <ChevronRight size={16} aria-hidden="true" />
+              <ChevronRight size={17} strokeWidth={1.8} aria-hidden="true" />
             </button>
           </nav>
           <div className="formation-schedule__organisation-body">
@@ -651,37 +836,40 @@ export default function FormationSchedulePlanner({
             ) : (
               <label className="formation-schedule__template-field">
                 <span>Template</span>
-                <select
-                  value={applyAllDays
-                    ? bulkTemplateId
-                    : (activeCustomBlocks ? '__custom__' : activeAssignment)}
-                  disabled={templatesLoading}
-                  onChange={(event) => {
-                    if (applyAllDays) {
-                      if (event.target.value === '__create__') {
-                        assignTemplate(activeDate || helperStartDate, '__create__')
-                      } else {
-                        setBulkTemplateId(event.target.value)
+                <span className="formation-schedule__template-select">
+                  <select
+                    value={applyAllDays
+                      ? bulkTemplateId
+                      : (activeCustomBlocks ? '__custom__' : activeAssignment)}
+                    disabled={templatesLoading}
+                    onChange={(event) => {
+                      if (applyAllDays) {
+                        if (event.target.value === '__create__') {
+                          assignTemplate(activeDate || helperStartDate, '__create__')
+                        } else {
+                          setBulkTemplateId(event.target.value)
+                        }
+                        return
                       }
-                      return
-                    }
-                    if (!activeDate) {
-                      setSelectedDates([displayedDate])
-                      setActiveDateKey(displayedDate)
-                    }
-                    assignTemplate(displayedDate, event.target.value)
-                  }}
-                  aria-invalid={Boolean(
-                    activeDate
-                    && !activeCustomBlocks
-                    && (!activeAssignment || !selectedTemplateIds.has(activeAssignment)),
-                  )}
-                >
-                  <option value="">Choisir un template</option>
-                  {activeCustomBlocks && <option value="__custom__">Journée personnalisée</option>}
-                  {templates.map((template) => <option key={template.id} value={String(template.id)}>{template.name}</option>)}
-                  <option value="__create__">Créer un template</option>
-                </select>
+                      if (!activeDate) {
+                        setSelectedDates([displayedDate])
+                        setActiveDateKey(displayedDate)
+                      }
+                      assignTemplate(displayedDate, event.target.value)
+                    }}
+                    aria-invalid={Boolean(
+                      activeDate
+                      && !activeCustomBlocks
+                      && (!activeAssignment || !selectedTemplateIds.has(activeAssignment)),
+                    )}
+                  >
+                    <option value="">Choisir un template</option>
+                    {activeCustomBlocks && <option value="__custom__">Journée personnalisée</option>}
+                    {templates.map((template) => <option key={template.id} value={String(template.id)}>{template.name}</option>)}
+                    <option value="__create__">Créer un template</option>
+                  </select>
+                  <ChevronDown size={16} strokeWidth={1.8} aria-hidden="true" />
+                </span>
               </label>
             )}
             {!reuse && normalizedDates.length > 1 && (
@@ -695,7 +883,7 @@ export default function FormationSchedulePlanner({
                     if (checked) setBulkTemplateId(activeAssignment)
                   }}
                 />
-                <span>Appliquer le même template à toutes les journées</span>
+                <span>Appliquer ce template à toutes les journées</span>
               </label>
             )}
           </div>
@@ -718,7 +906,7 @@ export default function FormationSchedulePlanner({
               event.dataTransfer.effectAllowed = 'copy'
               event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
             }}
-            onDragEnd={() => setDropDate('')}
+            onDragEnd={() => setDropPreview(null)}
             onClick={() => addSequenceToDay(activeDate || displayedDate)}
           >
             <PlusCircle size={14} aria-hidden="true" />
@@ -735,20 +923,68 @@ export default function FormationSchedulePlanner({
         </section>
       </aside>
 
-      <div className="formation-schedule__week">
+      <div
+        className="formation-schedule__week"
+        onPointerDown={beginWeekSwipe}
+        onPointerUp={finishWeekSwipe}
+        onPointerCancel={() => { weekSwipeRef.current = null }}
+        onWheel={handleWeekWheel}
+      >
         <header className="formation-schedule__toolbar">
           <button type="button" className="formation-schedule__icon-button" onClick={() => setSidebarOpen((current) => !current)} aria-label={sidebarOpen ? 'Masquer le panneau' : 'Afficher le panneau'}>
             <Menu size={17} aria-hidden="true" />
           </button>
-          <h1>{visibleWeekLabel}</h1>
+          <div className="formation-schedule__week-navigation">
+            <button type="button" onClick={() => navigateWeek(-1)} aria-label="Semaine précédente" title="Semaine précédente">
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <h1>{visibleWeekLabel}</h1>
+            <button type="button" onClick={() => navigateWeek(1)} aria-label="Semaine suivante" title="Semaine suivante">
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </div>
           <div className="formation-schedule__toolbar-actions">
-            <button type="button" className="formation-schedule__search" onClick={() => activeDate && setFocusedWeekStart(weekStart(activeDate))} aria-label="Afficher la journée active"><Search size={15} aria-hidden="true" /></button>
+            <button
+              type="button"
+              className="formation-schedule__prefill-toolbar"
+              aria-expanded={prefillOpen}
+              aria-label="Remplir automatiquement les dates"
+              title="Remplir automatiquement les dates"
+              onClick={() => {
+                setHelperError('')
+                setPrefillOpen(true)
+              }}
+            >
+              Remplir automatiquement
+            </button>
           </div>
         </header>
 
-        <div className="formation-schedule__day-headings" aria-hidden="true">
-          <span />
-          {FIGMA_WEEKDAY_LABELS.map((label) => <span key={label}>{label}</span>)}
+        <div className="formation-schedule__day-headings">
+          <span aria-hidden="true" />
+          {visibleWeekDates.map((date, dayIndex) => {
+            const blocks = scheduleDayByDate.get(date)?.blocks || []
+            return (
+              <div
+                key={date}
+                className="formation-schedule__day-heading"
+                data-active={activeDate === date || undefined}
+              >
+                <span>{WEEKDAY_LABELS[dayIndex]}</span>
+                {!reuse && blocks.length > 0 && (
+                  <button
+                    type="button"
+                    className="formation-schedule__template-save-trigger"
+                    aria-expanded={templateQuickSave?.date === date}
+                    aria-label={`Enregistrer le ${formatLongDate(date)} comme template`}
+                    onClick={() => openTemplateQuickSave(date)}
+                  >
+                    <BookmarkPlus size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            )
+          })}
         </div>
 
         <div ref={timelineRef} className="formation-schedule__timeline">
@@ -768,78 +1004,336 @@ export default function FormationSchedulePlanner({
             {visibleWeekDates.map((date, dayIndex) => {
               const scheduledDay = scheduleDayByDate.get(date)
               const blocks = scheduledDay?.blocks || []
+              const isSelectedDay = selectedSet.has(date)
               const canDropSequence = (
                 !reuse
                 && date >= today
+                && isSelectedDay
                 && getScheduleStats(blocks).courseCount < DAY_SCHEDULE_RULES.maxCourses
               )
               const events = blocks.map((block, blockIndex) => ({
+                block,
+                blockIndex,
                 dayIndex,
                 start: Number(block.start_minute || 0) / 60,
                 duration: Math.max(5, Number(block.duration_minutes || 0)) / 60,
                 label: block.label || scheduledDay.templateName || `Journée ${scheduledDay.dayNumber}`,
-                time: `${String(Math.floor(Number(block.start_minute || 0) / 60)).padStart(2, '0')}:${String(Number(block.start_minute || 0) % 60).padStart(2, '0')}`,
+                time: `${formatScheduleMinute(block.start_minute)}–${formatScheduleMinute(block.end_minute)}`,
+                kind: block.block_type === 'pause'
+                  ? (block.pause_kind === 'lunch' ? 'lunch' : 'pause')
+                  : block.block_type,
                 tone: (blockIndex % 5) + 1,
               }))
+              const canEditDay = !reuse && date >= today && isSelectedDay
+              const updateDropPreview = (event) => {
+                const column = event.currentTarget
+                const firstHour = column.querySelector('.formation-schedule__hour-slot')
+                const hourHeight = firstHour?.getBoundingClientRect().height || 60
+                const columnTop = column.getBoundingClientRect().top
+                const pointerMinute = ((event.clientY - columnTop) / hourHeight) * 60
+                const minute = getScheduleSequenceDropMinute(pointerMinute, blocks)
+                setDropPreview((current) => (
+                  current?.date === date && current.minute === minute
+                    ? current
+                    : { date, minute, mode: blocks.length ? 'append' : 'start' }
+                ))
+                return minute
+              }
               return (
-                <button
+                <div
                   key={date}
-                  type="button"
                   className="formation-schedule__week-column"
+                  role="button"
+                  tabIndex={isSelectedDay ? 0 : -1}
                   data-weekend={dayIndex > 4}
                   data-active={activeDate === date}
-                  data-drop-active={dropDate === date || undefined}
-                  aria-pressed={selectedSet.has(date)}
-                  aria-label={`${selectedSet.has(date) ? 'Afficher' : 'Ajouter'} le ${formatLongDate(date)}`}
-                  onClick={() => activateDate(date)}
+                  data-drop-active={dropPreview?.date === date || undefined}
+                  aria-pressed={isSelectedDay}
+                  aria-disabled={!isSelectedDay}
+                  aria-label={isSelectedDay
+                    ? `Afficher le ${formatLongDate(date)}`
+                    : `${formatLongDate(date)} non sélectionné. Sélectionnez cette journée dans le calendrier à gauche.`}
+                  onClick={() => {
+                    if (isSelectedDay) activateDate(date)
+                  }}
+                  onKeyDown={(event) => {
+                    if (!isSelectedDay) return
+                    if (event.target !== event.currentTarget) return
+                    if (!['Enter', ' '].includes(event.key)) return
+                    event.preventDefault()
+                    activateDate(date)
+                  }}
                   onDragEnter={(event) => {
                     if (!canDropSequence) return
                     if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
                     event.preventDefault()
-                    setDropDate(date)
+                    updateDropPreview(event)
                   }}
                   onDragOver={(event) => {
                     if (!canDropSequence) return
                     if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
                     event.preventDefault()
                     event.dataTransfer.dropEffect = 'copy'
+                    updateDropPreview(event)
                   }}
                   onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget)) setDropDate('')
+                    if (!event.currentTarget.contains(event.relatedTarget)) setDropPreview(null)
                   }}
                   onDrop={(event) => {
                     if (!canDropSequence) return
                     if (event.dataTransfer.getData('application/x-day-sequence') !== 'course-qa-pause') return
                     event.preventDefault()
                     event.stopPropagation()
-                    setDropDate('')
-                    addSequenceToDay(date)
+                    const startMinute = updateDropPreview(event)
+                    setDropPreview(null)
+                    addSequenceToDay(date, startMinute)
                   }}
                 >
                   {Array.from({ length: 24 }, (_, hourIndex) => <span key={hourIndex} className="formation-schedule__hour-slot" />)}
+                  {dropPreview?.date === date && (
+                    <div
+                      className="formation-schedule__drop-time-preview"
+                      style={{ '--drop-preview-start': dropPreview.minute / 60 }}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <div className="formation-schedule__drop-time-preview-body">
+                        <strong>
+                          {dropPreview.mode === 'start' ? 'Début' : 'Ajout'} {formatScheduleMinute(dropPreview.minute)}
+                        </strong>
+                        <span>Relâchez pour placer la séquence</span>
+                      </div>
+                    </div>
+                  )}
                   {events.map((event, eventIndex) => (
-                    <span
-                      key={`${date}:${event.start}:${eventIndex}`}
+                    <article
+                      key={`${date}:${event.block.block_key || eventIndex}`}
                       className="formation-schedule__week-event"
+                      data-kind={event.kind}
                       data-tone={event.tone}
+                      data-resizing={resizingEventKey === `${date}:${event.block.block_key || event.blockIndex}` || undefined}
                       style={{
                         '--event-start': event.start,
                         '--event-duration': event.duration,
                       }}
                     >
+                      {canEditDay && event.block.block_type === 'pause' && (
+                        <button
+                          type="button"
+                          className="formation-schedule__pause-toggle"
+                          aria-pressed={event.block.pause_kind === 'lunch'}
+                          aria-label={event.block.pause_kind === 'lunch'
+                            ? 'Repasser cette pause en pause courte'
+                            : 'Transformer cette pause en pause déjeuner'}
+                          data-hint={event.block.pause_kind === 'lunch'
+                            ? 'Double-cliquer pour repasser en pause courte'
+                            : 'Double-cliquer pour transformer en pause déjeuner'}
+                          title={event.block.pause_kind === 'lunch'
+                            ? 'Double-cliquer pour repasser en pause courte'
+                            : 'Double-cliquer pour transformer en pause déjeuner'}
+                          onPointerDown={(pointerEvent) => {
+                            handleLunchPointerDown(
+                              pointerEvent,
+                              date,
+                              blocks,
+                              event.blockIndex,
+                            )
+                          }}
+                          onKeyDown={(keyEvent) => {
+                            if (!['Enter', ' '].includes(keyEvent.key)) return
+                            toggleLunchForDay(
+                              keyEvent,
+                              date,
+                              blocks,
+                              event.blockIndex,
+                            )
+                          }}
+                        />
+                      )}
                       <span className="formation-schedule__week-event-heading">
-                        <span>{event.label}</span>
+                        <span>
+                          {event.block.block_type === 'pause'
+                            ? (event.block.pause_kind === 'lunch'
+                              ? <Utensils size={10} aria-hidden="true" />
+                              : <Coffee size={10} aria-hidden="true" />)
+                            : null}
+                          {event.label}
+                        </span>
                         <time>{event.time}</time>
                       </span>
-                      {event.description && <span className="formation-schedule__week-event-description">{event.description}</span>}
-                    </span>
+                      {canEditDay && event.block.block_type === 'pause' && (
+                        <span className="formation-schedule__week-event-description">
+                          {event.block.pause_kind === 'lunch'
+                            ? 'Pause déjeuner sélectionnée'
+                            : 'Cliquer pour définir le déjeuner'}
+                        </span>
+                      )}
+                      {canEditDay && (
+                        <button
+                          type="button"
+                          className="formation-schedule__event-resize"
+                          aria-label={`Modifier la durée de ${event.label}, ${getScheduleBlockDurationBounds(event.block).min} à ${getScheduleBlockDurationBounds(event.block).max} minutes`}
+                          title={`Étirez pour régler la durée, ${getScheduleBlockDurationBounds(event.block).min} à ${getScheduleBlockDurationBounds(event.block).max} min`}
+                          onClick={(clickEvent) => {
+                            clickEvent.preventDefault()
+                            clickEvent.stopPropagation()
+                          }}
+                          onPointerDown={(pointerEvent) => beginEventResize(
+                            pointerEvent,
+                            date,
+                            blocks,
+                            event.blockIndex,
+                          )}
+                          onKeyDown={(keyEvent) => {
+                            if (!['ArrowUp', 'ArrowDown'].includes(keyEvent.key)) return
+                            keyEvent.preventDefault()
+                            keyEvent.stopPropagation()
+                            updateEventDuration(
+                              date,
+                              blocks,
+                              event.blockIndex,
+                              event.block.duration_minutes + (keyEvent.key === 'ArrowDown' ? 5 : -5),
+                            )
+                          }}
+                        >
+                          <GripHorizontal size={14} aria-hidden="true" />
+                        </button>
+                      )}
+                    </article>
                   ))}
-                </button>
+                </div>
               )
             })}
           </div>
         </div>
       </div>
+
+      <dialog
+        ref={templateSaveDialogRef}
+        className="formation-schedule__prefill-dialog formation-schedule__template-save-dialog"
+        aria-labelledby="formation-template-save-title"
+        onCancel={(event) => {
+          event.preventDefault()
+          setTemplateQuickSave(null)
+        }}
+        onClose={() => setTemplateQuickSave(null)}
+      >
+        {templateQuickSave && (
+          <form
+            className="formation-schedule__prefill-form formation-schedule__template-save-form"
+            onSubmit={saveDayAsTemplate}
+          >
+            <header>
+              <div>
+                <p className="formation-schedule__prefill-eyebrow">Organisation</p>
+                <h2 id="formation-template-save-title">Enregistrer comme template</h2>
+                <p>Donnez un nom à cette journée pour pouvoir la réutiliser.</p>
+              </div>
+              <button type="button" onClick={() => setTemplateQuickSave(null)} aria-label="Fermer">
+                <X size={16} aria-hidden="true" />
+              </button>
+            </header>
+            <div className="formation-schedule__helper-content">
+              {templateQuickSave.saved ? (
+                <>
+                  <p className="formation-schedule__template-save-success" role="status">
+                    Template enregistré et prêt à être réutilisé.
+                  </p>
+                  <footer>
+                    <span aria-hidden="true" />
+                    <button
+                      type="button"
+                      className="formation-schedule__prefill-action"
+                      onClick={() => setTemplateQuickSave(null)}
+                    >
+                      Fermer
+                    </button>
+                  </footer>
+                </>
+              ) : (
+                <>
+                  <label htmlFor="formation-template-save-name">
+                    <span>Nom du template</span>
+                    <input
+                      id="formation-template-save-name"
+                      value={templateQuickSave.name}
+                      autoFocus
+                      onChange={(event) => setTemplateQuickSave((current) => ({
+                        ...current,
+                        name: event.target.value,
+                        error: '',
+                      }))}
+                    />
+                  </label>
+                  {templateQuickSave.error && (
+                    <p className="formation-schedule__template-save-error" role="alert">
+                      {templateQuickSave.error}
+                    </p>
+                  )}
+                  <footer>
+                    <button
+                      type="button"
+                      className="formation-schedule__prefill-cancel"
+                      onClick={() => setTemplateQuickSave(null)}
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="submit"
+                      className="formation-schedule__prefill-action"
+                      disabled={templateQuickSave.saving || !templateQuickSave.name.trim()}
+                    >
+                      {templateQuickSave.saving ? 'Enregistrement…' : 'Enregistrer le template'}
+                    </button>
+                  </footer>
+                </>
+              )}
+            </div>
+          </form>
+        )}
+      </dialog>
+
+      <dialog
+        ref={prefillDialogRef}
+        className="formation-schedule__prefill-dialog"
+        aria-labelledby="formation-prefill-title"
+        onCancel={(event) => {
+          event.preventDefault()
+          setPrefillOpen(false)
+        }}
+        onClose={() => setPrefillOpen(false)}
+      >
+        <form className="formation-schedule__prefill-form" onSubmit={applyPrefill}>
+          <header>
+            <div>
+              <p className="formation-schedule__prefill-eyebrow">Planification</p>
+              <h2 id="formation-prefill-title">Remplir automatiquement</h2>
+              <p>Choisissez le rythme des journées à ajouter au calendrier.</p>
+            </div>
+            <button type="button" onClick={() => setPrefillOpen(false)} aria-label="Fermer">
+              <X size={16} aria-hidden="true" />
+            </button>
+          </header>
+          <div className="formation-schedule__helper-content">
+            <label><span>Date de début</span><input type="date" min={earliestSuggestedDate} value={helperStartDate} onChange={(event) => { setHelperStartDate(event.target.value); setHelperError('') }} /></label>
+            <div className="formation-schedule__helper-numbers">
+              <label><span>Semaines</span><input type="number" min="1" max="104" value={helperWeeks} onChange={(event) => setHelperWeeks(event.target.value)} /></label>
+              <label><span>Jours / semaine</span><input type="number" min="1" max="7" value={helperDaysPerWeek} onChange={(event) => setHelperDaysPerWeek(event.target.value)} /></label>
+            </div>
+            <fieldset>
+              <legend>Jours préférés</legend>
+              <div className="formation-schedule__weekdays">
+                {TRAINING_WEEKDAYS.map((day) => <button key={day.id} type="button" aria-pressed={preferredWeekdays.includes(day.id)} onClick={() => togglePreferredWeekday(day.id)}>{day.short}</button>)}
+              </div>
+            </fieldset>
+            {helperError && <p className="formation-schedule__inline-error" role="alert">{helperError}</p>}
+            <footer>
+              <button type="button" className="formation-schedule__prefill-cancel" onClick={() => setPrefillOpen(false)}>Annuler</button>
+              <button type="submit" className="formation-schedule__prefill-action">Remplir les dates</button>
+            </footer>
+          </div>
+        </form>
+      </dialog>
     </section>
   )
 }

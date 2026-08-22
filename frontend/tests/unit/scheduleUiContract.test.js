@@ -40,26 +40,121 @@ test('keeps time labels in a clean gutter before the weekly grid', async () => {
   assert.doesNotMatch(styles, /\.formation-schedule__week-column:first-child\s*\{[^}]*border-left/)
 })
 
-test('uses compact month names and a short calendar fill action', async () => {
-  const source = await readFile(
-    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
-    'utf8',
-  )
-
-  assert.match(source, /function monthLabel[\s\S]*?month: 'short'/)
-  assert.match(source, /\{prefillOpen \? 'Retour' : 'Remplir'\}/)
-  assert.match(source, /Remplir automatiquement les dates/)
-})
-
-test('gives the sidebar calendar a little more room', async () => {
+test('greys every unscheduled day and warms selected days', async () => {
   const styles = await readFile(
     new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
     'utf8',
   )
 
-  assert.match(styles, /--fsp-sidebar-width: 272px/)
+  assert.match(styles, /\.formation-schedule__week-column\s*\{[^}]*background-color: #f2f2f2/)
+  assert.match(styles, /\.formation-schedule__week-column\[aria-pressed="true"\]\s*\{[^}]*background-color: #fffbea/)
+  assert.doesNotMatch(styles, /\.formation-schedule__week-column\[data-weekend="true"\]/)
+})
+
+test('keeps every selected lunch break black regardless of its sequence tone', async () => {
+  const styles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
+
+  const lastToneRule = styles.lastIndexOf('.formation-schedule__week-event[data-tone="7"]')
+  const lunchRule = styles.lastIndexOf('.formation-schedule__week-event[data-kind="lunch"]')
+
+  assert.ok(lunchRule > lastToneRule, 'the lunch style must override every sequence tone')
+  assert.match(styles, /\.formation-schedule__week-event\[data-kind="lunch"\]\s*\{[^}]*border-color: #373737;[^}]*background: #373737;[^}]*color: #fff;/)
+})
+
+test('saves a completed calendar day as a reusable template from its heading', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /Enregistrer le \$\{formatLongDate\(date\)\} comme template/)
+  assert.match(source, /ref=\{templateSaveDialogRef\}/)
+  assert.match(source, /className="formation-schedule__prefill-dialog formation-schedule__template-save-dialog"/)
+  assert.match(source, /className="formation-schedule__prefill-form formation-schedule__template-save-form"/)
+  assert.match(source, /formation-template-save-title">Enregistrer comme template/)
+  assert.match(source, /Enregistrer le template/)
+  assert.doesNotMatch(source, /formation-schedule__template-save-popover/)
+  assert.match(source, /validateScheduleTemplate\(\{/)
+  assert.match(source, /await createDayScheduleTemplate\(result\.template\)/)
+  assert.match(source, /Template enregistré et prêt à être réutilisé\./)
+
+  const styles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
+  assert.match(styles, /\.formation-schedule__prefill-dialog\s*\{[^}]*width: min\(680px/)
+  assert.match(styles, /\.formation-schedule__prefill-dialog::backdrop\s*\{[^}]*background: rgb\(15 18 24 \/ 52%\)/)
+  assert.match(styles, /\.formation-schedule__day-heading\[data-active="true"\]\s*\{[^}]*background: #fff2bf/)
+  assert.match(styles, /\.formation-schedule__week-column\[data-active="true"\]\s*\{[^}]*background-color: #fff7d6/)
+  assert.doesNotMatch(styles, /\.formation-schedule__week-column\[data-active="true"\]\s*\{[^}]*var\(--fsp-accent\)/)
+  assert.doesNotMatch(styles, /\.formation-schedule__template-save-popover/)
+})
+
+test('opens automatic date filling from the weekly toolbar', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /function monthLabel[\s\S]*?month: 'long'[\s\S]*?year: 'numeric'/)
+  assert.match(source, />\s*Remplir automatiquement\s*<\/button>/)
+  assert.match(source, /className="formation-schedule__prefill-dialog"/)
+  assert.match(source, /dialog\.showModal\(\)/)
+  assert.match(source, /formation-schedule__prefill-eyebrow">Planification/)
+  assert.match(source, /Remplir automatiquement les dates/)
+  assert.doesNotMatch(source, /className="formation-schedule__prefill-toggle"/)
+
+  const styles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
+  assert.match(styles, /\.formation-schedule__prefill-dialog\s*\{[^}]*width: min\(680px/)
+  assert.match(styles, /\.formation-schedule__prefill-dialog::backdrop\s*\{[^}]*background: rgb\(15 18 24 \/ 52%\)[^}]*backdrop-filter: blur\(2px\)/)
+  assert.match(styles, /\.formation-schedule__helper-content input\s*\{[^}]*min-height: 44px/)
+})
+
+test('gives the sidebar calendar a larger, legible monthly layout', async () => {
+  const styles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(styles, /--fsp-sidebar-width: 320px/)
   assert.match(styles, /grid-template-columns: var\(--fsp-sidebar-width\) minmax\(0, 1fr\)/)
-  assert.match(styles, /@media \(max-width: 980px\)[\s\S]*?--fsp-sidebar-width: 240px/)
+  assert.match(styles, /\.formation-schedule__mini-weekdays span\s*\{[^}]*text-transform: uppercase/)
+  assert.match(styles, /\.formation-schedule__mini-grid button::before\s*\{[^}]*width: 36px; height: 36px[^}]*border-radius: 50%/)
+  assert.match(styles, /\.formation-schedule__mini-grid button:focus-visible::after\s*\{[^}]*width: 38px; height: 38px[^}]*border-radius: 50%/)
+  assert.match(styles, /@media \(max-width: 980px\)[\s\S]*?--fsp-sidebar-width: 280px/)
+})
+
+test('aligns the template overview with the centered workspace page hierarchy', async () => {
+  const templateSource = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
+    'utf8',
+  )
+  const templateStyles = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.css', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(templateSource, /day-schedule-page--overview/)
+  assert.match(templateSource, /day-schedule-section-divider/)
+  assert.match(templateSource, /<strong>Mes templates<\/strong>/)
+  assert.match(templateSource, /day-schedule-library-actions/)
+  assert.match(templateSource, /\/assets\/calendar-template\.png/)
+  assert.match(templateSource, /day-schedule-template-calendar/)
+  assert.doesNotMatch(templateSource, /Modifiable/)
+  assert.doesNotMatch(templateSource, />\s*Utiliser\s*<\/button>/)
+  assert.match(templateSource, /Utilisé/)
+  assert.match(templateSource, /onCreate=\{startCreate\}/)
+  assert.match(templateStyles, /\.day-schedule-page--overview \.day-schedule-page-header\s*\{[\s\S]*?text-align: center/)
+  assert.match(templateStyles, /\.day-schedule-section-divider\s*\{[\s\S]*?align-items: center/)
+  assert.doesNotMatch(templateStyles, /\.day-schedule-template-calendar\s*\{[^}]*position: absolute/)
+  assert.match(templateStyles, /\.day-schedule-template-card-title\s*\{[^}]*gap: 10px/)
+  assert.match(templateStyles, /\.day-schedule-template-calendar img\s*\{[\s\S]*?width: 36px/)
 })
 
 test('reviews the definitive schedule only when preparation is requested', async () => {
@@ -71,12 +166,19 @@ test('reviews the definitive schedule only when preparation is requested', async
     new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
     'utf8',
   )
+  const plannerStyles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
 
   assert.doesNotMatch(plannerSource, /Je confirme ce calendrier définitif/)
   assert.doesNotMatch(plannerSource, /formation-schedule__date-list/)
   assert.match(plannerSource, /Naviguer entre les journées/)
-  assert.match(plannerSource, /Appliquer le même template à toutes les journées/)
+  assert.match(plannerSource, /Appliquer ce template à toutes les journées/)
   assert.match(plannerSource, /formation-schedule__day-navigation/)
+  assert.match(plannerSource, /formation-schedule__template-select/)
+  assert.match(plannerStyles, /\.formation-schedule__day-navigation\s*\{[^}]*background: #fafafb/)
+  assert.match(plannerStyles, /\.formation-schedule__template-select select\s*\{[^}]*min-height: 44px[^}]*appearance: none/)
   assert.match(dashboardSource, /Confirmer le planning définitif/)
   assert.match(dashboardSource, /La première date doit être au minimum à J\+2/)
   assert.match(dashboardSource, /Associez un template à/)
@@ -161,22 +263,62 @@ test('adds pedagogical sequences directly to formation days', async () => {
   assert.match(source, /draggable=\{!reuse\}/)
   assert.match(source, /setData\('application\/x-day-sequence', 'course-qa-pause'\)/)
   assert.match(source, /onDrop=\{\(event\) => \{/)
-  assert.match(source, /addSequenceToDay\(date\)/)
+  assert.match(source, /addSequenceToDay\(date, startMinute\)/)
   assert.match(source, /onClick=\{\(\) => addSequenceToDay\(activeDate \|\| displayedDate\)\}/)
   assert.match(source, /onClick=\{\(\) => removeSequenceFromDay\(activeDate\)\}/)
+  assert.match(source, /toggleLunchForDay/)
+  assert.match(source, /setSchedulePauseKind\(/)
+  assert.match(source, /beginEventResize/)
+  assert.match(source, /updateScheduleBlockDuration\(/)
+  assert.match(source, /getScheduleBlockDurationBounds/)
+  assert.match(source, /Transformer cette pause en pause déjeuner/)
+  assert.match(source, /Double-cliquer pour transformer en pause déjeuner/)
+  assert.match(source, /handleLunchPointerDown/)
+  assert.match(source, /now - previous\.at <= 500/)
+  assert.match(source, /if \(!\['Enter', ' '\]\.includes\(keyEvent\.key\)\) return/)
+  assert.match(source, /onPointerDown=\{\(pointerEvent\) => beginEventResize\(/)
+  assert.match(source, /getScheduleSequenceDropMinute\(pointerMinute, blocks\)/)
+  assert.match(source, /Début.*formatScheduleMinute\(dropPreview\.minute\)/)
+  assert.match(source, /Relâchez pour placer la séquence/)
   assert.doesNotMatch(source, /onClick=\{\(\) => assignTemplate\(activeDate \|\| helperStartDate, '__create__'\)\}/)
+
+  const styles = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
+    'utf8',
+  )
+  assert.match(styles, /\.formation-schedule__pause-toggle::after\s*\{[^}]*content: attr\(data-hint\)[^}]*opacity: 0/)
+  assert.match(styles, /\.formation-schedule__week-event:hover \.formation-schedule__pause-toggle::after[^}]*visibility: visible; opacity: 1/)
 })
 
-test('keeps a scheduled day when its empty calendar area is clicked', async () => {
+test('selects training days only from the mini calendar', async () => {
   const source = await readFile(
     new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
     'utf8',
   )
 
-  assert.match(source, /const activateDate = \(date\) => \{[\s\S]*?current\.includes\(date\) \? current : \[\.\.\.current, date\]/)
-  assert.match(source, /aria-label=\{`\$\{selectedSet\.has\(date\) \? 'Afficher' : 'Ajouter'\} le \$\{formatLongDate\(date\)\}`\}/)
-  assert.match(source, /onClick=\{\(\) => activateDate\(date\)\}/)
+  assert.match(source, /const activateDate = \(date\) => \{\s*if \(date < today \|\| !selectedDates\.includes\(date\)\) return/)
+  const activateDateSource = source.match(/const activateDate = \(date\) => \{[\s\S]*?\n {2}\}/)?.[0] || ''
+  assert.doesNotMatch(activateDateSource, /setSelectedDates/)
+  assert.match(source, /if \(isSelectedDay\) activateDate\(date\)/)
+  assert.match(source, /aria-disabled=\{!isSelectedDay\}/)
+  assert.match(source, /&& isSelectedDay\s*&& getScheduleStats/)
   assert.equal((source.match(/onClick=\{\(\) => toggleDate\(day\.date\)\}/g) || []).length, 1)
+})
+
+test('navigates the weekly calendar in French with controls and horizontal swipes', async () => {
+  const source = await readFile(
+    new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'/)
+  assert.match(source, /aria-label="Semaine précédente"/)
+  assert.match(source, /aria-label="Semaine suivante"/)
+  assert.match(source, /const navigateWeek = \(offset\) =>/)
+  assert.match(source, /onPointerDown=\{beginWeekSwipe\}/)
+  assert.match(source, /onPointerUp=\{finishWeekSwipe\}/)
+  assert.match(source, /onWheel=\{handleWeekWheel\}/)
+  assert.match(source, /Math\.abs\(deltaX\) < 60/)
 })
 
 test('locks the template editor page and scrolls only the calendar', async () => {

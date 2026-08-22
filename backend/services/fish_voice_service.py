@@ -18,10 +18,12 @@ FISH_ASR_URL = "https://api.fish.audio/v1/asr"
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 MAX_CLONE_BYTES = 25 * 1024 * 1024
 MAX_CALIBRATION_BYTES = 100 * 1024 * 1024
-MAX_CONSENT_BYTES = 10 * 1024 * 1024
-CONSENT_STATEMENT = (
-    "Je confirme être propriétaire de cette voix ou disposer de son autorisation "
-    "expresse pour créer et utiliser cette voix IA."
+RIGHTS_DECLARATION = (
+    "Je certifie que cette voix est la mienne ou que je dispose d’une autorisation "
+    "écrite, valide et suffisante de son titulaire pour la cloner et l’utiliser sur la "
+    "plateforme. Je m’engage à ne pas l’utiliser de manière illicite, trompeuse ou "
+    "portant atteinte aux droits d’un tiers. Je reconnais être responsable des fichiers "
+    "fournis et de l’utilisation de cette voix, conformément aux conditions d’utilisation."
 )
 
 

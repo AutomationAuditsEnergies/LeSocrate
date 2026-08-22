@@ -47,6 +47,36 @@ class AdminSessionPermissionsTest(unittest.TestCase):
             {"formation_pipeline": False},
         )
 
+    def test_local_dev_login_creates_center_session_on_loopback(self):
+        local_account = {
+            "id": 42,
+            "username": "local-dev@cadrenza.test",
+            "center_name": "Environnement local",
+            "slug": "local-dev",
+            "is_active": 1,
+            "pipeline_access_enabled": 0,
+        }
+        with patch.dict("os.environ", {"LOCAL_DEV": "true"}), patch.object(
+            admin_routes,
+            "_get_or_create_local_dev_center",
+            return_value=local_account,
+        ):
+            response = self.client.post("/api/admin/dev-login")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["success"])
+        self.assertEqual(response.get_json()["account"]["type"], "training_center")
+
+        session_response = self.client.get("/api/admin/session")
+        self.assertEqual(session_response.status_code, 200)
+        self.assertTrue(session_response.get_json()["authenticated"])
+
+    def test_local_dev_login_is_hidden_outside_dev_mode(self):
+        with patch.dict("os.environ", {"LOCAL_DEV": "false"}):
+            response = self.client.post("/api/admin/dev-login")
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

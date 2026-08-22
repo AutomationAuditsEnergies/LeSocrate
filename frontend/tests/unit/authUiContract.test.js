@@ -51,3 +51,9 @@ test('keeps recovery and explicit signup flows accessible', () => {
   assert.match(source, /initialPasswordRecoveryMode \|\| initialAuthMode !== 'login'/)
   assert.match(source, /setCheckingExistingSession\(false\)/)
 })
+
+test('offers an explicit passwordless entry point only in local development', () => {
+  assert.match(source, /import\.meta\.env\.DEV/)
+  assert.match(source, /apiFetch\('\/api\/admin\/dev-login'/)
+  assert.match(source, /Accéder sans compte/)
+})
