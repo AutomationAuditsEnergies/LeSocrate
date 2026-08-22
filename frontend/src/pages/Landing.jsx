@@ -127,7 +127,6 @@ function LandingHeader() {
         <a href="#advantages">Professeurs IA</a>
         <a href="#features">Planification</a>
         <a href="#classe">Économies</a>
-        <a href="#pilotage">Témoignages</a>
         <a href="#faq">FAQ</a>
       </nav>
 
@@ -146,7 +145,6 @@ function LandingHeader() {
           <a href="#advantages">Professeurs IA</a>
           <a href="#features">Planification</a>
           <a href="#classe">Économies</a>
-          <a href="#pilotage">Témoignages</a>
           <a href="#faq">FAQ</a>
           <a href="/connexion-centre">Se connecter</a>
           <a href="/connexion-centre?mode=signup">Créer un espace</a>
@@ -294,42 +292,6 @@ function CustomizableSection() {
   )
 }
 
-function TestimonialSection() {
-  const avatars = ['/uifry/avatar-1.svg', '/uifry/avatar-2.svg', '/uifry/avatar-3.svg', '/uifry/avatar-4.svg', '/uifry/avatar-5.svg']
-
-  return (
-    <section className="uifry-testimonial" id="pilotage" aria-labelledby="testimonial-heading">
-      <header>
-        <p>Testimonial</p>
-        <h2 id="testimonial-heading">What Our Users<br />Say About Us?</h2>
-      </header>
-
-      <div className="uifry-testimonial-grid">
-        <div className="uifry-testimonial-visual">
-          <img src="/uifry/testimonial-visual.png" alt="Portraits de cinq utilisateurs de Uifry" />
-        </div>
-        <blockquote>
-          <h3>The Best Financial Accounting App Ever!</h3>
-          <p>
-            “Arcu at dictum sapien, mollis. Vulputate sit id accumsan,
-            ultricies. In ultrices malesuada elit mauris etiam odio. Duis
-            tristique lacus, et blandit viverra nisl velit. Sed mattis
-            rhoncus, diam suspendisse sit nunc, gravida eu. Lectus eget eget
-            ac dolor neque lorem sapien, suspendisse aliquam.”
-          </p>
-          <div className="uifry-avatar-row" aria-label="Autres témoignages">
-            {avatars.map((avatar, index) => (
-              <img className={index === 0 ? 'is-current' : ''} src={avatar} alt="" key={avatar} />
-            ))}
-          </div>
-          <cite>Nick Jonas</cite>
-        </blockquote>
-      </div>
-      <Spark className="uifry-testimonial-spark" />
-    </section>
-  )
-}
-
 function FaqSection() {
   const [openItem, setOpenItem] = useState(null)
 
@@ -462,7 +424,6 @@ export default function Landing() {
           <PremiumSection />
           <AdvantagesSection />
           <CustomizableSection />
-          <TestimonialSection />
           <FaqSection />
           <DownloadSection />
         </main>
