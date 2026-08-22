@@ -3484,8 +3484,8 @@ function PlatformCardsView({
       )}
 
       {platforms.length === 0 && (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center pb-16 pt-8 text-center sm:pb-20">
-          <img src="/robot-blue.png" alt="" className="h-24 w-24 object-contain" />
+        <div className="flex min-h-0 flex-1 flex-col items-center pb-16 pt-10 text-center sm:pb-20 sm:pt-14">
+          <img src="/robot-blue.png" alt="" className="h-[200px] w-[200px] object-contain" />
           <h2 className="mt-3 text-xl font-bold" style={{ color: colors.text }}>Aucun professeur recruté</h2>
           <p className="mt-2 max-w-xl text-sm leading-6" style={{ color: colors.textMuted }}>
             Recrutez votre premier professeur IA pour préparer et dispenser une formation.
