@@ -40,6 +40,7 @@ import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } fr
 import { getReusableTeacherDefaults } from '../centerWorkspace'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
+import { RECRUITMENT_STEPS } from '../recruitmentConversation'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -2512,16 +2513,6 @@ function CenterSettingsModal({ accountName, accountEmail, onClose }) {
   )
 }
 
-const RECRUITMENT_STEPS = [
-  { id: 'teacherName', question: 'Comment souhaitez-vous appeler ce professeur IA ?', placeholder: 'Ex. Pierre, Lina, Sofia…', type: 'text' },
-  { id: 'rncpCode', question: 'Quel est le code RNCP de la formation que vous souhaitez dispenser ?', placeholder: 'Ex. 37099', type: 'number' },
-  { id: 'rncpConfirm', question: 'S’agit-il bien de ce titre professionnel ?', type: 'confirm' },
-  { id: 'trainingDays', question: 'Combien de journées de formation faut-il prévoir au total ?', placeholder: 'Ex. 52', type: 'number' },
-  { id: 'weeklyCourseCount', question: 'En moyenne, combien de journées de cours souhaitez-vous prévoir chaque semaine ?', type: 'frequency' },
-  { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous prévoir habituellement ?', type: 'days' },
-  { id: 'startDate', question: 'À quelle date la formation doit-elle commencer ?', type: 'date' },
-]
-
 const RECRUITMENT_DAY_OPTIONS = [
   { id: 'lundi', label: 'Lundi' },
   { id: 'mardi', label: 'Mardi' },
@@ -2737,7 +2728,7 @@ function RecruitmentAssistant({
       const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
       setDraft(correctedDraft)
       setHistory((current) => [...current, { role: 'user', text: value }])
-      setStepIndex(1)
+      setStepIndex(RECRUITMENT_STEPS.findIndex((step) => step.id === 'rncpCode'))
       setAnswer('')
       revealAssistantMessages([
         { role: 'assistant', text: 'D’accord. Quel est le code RNCP du titre professionnel que vous souhaitez dispenser ?' },
@@ -2908,7 +2899,7 @@ function RecruitmentAssistant({
     setStarted(true)
     setHistory([{ role: 'user', text: value }])
     setBrief('')
-    interpretFreeTextAnswer('teacherName', value)
+    interpretFreeTextAnswer('rncpCode', value)
   }
 
   const submitAnswer = (event) => {

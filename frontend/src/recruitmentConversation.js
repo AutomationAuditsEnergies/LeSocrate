@@ -25,6 +25,16 @@ const GENERIC_TRAINING_LABELS = new Set([
   'formation professionnelle',
 ])
 
+export const RECRUITMENT_STEPS = [
+  { id: 'rncpCode', question: 'Quel est le code RNCP de la formation que vous souhaitez dispenser ?', placeholder: 'Ex. 37099', type: 'number' },
+  { id: 'rncpConfirm', question: 'S’agit-il bien de ce titre professionnel ?', type: 'confirm' },
+  { id: 'trainingDays', question: 'Combien de journées de formation faut-il prévoir au total ?', placeholder: 'Ex. 52', type: 'number' },
+  { id: 'weeklyCourseCount', question: 'En moyenne, combien de journées de cours souhaitez-vous prévoir chaque semaine ?', type: 'frequency' },
+  { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous prévoir habituellement ?', type: 'days' },
+  { id: 'startDate', question: 'À quelle date la formation doit-elle commencer ?', type: 'date' },
+  { id: 'teacherName', question: 'Pour terminer, comment souhaitez-vous appeler ce professeur IA ?', placeholder: 'Ex. Pierre, Lina, Sofia…', type: 'text' },
+]
+
 export function validateRecruitmentAnswer(stepId, rawValue) {
   const value = String(rawValue || '').trim().replace(/\s+/g, ' ')
   const normalized = normalizeText(value)

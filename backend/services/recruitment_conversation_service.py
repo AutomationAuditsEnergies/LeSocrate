@@ -82,7 +82,7 @@ def _clarification(field: str, attempt: int = 0) -> str:
 def _guidance(field: str) -> str:
     guidance = {
         "teacherName": (
-            "Je vais vous guider, une question à la fois. Pour commencer, choisissez "
+            "Je vais vous guider. Pour terminer la configuration, choisissez "
             "simplement le prénom ou le nom du professeur IA, par exemple « Pierre » "
             "ou « Sofia ». Quel nom voulez-vous lui donner ?"
         ),
@@ -92,7 +92,7 @@ def _guidance(field: str) -> str:
             "distance ». Quel titre souhaitez-vous préparer ?"
         ),
         "rncpCode": (
-            "Je vais vous guider. Pour identifier la bonne formation, j’ai besoin de son "
+            "Je vais vous guider, une question à la fois. Pour commencer et identifier la bonne formation, j’ai besoin de son "
             "code RNCP, composé de 4 à 6 chiffres. Quel est ce code ?"
         ),
         "trainingDays": (

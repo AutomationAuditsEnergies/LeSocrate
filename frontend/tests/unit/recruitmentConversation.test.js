@@ -3,8 +3,15 @@ import test from 'node:test'
 
 import {
   applyKnownRncpTraining,
+  RECRUITMENT_STEPS,
   validateRecruitmentAnswer,
 } from '../../src/recruitmentConversation.js'
+
+test('starts with the RNCP code and leaves teacher personalization until the end', () => {
+  assert.equal(RECRUITMENT_STEPS[0].id, 'rncpCode')
+  assert.equal(RECRUITMENT_STEPS.at(-1).id, 'teacherName')
+  assert.match(RECRUITMENT_STEPS.at(-1).question, /Pour terminer/)
+})
 
 test('asks again when the training answer only describes its duration', () => {
   const result = validateRecruitmentAnswer('trainingName', 'une formation longue')

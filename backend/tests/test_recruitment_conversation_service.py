@@ -57,14 +57,25 @@ class RecruitmentConversationServiceTest(unittest.TestCase):
         llm_post.return_value = '{"intent": "help", "value": null}'
 
         result = interpret_recruitment_answer(
-            "teacherName",
+            "rncpCode",
             "Qu'est-ce que je dois faire ?",
         )
 
         self.assertFalse(result["answered"])
         self.assertIn("Je vais vous guider", result["reply"])
-        self.assertIn("Quel nom voulez-vous lui donner ?", result["reply"])
+        self.assertIn("Pour commencer", result["reply"])
+        self.assertIn("Quel est ce code ?", result["reply"])
         llm_post.assert_called_once()
+
+    @patch("services.recruitment_conversation_service._llm_post")
+    def test_teacher_name_guidance_marks_personalization_as_the_last_step(self, llm_post):
+        llm_post.return_value = '{"intent": "help", "value": null}'
+
+        result = interpret_recruitment_answer("teacherName", "Que dois-je choisir ?")
+
+        self.assertFalse(result["answered"])
+        self.assertIn("Pour terminer", result["reply"])
+        self.assertIn("Quel nom voulez-vous lui donner ?", result["reply"])
 
     @patch("services.recruitment_conversation_service._llm_post")
     def test_does_not_guess_when_the_nlp_provider_is_unavailable(self, llm_post):

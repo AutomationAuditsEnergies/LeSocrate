@@ -6,6 +6,10 @@ const dashboardSource = readFileSync(
   new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
   'utf8',
 )
+const recruitmentSource = readFileSync(
+  new URL('../../src/recruitmentConversation.js', import.meta.url),
+  'utf8',
+)
 
 test('streams recruitment replies by words and keeps the latest exchange above the composer', () => {
   assert.match(dashboardSource, /scrollArea\.scrollTo\(\{/)
@@ -46,7 +50,7 @@ test('explains the flexible weekly rhythm and removes color selection from recru
 
 test('presents teaching days as flexible defaults for most weeks', () => {
   assert.match(
-    dashboardSource,
+    recruitmentSource,
     /Quels jours de la semaine souhaitez-vous prévoir habituellement/,
   )
   assert.match(
