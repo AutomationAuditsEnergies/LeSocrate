@@ -5,11 +5,14 @@ import {
   AudioWaveform,
   CalendarDays,
   ChevronLeft,
+  ChevronRight,
   ChevronsUpDown,
+  ClipboardCheck,
   Copy,
   CreditCard,
   ExternalLink,
   FileCheck2,
+  FolderOpen,
   Globe2,
   KeyRound,
   LayoutTemplate,
@@ -88,10 +91,17 @@ const PLATFORM_LOAD_TIMEOUT_MS = 30000
 // Fixtures purement visuelles pour travailler le roster en local sans recopier
 // de données réelles. Elles ne sont utilisées qu'en mode Vite DEV.
 const buildLocalDesignTeachers = () => {
-  const nextSession = new Date()
-  nextSession.setDate(nextSession.getDate() + 1)
-  nextSession.setHours(9, 0, 0, 0)
-  const scheduledAt = nextSession.toISOString()
+  const buildSession = (id, sessionIndex, daysFromNow) => {
+    const scheduledAt = new Date()
+    scheduledAt.setDate(scheduledAt.getDate() + daysFromNow)
+    scheduledAt.setHours(9, 0, 0, 0)
+    return { id, session_index: sessionIndex, scheduled_at: scheduledAt.toISOString(), audio_status: 'scheduled' }
+  }
+  const upcomingSessions = [
+    buildSession(-1001, 2, 1),
+    buildSession(-1002, 3, 2),
+    buildSession(-1003, 4, 8),
+  ]
 
   return [
     {
@@ -123,8 +133,8 @@ const buildLocalDesignTeachers = () => {
       remaining_session_count: 4,
       teacher_preparation: { status: 'ready', progress: 100, stage: 'Professeur prêt' },
       course_schedule: {
-        next_session: { id: -1001, session_index: 2, scheduled_at: scheduledAt, audio_status: 'scheduled' },
-        upcoming_sessions: [{ id: -1001, session_index: 2, scheduled_at: scheduledAt, audio_status: 'scheduled' }],
+        next_session: upcomingSessions[0],
+        upcoming_sessions: upcomingSessions,
       },
     },
   ]
@@ -811,6 +821,12 @@ export default function HRDashboard() {
 
   const fetchAttendance = async (platformId = attendancePlatformId, courseDate = attendanceDate) => {
     if (!platformId || !courseDate) return
+    if (import.meta.env.DEV && Number(platformId) < 0) {
+      setAttendanceData({ students: [], daily_exports: [] })
+      setAttendanceError('')
+      setAttendanceLoading(false)
+      return
+    }
     setAttendanceLoading(true)
     setAttendanceError('')
     try {
@@ -3959,6 +3975,7 @@ function PlatformCardsView({
 }) {
   const [rosterSearch, setRosterSearch] = useState('')
   const [rosterSearchOpen, setRosterSearchOpen] = useState(false)
+  const [selectedTeacherId, setSelectedTeacherId] = useState(null)
   const normalizedRosterSearch = rosterSearch.trim().toLocaleLowerCase('fr-FR')
   const searchedPlatforms = normalizedRosterSearch
     ? platforms.filter((platform) => [
@@ -3988,7 +4005,7 @@ function PlatformCardsView({
 
   return (
     <section className="mx-auto flex h-full min-h-0 w-full max-w-[90rem] flex-col overflow-hidden pt-4 sm:pt-6">
-      <header className="relative mx-auto w-full max-w-[1204px] px-4 text-center sm:px-12">
+      {!selectedTeacherId && <><header className="relative mx-auto w-full max-w-[1204px] px-4 text-center sm:px-12">
         <h1 className="workspace-display-title text-[1.75rem] font-semibold leading-tight tracking-[-0.02em] sm:text-[2rem]" style={{ color: colors.text }}>
           Mes professeurs
         </h1>
@@ -4077,7 +4094,9 @@ function PlatformCardsView({
         })}
       </div>
 
-      {filteredPlatforms.length > cardsPerPage && (
+      </>}
+
+      {!selectedTeacherId && filteredPlatforms.length > cardsPerPage && (
         <div className="mx-auto mt-5 flex w-full max-w-[1204px] items-center justify-end gap-3">
           <span className="text-sm" style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}>
             Page <span className="font-semibold" style={{ color: colors.text }}>{safeCardPage + 1}</span> / {totalPages}
@@ -4103,7 +4122,7 @@ function PlatformCardsView({
         </div>
       )}
 
-      {platforms.length === 0 && (
+      {!selectedTeacherId && platforms.length === 0 && (
         <div className="flex min-h-0 flex-1 flex-col items-center pb-16 pt-10 text-center sm:pb-20 sm:pt-14">
           <img src="/robot-blue.png" alt="" className="h-[200px] w-[200px] object-contain" />
           <h2 className="mt-3 text-xl font-bold" style={{ color: colors.text }}>Aucun professeur recruté</h2>
@@ -4121,10 +4140,10 @@ function PlatformCardsView({
         </div>
       )}
 
-      {filteredPlatforms.length > 0 && (
+      {(selectedTeacherId || filteredPlatforms.length > 0) && (
         <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6 pr-1">
-        <div className="mx-auto grid w-full max-w-[1204px] grid-cols-1 items-start gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
-        {visiblePlatforms.map((p) => (
+        <div className={`mx-auto grid w-full items-start gap-3 sm:gap-4 ${selectedTeacherId ? 'max-w-5xl grid-cols-1' : 'max-w-[1204px] grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5'}`}>
+        {(selectedTeacherId ? platforms.filter((platform) => platform.id === selectedTeacherId) : visiblePlatforms).map((p) => (
           <PlatformCard
             key={p.id}
             platform={p}
@@ -4165,6 +4184,9 @@ function PlatformCardsView({
             newlyCreated={newlyCreatedPlatformId === p.id}
             retryingPreparation={retryingPlatformId === p.id}
             onRetryPreparation={() => onRetryPreparation(p)}
+            detailsOpen={selectedTeacherId === p.id}
+            onOpenDetails={() => setSelectedTeacherId(p.id)}
+            onCloseDetails={() => setSelectedTeacherId(null)}
           />
         ))}
         </div>
@@ -4539,22 +4561,15 @@ function AttendanceCardPanel({
   }
 
   return (
-    <div
-      className="p-1 sm:p-2"
-    >
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+    <div className="mx-auto w-full max-w-4xl px-4 py-3 sm:px-6">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b pb-4" style={{ borderColor: colors.border }}>
         <div>
           <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Présence de la journée</h4>
           <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
             {students.length} participant{students.length > 1 ? 's' : ''}. Les entrées et sorties sont enregistrées automatiquement.
           </p>
         </div>
-        <span
-          className="flex-shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold"
-          style={{ backgroundColor: colors.cardBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-        >
-          Suivi automatique
-        </span>
+        <span className="text-xs font-medium" style={{ color: colors.textMuted }}>Suivi automatique</span>
       </div>
 
       <div className="mb-4">
@@ -4584,10 +4599,10 @@ function AttendanceCardPanel({
 
       {error && (
         <div
-          className="mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs"
+          className="mb-4 flex items-center gap-2 border-y px-1 py-3 text-xs"
           style={{
             backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
-            border: darkMode ? '1px solid rgba(248, 113, 113, 0.28)' : '1px solid #fecaca',
+            borderColor: darkMode ? 'rgba(248, 113, 113, 0.28)' : '#fecaca',
             color: darkMode ? '#fecaca' : '#991b1b',
           }}
         >
@@ -4596,7 +4611,7 @@ function AttendanceCardPanel({
         </div>
       )}
 
-      <section className="mb-4 border-t pt-4" style={{ borderColor: colors.border }}>
+      <section className="mb-4 border-t pt-5" style={{ borderColor: colors.border }}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <span className="text-sm font-semibold" style={{ color: colors.text }}>
             Fichiers Excel par journée
@@ -4653,7 +4668,7 @@ function AttendanceCardPanel({
           <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#121212' }} />
         </div>
       ) : students.length === 0 ? (
-        <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
+        <p className="border-y py-6 text-center text-xs" style={{ color: colors.textMuted, borderColor: colors.border }}>
           Aucune entrée dans la salle n’a été enregistrée pour cette journée.
         </p>
       ) : (
@@ -4715,6 +4730,7 @@ function TeacherToolPanel({
   colors,
   darkMode,
   children,
+  showHeader = true,
 }) {
   return (
     <section
@@ -4722,7 +4738,7 @@ function TeacherToolPanel({
       aria-label={title}
       style={{ backgroundColor: colors.cardBg }}
     >
-      <header className="flex flex-shrink-0 items-center gap-2 border-b px-3 py-2 pr-10" style={{ borderColor: colors.border }}>
+      {showHeader && <header className="flex flex-shrink-0 items-center gap-2 border-b px-3 py-2 pr-10" style={{ borderColor: colors.border }}>
         <button
           type="button"
           onClick={onBack}
@@ -4746,7 +4762,7 @@ function TeacherToolPanel({
           </h2>
           <p className="truncate text-[11px]" style={{ color: colors.textMuted }}>{subtitle}</p>
         </div>
-      </header>
+      </header>}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {children}
       </div>
@@ -6144,6 +6160,12 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (import.meta.env.DEV && Number(platformId) < 0) {
+      setRules([])
+      setError('')
+      setLoading(false)
+      return undefined
+    }
     let active = true
     const timeoutId = window.setTimeout(async () => {
       setLoading(true)
@@ -6419,20 +6441,15 @@ function StudentsToolContent({
   darkMode,
 }) {
   return (
-    <div className="p-3">
-      <div className="mb-4 flex items-start justify-between gap-4">
+    <div className="mx-auto w-full max-w-4xl px-4 py-3 sm:px-6">
+      <div className="mb-5 flex items-start justify-between gap-4 border-b pb-4" style={{ borderColor: colors.border }}>
         <div>
           <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves et invitations</h3>
           <p className="mt-1 max-w-[62ch] text-xs leading-5" style={{ color: colors.textMuted }}>
             Ajoutez uniquement les adresses qui recevront le lien d’accès et les rappels.
           </p>
         </div>
-        <span
-          className="flex-shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums"
-          style={{ backgroundColor: colors.cardBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-        >
-          {studentEmails.length}
-        </span>
+        <span className="text-xs font-semibold tabular-nums" style={{ color: colors.textMuted }}>{studentEmails.length} élève{studentEmails.length > 1 ? 's' : ''}</span>
       </div>
 
       <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
@@ -6440,7 +6457,7 @@ function StudentsToolContent({
         <textarea
           value={studentEmailDraft}
           onChange={(event) => onStudentEmailDraftChange(event.target.value)}
-          rows={3}
+          rows={2}
           placeholder="prenom@exemple.com, autre@exemple.com"
           className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-black/25"
           style={{
@@ -6475,9 +6492,8 @@ function StudentsToolContent({
           <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#121212' }} />
         </div>
       ) : studentEmails.length === 0 ? (
-        <div className="rounded-xl border border-dashed px-4 py-7 text-center" style={{ borderColor: colors.border }}>
-          <Icon name="group_off" className="text-2xl" style={{ color: colors.textMuted }} />
-          <p className="mt-2 text-xs" style={{ color: colors.textMuted }}>Aucune adresse ajoutée pour le moment.</p>
+        <div className="border-y px-4 py-7 text-center" style={{ borderColor: colors.border }}>
+          <p className="text-xs" style={{ color: colors.textMuted }}>Aucune adresse ajoutée pour le moment.</p>
         </div>
       ) : (
         <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
@@ -6525,9 +6541,8 @@ function PlatformCard({
   onExportAttendance, onOpenCourseTimeModal, onOpenCoursFolders,
   currentCourseTime, onSetCourseTime, onRetrySessionAudio, onPreviewSessionPostponement,
   onPostponeSession, onAudiosPublished, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
-  onBeforeFlip,
+  onBeforeFlip, detailsOpen = false, onOpenDetails, onCloseDetails,
 }) {
-  const [detailsOpen, setDetailsOpen] = useState(false)
   const [activeTool, setActiveTool] = useState(null)
   const [fallbackSessionId, setFallbackSessionId] = useState(null)
   const creationProgress = getHiddenPipelineProgress(p)
@@ -6542,7 +6557,7 @@ function PlatformCard({
     Array.isArray(p.course_schedule?.upcoming_sessions)
       ? p.course_schedule.upcoming_sessions
       : nextCourseSession ? [nextCourseSession] : []
-  ).slice(0, 3)
+  )
   const rosterStage = getTeacherRosterStage(p)
   const robotTheme = getRobotTheme(p.center_platform_number || p.id, p.teacher_color)
   const rosterMeta = {
@@ -6560,10 +6575,10 @@ function PlatformCard({
   }
   const actionItems = [
     ...(p.active ? [
-      { key: 'planning', label: 'Planning', icon: 'schedule', onOpen: onOpenCourseTimeModal },
-      { key: 'courses', label: 'Cours', icon: 'folder_special', onOpen: onOpenCoursFolders },
-      { key: 'students', label: 'Élèves', icon: 'group', onOpen: onToggleStudentEmails },
-      { key: 'attendance', label: 'Présence', icon: 'fact_check', onOpen: onToggleAttendance },
+      { key: 'planning', label: 'Planning', icon: 'schedule', IconComponent: CalendarDays, onOpen: onOpenCourseTimeModal },
+      { key: 'courses', label: 'Cours', icon: 'folder_open', IconComponent: FolderOpen, onOpen: onOpenCoursFolders },
+      { key: 'students', label: 'Élèves', icon: 'group', IconComponent: UsersRound, onOpen: onToggleStudentEmails },
+      { key: 'attendance', label: 'Présence', icon: 'fact_check', IconComponent: ClipboardCheck, onOpen: onToggleAttendance },
     ] : []),
   ]
   const activeToolMeta = actionItems.find((item) => item.key === activeTool)
@@ -6582,40 +6597,26 @@ function PlatformCard({
   const closeDetails = useCallback(() => {
     onBeforeFlip?.()
     setActiveTool(null)
-    setDetailsOpen(false)
-  }, [onBeforeFlip])
-
-  useEffect(() => {
-    if (!detailsOpen) return undefined
-    const previousOverflow = document.body.style.overflow
-    const handleEscape = (event) => {
-      if (event.key === 'Escape') closeDetails()
-    }
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', handleEscape)
-    return () => {
-      document.body.style.overflow = previousOverflow
-      window.removeEventListener('keydown', handleEscape)
-    }
-  }, [detailsOpen, closeDetails])
+    onCloseDetails?.()
+  }, [onBeforeFlip, onCloseDetails])
 
   return (
     <>
       {/* Carte de roster : toute la surface ouvre la fiche, comme chez Delos. */}
-      <div className={`w-full self-start ${newlyCreated ? 'teacher-card-enter' : ''}`}>
+      {!detailsOpen && <div className={`w-full self-start ${newlyCreated ? 'teacher-card-enter' : ''}`}>
         <div
           role="button"
           tabIndex={0}
           aria-label={`Ouvrir le professeur ${p.teacher_name || p.name || 'IA'}`}
           onClick={() => {
             onBeforeFlip?.()
-            setDetailsOpen(true)
+            onOpenDetails?.()
           }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault()
               onBeforeFlip?.()
-              setDetailsOpen(true)
+              onOpenDetails?.()
             }
           }}
           className="group relative flex min-h-[332px] cursor-pointer flex-col gap-2 overflow-hidden rounded-2xl p-3 text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
@@ -6683,33 +6684,18 @@ function PlatformCard({
             <Icon name="arrow_forward" className="text-sm" />
           </span>
         </div>
-      </div>
+      </div>}
 
-      {detailsOpen && createPortal(
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[3px]"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeDetails()
-          }}
-        >
+      {detailsOpen && (
+        <div className="mx-auto w-full max-w-4xl px-2 sm:px-6">
+          <button type="button" onClick={activeTool ? closeTool : closeDetails} className="mb-6 inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-[#52525B] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30">
+            <ChevronLeft size={18} /> {activeTool ? activeToolMeta?.label : 'Mes professeurs'}
+          </button>
           <section
-            role="dialog"
-            aria-modal="true"
             aria-labelledby={`teacher-details-${p.id}`}
-            className="relative flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:max-h-[760px]"
-            style={{ border: `1px solid ${colors.border}` }}
+            className="relative flex w-full flex-col overflow-hidden bg-white"
           >
             <div className="relative min-h-0 flex-1 overflow-hidden" style={{ backgroundColor: colors.cardBg }}>
-              <button
-                type="button"
-                onClick={closeDetails}
-                aria-label="Fermer la fiche du professeur"
-                className="absolute right-2 top-2 z-40 flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
-                style={{ color: colors.textMuted }}
-              >
-                <Icon name="close" className="text-base" />
-              </button>
-
               <div className="relative h-full overflow-hidden">
 
       {/* Inactive overlay */}
@@ -6776,24 +6762,11 @@ function PlatformCard({
         </div>
       )}
 
-      {!activeTool ? (
-      <div className="h-full overflow-y-auto p-6">
+      {!activeTool && <div className="h-full overflow-y-auto p-6">
         {/* Header — SKU chip + name + status pill, optional meta line below */}
         <div className="mb-5 space-y-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span
-              className="flex-shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-              style={{
-                backgroundColor: colors.innerBg,
-                color: colors.textMuted,
-                border: `1px solid ${colors.border}`,
-                letterSpacing: '0.08em',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              P{p.center_platform_number || p.id}
-            </span>
-            <h2 id={`teacher-details-${p.id}`} className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: colors.text }}>
+            <h2 id={`teacher-details-${p.id}`} className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: '#2563EB' }}>
               {p.teacher_name || p.name || 'Professeur IA'}
             </h2>
           </div>
@@ -6802,119 +6775,40 @@ function PlatformCard({
           </p>
         </div>
 
+        <div className="min-w-0">
+
         {/* Slide-to-confirm + backup pipeline déménagés vers CoursFoldersModal :
             l'action lock/unlock cohabite désormais avec la vue où on voit
             les audios (modale "Cours"). Le card reste épuré. */}
 
-        {/* Barre d'outils de la formation. Les commandes partagent un même
-            cadre afin de former une seule zone fonctionnelle, et non six
-            boutons flottants sans hiérarchie. */}
-        <div
-          className="mb-4 grid grid-cols-2 overflow-hidden rounded-xl"
-          style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}
-        >
-          {actionItems.map((action, index) => {
-            return (
-              <button
-                key={action.key}
-                type="button"
-                onClick={() => openTool(action)}
-                className="flex min-h-12 items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors hover:bg-black/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-black/35 dark:hover:bg-white/5"
-                style={{
-                  backgroundColor: 'transparent',
-                  borderTop: index >= 2 ? `1px solid ${colors.border}` : 'none',
-                  borderLeft: index % 2 === 1 ? `1px solid ${colors.border}` : 'none',
-                  color: colors.textSecondary,
-                }}
-              >
-                <Icon
-                  name={action.icon}
-                  className="text-lg"
-                  style={{ color: colors.textMuted }}
-                />
-                <span className="min-w-0 flex-1 truncate">{action.label}</span>
-                <Icon
-                  name="chevron_right"
-                  className="text-base"
-                  style={{ color: colors.textMuted }}
-                />
-              </button>
-            )
-          })}
-        </div>
-
-        {/* === Divider entre groupes A (boxed) et B (linky externes) === */}
-        {p.active && (
-          <div
-            className="my-4 h-px"
-            style={{ backgroundColor: colors.border }}
-            aria-hidden="true"
-          />
-        )}
-
-        {/* === Group B : liens externes (linky, pas de fond, hover bg tint) === */}
-
-        {/* Lien vers la page apprenant — l'admin clique pour vérifier ce que voit l'apprenant */}
-        {p.active && (
-          <a
-            href={p.public_url || `${p.frontend_url || window.location.origin}/?p=${p.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-            style={{
-              color: colors.textSecondary,
-              textDecoration: 'none',
-            }}
-          >
-            <span>Accéder au cours</span>
-            <Icon name="open_in_new" className="text-base" style={{ color: colors.textMuted }} />
-          </a>
-        )}
-
-        {!activeTool && (
-          <section className="mt-5 border-t pt-4" style={{ borderColor: colors.border }}>
-            <p className="text-[11px] font-semibold" style={{ color: colors.textMuted }}>
-              Prochaines diffusions
-            </p>
-            {upcomingCourseSessions.length > 0 ? (
-              <>
-                <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                  Vos prochaines séances seront générées automatiquement 72 heures avant leur début. Vérifiez ensuite que chaque séance a bien été générée.
-                </p>
-                <div className="mt-2 divide-y" style={{ borderColor: colors.border }}>
-                  {upcomingCourseSessions.map((session) => (
-                  <div key={session.id} className="py-2">
-                    <p className="text-[11px] font-semibold leading-4" style={{ color: colors.text }}>
-                      J{session.session_index} · {formatScheduleLongDateTime(session.scheduled_at)}
-                    </p>
-                    <p className="mt-0.5 text-[11px] leading-4" style={{ color: colors.textSecondary }}>
-                      Génération : {formatScheduleDateTimeOffset(session.scheduled_at, 72)}
-                    </p>
-                    {session.audio_status === 'error' && (
-                      <button
-                        type="button"
-                        onClick={() => openTool(
-                          actionItems.find((item) => item.key === 'courses'),
-                          { targetSessionId: session.id },
-                        )}
-                        className="mt-2 min-h-9 rounded-md bg-red-700 px-3 py-1.5 text-[11px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
-                      >
-                        Utiliser un ancien cours
-                      </button>
-                    )}
-                  </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                Aucune séance n’est programmée pour le moment.
-              </p>
+        <section className="max-w-2xl" aria-label="Outils du professeur">
+          <p className="mb-3 text-sm font-semibold text-[#64748B]">Outils</p>
+          <div className="divide-y divide-[#E2E8F0] border-y border-[#E2E8F0]">
+            {actionItems.map((action) => {
+              const ActionIcon = action.IconComponent
+              return (
+                <button key={action.key} type="button" onClick={() => openTool(action)} className="group flex min-h-14 w-full items-center gap-4 px-1 py-3.5 text-left text-base font-medium text-[#334155] transition-colors hover:text-[#0F172A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/25">
+                  <ActionIcon size={20} strokeWidth={1.8} className="text-[#64748B] transition-colors group-hover:text-[#0F172A]" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                  <ChevronRight size={16} strokeWidth={1.8} className="text-[#94A3B8]" aria-hidden="true" />
+                </button>
+              )
+            })}
+            {p.active && (
+              <a href={p.public_url || `${p.frontend_url || window.location.origin}/?p=${p.id}`} target="_blank" rel="noopener noreferrer" className="group flex min-h-14 w-full items-center gap-4 px-1 py-3.5 text-left text-base font-medium text-[#334155] transition-colors hover:text-[#0F172A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/25">
+                <Globe2 size={20} strokeWidth={1.8} className="text-[#64748B] transition-colors group-hover:text-[#0F172A]" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">Lien du cours</span>
+                <ExternalLink size={16} strokeWidth={1.8} className="text-[#94A3B8]" aria-hidden="true" />
+              </a>
             )}
-          </section>
-        )}
-      </div>
-      ) : (
+          </div>
+        </section>
+
+        </div>
+      </div>}
+
+      {activeTool && (
+        <div className="h-full min-h-[32rem] overflow-hidden bg-white">
         <TeacherToolPanel
           title={activeToolMeta?.label || 'Outil'}
           subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
@@ -6922,17 +6816,28 @@ function PlatformCard({
           onBack={closeTool}
           colors={colors}
           darkMode={darkMode}
+          showHeader={false}
         >
           {activeTool === 'planning' && (
-            <CourseTimeModal
-              embedded
-              onSubmit={onSetCourseTime}
-              initialDate={currentCourseTime?.date_cours}
-              schedule={currentCourseTime?.schedule}
-              onRetryAudio={onRetrySessionAudio}
-              onPreviewPostponement={onPreviewSessionPostponement}
-              onPostponeSession={onPostponeSession}
-            />
+            <section className="px-4 py-3" aria-labelledby={`teacher-schedule-${p.id}`}>
+              <h2 id={`teacher-schedule-${p.id}`} className="text-base font-semibold" style={{ color: colors.text }}>Prochaines séances</h2>
+              <p className="mt-1 text-sm leading-6" style={{ color: colors.textSecondary }}>Les séances sont générées automatiquement 72 heures avant leur début.</p>
+              {upcomingCourseSessions.length > 0 ? (
+                <div className="mt-3 divide-y" style={{ borderColor: colors.border }}>
+                  {upcomingCourseSessions.map((session) => (
+                    <div key={session.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                      <div>
+                        <p className="text-sm font-semibold" style={{ color: colors.text }}>J{session.session_index}</p>
+                        <p className="mt-0.5 text-sm" style={{ color: colors.textSecondary }}>{formatScheduleLongDateTime(session.scheduled_at)}</p>
+                      </div>
+                      <CalendarDays size={18} strokeWidth={1.8} style={{ color: colors.textMuted }} aria-hidden="true" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm" style={{ color: colors.textSecondary }}>Aucune prochaine séance programmée.</p>
+              )}
+            </section>
           )}
           {activeTool === 'courses' && (
             <CoursFoldersModal
@@ -6973,12 +6878,12 @@ function PlatformCard({
             </div>
           )}
         </TeacherToolPanel>
+        </div>
       )}
             </div>
             </div>
           </section>
-        </div>,
-        document.body,
+        </div>
       )}
     </>
   )

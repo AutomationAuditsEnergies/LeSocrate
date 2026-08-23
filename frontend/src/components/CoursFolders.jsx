@@ -1503,7 +1503,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 py-2' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+        {(!embedded || view !== 'folders' || audioEditorFile) && <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 py-2' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
           <div className="flex min-w-0 items-center gap-2.5">
             <Icon name={audioEditorFile ? 'content_cut' : 'folder_special'} style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />
             <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
@@ -1520,7 +1520,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               <Icon name="close" style={{ fontSize: '20px' }} />
             </button>
           )}
-        </div>
+        </div>}
 
         {/* Modal Body */}
         <div
@@ -1595,14 +1595,14 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   </div>
                 </form>
               ) : (
-                <div className="mb-5 flex gap-2">
+                <div className="mb-5 flex flex-wrap items-center justify-end gap-2 border-b pb-4" style={{ borderColor: colors.border }}>
                   <button
                     onClick={handleCreateFolder}
-                    className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
-                    style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+                    style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
                   >
-                    <Icon name="add" className="text-lg" />
-                    Nouveau cours
+                    <Icon name="add" className="text-base" />
+                    Créer un cours
                   </button>
                   <button
                     type="button"
@@ -1610,11 +1610,11 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       setShowFillForm((value) => !value)
                       setFillFeedback(null)
                     }}
-                    className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white"
+                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white"
                     style={{ backgroundColor: '#121212' }}
                   >
-                    <Icon name="publish" className="text-lg" />
-                    Remplir
+                    <Icon name="content_copy" className="text-base" />
+                    Réutiliser un cours
                   </button>
                 </div>
               )}
@@ -1667,10 +1667,9 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300" style={{ borderTopColor: colors.textSecondary }} />
                 </div>
               ) : folders.length === 0 ? (
-                <div className="py-12 text-center" style={{ color: colors.textMuted }}>
-                  <Icon name="folder_off" className="text-5xl mb-3" />
-                  <p className="text-sm">Aucun cours pour le moment</p>
-                  <p className="text-xs mt-1">Créez un nouveau cours pour commencer</p>
+                <div className="border-y py-8 text-center" style={{ color: colors.textMuted, borderColor: colors.border }}>
+                  <p className="text-sm font-medium" style={{ color: colors.textSecondary }}>Aucun cours enregistré</p>
+                  <p className="mt-1 text-xs">Créez un cours ou réutilisez une journée existante.</p>
                 </div>
               ) : (
                 <>
