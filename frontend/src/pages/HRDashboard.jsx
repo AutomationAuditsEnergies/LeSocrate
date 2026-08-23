@@ -36,7 +36,7 @@ import AIVoicesView from './AIVoicesView.jsx'
 import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
 import './CreatePlatformView.css'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
-import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
+import { getAudioStatusMeta, getNextCourseSession } from '../courseSchedule'
 import { getReusableTeacherDefaults } from '../centerWorkspace'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
@@ -4335,13 +4335,13 @@ function AttendanceCardPanel({
               type="date"
               value={courseDate}
               onChange={(e) => onCourseDateChange(e.target.value)}
-              className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm font-normal outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
+              className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm font-normal outline-none transition-shadow focus:ring-2 focus:ring-black/25"
               style={inputStyle}
             />
             <button
               type="button"
               onClick={onRefresh}
-              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 dark:hover:bg-white/5"
               style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
               title="Actualiser les présences"
               aria-label="Actualiser les présences"
@@ -4375,11 +4375,11 @@ function AttendanceCardPanel({
             type="button"
             onClick={() => onExport(selectedExport || null)}
             disabled={!selectedExport}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 disabled:cursor-not-allowed disabled:opacity-50"
             style={{
-              backgroundColor: selectedExport ? '#8B5CF6' : colors.cardBg,
+              backgroundColor: selectedExport ? '#121212' : colors.cardBg,
               color: selectedExport ? 'white' : colors.textMuted,
-              border: selectedExport ? '1px solid #8B5CF6' : `1px solid ${colors.border}`,
+              border: selectedExport ? '1px solid #121212' : `1px solid ${colors.border}`,
             }}
             title={selectedExport ? 'Télécharger le relevé de cette journée' : 'Disponible automatiquement le lendemain matin'}
           >
@@ -4420,7 +4420,7 @@ function AttendanceCardPanel({
 
       {loading ? (
         <div className="flex items-center justify-center py-5">
-          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
+          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#121212' }} />
         </div>
       ) : students.length === 0 ? (
         <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
@@ -4498,14 +4498,14 @@ function TeacherToolPanel({
           onClick={onBack}
           autoFocus
           aria-label="Revenir aux outils du professeur"
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 dark:hover:bg-white/5"
           style={{ color: colors.textMuted }}
         >
           <Icon name="arrow_back" className="text-lg" />
         </button>
         <span
           className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
-          style={{ backgroundColor: colors.innerBg, color: darkMode ? '#c4b5fd' : '#7c3aed' }}
+          style={{ backgroundColor: darkMode ? '#ffffff' : '#121212', color: darkMode ? '#121212' : '#ffffff' }}
           aria-hidden="true"
         >
           <Icon name={icon} className="text-base" />
@@ -5685,7 +5685,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                 <button
                   type="button"
                   onClick={() => setCourseMaterialsReloadKey((key) => key + 1)}
-                  className="flex min-h-9 items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                  className="flex min-h-9 items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-[#121212] transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
                 >
                   <Icon name="refresh" className="text-base" />
                   <span>Réessayer</span>
@@ -5701,7 +5701,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                     href={material.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2.5 text-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                    className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2.5 text-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
                     style={{ border: '1px solid #e2e8f0', color: '#334155', textDecoration: 'none' }}
                   >
                     <span className="min-w-0">
@@ -5793,8 +5793,8 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                 onClick={() => !uploading && fileInputRef.current?.click()}
                 className="flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-lg cursor-pointer transition-all"
                 style={{
-                  borderColor: dragOver ? '#8B5CF6' : '#e2e8f0',
-                  backgroundColor: dragOver ? 'rgba(139, 92, 246, 0.06)' : 'transparent',
+                  borderColor: dragOver ? '#121212' : '#e2e8f0',
+                  backgroundColor: dragOver ? 'rgba(18, 18, 18, 0.04)' : 'transparent',
                   minHeight: embedded ? '120px' : '500px',
                   cursor: uploading ? 'not-allowed' : 'pointer',
                   opacity: uploading ? 0.6 : 1
@@ -5811,7 +5811,7 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                 <div className={`flex flex-col items-center text-center ${embedded ? 'gap-2 px-3' : 'gap-4 px-6'}`}>
                   {uploading ? (
                     <>
-                      <div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-200 border-t-violet-500" />
+                      <div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-200 border-t-[#121212]" />
                       <p className="text-sm font-medium" style={{ color: '#64748b' }}>Upload en cours...</p>
                     </>
                   ) : justUploaded ? (
@@ -5822,14 +5822,14 @@ function PDFModal({ platform, onClose, onUpload, onDelete, uploading, embedded =
                         className="w-24 h-20 flex-shrink-0 object-contain"
                         style={{ transform: 'scaleX(-1)' }}
                       />
-                      <p className="text-left text-base font-semibold leading-snug" style={{ color: '#6d28d9' }}>
+                      <p className="text-left text-base font-semibold leading-snug" style={{ color: '#121212' }}>
                         Le chatbot a bien été alimenté à partir du contenu du cours de cette semaine !
                       </p>
                     </div>
                   ) : (
                     <>
-                      <div className={`flex items-center justify-center rounded-full ${embedded ? 'size-10' : 'size-20'}`} style={{ backgroundColor: 'rgba(139, 92, 246, 0.10)' }}>
-                        <Icon name="cloud_upload" className={embedded ? 'text-2xl' : 'text-5xl'} style={{ color: '#7c3aed' }} />
+                      <div className={`flex items-center justify-center rounded-full ${embedded ? 'size-10' : 'size-20'}`} style={{ backgroundColor: 'rgba(18, 18, 18, 0.08)' }}>
+                        <Icon name="cloud_upload" className={embedded ? 'text-2xl' : 'text-5xl'} style={{ color: '#121212' }} />
                       </div>
                       <div>
                         <h3 className={`${embedded ? 'text-xs font-semibold' : 'mb-2 text-lg font-bold'}`} style={{ color: '#111418' }}>
@@ -6040,8 +6040,8 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
           <button
             type="button"
             onClick={() => setEditingId('new')}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
-            style={{ backgroundColor: colors.cardBg, color: darkMode ? '#c4b5fd' : '#7c3aed', border: `1px solid ${colors.border}` }}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
+            style={{ backgroundColor: colors.cardBg, color: colors.text, border: `1px solid ${colors.border}` }}
           >
             <Icon name="add" className="text-sm" /> Créer un rappel
           </button>
@@ -6069,7 +6069,7 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
                 checked={Boolean(rule.is_active)}
                 onChange={() => toggleRule(rule)}
                 aria-label={`${rule.is_active ? 'Désactiver' : 'Activer'} ${rule.name}`}
-                className="h-4 w-4 accent-violet-600"
+                className="h-4 w-4 accent-black"
               />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-semibold" style={{ color: colors.text }}>{rule.name}</p>
@@ -6093,11 +6093,11 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
               Nom du rappel
-              <input required maxLength={120} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+              <input required maxLength={120} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-black/25" style={inputStyle} />
             </label>
             <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
               Déclenchement
-              <select value={form.trigger_mode} onChange={(e) => setForm({ ...form, trigger_mode: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle}>
+              <select value={form.trigger_mode} onChange={(e) => setForm({ ...form, trigger_mode: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-black/25" style={inputStyle}>
                 <option value="relative_minutes">Délai avant le cours</option>
                 <option value="local_day_time">Jour et heure précis</option>
               </select>
@@ -6108,32 +6108,32 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
                 Jours avant
-                <input type="number" min="0" max="365" required value={form.days_before} onChange={(e) => setForm({ ...form, days_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+                <input type="number" min="0" max="365" required value={form.days_before} onChange={(e) => setForm({ ...form, days_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-black/25" style={inputStyle} />
               </label>
               <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
                 Heure d’envoi
-                <input type="time" required max={Number(form.days_before) === 0 ? '08:59' : undefined} value={form.local_time} onChange={(e) => setForm({ ...form, local_time: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+                <input type="time" required max={Number(form.days_before) === 0 ? '08:59' : undefined} value={form.local_time} onChange={(e) => setForm({ ...form, local_time: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-black/25" style={inputStyle} />
               </label>
             </div>
           ) : (
             <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
               Minutes avant le cours
-              <input type="number" min="1" max="525600" required value={form.minutes_before} onChange={(e) => setForm({ ...form, minutes_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+              <input type="number" min="1" max="525600" required value={form.minutes_before} onChange={(e) => setForm({ ...form, minutes_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-black/25" style={inputStyle} />
             </label>
           )}
 
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Objet de l’e-mail
-            <input required maxLength={200} value={form.subject_template} onChange={(e) => setForm({ ...form, subject_template: e.target.value })} placeholder="Votre formation commence bientôt" className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+            <input required maxLength={200} value={form.subject_template} onChange={(e) => setForm({ ...form, subject_template: e.target.value })} placeholder="Votre formation commence bientôt" className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-black/25" style={inputStyle} />
           </label>
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Message
-            <textarea required maxLength={5000} rows={3} value={form.content_template} onChange={(e) => setForm({ ...form, content_template: e.target.value })} placeholder="Rendez-vous le {date} à {time}." className="mt-1 w-full resize-y rounded-lg px-2.5 py-2 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+            <textarea required maxLength={5000} rows={3} value={form.content_template} onChange={(e) => setForm({ ...form, content_template: e.target.value })} placeholder="Rendez-vous le {date} à {time}." className="mt-1 w-full resize-y rounded-lg px-2.5 py-2 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-black/25" style={inputStyle} />
           </label>
 
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Destinataires
-            <select value={form.recipient_scope} onChange={(e) => setForm({ ...form, recipient_scope: e.target.value, recipient_ids: e.target.value === 'all' ? [] : form.recipient_ids })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle}>
+            <select value={form.recipient_scope} onChange={(e) => setForm({ ...form, recipient_scope: e.target.value, recipient_ids: e.target.value === 'all' ? [] : form.recipient_ids })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-black/25" style={inputStyle}>
               <option value="all">Tous les e-mails élèves</option>
               <option value="selected_explicit">Une sélection d’élèves</option>
             </select>
@@ -6155,7 +6155,7 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
                         ? [...form.recipient_ids, recipient.id]
                         : form.recipient_ids.filter((id) => id !== recipient.id),
                     })}
-                    className="h-4 w-4 accent-violet-600"
+                    className="h-4 w-4 accent-black"
                   />
                   <span className="truncate">{recipient.email}</span>
                 </label>
@@ -6166,7 +6166,7 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
           <p className="text-[11px]" style={{ color: colors.textMuted }}>Variables disponibles : {'{date}'}, {'{time}'}, {'{session_code}'}, {'{class_url}'}.</p>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={resetForm} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>Annuler</button>
-            <button type="submit" disabled={saving} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="submit" disabled={saving} className="rounded-lg bg-[#121212] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
               {saving ? 'Enregistrement…' : editingId === 'new' ? 'Créer le rappel' : 'Enregistrer le rappel'}
             </button>
           </div>
@@ -6212,7 +6212,7 @@ function StudentsToolContent({
           onChange={(event) => onStudentEmailDraftChange(event.target.value)}
           rows={3}
           placeholder="prenom@exemple.com, autre@exemple.com"
-          className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30"
+          className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-black/25"
           style={{
             backgroundColor: colors.cardBg,
             border: `1px solid ${colors.border}`,
@@ -6228,8 +6228,8 @@ function StudentsToolContent({
           type="button"
           onClick={onAddStudentEmails}
           disabled={!studentEmailDraft.trim() || studentEmailsSaving}
-          className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ backgroundColor: '#8B5CF6', color: 'white' }}
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ backgroundColor: '#121212', color: 'white' }}
         >
           {studentEmailsSaving ? (
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -6242,7 +6242,7 @@ function StudentsToolContent({
 
       {studentEmailsLoading ? (
         <div className="flex items-center justify-center py-5">
-          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
+          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#121212' }} />
         </div>
       ) : studentEmails.length === 0 ? (
         <div className="rounded-xl border border-dashed px-4 py-7 text-center" style={{ borderColor: colors.border }}>
@@ -6505,7 +6505,7 @@ function PlatformCard({
         >
           <div className="text-center px-6">
             <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px]"
-              style={{ borderColor: darkMode ? '#334155' : '#e2e8f0', borderTopColor: '#8B5CF6' }} />
+              style={{ borderColor: darkMode ? '#334155' : '#e2e8f0', borderTopColor: '#121212' }} />
             <p className="text-sm font-semibold mb-1" style={{ color: colors.text }}>
               {preparation.stage || 'Préparation du professeur'}
             </p>
@@ -6535,8 +6535,8 @@ function PlatformCard({
                 type="button"
                 onClick={onRetryPreparation}
                 disabled={retryingPreparation}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-60"
-                style={{ backgroundColor: '#8B5CF6' }}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 disabled:cursor-wait disabled:opacity-60"
+                style={{ backgroundColor: '#121212' }}
               >
                 <Icon name={retryingPreparation ? 'hourglass_top' : 'refresh'} className="text-[16px]" aria-hidden="true" />
                 {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la pipeline'}
@@ -6567,7 +6567,7 @@ function PlatformCard({
               {p.teacher_name || p.name || 'Professeur IA'}
             </h2>
           </div>
-          <p className="text-xs font-medium" style={{ color: '#6C63FF' }}>
+          <p className="text-xs font-medium" style={{ color: colors.textSecondary }}>
             Professeur du {p.source_tp_name || p.name || 'parcours'}
           </p>
         </div>
@@ -6589,7 +6589,7 @@ function PlatformCard({
                 key={action.key}
                 type="button"
                 onClick={() => openTool(action)}
-                className="flex min-h-12 items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors hover:bg-black/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/50 dark:hover:bg-white/5"
+                className="flex min-h-12 items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors hover:bg-black/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-black/35 dark:hover:bg-white/5"
                 style={{
                   backgroundColor: 'transparent',
                   borderTop: index >= 2 ? `1px solid ${colors.border}` : 'none',
@@ -6775,8 +6775,6 @@ function formatRelativeTime(dateStr) {
   const years = Math.floor(diffDay / 365)
   return `il y a ${years} an${years > 1 ? 's' : ''}`
 }
-
-const COURSE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
 
 function formatScheduleDateTime(value) {
   if (!value) return 'Non programmé'
@@ -6968,7 +6966,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
           <>
             <header className="flex items-start justify-between gap-4 border-b px-5 py-5 sm:px-6" style={{ borderColor: '#e2e8f0' }}>
               <div className="flex min-w-0 items-start gap-3">
-                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: '#f3f0ff', color: '#7c3aed' }}>
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-[#121212] text-white">
                   <Icon name="event_repeat" className="text-xl" />
                 </span>
                 <div>
@@ -7000,16 +6998,16 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                     type="button"
                     autoFocus
                     onClick={() => setMode('next_occurrence')}
-                    className="flex min-h-[72px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-violet-200"
-                    style={{ borderColor: mode === 'next_occurrence' ? '#8b5cf6' : '#e2e8f0', backgroundColor: mode === 'next_occurrence' ? '#faf8ff' : '#fff' }}
+                    className="flex min-h-[72px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-black/25"
+                    style={{ borderColor: mode === 'next_occurrence' ? '#121212' : '#e2e8f0', backgroundColor: '#fff' }}
                   >
-                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'next_occurrence' ? '#8b5cf6' : '#cbd5e1' }}>
-                      {mode === 'next_occurrence' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />}
+                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'next_occurrence' ? '#121212' : '#cbd5e1' }}>
+                      {mode === 'next_occurrence' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#121212' }} />}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold" style={{ color: '#0f172a' }}>Au prochain créneau prévu</span>
-                        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#6d28d9', backgroundColor: '#ede9fe' }}>Recommandé</span>
+                        <span className="rounded-full bg-[#121212] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">Recommandé</span>
                       </span>
                       <span className="mt-1 block text-xs leading-5" style={{ color: '#64748b' }}>Le cours suivant prend sa place et toute la suite se décale naturellement.</span>
                     </span>
@@ -7017,11 +7015,11 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                   <button
                     type="button"
                     onClick={() => setMode('specific_date')}
-                    className="flex min-h-[68px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-violet-200"
-                    style={{ borderColor: mode === 'specific_date' ? '#8b5cf6' : '#e2e8f0', backgroundColor: mode === 'specific_date' ? '#faf8ff' : '#fff' }}
+                    className="flex min-h-[68px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-black/25"
+                    style={{ borderColor: mode === 'specific_date' ? '#121212' : '#e2e8f0', backgroundColor: '#fff' }}
                   >
-                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'specific_date' ? '#8b5cf6' : '#cbd5e1' }}>
-                      {mode === 'specific_date' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />}
+                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'specific_date' ? '#121212' : '#cbd5e1' }}>
+                      {mode === 'specific_date' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#121212' }} />}
                     </span>
                     <span>
                       <span className="text-sm font-semibold" style={{ color: '#0f172a' }}>Choisir une nouvelle date</span>
@@ -7041,16 +7039,16 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                     min={toLocalDateTimeInput(new Date(new Date(session.scheduled_at).getTime() + 60000)).slice(0, 10)}
                     onChange={(event) => setCustomDate(event.target.value ? `${event.target.value}T09:00` : '')}
                     className="h-11 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2"
-                    style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': '#ddd6fe' }}
+                    style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': 'rgba(18, 18, 18, 0.25)' }}
                   />
                   <p className="mt-1.5 text-xs" style={{ color: '#64748b' }}>Le cours commencera à 09:00.</p>
                 </div>
               )}
 
-              <div className="rounded-xl border p-4" style={{ borderColor: '#ddd6fe', backgroundColor: '#faf8ff' }} aria-live="polite">
+              <div className="rounded-xl border p-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#f8fafc' }} aria-live="polite">
                 {previewLoading ? (
                   <div className="flex items-center gap-3 text-sm" style={{ color: '#64748b' }}>
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600" />
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-[#121212]" />
                     Calcul de l’impact sur le planning…
                   </div>
                 ) : preview ? (
@@ -7060,18 +7058,18 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                         <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94a3b8' }}>Date actuelle</p>
                         <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#475569' }}>{formatPostponementDay(preview.previous_scheduled_at)}</p>
                       </div>
-                      <Icon name="arrow_forward" className="text-lg" style={{ color: '#8b5cf6' }} />
+                      <Icon name="arrow_forward" className="text-lg" style={{ color: '#121212' }} />
                       <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#7c3aed' }}>Nouvelle date</p>
-                        <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#5b21b6' }}>{formatPostponementDay(preview.new_scheduled_at)}</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>Nouvelle date</p>
+                        <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#0f172a' }}>{formatPostponementDay(preview.new_scheduled_at)}</p>
                       </div>
                     </div>
                     <div className="flex items-start gap-2 border-t pt-3 text-xs leading-5" style={{ borderColor: '#e9e2ff', color: '#475569' }}>
-                      <Icon name="verified" className="mt-0.5 text-base" style={{ color: '#7c3aed' }} />
+                      <Icon name="verified" className="mt-0.5 text-base" style={{ color: '#121212' }} />
                       <p><strong style={{ color: '#334155' }}>Aucun cours ne sera perdu.</strong> {preview.affected_session_count > 1 ? `Les ${preview.affected_session_count - 1} cours suivants seront décalés d’un créneau.` : 'Seule cette date sera déplacée.'}</p>
                     </div>
                     <div className="flex items-start gap-2 text-xs leading-5" style={{ color: '#475569' }}>
-                      <Icon name="graphic_eq" className="mt-0.5 text-base" style={{ color: '#7c3aed' }} />
+                      <Icon name="graphic_eq" className="mt-0.5 text-base" style={{ color: '#121212' }} />
                       <p>{audioCopy[preview.audio_preservation]}</p>
                     </div>
                   </div>
@@ -7097,7 +7095,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                   onChange={(event) => setReason(event.target.value)}
                   placeholder="Ex. indisponibilité du formateur"
                   className="h-11 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2"
-                  style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': '#ddd6fe' }}
+                  style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': 'rgba(18, 18, 18, 0.25)' }}
                 />
               </div>
 
@@ -7124,7 +7122,7 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
                 onClick={confirmPostponement}
                 disabled={!preview || previewLoading || confirming}
                 className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-5 text-sm font-semibold text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ backgroundColor: '#8b5cf6' }}
+                style={{ backgroundColor: '#121212' }}
               >
                 {confirming && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
                 {confirming ? 'Mise à jour…' : preview ? `Reporter au ${formatPostponementButtonDate(preview.new_scheduled_at)}` : 'Choisir une date'}
@@ -7143,36 +7141,17 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
   const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
   const [heure] = useState('09:00')
-  const [selectedWeekdays, setSelectedWeekdays] = useState(
-    (schedule?.weekdays || [])
-      .map((day) => Number(day))
-      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
-      .sort((a, b) => a - b)
-  )
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [busySessionId, setBusySessionId] = useState(null)
   const [actionError, setActionError] = useState('')
   const [sessionToPostpone, setSessionToPostpone] = useState(null)
-  const expectedWeekdayCount = Number(schedule?.weekly_course_count || selectedWeekdays.length || 0)
-  const weekdaySelectionError = hasSchedule && !scheduleSelectionIsValid({ selectedWeekdays, expectedWeekdayCount })
-    ? `Sélectionnez ${expectedWeekdayCount} jour${expectedWeekdayCount > 1 ? 's' : ''}.`
-    : ''
-
-  const toggleWeekday = (day) => {
-    setResult(null)
-    setSelectedWeekdays((current) => {
-      if (current.includes(day)) return current.filter((value) => value !== day)
-      return [...current, day].sort((a, b) => a - b)
-    })
-  }
-
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if ((!hasSchedule && !date) || !heure || weekdaySelectionError) return
+    if (!date || !heure) return
     setLoading(true)
     setResult(null)
-    const data = await onSubmit(hasSchedule ? '' : date, heure, hasSchedule ? selectedWeekdays : undefined)
+    const data = await onSubmit(date, heure)
     setResult(data)
     setLoading(false)
   }
@@ -7207,7 +7186,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
         {!embedded && (
         <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: '#ede9fe', color: '#7c3aed' }}>
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#121212] text-white">
               <Icon name="calendar_month" className="text-xl" />
             </span>
             <div>
@@ -7228,7 +7207,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
 
         {/* Body */}
         <div className={`min-h-0 flex-1 overflow-y-auto ${embedded ? 'p-3' : 'p-5 sm:p-6'}`} style={embedded ? undefined : { maxHeight: 'calc(92vh - 74px)' }}>
-          {result?.success ? (
+          {hasSchedule ? null : result?.success ? (
             <div className="flex flex-col items-center gap-4 py-4 text-center">
               <div className="flex items-center justify-center size-14 rounded-full" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)' }}>
                 <Icon name="check_circle" className="text-4xl" style={{ color: '#10b981' }} />
@@ -7237,70 +7216,29 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
               <button
                 onClick={embedded ? () => setResult(null) : onClose}
                 className="mt-2 rounded-lg px-5 py-2 text-sm font-semibold text-white transition-colors"
-                style={{ backgroundColor: '#8B5CF6' }}
+                style={{ backgroundColor: '#121212' }}
               >
                 {embedded ? 'Voir le planning' : 'Fermer'}
               </button>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              {hasSchedule ? (
-                <div className="rounded-xl px-4 py-3" style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                  <p className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#64748b' }}>
-                    Planning automatique
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {COURSE_WEEKDAY_LABELS.map((label, day) => {
-                      const selected = selectedWeekdays.includes(day)
-                      return (
-                        <button
-                          type="button"
-                          key={label}
-                          onClick={() => toggleWeekday(day)}
-                          className="rounded-full px-2.5 py-1 text-xs font-semibold transition-colors"
-                          style={{
-                            backgroundColor: selected ? '#ede9fe' : '#ffffff',
-                            color: selected ? '#7c3aed' : '#64748b',
-                            border: `1px solid ${selected ? '#c4b5fd' : '#e2e8f0'}`,
-                          }}
-                        >
-                          {label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  {weekdaySelectionError && (
-                    <p className="mt-2 text-xs" style={{ color: '#dc2626' }}>
-                      {weekdaySelectionError}
-                    </p>
-                  )}
-                  <p className="mt-3 text-xs" style={{ color: '#64748b' }}>
-                    Les séances prévues dans les 72 h restent inchangées. Le nouveau planning s’applique automatiquement aux suivantes.
-                  </p>
-                  <div className="mt-3 space-y-1 text-xs" style={{ color: '#64748b' }}>
-                    <p>{schedule.total_training_days} journée{schedule.total_training_days > 1 ? 's' : ''} au total</p>
-                    <p>Prochaine journée : {formatScheduleDateTime(schedule.next_session_at)}</p>
-                    <p>Dernière journée prévue : {formatScheduleDateTime(schedule.last_session_at)}</p>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Date du cours</label>
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    required
-                    className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
-                    style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
-                    onFocus={(e) => { e.currentTarget.style.borderColor = '#137fec' }}
-                    onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
-                  />
-                </div>
-              )}
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Date du cours</label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  required
+                  className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
+                  style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = '#121212' }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
+                />
+              </div>
               <div>
                 <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>
-                  {hasSchedule ? 'Heure de début de chaque journée' : 'Heure de début'}
+                  Heure de début
                 </label>
                 <div className="flex h-11 items-center justify-between rounded-lg border px-3 text-sm" style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}>
                   <span className="font-semibold">09:00</span>
@@ -7325,26 +7263,26 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                 </button>
                 <button
                   type="submit"
-                  disabled={loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError}
+                  disabled={loading || !date || !heure}
                   className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-opacity"
-                  style={{ backgroundColor: '#8B5CF6', opacity: (loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError) ? 0.6 : 1 }}
+                  style={{ backgroundColor: '#121212', opacity: (loading || !date || !heure) ? 0.6 : 1 }}
                 >
                   {loading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                   ) : (
                     <Icon name="save" className="text-base" />
                   )}
-                  {loading ? 'Enregistrement...' : hasSchedule ? 'Mettre à jour' : 'Enregistrer'}
+                  {loading ? 'Enregistrement...' : 'Enregistrer'}
                 </button>
               </div>
             </form>
           )}
 
           {hasSchedule && Array.isArray(schedule.sessions) && (
-            <section className="mt-6 border-t pt-5" style={{ borderColor: '#e2e8f0' }}>
+            <section>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <h4 className="text-sm font-semibold" style={{ color: '#0f172a' }}>Journées programmées</h4>
+                  <h4 className="text-sm font-semibold" style={{ color: '#0f172a' }}>Prochaines journées programmées</h4>
                   <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
                     Les fichiers sont préparés 72 h avant chaque séance.
                   </p>
@@ -7390,7 +7328,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                         disabled={busySessionId === session.id}
                         onClick={() => runSessionAction(session)}
                         className="rounded-lg px-3 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-50"
-                        style={{ backgroundColor: '#8B5CF6' }}
+                        style={{ backgroundColor: '#121212' }}
                       >
                         {busySessionId === session.id ? 'Relance…' : 'Relancer l’audio'}
                       </button>
@@ -7401,7 +7339,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudi
                         disabled={busySessionId === session.id}
                         onClick={() => setSessionToPostpone(session)}
                         className="min-h-10 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50"
-                        style={{ color: '#6d28d9', backgroundColor: '#f5f3ff' }}
+                        style={{ color: '#ffffff', backgroundColor: '#121212' }}
                       >
                         Reporter cette séance
                       </button>

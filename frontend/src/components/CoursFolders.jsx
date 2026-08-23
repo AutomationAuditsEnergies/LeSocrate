@@ -1611,7 +1611,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       setFillFeedback(null)
                     }}
                     className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white"
-                    style={{ backgroundColor: '#7c3aed' }}
+                    style={{ backgroundColor: '#121212' }}
                   >
                     <Icon name="publish" className="text-lg" />
                     Remplir
