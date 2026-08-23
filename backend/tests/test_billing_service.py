@@ -566,6 +566,28 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 409)
         retry_fulfillment.assert_not_called()
 
+    def test_pending_center_message_includes_teacher_training_and_rncp(self):
+        public_id = str(uuid4())
+        message = billing_service.serialize_center_message({
+            "public_id": public_id,
+            "request_payload_json": {"teacher_name": "Pierrot Test"},
+            "training_title": "TP - Employé commercial",
+            "rncp_code": "RNCP37099",
+            "review_status": "pending",
+            "payment_status": "not_started",
+            "fulfillment_status": "not_started",
+        })
+
+        self.assertEqual(message["title"], "Demande reçue")
+        self.assertEqual(message["rncp_code"], "RNCP37099")
+        self.assertEqual(
+            message["body"],
+            "La demande pour le professeur IA nommé Pierrot Test, pour la formation du titre "
+            "professionnel « TP - Employé commercial » au code RNCP numéro 37099, est en "
+            "cours de vérification par nos équipes. Vous recevrez un message très vite dès "
+            "qu’une décision sera prise.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

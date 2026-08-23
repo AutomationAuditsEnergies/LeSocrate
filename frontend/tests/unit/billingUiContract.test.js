@@ -10,7 +10,8 @@ const source = readFileSync(
 test('submits teacher orders for review before opening Stripe Checkout', () => {
   assert.match(source, /data\.next_action === 'pending_review'/)
   assert.match(source, /Demande envoyée/)
-  assert.match(source, /lien de paiement Stripe par e-mail/)
+  assert.match(source, /Votre demande a bien été envoyée à nos équipes/)
+  assert.match(source, /Veuillez consulter votre messagerie/)
 })
 
 test('still follows a hosted Stripe Checkout URL returned by the backend', () => {

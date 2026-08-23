@@ -14,6 +14,10 @@ test('adds a durable center messaging tab backed by authenticated APIs', () => {
   assert.match(dashboard, /id: 'messages', label: 'Messagerie'/)
   assert.match(dashboard, /api\/hr\/messages/)
   assert.match(dashboard, /Suivez ici la validation et la préparation de vos professeurs/)
+  assert.doesNotMatch(dashboard, /Demande concernée/)
+  assert.doesNotMatch(dashboard, /<Mail size=\{19\}/)
+  assert.match(dashboard, /formatScheduleDateTime\(selected\.updated_at\)/)
+  assert.match(dashboard, /\{selected\.body\}[\s\S]*\{selected\.title\}/)
 })
 
 test('gives the internal admin a protected validation inbox and API credit links', () => {

@@ -585,6 +585,13 @@ def mark_admin_review_seen(public_id: str) -> dict[str, Any]:
 
 def _center_message_copy(order: dict[str, Any]) -> tuple[str, str, str, str | None]:
     teacher = _teacher_name(order)
+    training_title = str(order.get("training_title") or "la formation concernée").strip()
+    rncp_code = re.sub(
+        r"^RNCP\s*",
+        "",
+        str(order.get("rncp_code") or "").strip(),
+        flags=re.IGNORECASE,
+    )
     review_status = order.get("review_status")
     payment_status = order.get("payment_status")
     fulfillment_status = order.get("fulfillment_status")
@@ -627,7 +634,13 @@ def _center_message_copy(order: dict[str, Any]) -> tuple[str, str, str, str | No
         )
     return (
         "Demande reçue",
-        f"La demande pour {teacher} est en cours de vérification. Vous recevrez un message dès qu’une décision sera prise.",
+        (
+            f"La demande pour le professeur IA nommé {teacher}, pour la formation du titre "
+            f"professionnel « {training_title} »"
+            f"{f' au code RNCP numéro {rncp_code}' if rncp_code else ''}, est en cours de "
+            "vérification par nos équipes. Vous recevrez un message très vite dès qu’une "
+            "décision sera prise."
+        ),
         "info",
         None,
     )
@@ -644,6 +657,7 @@ def serialize_center_message(order: dict[str, Any]) -> dict[str, Any]:
         "action": action,
         "teacher_name": _teacher_name(order),
         "training_title": order.get("training_title"),
+        "rncp_code": order.get("rncp_code"),
         "review_status": order.get("review_status"),
         "payment_status": order.get("payment_status"),
         "fulfillment_status": order.get("fulfillment_status"),

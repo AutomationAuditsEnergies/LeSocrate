@@ -1595,7 +1595,6 @@ export default function HRDashboard() {
               error={messagesError}
               onRetry={fetchCenterMessages}
               onOpen={markCenterMessageSeen}
-              onShowTeachers={showDashboardView}
             />
           ) : (
             <PlatformCardsView
@@ -2064,7 +2063,7 @@ export default function HRDashboard() {
   )
 }
 
-function CenterMessagesPanel({ messages, loading, error, onRetry, onOpen, onShowTeachers }) {
+function CenterMessagesPanel({ messages, loading, error, onRetry, onOpen }) {
   const [selectedId, setSelectedId] = useState(null)
 
   useEffect(() => {
@@ -2141,22 +2140,9 @@ function CenterMessagesPanel({ messages, loading, error, onRetry, onOpen, onShow
           <article className="min-h-0 overflow-y-auto px-2 py-6 sm:px-6 lg:px-10 lg:py-8">
             {selected && (
               <div className="mx-auto max-w-2xl">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#18181B] text-white">
-                  <Mail size={19} aria-hidden="true" />
-                </div>
-                <p className="mt-5 text-xs text-[#6B6B72]">{formatScheduleDateTime(selected.updated_at)}</p>
-                <h2 className="mt-2 text-xl font-semibold tracking-tight text-[#18181B]">{selected.title}</h2>
-                <p className="mt-3 max-w-[68ch] text-sm leading-6 text-[#3F3F46]">{selected.body}</p>
-                <div className="mt-6 rounded-xl bg-[#F7F7F5] px-4 py-4">
-                  <p className="text-xs text-[#6B6B72]">Demande concernée</p>
-                  <p className="mt-1 text-sm font-semibold text-[#18181B]">{selected.teacher_name}</p>
-                  <p className="mt-0.5 text-sm text-[#5F5E5A]">{selected.training_title}</p>
-                </div>
-                {selected.action === 'teachers' && (
-                  <button type="button" onClick={onShowTeachers} className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white">
-                    Voir mes professeurs <Icon name="arrow_forward" className="text-base" />
-                  </button>
-                )}
+                <p className="text-xs text-[#6B6B72]">{formatScheduleDateTime(selected.updated_at)}</p>
+                <p className="mt-4 max-w-[68ch] text-sm leading-6 text-[#3F3F46]">{selected.body}</p>
+                <p className="mt-6 text-sm font-semibold text-[#18181B]">{selected.title}</p>
               </div>
             )}
           </article>
