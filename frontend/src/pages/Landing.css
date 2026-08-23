@@ -236,6 +236,8 @@ body.uifry-landing-active #root {
   margin-left: auto;
 }
 
+.uifry-mobile-brand { display: none; }
+
 .uifry-mobile-nav summary {
   display: grid;
   gap: 5px;
@@ -332,6 +334,8 @@ body.uifry-landing-active #root {
 }
 
 .uifry-title-line { white-space: nowrap; }
+.uifry-mobile-title { display: none; }
+.uifry-mobile-prompt-text { display: none; }
 .uifry-title-accent {
   position: relative;
   display: inline-block;
@@ -499,6 +503,17 @@ body.uifry-landing-active #root {
   60% { opacity: 0.85; }
   78% { left: 122%; opacity: 0; }
   100% { left: 122%; opacity: 0; }
+}
+
+@keyframes uifry-mobile-nav-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scaleY(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
 }
 
 .uifry-button {
@@ -1446,64 +1461,110 @@ body.uifry-landing-active #root {
   .uifry-testimonial,
   .uifry-faq,
   .uifry-download-section,
-  .uifry-footer { width: calc(100% - 32px); }
+  .uifry-footer { width: calc(100% - 56px); }
 
-  .uifry-page { padding-top: 68px; }
-  .uifry-header { width: 100%; height: 68px; margin: 0; padding: 0 16px; }
+  .uifry-page { padding-top: calc(68px + env(safe-area-inset-top)); }
+  .uifry-header {
+    width: 100%;
+    height: calc(68px + env(safe-area-inset-top));
+    margin: 0;
+    padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  }
+  .uifry-mobile-brand { display: inline-flex; }
+  .uifry-mobile-brand .uifry-brand { gap: 7px; }
+  .uifry-mobile-brand .uifry-brand-mark { width: 29px; height: 29px; flex-basis: 29px; background: #3478f6; }
+  .uifry-mobile-brand .uifry-brand-name { font-size: 21px; letter-spacing: -0.8px; }
+  .uifry-mobile-nav nav {
+    top: 100%;
+    right: 0;
+    left: 0;
+    width: 100%;
+    padding: 12px 24px 18px;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0 0 16px 16px;
+    box-shadow: 0 8px 12px rgba(15, 23, 42, 0.1);
+    transform-origin: top center;
+    animation: uifry-mobile-nav-drop 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .uifry-mobile-nav nav a { padding: 11px 4px; }
   .uifry-logo-link { width: 150px; }
   .uifry-brand-mark { width: 34px; height: 34px; flex-basis: 34px; }
   .uifry-brand-name { font-size: 27px; }
-  .uifry-hero { min-height: 720px; padding-top: 48px; }
-  .uifry-hero h1 { font-size: clamp(36px, 10vw, 46px); line-height: 1.02; }
+  .uifry-hero { min-height: 600px; padding-top: 54px; }
+  .uifry-hero h1 { font-size: clamp(29px, 8vw, 32px); line-height: 1.08; }
+  .uifry-desktop-title { display: none; }
+  .uifry-mobile-title { display: block; }
+  .uifry-desktop-prompt-text { display: none; }
+  .uifry-mobile-prompt-text { display: block; }
   .uifry-hero-copy > p { font-size: 16px; line-height: 25px; }
   .uifry-hero-actions { flex-wrap: wrap; gap: 10px; }
   .uifry-hero-actions .cadrenza-cta { min-height: 50px; padding: 0 20px; font-size: 16px; }
-  .uifry-prompt-card { top: 350px; min-height: 250px; padding: 20px; border-radius: 20px; }
-  .uifry-scroll-cue { bottom: 8px; }
-  .uifry-prompt-copy { gap: 12px; }
-  .uifry-prompt-copy svg { width: 23px; height: 23px; flex-basis: 23px; }
-  .uifry-prompt-copy p { font-size: 15px; line-height: 1.45; }
-  .uifry-prompt-footer { align-items: flex-start; flex-direction: column; gap: 16px; margin-top: 28px; }
-  .uifry-prompt-actions { width: 100%; flex-wrap: wrap; }
-  .uifry-prompt-actions .cadrenza-cta { flex: 1 1 auto; }
+  .uifry-prompt-card { top: 185px; min-height: 0; padding: 16px; border-radius: 18px; }
+  .uifry-scroll-cue { bottom: 64px; }
+  .uifry-prompt-copy { gap: 10px; }
+  .uifry-prompt-copy svg { width: 20px; height: 20px; flex-basis: 20px; }
+  .uifry-prompt-copy p { font-size: 14px; line-height: 1.42; }
+  .uifry-prompt-footer { align-items: stretch; flex-direction: column; gap: 12px; margin-top: 14px; }
+  .uifry-agent-pill { display: none; }
+  .uifry-agent-avatar { width: 26px; height: 26px; }
+  .uifry-agent-avatar img { width: 24px; height: 24px; }
+  .uifry-agent-chevron { display: none; }
+  .uifry-prompt-actions { width: 100%; flex: none; flex-direction: column; align-items: stretch; gap: 8px; }
+  .uifry-prompt-actions .cadrenza-cta { width: 100%; min-height: 36px; flex: none; padding: 0 14px; font-size: 13px; }
+  .uifry-prompt-actions .cadrenza-cta-primary { gap: 8px; }
+  .uifry-prompt-actions .cadrenza-cta-primary span { font-size: 20px; }
   .uifry-download-actions { flex-wrap: wrap; }
   .uifry-button { width: 155px; height: 54px; font-size: 16px; }
   .uifry-watch { gap: 9px; font-size: 16px; }
   .uifry-watch img { width: 26px; height: 26px; }
   .uifry-ribbon { display: none; }
   .uifry-hero-visual { top: 700px; left: 50%; transform: translateX(-50%) scale(0.54); }
-  .uifry-spark { width: 44px; height: 44px; }
+  .uifry-spark { width: 34px; height: 34px; }
+  .uifry-hero-spark-left { left: -8px; }
+  .uifry-hero-spark-right { right: -8px; }
 
-  .uifry-feature { padding: 48px 0 70px; }
+  .uifry-feature { gap: 18px; padding: 40px 0 54px; }
   .uifry-feature h2,
   .uifry-testimonial h2,
   .uifry-faq h2,
-  .uifry-download-section h2 { font-size: 40px; }
-  .uifry-visual-shell { height: 440px; }
-  .uifry-visual-shell > img:first-of-type { width: 440px; height: 465px; }
-  .uifry-feature-premium .uifry-planner-phone-shell { height: 540px; }
+  .uifry-download-section h2 { font-size: 34px; }
+  .uifry-visual-shell { height: 340px; }
+  .uifry-visual-shell > img:first-of-type { width: 360px; height: 381px; }
+  .uifry-feature-premium .uifry-planner-phone-shell { height: 460px; }
   .uifry-feature-premium .uifry-planner-phone-shell > img.uifry-planner-reference-orbits:first-of-type {
-    width: 500px;
-    height: 529px;
+    width: 430px;
+    height: 455px;
   }
   .uifry-feature-premium .cadrenza-phone-device {
-    --width: 260px;
-    width: 260px;
+    --width: 224px;
+    width: 224px;
   }
-  .uifry-floating-card { top: 205px; left: 50%; width: 155px; }
+  .uifry-feature-premium .cadrenza-phone-screen { padding: 34px 18px 14px; }
+  .uifry-feature-premium .cadrenza-phone-robot { height: 48px; margin-bottom: 4px; }
+  .uifry-feature-premium .cadrenza-phone-robot img { width: 44px; height: 44px; }
+  .uifry-feature-premium .cadrenza-phone-screen h3 { font-size: 13px; }
+  .uifry-feature-premium .cadrenza-phone-calendar__weekdays { margin-top: 6px; font-size: 9px; }
+  .uifry-feature-premium .cadrenza-phone-calendar__grid { margin-top: 5px; row-gap: 2px; font-size: 9px; }
+  .uifry-feature-premium .cadrenza-phone-calendar__grid span { width: 18px; height: 18px; }
+  .uifry-feature-premium .cadrenza-phone-duration { margin-top: 8px; padding-top: 8px; }
+  .uifry-feature-premium .cadrenza-phone-duration__options { margin-top: 5px; }
+  .uifry-feature-premium .cadrenza-phone-duration__options > div { min-height: 26px; gap: 8px; padding: 0 10px; }
+  .uifry-feature-premium .cadrenza-phone-duration__options strong { font-size: 10px; }
+  .uifry-floating-card { top: 160px; left: 50%; width: 145px; }
   .uifry-feature-row p,
   .uifry-advantage-copy > p,
   .uifry-customizable-copy > p,
   .uifry-testimonial blockquote > p { font-size: 16px; line-height: 25px; }
   .uifry-advantage-copy h3,
   .uifry-customizable-copy h2 { align-items: flex-start; font-size: 24px; line-height: 1.2; }
-  .uifry-customizable-copy { gap: 30px; }
+  .uifry-customizable-copy { gap: 24px; }
   .uifry-saving-benefit { gap: 14px; }
   .uifry-saving-benefit > span { width: 46px; height: 46px; flex-basis: 46px; }
   .uifry-saving-benefit > span img { width: 40px; height: 40px; }
   .uifry-saving-benefit h2 { font-size: 22px; }
   .uifry-saving-benefit p { font-size: 15px; }
-  .uifry-savings-calculator { padding: 22px; }
+  .uifry-savings-calculator { padding: 20px; }
   .uifry-calculator-result { align-items: flex-start; flex-direction: column; }
   .uifry-calculator-result p { max-width: none; }
   .uifry-advantage-list .uifry-advantage-copy h3 { font-size: 17px; line-height: 26px; }
@@ -1512,27 +1573,58 @@ body.uifry-landing-active #root {
   .uifry-testimonial > header { text-align: left; }
   .uifry-testimonial-grid { margin-top: 34px; }
 
-  .uifry-faq { padding: 62px 0; }
+  .uifry-faq { padding: 48px 0; }
   .uifry-faq header { margin-bottom: 24px; }
   .uifry-faq h2 { font-size: 32px; }
   .uifry-faq-item button { min-height: 60px; padding: 16px 2px; font-size: 15px; }
   .uifry-faq-item p { padding: 0 30px 18px 2px; font-size: 13px; line-height: 1.6; }
 
-  .uifry-download-section { min-height: 670px; margin-top: 36px; }
+  .uifry-download-section { min-height: 560px; margin-top: 28px; }
+  .uifry-download-ring-one {
+    top: auto;
+    right: -375px;
+    bottom: -330px;
+    width: 520px;
+    height: 520px;
+  }
+  .uifry-download-ring-two {
+    top: auto;
+    right: -315px;
+    bottom: -405px;
+    width: 520px;
+    height: 520px;
+  }
+  .uifry-download-spark-left {
+    right: 24px;
+    bottom: 24px;
+    left: auto;
+  }
+  .uifry-download-spark-right { display: none; }
+  .uifry-download-left-column,
+  .uifry-download-visual { min-width: 0; }
   .uifry-download-copy { padding: 48px 24px 0; }
   .uifry-download-copy > p { font-size: 16px; line-height: 25px; }
-  .uifry-download-left-column { padding: 38px 24px 18px; transform: none; }
-  .uifry-download-visual { min-height: 150px; padding: 14px 20px 32px; }
+  .uifry-download-left-column { padding: 34px 22px 14px; transform: none; }
+  .uifry-download-visual { min-height: 96px; padding: 8px 20px 20px; }
   .uifry-onboarding-card h3 { font-size: 30px; }
   .uifry-onboarding-card { padding: 18px; }
   .uifry-onboarding-form > div { grid-template-columns: minmax(0, 1fr) 46px; }
   .uifry-onboarding-form .uifry-onboarding-submit,
   .uifry-onboarding-form button { width: 46px; }
 
-  .uifry-footer { min-height: 300px; padding-top: 46px; }
+  .uifry-footer { min-height: 250px; margin-top: 72px; padding-top: 36px; }
   .uifry-footer-details { align-items: flex-start; flex-direction: column; gap: 14px; }
   .uifry-footer-contact a { font-size: 15px; white-space: normal; }
   .uifry-copyright { margin-top: 38px; padding-top: 24px; font-size: 14px; }
+}
+
+@media (max-width: 359px) {
+  .uifry-hero-spark-left,
+  .uifry-hero-spark-right { display: none; }
+
+  .uifry-hero h1 { font-size: 26px; }
+  .uifry-prompt-footer { align-items: flex-start; flex-direction: column; }
+  .uifry-prompt-actions { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

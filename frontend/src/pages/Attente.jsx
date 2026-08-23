@@ -98,33 +98,33 @@ export default function Attente() {
         />
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center relative z-10 px-8 py-8">
-        <div className="countdown-glow bg-gradient-to-r from-blue-600/20 to-purple-600/20 backdrop-blur-lg border border-white/30 rounded-3xl p-8 mb-8">
-          <h2 className="text-2xl font-semibold text-white text-center mb-6">
+      <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-4 py-[max(1rem,env(safe-area-inset-top))] sm:px-8 sm:py-8">
+        <div className="countdown-glow mb-6 w-full max-w-3xl rounded-3xl border border-white/30 bg-gradient-to-r from-blue-600/20 to-purple-600/20 p-4 backdrop-blur-lg sm:mb-8 sm:w-auto sm:max-w-none sm:p-8">
+          <h2 className="mb-5 text-center text-xl font-semibold text-white sm:mb-6 sm:text-2xl">
             {timeLeft === null ? 'Chargement...' : 'Début de la formation dans :'}
           </h2>
 
-          <div className="grid grid-cols-4 gap-4 text-center">
-            <div className="bg-white/10 rounded-xl p-4">
-              <div id="jours" className="text-3xl font-bold text-blue-400">
+          <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-4 sm:gap-4">
+            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
+              <div id="jours" className="text-2xl font-bold text-blue-400 sm:text-3xl">
                 {countdown.jours}
               </div>
               <div className="text-sm text-gray-300">Jours</div>
             </div>
-            <div className="bg-white/10 rounded-xl p-4">
-              <div id="heures" className="text-3xl font-bold text-purple-400">
+            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
+              <div id="heures" className="text-2xl font-bold text-purple-400 sm:text-3xl">
                 {countdown.heures}
               </div>
               <div className="text-sm text-gray-300">Heures</div>
             </div>
-            <div className="bg-white/10 rounded-xl p-4">
-              <div id="minutes" className="text-3xl font-bold text-pink-400">
+            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
+              <div id="minutes" className="text-2xl font-bold text-pink-400 sm:text-3xl">
                 {countdown.minutes}
               </div>
               <div className="text-sm text-gray-300">Minutes</div>
             </div>
-            <div className="bg-white/10 rounded-xl p-4">
-              <div id="secondes" className="text-3xl font-bold text-yellow-400">
+            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
+              <div id="secondes" className="text-2xl font-bold text-yellow-400 sm:text-3xl">
                 {countdown.secondes}
               </div>
               <div className="text-sm text-gray-300">Secondes</div>
@@ -132,10 +132,10 @@ export default function Attente() {
           </div>
         </div>
 
-        <div className="flex gap-4">
+        <div className="flex w-full max-w-md flex-col gap-3 px-2 min-[420px]:flex-row min-[420px]:justify-center sm:w-auto sm:max-w-none sm:gap-4 sm:px-0">
           <button
             onClick={() => window.location.reload()}
-            className="group relative px-7 py-3 rounded-xl font-semibold text-white/90 overflow-hidden transition-all duration-300 hover:scale-105 hover:text-white hover:shadow-[0_0_25px_rgba(255,255,255,0.15)]"
+            className="group relative min-h-12 flex-1 overflow-hidden rounded-xl px-7 py-3 font-semibold text-white/90 transition-all duration-300 hover:scale-105 hover:text-white hover:shadow-[0_0_25px_rgba(255,255,255,0.15)] sm:flex-none"
             style={{
               background: 'rgba(255,255,255,0.08)',
               backdropFilter: 'blur(12px)',
@@ -153,7 +153,7 @@ export default function Attente() {
 
           <button
             onClick={() => navigate('/')}
-            className="group relative px-7 py-3 rounded-xl font-semibold text-white/90 overflow-hidden transition-all duration-300 hover:scale-105 hover:text-white hover:shadow-[0_0_25px_rgba(255,255,255,0.15)]"
+            className="group relative min-h-12 flex-1 overflow-hidden rounded-xl px-7 py-3 font-semibold text-white/90 transition-all duration-300 hover:scale-105 hover:text-white hover:shadow-[0_0_25px_rgba(255,255,255,0.15)] sm:flex-none"
             style={{
               background: 'rgba(255,255,255,0.08)',
               backdropFilter: 'blur(12px)',

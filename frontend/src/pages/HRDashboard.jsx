@@ -41,6 +41,7 @@ import { getReusableTeacherDefaults } from '../centerWorkspace'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
 import { calculateTrainingDays, RECRUITMENT_STEPS } from '../recruitmentConversation'
+import { addCalendarDays, prefillTrainingDates } from '../formationScheduleV2'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -947,7 +948,6 @@ export default function HRDashboard() {
   const startNewManualRecruitment = () => {
     window.sessionStorage.removeItem('teacher_creation_draft')
     setTemplateCreationDraft(null)
-    openCreateModal()
   }
 
   useEffect(() => () => {
@@ -962,6 +962,24 @@ export default function HRDashboard() {
 
   const handleAssistantComplete = (draft) => {
     resetCreateForm()
+    const weekdayNumbers = {
+      lundi: 1,
+      mardi: 2,
+      mercredi: 3,
+      jeudi: 4,
+      vendredi: 5,
+    }
+    const preferredWeekdays = draft.teachingDays
+      .map((day) => weekdayNumbers[day])
+      .filter(Boolean)
+    const selectedDates = prefillTrainingDates({
+      startDate: draft.startDate,
+      weeks: Number(draft.trainingWeeks) + 1,
+      daysPerWeek: Number(draft.weeklyCourseCount),
+      preferredWeekdays,
+      limit: Number(draft.trainingDays),
+    })
+
     setTeacherFirstName(draft.teacherName)
     setTeacherColor(draft.teacherColor)
     setNewFormTpName(draft.trainingName)
@@ -970,6 +988,11 @@ export default function HRDashboard() {
     setWeeklyCourseCount(String(draft.weeklyCourseCount))
     setTeachingDays(draft.teachingDays)
     setScheduleStartDate(draft.startDate)
+    setInitialScheduleV2({
+      schedule_schema_version: 2,
+      selected_dates: selectedDates,
+      template_assignments: {},
+    })
     setFormationMode('new')
     fetchModules()
     setShowModulesModal(false)
@@ -1429,7 +1452,7 @@ export default function HRDashboard() {
               onComplete={handleAssistantComplete}
               hasSavedDraft={Boolean(templateCreationDraft)}
               onResumeDraft={resumeFormationDraftWithTemplate}
-              onManualCreate={startNewManualRecruitment}
+              onManualStart={startNewManualRecruitment}
             />
           ) : workspaceSection === 'schedule-templates' ? (
             <DayScheduleTemplates
@@ -2583,14 +2606,361 @@ function getRecruitmentAssistantText(step, draft, matchingModule) {
   return step.question
 }
 
+function ManualRecruitmentForm({ colors, onBack, onComplete }) {
+  const earliestStartDate = addCalendarDays(todayDateInput(), 2)
+  const [form, setForm] = useState({
+    rncpCode: '',
+    startDate: earliestStartDate,
+    weeklyCourseCount: 2,
+    trainingWeeks: 3,
+    teachingDays: ['mardi', 'jeudi'],
+    teacherName: '',
+  })
+  const [rncpResult, setRncpResult] = useState({
+    status: 'idle',
+    certification: null,
+    message: '',
+  })
+  const [inactiveInfoOpen, setInactiveInfoOpen] = useState(false)
+  const lookupVersionRef = useRef(0)
+
+  useEffect(() => {
+    const code = String(form.rncpCode || '').replace(/\D/g, '')
+    setInactiveInfoOpen(false)
+    lookupVersionRef.current += 1
+    const lookupVersion = lookupVersionRef.current
+
+    if (!/^\d{4,6}$/.test(code)) {
+      setRncpResult({ status: 'idle', certification: null, message: '' })
+      return undefined
+    }
+
+    setRncpResult({ status: 'loading', certification: null, message: '' })
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const response = await apiFetch(`/api/hr/recruitment/rncp/${encodeURIComponent(code)}`, {
+          timeoutMs: 25000,
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (lookupVersion !== lookupVersionRef.current) return
+
+        if (!response.ok || !payload.success) {
+          setRncpResult({
+            status: 'error',
+            certification: null,
+            message: payload.error || 'Impossible de vérifier ce code RNCP pour le moment.',
+          })
+          return
+        }
+
+        const certification = payload.certification
+        if (!certification?.active) {
+          setRncpResult({
+            status: 'inactive',
+            certification: { ...certification, reac_available: payload.available },
+            message: '',
+          })
+          return
+        }
+
+        if (!payload.available) {
+          setRncpResult({
+            status: 'unavailable',
+            certification,
+            message: payload.reply || 'Le référentiel nécessaire à cette formation n’est pas disponible.',
+          })
+          return
+        }
+
+        setRncpResult({ status: 'valid', certification, message: '' })
+      } catch {
+        if (lookupVersion !== lookupVersionRef.current) return
+        setRncpResult({
+          status: 'error',
+          certification: null,
+          message: 'France Compétences est temporairement inaccessible. Réessayez dans quelques instants.',
+        })
+      }
+    }, 450)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [form.rncpCode])
+
+  useEffect(() => {
+    if (!inactiveInfoOpen) return undefined
+
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setInactiveInfoOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [inactiveInfoOpen])
+
+  const updateWeeklyCourseCount = (value) => {
+    const weeklyCourseCount = Number(value)
+    setForm((current) => {
+      const teachingDays = current.teachingDays.slice(0, weeklyCourseCount)
+      for (const option of RECRUITMENT_DAY_OPTIONS) {
+        if (teachingDays.length >= weeklyCourseCount) break
+        if (!teachingDays.includes(option.id)) teachingDays.push(option.id)
+      }
+      return { ...current, weeklyCourseCount, teachingDays }
+    })
+  }
+
+  const toggleManualDay = (day) => {
+    setForm((current) => {
+      const selected = current.teachingDays.includes(day)
+      const teachingDays = selected
+        ? current.teachingDays.filter((item) => item !== day)
+        : current.teachingDays.length < Number(current.weeklyCourseCount)
+          ? [...current.teachingDays, day]
+          : current.teachingDays
+      return { ...current, teachingDays }
+    })
+  }
+
+  const certificationIsConfirmed = ['valid', 'validInactive'].includes(rncpResult.status)
+  const weeklyDaysAreComplete = form.teachingDays.length === Number(form.weeklyCourseCount)
+  const canContinue = Boolean(
+    certificationIsConfirmed
+    && form.startDate
+    && Number(form.trainingWeeks) >= 1
+    && weeklyDaysAreComplete
+    && form.teacherName.trim(),
+  )
+
+  const submitManualRecruitment = (event) => {
+    event.preventDefault()
+    if (!canContinue) return
+    const certification = rncpResult.certification
+    onComplete({
+      teacherName: form.teacherName.trim(),
+      trainingName: certification.title,
+      rncpCode: String(certification.rncp_code || form.rncpCode).replace(/\D/g, ''),
+      trainingWeeks: Number(form.trainingWeeks),
+      weeklyCourseCount: Number(form.weeklyCourseCount),
+      trainingDays: calculateTrainingDays(form.trainingWeeks, form.weeklyCourseCount),
+      teachingDays: form.teachingDays,
+      startDate: form.startDate,
+      teacherColor: 'violet',
+    })
+  }
+
+  const certification = rncpResult.certification
+  const replacements = Array.isArray(certification?.replacement_certifications)
+    ? certification.replacement_certifications
+    : []
+  const fieldClassName = 'mt-2 h-11 w-full rounded-lg border border-[#D7D9DD] bg-white px-3.5 text-sm text-[#191918] outline-none transition-[border-color,box-shadow] placeholder:text-[#73736F] focus:border-[#097FE8] focus:ring-2 focus:ring-[#097FE8]/15'
+
+  return (
+    <>
+      <section className="manual-recruitment-enter mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col" aria-labelledby="manual-recruitment-title">
+      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b" style={{ borderColor: colors.borderLight }}>
+        <button type="button" onClick={onBack} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[#5F5E5A] transition-colors hover:bg-[#F1F1EF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/45" aria-label="Revenir au recrutement conversationnel">
+          <ChevronLeft size={20} strokeWidth={1.8} aria-hidden="true" />
+        </button>
+        <div>
+          <h1 id="manual-recruitment-title" className="text-sm font-semibold" style={{ color: colors.text }}>Configurer le professeur</h1>
+        </div>
+      </header>
+
+      <div className={`rncp-form-content min-h-0 flex-1 overflow-y-auto ${inactiveInfoOpen ? 'rncp-form-content--shifted' : ''}`} style={{ scrollbarGutter: 'stable' }}>
+        <form onSubmit={submitManualRecruitment} className="manual-recruitment-form mx-auto w-full max-w-3xl py-8 sm:py-10">
+          <div className="mb-8">
+            <h2 className="text-2xl font-semibold tracking-[-0.02em] text-[#191918]">Informations de la formation</h2>
+            <p className="mt-2 max-w-[68ch] text-sm leading-6 text-[#5F5E5A]">Renseignez les éléments nécessaires pour préparer automatiquement les premières dates du calendrier.</p>
+          </div>
+
+          <div className="space-y-7">
+            <div>
+              <label htmlFor="manual-rncp-code" className="text-sm font-medium text-[#2C2C2A]">Code RNCP</label>
+              <div className={`mt-2 grid items-start ${rncpResult.status === 'inactive' ? 'grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]' : 'gap-3 sm:grid-cols-2'}`}>
+                <div>
+                  <input
+                    id="manual-rncp-code"
+                    type="text"
+                    inputMode="numeric"
+                    value={form.rncpCode}
+                    onChange={(event) => setForm((current) => ({
+                      ...current,
+                      rncpCode: event.target.value.replace(/\D/g, '').slice(0, 6),
+                    }))}
+                    placeholder="Ex. 37099"
+                    className="h-11 w-full rounded-lg border border-[#D7D9DD] bg-white px-3.5 text-sm text-[#191918] outline-none transition-[border-color,box-shadow] placeholder:text-[#73736F] focus:border-[#097FE8] focus:ring-2 focus:ring-[#097FE8]/15"
+                    aria-describedby="manual-rncp-status"
+                    autoFocus
+                  />
+                  {form.rncpCode && form.rncpCode.length < 4 && <p className="mt-1.5 text-xs text-[#68625B]">Saisissez entre 4 et 6 chiffres.</p>}
+                </div>
+
+                <div id="manual-rncp-status" className={rncpResult.status === 'idle' ? 'hidden' : 'min-h-11'} aria-live="polite">
+                  {rncpResult.status === 'loading' && (
+                    <div className="flex min-h-11 items-center gap-2 rounded-lg bg-[#F5F5F3] px-3.5 text-sm text-[#5F5E5A]">
+                      <span className="recruitment-thinking-dot h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
+                      Vérification auprès de France Compétences…
+                    </div>
+                  )}
+                  {rncpResult.status === 'valid' && (
+                    <div className="flex h-11 min-w-0 items-center rounded-lg bg-[#EAF7EF] px-3.5 text-sm text-[#17633A]">
+                      <p className="flex min-w-0 items-center gap-2">
+                        <Icon name="check_circle" className="shrink-0 text-base" />
+                        <span className="shrink-0 font-semibold">Code RNCP valide</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="truncate text-[#24583B]" title={certification.title}>{certification.title}</span>
+                      </p>
+                    </div>
+                  )}
+                  {rncpResult.status === 'validInactive' && (
+                    <div className="flex h-11 min-w-0 items-center rounded-lg bg-[#FFF4D6] px-3.5 text-sm text-[#755600]">
+                      <p className="flex min-w-0 items-center gap-2">
+                        <Icon name="check_circle" className="shrink-0 text-base" />
+                        <span className="shrink-0 font-semibold">Fiche inactive conservée</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="truncate" title={certification.title}>{certification.title}</span>
+                      </p>
+                    </div>
+                  )}
+                  {['error', 'unavailable'].includes(rncpResult.status) && (
+                    <div className="rounded-lg bg-[#FDECEC] px-3.5 py-2.5 text-sm leading-5 text-[#9F2D2D]" role="alert">{rncpResult.message}</div>
+                  )}
+                  {rncpResult.status === 'inactive' && (
+                    <div className="flex h-11 items-center">
+                      <button
+                        type="button"
+                        onClick={() => setInactiveInfoOpen((open) => !open)}
+                        aria-expanded={inactiveInfoOpen}
+                        aria-controls="manual-rncp-update-details"
+                        aria-label="Afficher les informations sur la mise à jour RNCP"
+                        className="inline-flex h-11 w-7 items-center justify-center text-xl font-bold leading-none text-[#EA580C] transition-colors hover:text-[#C2410C] focus-visible:outline-none focus-visible:underline focus-visible:decoration-2 focus-visible:underline-offset-4"
+                      >
+                        <span aria-hidden="true">!</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <label className="text-sm font-medium text-[#2C2C2A]" htmlFor="manual-start-date">
+                Date de début
+                <input id="manual-start-date" type="date" min={earliestStartDate} value={form.startDate} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} className={fieldClassName} />
+              </label>
+              <label className="text-sm font-medium text-[#2C2C2A]" htmlFor="manual-training-weeks">
+                Durée de la formation
+                <div className="relative">
+                  <input id="manual-training-weeks" type="number" min="1" max="104" value={form.trainingWeeks} onChange={(event) => setForm((current) => ({ ...current, trainingWeeks: event.target.value }))} className={`${fieldClassName} pr-24`} />
+                  <span className="pointer-events-none absolute bottom-3 right-3 text-sm text-[#68625B]">semaines</span>
+                </div>
+              </label>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-[#2C2C2A]" htmlFor="manual-weekly-count">Rythme hebdomadaire</label>
+              <select id="manual-weekly-count" value={form.weeklyCourseCount} onChange={(event) => updateWeeklyCourseCount(event.target.value)} className={`${fieldClassName} block sm:max-w-xs`}>
+                {[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count} journée{count > 1 ? 's' : ''} par semaine</option>)}
+              </select>
+            </div>
+
+            <fieldset>
+              <legend className="text-sm font-medium text-[#2C2C2A]">Jours habituels de formation</legend>
+              <p className="mt-1 text-xs leading-5 text-[#68625B]">Choisissez exactement {form.weeklyCourseCount} jour{Number(form.weeklyCourseCount) > 1 ? 's' : ''}. Vous pourrez déplacer les exceptions dans le planning.</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {RECRUITMENT_DAY_OPTIONS.map((day) => {
+                  const selected = form.teachingDays.includes(day.id)
+                  return (
+                    <button key={day.id} type="button" onClick={() => toggleManualDay(day.id)} aria-pressed={selected} className={`min-h-11 rounded-lg border px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/40 ${selected ? 'border-[#191918] bg-[#191918] text-white' : 'border-[#D7D9DD] bg-white text-[#3F3F3C] hover:bg-[#F5F5F3]'}`}>
+                      {day.label}
+                    </button>
+                  )
+                })}
+              </div>
+              {!weeklyDaysAreComplete && <p className="mt-2 text-xs font-medium text-[#9F2D2D]" role="status">Sélectionnez encore {Number(form.weeklyCourseCount) - form.teachingDays.length} jour.</p>}
+            </fieldset>
+
+            <label className="block text-sm font-medium text-[#2C2C2A]" htmlFor="manual-teacher-name">
+              Nom du professeur IA
+              <input id="manual-teacher-name" type="text" value={form.teacherName} onChange={(event) => setForm((current) => ({ ...current, teacherName: event.target.value }))} placeholder="Ex. Pierre" className={fieldClassName} />
+            </label>
+          </div>
+
+          <footer className="mt-10 flex flex-col-reverse gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between" style={{ borderColor: colors.borderLight }}>
+            <button type="button" onClick={onBack} className="min-h-11 rounded-lg px-4 text-sm font-medium text-[#5F5E5A] transition-colors hover:bg-[#F1F1EF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/30">Retour au chat</button>
+            <button type="submit" disabled={!canContinue} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#191918] px-5 text-sm font-semibold text-white transition-colors hover:bg-[#30302E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/45 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C7C7C4]">
+              Configurer le planning
+              <Icon name="arrow_forward" className="text-base" />
+            </button>
+          </footer>
+        </form>
+        </div>
+      </section>
+
+      {rncpResult.status === 'inactive' && inactiveInfoOpen && typeof document !== 'undefined' && createPortal(
+        <>
+          <button type="button" className="fixed inset-0 z-40 cursor-default bg-transparent" onClick={() => setInactiveInfoOpen(false)} aria-label="Fermer le panneau RNCP" />
+          <aside id="manual-rncp-update-details" className="rncp-side-panel-enter fixed inset-y-0 right-0 z-50 flex w-full max-w-[420px] flex-col border-l border-[#DEDCD8] bg-white text-sm text-[#2C2C2A] shadow-[-16px_0_40px_rgba(25,25,24,0.08)]" role="dialog" aria-modal="false" aria-labelledby="manual-rncp-update-title">
+            <header className="flex items-start justify-between gap-4 px-5 py-[13px]">
+              <div className="min-w-0">
+                <p className="mb-1 text-xs font-medium uppercase tracking-[0.08em] text-[#EA580C]">Code RNCP</p>
+                <h2 id="manual-rncp-update-title" className="text-lg font-semibold tracking-[-0.01em] text-[#191918]">Certification mise à jour</h2>
+              </div>
+              <button type="button" onClick={() => setInactiveInfoOpen(false)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#73736F] transition-colors hover:bg-[#F1F1EF] hover:text-[#191918] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/30" aria-label="Fermer les informations RNCP">
+                <X size={18} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
+              {replacements.length === 1 ? (
+                <>
+                  <p className="leading-6 text-[#5F5E5A]">Le titre professionnel enregistré sous le code RNCP {certification.rncp_code} a été remplacé par la nouvelle certification RNCP {replacements[0].rncp_code}.</p>
+                  {certification.reac_available && <p className="mt-4 font-medium leading-6 text-[#2C2C2A]">Souhaitez-vous conserver le titre RNCP {certification.rncp_code} ou utiliser le titre RNCP {replacements[0].rncp_code} ?</p>}
+                </>
+              ) : (
+                <>
+                  <p className="leading-6 text-[#5F5E5A]">
+                    Le titre RNCP {certification.rncp_code}
+                    {replacements.length > 1
+                      ? ' a été remplacé par plusieurs certifications plus récentes.'
+                      : ' ne dispose d’aucune certification de remplacement référencée.'}
+                  </p>
+                  {replacements.length > 1 && certification.reac_available && <p className="mt-4 font-medium leading-6 text-[#2C2C2A]">Souhaitez-vous conserver le titre RNCP {certification.rncp_code} ou utiliser l’une de ses certifications de remplacement ?</p>}
+                </>
+              )}
+            </div>
+
+            <footer className="grid gap-2 border-t border-[#E8E7E4] p-5">
+              {replacements.map((replacement) => (
+                <button key={replacement.rncp_code} type="button" onClick={() => { setInactiveInfoOpen(false); setForm((current) => ({ ...current, rncpCode: String(replacement.rncp_code).replace(/\D/g, '') })) }} className="min-h-12 rounded-lg bg-[#191918] px-3.5 py-2.5 text-left text-sm font-medium text-white transition-colors hover:bg-[#30302E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/40 focus-visible:ring-offset-2">
+                  <span className="mb-0.5 block text-[11px] font-normal text-white/60">Certification actuelle</span>
+                  <span className="block">Utiliser RNCP {replacement.rncp_code}</span>
+                </button>
+              ))}
+              {certification.reac_available && (
+                <button type="button" onClick={() => { setRncpResult((current) => ({ ...current, status: 'validInactive' })); setInactiveInfoOpen(false) }} className="min-h-12 rounded-lg border border-[#CFCFCB] bg-white px-3.5 py-2.5 text-left text-sm font-medium text-[#2C2C2A] transition-colors hover:border-[#A8A8A3] hover:bg-[#F7F7F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/30">
+                  <span className="mb-0.5 block text-[11px] font-normal text-[#73736F]">Ancienne certification</span>
+                  <span className="block">Conserver RNCP {certification.rncp_code}</span>
+                </button>
+              )}
+              {!certification.reac_available && replacements.length === 0 && <p className="text-xs leading-5">Cette fiche ne peut pas être utilisée. Saisissez un autre code RNCP.</p>}
+            </footer>
+          </aside>
+        </>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 function RecruitmentAssistant({
   colors,
   modules,
   onComplete,
-  onManualCreate,
   hasSavedDraft = false,
   onResumeDraft,
+  onManualStart,
 }) {
+  const [manualMode, setManualMode] = useState(false)
   const [started, setStarted] = useState(false)
   const [brief, setBrief] = useState('')
   const [stepIndex, setStepIndex] = useState(0)
@@ -2843,8 +3213,12 @@ function RecruitmentAssistant({
     }
   }
 
-  const interpretFreeTextAnswer = async (field, value) => {
+  const interpretFreeTextAnswer = async (field, value, turnHistory = null) => {
     setIsThinking(true)
+    const conversationHistory = turnHistory || [
+      ...history,
+      { role: 'user', text: value },
+    ]
 
     let interpretation
     try {
@@ -2855,6 +3229,7 @@ function RecruitmentAssistant({
           field,
           message: value,
           draft,
+          history: conversationHistory.slice(-12),
           attempt: clarificationAttempts[field] || 0,
         }),
         timeoutMs: 25000,
@@ -2908,7 +3283,7 @@ function RecruitmentAssistant({
     setStarted(true)
     setHistory([{ role: 'user', text: value }])
     setBrief('')
-    interpretFreeTextAnswer('rncpCode', value)
+    interpretFreeTextAnswer('rncpCode', value, [{ role: 'user', text: value }])
   }
 
   const submitAnswer = (event) => {
@@ -2918,7 +3293,7 @@ function RecruitmentAssistant({
     const field = currentStep?.id
     setHistory((current) => [...current, { role: 'user', text: value }])
     setAnswer('')
-    interpretFreeTextAnswer(field, value)
+    interpretFreeTextAnswer(field, value, [...history, { role: 'user', text: value }])
   }
 
   const resolvePendingConfirmation = (confirmed) => {
@@ -2985,6 +3360,16 @@ function RecruitmentAssistant({
     })
   }
 
+  if (manualMode) {
+    return (
+      <ManualRecruitmentForm
+        colors={colors}
+        onBack={() => setManualMode(false)}
+        onComplete={onComplete}
+      />
+    )
+  }
+
   if (!started) {
     const suggestions = [
       { icon: ShieldCheck, text: 'Recruter un professeur pour un titre professionnel RNCP' },
@@ -3049,7 +3434,7 @@ function RecruitmentAssistant({
                   <span>Reprendre ma progression</span>
                 </button>
               )}
-              <button type="button" onClick={onManualCreate} className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-3 text-[13px] font-medium text-[#191918] transition-colors duration-150 hover:bg-[#ECEBE8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/35 focus-visible:ring-offset-2">
+              <button type="button" onClick={() => { onManualStart?.(); setManualMode(true) }} className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-3 text-[13px] font-medium text-[#191918] transition-colors duration-150 hover:bg-[#ECEBE8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#191918]/35 focus-visible:ring-offset-2">
                 <PenLine size={15} strokeWidth={1.6} aria-hidden="true" />
                 <span>Recruter manuellement</span>
               </button>
@@ -3079,12 +3464,17 @@ function RecruitmentAssistant({
       <div className="flex h-14 shrink-0 items-center justify-between gap-4 border-b" style={{ borderColor: colors.borderLight }}>
         <div>
           <h1 className="text-sm font-semibold" style={{ color: colors.text }}>Nouveau professeur IA</h1>
-          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>{completed ? 'Configuration prête à vérifier' : `Question ${Math.min(stepIndex + 1, RECRUITMENT_STEPS.length)} sur ${RECRUITMENT_STEPS.length}`}</p>
+          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>{completed ? 'Configuration prête à planifier' : `Question ${Math.min(stepIndex + 1, RECRUITMENT_STEPS.length)} sur ${RECRUITMENT_STEPS.length}`}</p>
         </div>
       </div>
 
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-1 sm:px-3">
-        <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" aria-live="polite">
+        <div
+          ref={chatScrollRef}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-2"
+          style={{ scrollbarGutter: 'stable' }}
+          aria-live="polite"
+        >
           <div className="flex min-h-full flex-col justify-start py-8 sm:py-10">
           {history.map((message, index) => (
             <div
@@ -3120,22 +3510,15 @@ function RecruitmentAssistant({
         </div>
 
         {completed && !isThinking ? (
-          <div className="recruitment-review-enter mt-4 max-h-[48vh] shrink-0 overflow-y-auto rounded-xl border bg-white p-5 sm:p-6" style={{ borderColor: colors.borderLight }}>
-            <div className="flex items-start gap-5">
-              <img src={RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === draft.teacherColor)?.image} alt="" className="teacher-robot-float h-24 w-24 shrink-0 object-contain" />
-              <div className="min-w-0 flex-1">
-                <p className="text-lg font-semibold" style={{ color: colors.text }}>Vérifiez la configuration proposée</p>
-                <p className="mt-1 text-sm leading-6" style={{ color: colors.textMuted }}>Le formulaire de recrutement sera déjà complété. Vous pourrez encore tout modifier avant de lancer la préparation.</p>
-              </div>
-            </div>
-            <dl className="mt-5 grid gap-x-6 gap-y-3 border-t pt-5 text-sm sm:grid-cols-2" style={{ borderColor: colors.borderLight }}>
+          <div className="recruitment-review-enter mt-4 max-h-[48vh] shrink-0 overflow-y-auto rounded-xl border bg-white p-5 sm:p-6" style={{ borderColor: colors.borderLight, scrollbarGutter: 'stable' }}>
+            <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
               <div><dt style={{ color: colors.textMuted }}>Professeur</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.teacherName}</dd></div>
               <div><dt style={{ color: colors.textMuted }}>Formation</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingName}</dd></div>
               <div><dt style={{ color: colors.textMuted }}>Référence</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>RNCP {draft.rncpCode}</dd></div>
               <div><dt style={{ color: colors.textMuted }}>Calendrier</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingWeeks} semaines, {draft.weeklyCourseCount} journée{Number(draft.weeklyCourseCount) > 1 ? 's' : ''}/semaine</dd></div>
             </dl>
             <button type="button" onClick={() => onComplete(draft)} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#191714] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#302D28]">
-              Vérifier le professeur
+              Configurer le planning
               <Icon name="arrow_forward" className="text-base" />
             </button>
           </div>
@@ -3234,7 +3617,7 @@ function RecruitmentAssistant({
                   const selected = draft.teachingDays.includes(day.id)
                   return (
                     <button key={day.id} type="button" onClick={() => toggleDay(day.id)} aria-pressed={selected} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: selected ? '#6D4AC7' : colors.innerBg, color: selected ? '#fff' : colors.textMuted }}>{selected ? <Icon name="check" className="text-sm" /> : index + 1}</span>
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: selected ? '#097FE8' : colors.innerBg, color: selected ? '#fff' : colors.textMuted }}>{selected ? <Icon name="check" className="text-sm" /> : index + 1}</span>
                       {day.label}
                     </button>
                   )
@@ -3368,7 +3751,7 @@ function PlatformCardsView({
 
   return (
     <section className="mx-auto flex h-full min-h-0 w-full max-w-[90rem] flex-col overflow-hidden pt-4 sm:pt-6">
-      <header className="relative mx-auto w-full max-w-[1204px] px-12 text-center">
+      <header className="relative mx-auto w-full max-w-[1204px] px-4 text-center sm:px-12">
         <h1 className="workspace-display-title text-[1.75rem] font-semibold leading-tight tracking-[-0.02em] sm:text-[2rem]" style={{ color: colors.text }}>
           Mes professeurs
         </h1>
@@ -4671,12 +5054,22 @@ export function CreatePlatformView({
                 onRequestIdentity={() => setIdentityEditorOpen(true)}
                 onCreateTemplate={onCreateTemplate}
                 onChange={handleSchedulePlanChange}
+                onValidate={handleLaunchRequest}
+                validating={creating}
               />
             )}
           </div>
 
           {scheduleAttemptErrors.length > 0 && (
             <div className="create-platform-workspace__error" role="alert">
+              <button
+                type="button"
+                className="create-platform-workspace__error-close"
+                onClick={() => setScheduleAttemptErrors([])}
+                aria-label="Masquer les erreurs du planning"
+              >
+                <X size={16} strokeWidth={1.8} aria-hidden="true" />
+              </button>
               <strong>Planning à compléter</strong>
               <ul>
                 {scheduleAttemptErrors.map((error) => <li key={error}>{error}</li>)}
@@ -4718,7 +5111,7 @@ export function CreatePlatformView({
           <div className="create-platform-workspace__identity-fields">
             <div>
               <label htmlFor="teacher-first-name">Prénom</label>
-              <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Lina" autoFocus className={inputClassName} />
+              <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Pierre" autoFocus className={inputClassName} />
             </div>
 
             <div>
@@ -4832,10 +5225,10 @@ export function CreatePlatformView({
                 {schedulePlan.dayCount} journée{schedulePlan.dayCount > 1 ? 's' : ''}
               </p>
               <h2 id="schedule-review-title" className="mt-1 text-xl font-bold tracking-[-0.025em]">
-                Confirmer le planning définitif
+                Vérifier avant le paiement
               </h2>
               <p className="mt-2 max-w-[58ch] text-sm leading-6 text-[#52525B]">
-                Vérifiez les dates et leurs templates. Après confirmation, cette organisation ne pourra plus être modifiée.
+                Vérifiez les dates et leurs templates avant de valider votre demande. Cette organisation ne pourra ensuite plus être modifiée.
               </p>
             </header>
 
@@ -4871,7 +5264,7 @@ export function CreatePlatformView({
                 disabled={creating}
                 className="min-h-11 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white hover:bg-[#27272A] disabled:bg-[#A1A1AA]"
               >
-                {creating ? 'Préparation en cours…' : 'Confirmer et lancer'}
+                {creating ? 'Préparation en cours…' : 'Valider la demande'}
               </button>
             </footer>
           </section>

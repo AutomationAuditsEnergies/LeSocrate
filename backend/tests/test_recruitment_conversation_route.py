@@ -31,12 +31,23 @@ class RecruitmentConversationRouteTest(unittest.TestCase):
         ) as interpret:
             response = self.client.post(
                 "/api/hr/recruitment/interpret",
-                json={"field": "teacherName", "message": "Appelez-le Pierre"},
+                json={
+                    "field": "teacherName",
+                    "message": "Appelez-le Pierre",
+                    "history": [
+                        {"role": "assistant", "text": "Quel nom choisissez-vous ?"},
+                        {"role": "user", "text": "Appelez-le Pierre"},
+                    ],
+                },
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["value"], "Pierre")
         interpret.assert_called_once()
+        self.assertEqual(
+            interpret.call_args.kwargs["history"][-1],
+            {"role": "user", "text": "Appelez-le Pierre"},
+        )
 
     def test_interpretation_rejects_oversized_messages(self):
         with patch("routes.hr_routes.HR_ENABLED", True):

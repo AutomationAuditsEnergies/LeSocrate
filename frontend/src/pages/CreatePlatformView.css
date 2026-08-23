@@ -538,13 +538,34 @@
 }
 
 .create-platform-workspace__error {
+  position: relative;
   flex: none;
   border-top: 1px solid #d4d4d8;
   background: #f4f4f5;
-  padding: 10px 24px;
+  padding: 10px 58px 10px 24px;
   color: #3f3f46;
   font-size: 13px;
 }
+
+.create-platform-workspace__error-close {
+  position: absolute;
+  top: 8px;
+  right: 18px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #71717a;
+  cursor: pointer;
+  padding: 0;
+}
+
+.create-platform-workspace__error-close:hover { background: #e4e4e7; color: #18181b; }
+.create-platform-workspace__error-close:focus-visible { outline: 2px solid #18181b; outline-offset: 2px; }
 
 .create-platform-workspace__error strong {
   display: block;

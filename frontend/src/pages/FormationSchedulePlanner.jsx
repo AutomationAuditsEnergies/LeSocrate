@@ -174,6 +174,8 @@ export default function FormationSchedulePlanner({
   preferredWeekdaysHint = [],
   onCreateTemplate,
   onChange,
+  onValidate,
+  validating = false,
 }) {
   const today = useMemo(localToday, [])
   const earliestSuggestedDate = reuse ? today : addCalendarDays(today, 3)
@@ -957,6 +959,16 @@ export default function FormationSchedulePlanner({
             >
               Remplir automatiquement
             </button>
+            {onValidate && (
+              <button
+                type="button"
+                className="formation-schedule__validate-toolbar"
+                onClick={onValidate}
+                disabled={validating}
+              >
+                {validating ? 'Validation…' : 'Valider'}
+              </button>
+            )}
           </div>
         </header>
 

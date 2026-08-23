@@ -514,16 +514,16 @@ export default function Video() {
                   style={{ width: '100%', height: '100%', background: '#020617' }}
                 />
                 <div
-                  className="absolute inset-x-0 bottom-0 flex items-center gap-4 px-6 pb-4 pt-10"
+                  className="absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-3 pt-8 sm:flex-nowrap sm:gap-4 sm:px-6 sm:pb-4 sm:pt-10"
                   style={{ background: 'linear-gradient(to top, rgba(2, 6, 23, 0.85), rgba(2, 6, 23, 0))' }}
                 >
                   <span className="text-sm font-medium" style={{ color: '#D8C7FF' }}>
                     Reprise dans
                   </span>
-                  <span className="text-3xl font-semibold tabular-nums text-white">
+                  <span className="text-2xl font-semibold tabular-nums text-white sm:text-3xl">
                     {formatCountdown(breakSecondsRemaining)}
                   </span>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full" style={{ backgroundColor: 'rgba(248, 247, 245, 0.25)' }}>
+                  <div className="h-2 min-w-full flex-1 overflow-hidden rounded-full sm:min-w-0" style={{ backgroundColor: 'rgba(248, 247, 245, 0.25)' }}>
                     <div
                       className="h-full rounded-full transition-[width] duration-500 ease-out"
                       style={{ width: `${breakProgress}%`, backgroundColor: '#BFA7FF' }}
@@ -556,12 +556,12 @@ export default function Video() {
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center">
-                <div className="w-40 h-40 rounded-full bg-white flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-24 h-24 text-gray-800" fill="currentColor" viewBox="0 0 24 24">
+                <div className="flex h-24 w-24 items-center justify-center rounded-full bg-white sm:h-40 sm:w-40">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-14 w-14 text-gray-800 sm:h-24 sm:w-24" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
                   </svg>
                 </div>
-                <span className="mt-4 text-white text-xl font-medium">Professeur</span>
+                <span className="mt-3 text-lg font-medium text-white sm:mt-4 sm:text-xl">Professeur</span>
               </div>
             )}
 
@@ -580,7 +580,7 @@ export default function Video() {
                   event.stopPropagation()
                   setSlideView((showProjectedSlides || showNextBreakPreview) ? 'professor' : 'slides')
                 }}
-                className="absolute right-3 top-3 rounded-lg bg-white/95 px-3 py-2 text-xs font-semibold text-gray-900 shadow-md transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 sm:right-5 sm:top-5 sm:rounded-xl sm:px-4 sm:text-sm sm:shadow-lg"
+                className="absolute right-3 top-3 max-w-[calc(100%-1.5rem)] rounded-lg bg-white/95 px-3 py-2 text-xs font-semibold text-gray-900 shadow-md transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 sm:right-5 sm:top-5 sm:rounded-xl sm:px-4 sm:text-sm sm:shadow-lg"
               >
                 {(showProjectedSlides || showNextBreakPreview) ? 'Professeur' : 'Visualiser les slides'}
               </button>

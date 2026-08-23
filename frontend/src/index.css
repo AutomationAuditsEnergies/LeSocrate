@@ -72,6 +72,53 @@ body {
   background-color: #F8F7F5;
 }
 
+html,
+body,
+#root {
+  min-width: 320px;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+.course-chat-panel {
+  width: 0;
+  overflow: hidden;
+}
+
+.course-chat-panel--open {
+  width: var(--course-chat-width);
+  overflow: visible;
+}
+
+@media (max-width: 639px) {
+  .course-chat-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    height: 100dvh;
+    width: 100%;
+    padding-top: env(safe-area-inset-top);
+    visibility: hidden;
+    transform: translateX(100%);
+    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), visibility 0s linear 220ms;
+  }
+
+  .course-chat-panel--open {
+    visibility: visible;
+    transform: translateX(0);
+    transition-delay: 0s;
+  }
+
+  .course-chat-resize-handle {
+    display: none;
+  }
+}
+
 .workspace-display-title {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-weight: 650;
@@ -154,6 +201,56 @@ body {
   animation: recruitment-review-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+@keyframes manual-recruitment-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+}
+
+.manual-recruitment-enter {
+  animation: manual-recruitment-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes rncp-side-panel-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(28px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.rncp-side-panel-enter {
+  animation: rncp-side-panel-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.rncp-form-content {
+  transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.manual-recruitment-form {
+  transition: max-width 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (min-width: 1280px) {
+  .rncp-form-content--shifted {
+    transform: translate3d(-210px, 0, 0);
+  }
+
+  .rncp-form-content--shifted .manual-recruitment-form {
+    max-width: min(48rem, calc(100vw - 740px));
+  }
+}
+
 @keyframes recruitment-thinking-pulse {
   0%, 100% {
     opacity: 0.35;
@@ -172,8 +269,23 @@ body {
   .teacher-robot-float,
   .teacher-identity-avatar,
   .recruitment-review-enter,
+  .manual-recruitment-enter,
+  .rncp-side-panel-enter,
+  .rncp-form-content,
   .recruitment-thinking-dot {
     animation: none;
+  }
+
+  .rncp-form-content {
+    transition: none;
+  }
+
+  .manual-recruitment-form {
+    transition: none;
+  }
+
+  .course-chat-panel {
+    transition: none;
   }
 }
 

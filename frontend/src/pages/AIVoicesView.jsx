@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowLeft,
+  BookOpenText,
   Check,
   Download,
   Mic,
@@ -35,17 +37,7 @@ function durationLabel(seconds) {
 }
 
 
-function calibrationLabel(voice) {
-  if (voice.calibration_status === 'completed' && voice.measured_wpm) {
-    return `${Math.round(voice.measured_wpm)} mots/min`
-  }
-  if (voice.calibration_status === 'running') return 'Calibration en cours'
-  if (voice.calibration_status === 'failed') return 'À recalibrer'
-  return 'Après paiement'
-}
-
-
-function AudioInput({ label, hint, value, onChange, accept = 'audio/*', maxSeconds = 600 }) {
+function AudioInput({ label, hint, value, onChange, onInspiration, accept = 'audio/*', maxSeconds = 600 }) {
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('')
@@ -150,6 +142,11 @@ function AudioInput({ label, hint, value, onChange, accept = 'audio/*', maxSecon
           <Upload size={16} /> Téléverser un audio existant
           <input type="file" accept={accept} className="sr-only" onChange={(event) => handleFile(event.target.files?.[0])} />
         </label>
+        {onInspiration && (
+          <button type="button" onClick={onInspiration} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#D4D4D8] bg-white px-3.5 py-2 text-sm font-semibold text-[#27272A] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 focus-visible:ring-offset-2">
+            <BookOpenText size={16} /> Besoin d’inspiration
+          </button>
+        )}
       </div>
       {value?.file && <p className="mt-3 truncate text-xs text-[#71717A]">{value.file.name}</p>}
       {error && <p className="mt-3 text-xs font-medium text-[#B42318]" role="alert">{error}</p>}
@@ -175,7 +172,7 @@ function ProgressSteps({ step, mode }) {
 }
 
 
-function VoiceWizard({ mode, onClose, onCreated }) {
+function VoiceWizard({ mode, onClose, onCreated, onInspirationChange }) {
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
   const [referenceId, setReferenceId] = useState('')
@@ -187,8 +184,15 @@ function VoiceWizard({ mode, onClose, onCreated }) {
   const [validating, setValidating] = useState(false)
   const [error, setError] = useState('')
   const [previewUrl, setPreviewUrl] = useState('')
+  const [inspirationOpen, setInspirationOpen] = useState(false)
 
   useEffect(() => () => previewUrl && URL.revokeObjectURL(previewUrl), [previewUrl])
+  useEffect(() => () => onInspirationChange?.(false), [onInspirationChange])
+
+  const setInspiration = (open) => {
+    setInspirationOpen(open)
+    onInspirationChange?.(open)
+  }
 
   const advanceDeclaration = () => {
     setError('')
@@ -274,14 +278,15 @@ function VoiceWizard({ mode, onClose, onCreated }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/35 p-0 sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-labelledby="voice-wizard-title">
-      <div className="max-h-[96dvh] w-full overflow-y-auto rounded-t-2xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-2xl">
-        <header className="sticky top-0 z-10 flex items-start justify-between border-b border-[#E9E9EC] bg-white px-5 py-4 sm:px-7">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#71717A]">Parcours guidé</p>
-            <h2 id="voice-wizard-title" className="mt-1 text-xl font-bold text-[#18181B]">{mode === 'clone' ? 'Créer une voix' : 'Importer une voix'}</h2>
-          </div>
-          <button type="button" onClick={onClose} className="flex h-11 w-11 items-center justify-center rounded-lg text-[#52525B] hover:bg-[#F4F4F5]" aria-label="Fermer"><X size={20} /></button>
+    <article className="mx-auto w-full max-w-3xl" aria-labelledby="voice-wizard-title">
+      <button type="button" onClick={onClose} className="mb-5 inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-[#52525B] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40" aria-label="Revenir à mes voix">
+        <ArrowLeft size={18} /> Mes voix
+      </button>
+
+      <div className="bg-white">
+        <header className="border-b border-[#E2E8F0] px-5 py-5 sm:px-7">
+          <h2 id="voice-wizard-title" className="text-xl font-bold text-[#18181B]">{mode === 'clone' ? 'Créer une voix' : 'Importer une voix'}</h2>
+          <p className="mt-1 text-sm text-[#64748B]">Suivez les trois étapes pour préparer la voix.</p>
         </header>
 
         <div className="px-5 py-6 sm:px-7">
@@ -320,20 +325,9 @@ function VoiceWizard({ mode, onClose, onCreated }) {
                 hint="Une seule personne, sans musique ni écho, avec un débit naturel. Vous pouvez prononcer le texte de votre choix."
                 value={voiceAudio}
                 onChange={(file, duration) => setVoiceAudio({ file, duration })}
+                onInspiration={() => setInspiration(true)}
                 maxSeconds={90}
               />
-
-              <div className="rounded-xl bg-[#F7F7F6] p-4 sm:p-5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold text-[#18181B]">Besoin d’inspiration&nbsp;?</p>
-                    <p className="mt-1 text-xs leading-5 text-[#6B6B72]">Si vous ne savez pas quoi dire, vous pouvez lire ce texte.</p>
-                  </div>
-                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#52525B]">Texte facultatif · environ 50 secondes</span>
-                </div>
-                <p className="mt-3 max-w-[70ch] text-sm leading-6 text-[#3F3F46]">« {VOICE_READING_TEXT} »</p>
-                <p className="mt-3 text-xs leading-5 text-[#6B6B72]">Lisez naturellement, sans accélérer, en marquant de courtes pauses à la ponctuation.</p>
-              </div>
             </div>
           )}
 
@@ -347,11 +341,7 @@ function VoiceWizard({ mode, onClose, onCreated }) {
 
           {step === 2 && (
             <div className="mt-7 space-y-5">
-              <div><h3 className="text-lg font-bold text-[#18181B]">Testez et validez la voix</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Écoutez le résultat et choisissez sa vitesse définitive. Après le paiement d’un professeur, nous lirons automatiquement un texte éducatif de référence de 7 069 mots avec ces réglages, avant de lancer la génération de ses cours.</p></div>
-              <div className="rounded-xl bg-[#F7F7F6] p-4 sm:p-5">
-                <p className="text-sm font-semibold text-[#18181B]">Calibration automatique des cours</p>
-                <p className="mt-2 text-sm leading-6 text-[#52525B]">La durée réelle de cette lecture permettra de calculer le débit de la voix en mots par minute. Tous les objectifs de mots des modules seront ensuite ajustés proportionnellement pour remplir leur durée prévue.</p>
-              </div>
+              <div><h3 className="text-lg font-bold text-[#18181B]">Testez et validez la voix</h3><p className="mt-1 text-sm leading-6 text-[#6B6B72]">Écoutez le résultat et choisissez sa vitesse définitive</p></div>
               <div className="rounded-xl border border-[#D9D9DE] p-4">
                 <div className="flex items-center justify-between gap-3"><label htmlFor="voice-speed" className="text-sm font-semibold text-[#18181B]">Vitesse finale</label><span className="rounded-full bg-[#F1F1F0] px-2.5 py-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</span></div>
                 <input id="voice-speed" type="range" min="0.75" max="1.35" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} className="mt-4 w-full accent-[#18181B]" />
@@ -374,29 +364,38 @@ function VoiceWizard({ mode, onClose, onCreated }) {
           </footer>
         </div>
       </div>
-    </div>
+
+      {inspirationOpen && (
+        <aside className="fixed inset-y-0 right-0 z-[100] flex w-full max-w-md flex-col border-l border-[#E2E8F0] bg-white shadow-[-8px_0_20px_rgba(15,23,42,0.08)]" aria-labelledby="voice-inspiration-title">
+          <header className="flex items-start justify-between gap-4 border-b border-[#E2E8F0] px-6 py-6">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748B]">Échantillon vocal</p>
+              <h3 id="voice-inspiration-title" className="mt-1 text-xl font-bold text-[#18181B]">Besoin d’inspiration&nbsp;?</h3>
+            </div>
+            <button type="button" onClick={() => setInspiration(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[#64748B] transition-colors hover:bg-[#F1F5F9] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40" aria-label="Fermer le texte d’inspiration"><X size={20} /></button>
+          </header>
+          <div className="flex-1 overflow-y-auto px-6 py-7">
+            <p className="text-sm leading-6 text-[#475569]">Si vous ne savez pas quoi dire, lisez simplement le texte ci-dessous avec votre débit habituel.</p>
+            <p className="mt-5 text-xs font-semibold uppercase tracking-[0.14em] text-[#64748B]">Texte facultatif · environ 50 secondes</p>
+            <div className="mt-6 border-y border-[#E2E8F0] py-6">
+              <p className="text-sm leading-7 text-[#1E293B]">« {VOICE_READING_TEXT} »</p>
+            </div>
+            <p className="mt-5 text-sm leading-6 text-[#64748B]">Lisez naturellement, sans accélérer, en marquant de courtes pauses à la ponctuation. La lecture dure environ 50 secondes.</p>
+          </div>
+        </aside>
+      )}
+    </article>
   )
 }
 
 
-function VoiceCard({ voice, onUpdated, onDeleted }) {
-  const [speed, setSpeed] = useState(Number(voice.playback_speed || 1))
-  const [saving, setSaving] = useState(false)
+function VoiceCard({ voice, onDeleted }) {
+  const speed = Number(voice.playback_speed || 1)
   const [previewing, setPreviewing] = useState(false)
   const [audioUrl, setAudioUrl] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => () => audioUrl && URL.revokeObjectURL(audioUrl), [audioUrl])
-
-  const saveSpeed = async () => {
-    setSaving(true)
-    setError('')
-    try {
-      const response = await apiFetch(`/api/hr/ai-voices/${voice.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playback_speed: speed }) })
-      const payload = await responsePayload(response)
-      onUpdated(payload.voice)
-    } catch (requestError) { setError(requestError.message) } finally { setSaving(false) }
-  }
 
   const preview = async () => {
     setPreviewing(true)
@@ -412,13 +411,11 @@ function VoiceCard({ voice, onUpdated, onDeleted }) {
   return (
     <article className="rounded-xl border border-[#D9D9DE] bg-white p-5">
       <div className="flex items-start gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#F1F1F0]"><Mic size={21} /></div>
-        <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate text-base font-bold text-[#18181B]">{voice.name}</h3><span className="rounded-full bg-[#F1F1F0] px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#52525B]">{voice.source === 'clone' ? 'Clonée' : 'Importée'}</span></div><p className="mt-1 truncate font-mono text-xs text-[#71717A]">{voice.fish_reference_id}</p></div>
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F1F1F0]"><img src="/microphone-cartoon.svg" alt="" className="h-11 w-9 object-contain" /></div>
+        <div className="min-w-0 flex-1"><h3 className="truncate text-base font-bold text-[#18181B]">{voice.name}</h3><p className="mt-1 text-sm text-[#71717A]">Vitesse appliquée&nbsp;: <span className="font-semibold text-[#3F3F46]">{speed.toFixed(2)}×</span></p></div>
         <button type="button" onClick={() => onDeleted(voice)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[#71717A] hover:bg-[#FEF2F2] hover:text-[#B42318]" aria-label={`Supprimer ${voice.name}`}><Trash2 size={17} /></button>
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Débit de référence</p><p className="mt-1 text-sm font-bold text-[#18181B]">{calibrationLabel(voice)}</p></div><div className="rounded-lg bg-[#F7F7F6] p-3"><p className="text-xs text-[#71717A]">Vitesse appliquée</p><p className="mt-1 text-sm font-bold text-[#18181B]">{speed.toFixed(2)}×</p></div></div>
-      <div className="mt-4"><input type="range" min="0.75" max="1.35" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} onMouseUp={saveSpeed} onTouchEnd={saveSpeed} className="w-full accent-[#18181B]" /></div>
-      <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={preview} disabled={previewing} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] px-3.5 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={16} /> {previewing ? 'Génération…' : 'Écouter'}</button>{saving && <span className="self-center text-xs text-[#71717A]">Enregistrement…</span>}</div>
+      <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={preview} disabled={previewing} className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-[#D4D4D8] px-3 py-1.5 text-sm font-semibold text-[#27272A] hover:bg-[#F4F4F5] disabled:opacity-50"><Play size={15} /> {previewing ? 'Génération…' : 'Écouter'}</button></div>
       {audioUrl && <audio controls autoPlay src={audioUrl} className="mt-4 w-full" />}
       {error && <p className="mt-3 text-xs font-medium text-[#B42318]" role="alert">{error}</p>}
     </article>
@@ -431,6 +428,7 @@ export default function AIVoicesView({ onVoicesChange }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [wizardMode, setWizardMode] = useState(null)
+  const [inspirationPanelOpen, setInspirationPanelOpen] = useState(false)
 
   const loadVoices = async () => {
     setError('')
@@ -459,13 +457,19 @@ export default function AIVoicesView({ onVoicesChange }) {
   const subtitle = useMemo(() => 'Créez, calibrez et mesurez les voix utilisées par vos professeurs.', [])
 
   return (
-    <section className="h-full overflow-y-auto pb-14" aria-labelledby="ai-voices-title">
+    <section className={`h-full overflow-y-auto pb-14 transition-[padding] duration-200 ${inspirationPanelOpen ? 'lg:pr-[28rem]' : ''}`} aria-labelledby={wizardMode ? undefined : 'ai-voices-title'} aria-label={wizardMode ? (wizardMode === 'clone' ? 'Créer une voix' : 'Importer une voix') : undefined}>
       <div className="mx-auto w-full max-w-5xl px-2 pt-6 sm:px-6 sm:pt-10">
-        <header className="text-center"><h1 id="ai-voices-title" className="text-3xl font-bold tracking-[-0.035em] text-[#18181B] sm:text-4xl">Mes voix IA</h1><p className="mt-2 text-sm text-[#6B6B72] sm:text-base">{subtitle}</p></header>
-        <div className="my-9 flex items-center gap-5" aria-hidden="true"><span className="h-px flex-1 bg-[#D9D9DE]" /><span className="text-xs font-semibold uppercase tracking-[0.3em] text-[#71717A]">Mes voix</span><span className="h-px flex-1 bg-[#D9D9DE]" /></div>
+        {!wizardMode && (
+          <>
+            <header className="text-center"><h1 id="ai-voices-title" className="text-3xl font-bold tracking-[-0.035em] text-[#18181B] sm:text-4xl">Mes voix IA</h1><p className="mt-2 text-sm text-[#6B6B72] sm:text-base">{subtitle}</p></header>
+            <div className="my-9 flex items-center gap-5" aria-hidden="true"><span className="h-px flex-1 bg-[#D9D9DE]" /><span className="text-xs font-semibold uppercase tracking-[0.3em] text-[#71717A]">Mes voix</span><span className="h-px flex-1 bg-[#D9D9DE]" /></div>
+          </>
+        )}
 
         {error && <p className="mb-5 rounded-lg bg-[#FEF2F2] px-4 py-3 text-sm font-medium text-[#B42318]" role="alert">{error}</p>}
-        {loading ? <div className="py-20 text-center text-sm text-[#71717A]">Chargement des voix…</div> : !hasVoices ? (
+        {wizardMode ? (
+          <VoiceWizard mode={wizardMode} onClose={() => { setInspirationPanelOpen(false); setWizardMode(null); loadVoices() }} onCreated={updateVoice} onInspirationChange={setInspirationPanelOpen} />
+        ) : loading ? <div className="py-20 text-center text-sm text-[#71717A]">Chargement des voix…</div> : !hasVoices ? (
           <div className="flex flex-col items-center py-8 text-center sm:py-12">
             <img src="/microphone-cartoon.svg" alt="" className="h-24 w-20 object-contain" />
             <h2 className="mt-3 text-xl font-bold text-[#18181B]">Aucune voix enregistrée</h2>
@@ -473,10 +477,9 @@ export default function AIVoicesView({ onVoicesChange }) {
             <div className="mt-6 flex flex-wrap justify-center gap-3"><button type="button" onClick={() => setWizardMode('clone')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] bg-white px-4 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5]"><PenLine size={16} /> Créer une voix</button><button type="button" onClick={() => setWizardMode('import')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#18181B] bg-white px-4 py-2 text-sm font-semibold text-[#18181B] hover:bg-[#F4F4F5]"><Download size={16} /> Importer une voix</button></div>
           </div>
         ) : (
-          <div><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-[#6B6B72]">{voices.length} voix disponible{voices.length > 1 ? 's' : ''}</p><div className="flex gap-2"><button type="button" onClick={() => setWizardMode('import')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#D4D4D8] px-3.5 py-2 text-sm font-semibold text-[#27272A] hover:bg-[#F4F4F5]"><Download size={16} /> Importer</button><button type="button" onClick={() => setWizardMode('clone')} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]"><Plus size={16} /> Créer une voix</button></div></div><div className="grid gap-4 lg:grid-cols-2">{voices.map((voice) => <VoiceCard key={voice.id} voice={voice} onUpdated={updateVoice} onDeleted={deleteVoice} />)}</div></div>
+          <div><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-[#6B6B72]">{voices.length} voix disponible{voices.length > 1 ? 's' : ''}</p><div className="flex gap-2"><button type="button" onClick={() => setWizardMode('import')} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#D4D4D8] px-3.5 py-2 text-sm font-semibold text-[#27272A] hover:bg-[#F4F4F5]"><Download size={16} /> Importer</button><button type="button" onClick={() => setWizardMode('clone')} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#27272A]"><Plus size={16} /> Créer une voix</button></div></div><div className="grid gap-4 lg:grid-cols-2">{voices.map((voice) => <VoiceCard key={voice.id} voice={voice} onDeleted={deleteVoice} />)}</div></div>
         )}
       </div>
-      {wizardMode && <VoiceWizard mode={wizardMode} onClose={() => { setWizardMode(null); loadVoices() }} onCreated={updateVoice} />}
     </section>
   )
 }

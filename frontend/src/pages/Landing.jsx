@@ -89,9 +89,13 @@ function HeroPromptCard() {
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="m14.5 5.5 4 4M4 20l3.5-1 10-10a2.8 2.8 0 0 0-4-4l-10 10L4 20Zm12-3.5v5m-2.5-2.5h5" />
         </svg>
-        <p>
+        <p className="uifry-desktop-prompt-text">
           J’ai besoin que tu animes une journée de formation de 8h à 17h lundi prochain.<br />
           Tu prépareras des diapositives et tu intéragiras avec les élèves.
+        </p>
+        <p className="uifry-mobile-prompt-text">
+          Anime une formation de 8h à 17h mardi stp.<br />
+          Prépare les diapos et intéragis avec les élèves.
         </p>
       </div>
 
@@ -122,6 +126,9 @@ function LandingHeader() {
 
   return (
     <header className={`uifry-header${scrolled ? ' is-scrolled' : ''}`}>
+      <a className="uifry-mobile-brand" href="#home" aria-label="Cadrenza, retour en haut de page">
+        <CadrenzaBrand />
+      </a>
       <nav className="uifry-nav" aria-label="Navigation principale">
         <a href="#home">Accueil</a>
         <a href="#advantages">Professeurs IA</a>
@@ -162,12 +169,19 @@ function Hero() {
 
       <div className="uifry-hero-copy">
         <h1>
-          <span className="uifry-title-line">
+          <span className="uifry-desktop-title">
+            <span className="uifry-title-line">
+              Des <span className="uifry-title-accent">professeurs IA</span>
+              <span className="uifry-title-robot" aria-hidden="true"><img src="/robot-blue.png" alt="" /></span>
+              pour
+            </span>
+            <br />délivrer vos formations.
+          </span>
+          <span className="uifry-mobile-title">
             Des <span className="uifry-title-accent">professeurs IA</span>
             <span className="uifry-title-robot" aria-hidden="true"><img src="/robot-blue.png" alt="" /></span>
-            pour
+            <br />pour vos formations.
           </span>
-          <br />délivrer vos formations.
         </h1>
       </div>
 

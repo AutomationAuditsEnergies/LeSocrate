@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Le Socrate — Ancienne vue calendrier</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #18181b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: #fff; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    .page { position: relative; display: grid; min-height: 100vh; grid-template-columns: minmax(330px, .72fr) minmax(680px, 1.28fr); overflow: hidden; }
+    .teacher { position: relative; display: flex; min-height: 100vh; flex-direction: column; overflow: hidden; padding: 24px; background: #43352d url('../frontend/public/teacher-studio-background.webp') center/cover no-repeat; }
+    .teacher::after { position: absolute; inset: 0; content: ""; background: linear-gradient(180deg, rgba(35,29,26,.04) 0%, rgba(35,29,26,0) 44%, rgba(25,21,19,.84) 100%); pointer-events: none; }
+    .customize { position: relative; z-index: 3; display: flex; justify-content: flex-end; }
+    .customize > button { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; padding: 8px 16px; border: 1px solid rgba(255,255,255,.28); border-radius: 999px; background: rgba(39,39,42,.86); color: #fff; font-size: 12px; font-weight: 650; }
+    .customize > button:hover { background: rgba(24,24,27,.96); }
+    .palette { font-size: 16px; }
+    .robot-stage { position: relative; z-index: 2; display: flex; min-height: 0; flex: 1; align-items: center; justify-content: center; }
+    .robot { width: min(34vw, 430px); height: min(52vh, 430px); object-fit: contain; filter: drop-shadow(0 10px 7px rgba(76,29,149,.14)); transform-origin: center bottom; animation: robot-idle 5.2s cubic-bezier(.45,0,.55,1) infinite; }
+    @keyframes robot-idle { 0%,100% { transform: translate3d(0,0,0) rotate(-.35deg); } 50% { transform: translate3d(0,-7px,0) rotate(.5deg); } }
+    .teacher-copy { position: relative; z-index: 2; max-width: 34rem; color: #fff; }
+    .formation { margin: 0; color: rgba(255,255,255,.7); font-size: 14px; font-weight: 550; }
+    .teacher-name { display: flex; align-items: center; gap: 10px; }
+    .teacher-name h1 { margin: 4px 0 0; font-size: clamp(34px, 4vw, 52px); font-weight: 760; letter-spacing: -.045em; line-height: 1.02; }
+    .edit { display: grid; width: 44px; height: 44px; place-items: center; flex: none; border: 1px solid rgba(255,255,255,.28); border-radius: 50%; background: rgba(24,24,27,.58); color: #fff; font-size: 18px; }
+    .description { display: -webkit-box; max-width: 58ch; margin: 12px 0 0; overflow: hidden; color: rgba(255,255,255,.78); font-size: 13px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 16px; color: rgba(255,255,255,.68); font-size: 11px; font-weight: 650; }
+    .editor { display: flex; min-width: 0; min-height: 100vh; flex-direction: column; border-left: 1px solid #e4e4e7; background: #fff; }
+    .schedule { min-height: 0; flex: 1; overflow: auto; padding: 12px 20px 10px; }
+    .heading { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 16px; }
+    .heading h2 { margin: 0; font-size: 18px; font-weight: 680; letter-spacing: -.015em; }
+    .count { border: 1px solid #dadce0; border-radius: 999px; padding: 7px 12px; background: #fff; font-size: 12px; font-weight: 650; }
+    details { margin-top: 8px; border: 1px solid #dadce0; border-radius: 6px; background: #fafafa; }
+    summary { display: flex; min-height: 38px; align-items: center; justify-content: space-between; padding: 6px 11px; list-style: none; font-size: 12px; font-weight: 650; cursor: pointer; }
+    summary::-webkit-details-marker { display: none; }
+    .helper { display: grid; grid-template-columns: 1.2fr .72fr .72fr; gap: 8px; border-top: 1px solid #dadce0; padding: 10px 11px; }
+    .helper label { color: #52525b; font-size: 10px; font-weight: 650; }
+    .helper input { width: 100%; min-height: 34px; margin-top: 4px; border: 1px solid #dadce0; border-radius: 3px; background: #fff; padding: 5px 8px; font-size: 11px; }
+    .workspace { display: grid; min-height: 565px; grid-template-columns: 240px minmax(0,1fr); margin-top: 8px; overflow: hidden; border: 1px solid rgba(157,158,159,.65); border-radius: 6px; background: #fff; font-family: Poppins, Inter, sans-serif; }
+    .sidebar { min-width: 0; overflow: hidden auto; border-right: 1px solid #dadce0; }
+    .side-month { padding: 10px 15px 4px; font-size: 17px; font-weight: 500; text-transform: capitalize; }
+    .mini-weekdays, .mini-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); padding: 0 10px; }
+    .mini-weekdays span { display: grid; height: 24px; place-items: center; font-size: 9px; opacity: .7; }
+    .mini-grid button { display: grid; height: 28px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #333; padding: 0; font-size: 9px; }
+    .mini-grid button.selected { width: 25px; height: 25px; place-self: center; background: #0c41ff; color: #fff; }
+    .agenda { margin-top: 8px; border-top: 1px solid #f0f0f0; padding: 11px 12px; }
+    .agenda h3, .dates h3 { margin: 0; font-size: 14px; font-weight: 520; }
+    .agenda p { margin: 7px 0 0; color: #6a778b; font-size: 9px; }
+    .dates { border-top: 1px solid #f0f0f0; padding: 11px 12px; }
+    .dates small { display: block; margin-top: 4px; color: #6a778b; font-size: 9px; }
+    .selected-day { margin-top: 13px; padding: 10px; border: 1px solid #dfe5ff; border-radius: 4px; background: #f5faff; }
+    .selected-day strong { display: block; font-size: 10px; }
+    .selected-day span { display: block; margin-top: 3px; color: #6a778b; font-size: 9px; }
+    .selected-day select { width: 100%; min-height: 32px; margin-top: 9px; border: 1px solid #dadce0; background: #fff; color: #333; font-size: 9px; }
+    .calendar { display: flex; min-width: 0; flex-direction: column; }
+    .calendar-header { display: flex; min-height: 54px; align-items: center; gap: 8px; border-bottom: 1px solid rgba(218,220,224,.6); padding: 8px; }
+    .circle { display: grid; width: 35px; height: 35px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #333; font-size: 18px; }
+    .view { border: 1px solid #0c41ff; border-radius: 3px; padding: 6px 7px; color: #0c41ff; font-size: 10px; font-weight: 550; }
+    .month-title { margin-left: 3px; font-size: 19px; font-weight: 420; text-transform: capitalize; white-space: nowrap; }
+    .month-title strong { font-weight: 560; }
+    .header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .add { min-height: 32px; border: 0; border-radius: 3px; background: #0c41ff; color: #fff; padding: 7px 10px; font-size: 10px; font-weight: 550; }
+    .weekday-labels, .month-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); }
+    .weekday-labels { min-height: 27px; border-bottom: 1px solid #dadce0; }
+    .weekday-labels span { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 9px; font-weight: 520; }
+    .weekday-labels img { width: 14px; height: 14px; object-fit: cover; border-radius: 2px; }
+    .month-grid { min-height: 500px; flex: 1; grid-template-rows: repeat(6,minmax(72px,1fr)); }
+    .day { position: relative; display: flex; min-width: 0; flex-direction: column; justify-content: space-between; border: 0; border-right: 1px solid rgba(218,220,224,.6); border-bottom: 1px solid rgba(218,220,224,.6); background: #fff; color: #333; padding: 5px; text-align: left; }
+    .day:nth-child(7n) { border-right: 0; }
+    .day:nth-last-child(-n+7) { border-bottom: 0; }
+    .day.outside { background: #f2f2f2; color: #9ea1aa; }
+    .day.active { background: #f5faff; box-shadow: inset 0 0 0 2px #0c41ff; }
+    .number { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; font-size: 9px; }
+    .day.chosen .number { background: #0c41ff; color: #fff; }
+    .event { min-width: 0; color: #2c5a41; font-size: 8px; line-height: 1.25; }
+    .event strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .event strong::before { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: #80d8ad; content: ""; }
+    .event time { display: block; margin-top: 2px; color: #333; }
+    .footer { display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid #e4e4e7; background: #fafafa; padding: 10px 24px; }
+    .price small { display: block; color: #64748b; font-size: 11px; font-weight: 650; }
+    .price strong { display: block; margin-top: 4px; color: #0f172a; font-size: 15px; }
+    .actions { display: flex; gap: 8px; }
+    .actions button { min-height: 42px; border-radius: 8px; padding: 0 16px; font-size: 12px; font-weight: 700; }
+    .cancel { border: 1px solid #d4d4d8; background: #fff; color: #3f3f46; }
+    .launch { border: 0; background: #18181b; color: #fff; }
+    .note { position: fixed; top: 10px; left: 50%; z-index: 20; transform: translateX(-50%); border: 1px solid rgba(255,255,255,.3); border-radius: 999px; background: rgba(24,24,27,.8); color: #fff; padding: 7px 12px; font-size: 10px; backdrop-filter: blur(8px); }
+    .identity-panel { position: absolute; bottom: 24px; left: 24px; z-index: 10; display: none; width: min(calc(36% - 48px),360px); color: #fff; }
+    .identity-panel.open { display: block; }
+    .identity-panel header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .identity-panel h2 { margin: 0; font-size: 15px; }
+    .identity-panel header button { min-height: 40px; border: 1px solid rgba(255,255,255,.42); border-radius: 8px; background: rgba(24,24,27,.72); color: #fff; padding: 0 12px; font-size: 11px; font-weight: 650; }
+    .fields { display: grid; gap: 8px; grid-template-columns: repeat(2,1fr); }
+    .fields label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 650; text-shadow: 0 1px 2px #18181b; }
+    .fields input { width: 100%; min-height: 36px; border: 1px solid rgba(255,255,255,.72); border-radius: 8px; background: rgba(255,255,255,.96); padding: 7px 10px; font-size: 11px; }
+    .identity-open .teacher-copy { visibility: hidden; }
+    @media (max-width: 1050px) { .page { grid-template-columns: 1fr; overflow: auto; } .teacher { min-height: 580px; } .editor { min-height: 800px; } .robot { width: 360px; } .note { display: none; } }
+    @media (max-width: 700px) { .workspace { grid-template-columns: 1fr; } .sidebar { display: none; } .schedule { padding: 10px; } .footer { align-items: stretch; flex-direction: column; } .actions { flex-direction: column; } .weekday-labels img, .view { display: none; } }
+    @media (prefers-reduced-motion: reduce) { .robot { animation: none; } }
+  </style>
+</head>
+<body>
+  <div class="note">Aperçu historique — aucun paiement réel</div>
+  <main class="page" id="page">
+    <section class="teacher">
+      <div class="customize"><button type="button" id="customize"><span class="palette">◉</span> Personnaliser</button></div>
+      <div class="robot-stage"><img class="robot" id="robot" src="../frontend/public/robot-violet.png" alt="Professeur IA violet légèrement animé"></div>
+      <div class="teacher-copy">
+        <p class="formation" id="formation-copy">TP Conseiller relation client à distance</p>
+        <div class="teacher-name"><h1 id="name-copy">Lina</h1><button class="edit" id="edit" type="button" aria-label="Modifier l’identité">✎</button></div>
+        <p class="description">Votre professeur IA accompagne les apprenants tout au long de cette formation certifiante, avec un déroulé structuré et des cours préparés pour chaque journée.</p>
+        <div class="meta"><span>RNCP 35304</span><span>12 journées</span></div>
+      </div>
+    </section>
+    <section class="editor">
+      <div class="schedule">
+        <div class="heading"><h2>Calendrier de la formation</h2><span class="count">12 journées</span></div>
+        <details><summary><span>✦ Préremplir les dates de formation</span><span>⌄</span></summary><div class="helper"><label>Date de début<input type="date" value="2026-09-01"></label><label>Semaines<input type="number" value="6"></label><label>Jours / semaine<input type="number" value="2"></label></div></details>
+        <div class="workspace">
+          <aside class="sidebar">
+            <div class="side-month">Septembre 2026</div>
+            <div class="mini-weekdays"><span>lun</span><span>mar</span><span>mer</span><span>jeu</span><span>ven</span><span>sam</span><span>dim</span></div><div class="mini-grid" id="mini"></div>
+            <section class="agenda"><h3>☷ Agenda</h3><p>12 journées de formation sélectionnées</p></section>
+            <section class="dates"><h3>Dates sélectionnées</h3><small>Choisissez une journée pour lui associer un template.</small><div class="selected-day"><strong>Journée 1</strong><span>mar. 1 sept. 2026</span><select><option>Journée type — 09 h à 18 h</option></select></div></section>
+          </aside>
+          <section class="calendar">
+            <header class="calendar-header"><button class="circle" type="button">☰</button><span class="view">Aujourd’hui</span><span class="month-title"><strong>Septembre</strong> 2026</span><div class="header-actions"><button class="circle" type="button">‹</button><button class="circle" type="button">›</button><button class="add" type="button">＋ Ajouter</button></div></header>
+            <div class="weekday-labels"><span><img src="../frontend/public/figma-calendar/day-1.png" alt="">Lun.</span><span><img src="../frontend/public/figma-calendar/day-2.png" alt="">Mar.</span><span><img src="../frontend/public/figma-calendar/day-3.png" alt="">Mer.</span><span><img src="../frontend/public/figma-calendar/day-4.png" alt="">Jeu.</span><span><img src="../frontend/public/figma-calendar/day-5.png" alt="">Ven.</span><span><img src="../frontend/public/figma-calendar/day-6.png" alt="">Sam.</span><span><img src="../frontend/public/figma-calendar/day-7.png" alt="">Dim.</span></div>
+            <div class="month-grid" id="calendar"></div>
+          </section>
+        </div>
+      </div>
+      <footer class="footer"><div class="price"><small>Tarif après validation</small><strong>Calculé selon les 12 journées</strong></div><div class="actions"><button class="cancel" type="button">Annuler</button><button class="launch" type="button" id="launch">Envoyer la demande</button></div></footer>
+    </section>
+    <section class="identity-panel" id="identity"><header><h2>Identité du professeur</h2><button type="button" id="done">Terminer</button></header><div class="fields"><label>Prénom<input id="name-input" value="Lina"></label><label>Formation<input id="formation-input" value="TP Conseiller relation client à distance"></label><label>Code RNCP<input value="35304"></label><label>Couleur<select id="color" style="width:100%;min-height:36px;border-radius:8px"><option value="violet">Violet</option><option value="blue">Bleu</option><option value="pink">Rose</option><option value="green">Vert</option><option value="amber">Ambre</option></select></label></div></section>
+  </main>
+  <script>
+    const selected = new Set([1,3,8,10,15,17,22,24,29]); const mini = document.querySelector('#mini');
+    mini.insertAdjacentHTML('beforeend','<button type="button">31</button>'); for(let i=1;i<=30;i++) mini.insertAdjacentHTML('beforeend',`<button type="button" class="${selected.has(i)?'selected':''}">${i}</button>`); for(let i=1;i<=4;i++) mini.insertAdjacentHTML('beforeend',`<button type="button">${i}</button>`);
+    const calendar=document.querySelector('#calendar'); const cells=[{n:31,out:true},...Array.from({length:30},(_,i)=>({n:i+1,out:false})),...Array.from({length:11},(_,i)=>({n:i+1,out:true}))];
+    cells.forEach(({n,out})=>{const chosen=!out&&selected.has(n);const active=!out&&n===1;const event=chosen?`<span class="event"><strong>Formation · Journée ${[...selected].indexOf(n)+1}</strong><time>09:00 – 18:00</time></span>`:'';calendar.insertAdjacentHTML('beforeend',`<button type="button" class="day ${out?'outside':''} ${chosen?'chosen':''} ${active?'active':''}"><span class="number">${n}</span>${event}</button>`)});
+    calendar.addEventListener('click',e=>{const cell=e.target.closest('.day:not(.outside)');if(!cell)return;cell.classList.toggle('chosen');if(cell.classList.contains('chosen')&&!cell.querySelector('.event'))cell.insertAdjacentHTML('beforeend','<span class="event"><strong>Formation</strong><time>09:00 – 18:00</time></span>');else if(!cell.classList.contains('chosen'))cell.querySelector('.event')?.remove()});
+    const page=document.querySelector('#page'),identity=document.querySelector('#identity'); function openIdentity(){identity.classList.add('open');page.classList.add('identity-open')} function closeIdentity(){identity.classList.remove('open');page.classList.remove('identity-open')}
+    document.querySelector('#edit').addEventListener('click',openIdentity);document.querySelector('#customize').addEventListener('click',openIdentity);document.querySelector('#done').addEventListener('click',closeIdentity);
+    document.querySelector('#name-input').addEventListener('input',e=>document.querySelector('#name-copy').textContent=e.target.value||'Votre professeur');document.querySelector('#formation-input').addEventListener('input',e=>document.querySelector('#formation-copy').textContent=e.target.value||'Formation à renseigner');document.querySelector('#color').addEventListener('change',e=>document.querySelector('#robot').src=`../frontend/public/robot-${e.target.value}.png`);
+    document.querySelector('#launch').addEventListener('click',()=>alert('Aperçu historique uniquement : aucune demande ni aucun paiement ne sera lancé.'));
+  </script>
+</body>
+</html>

@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-08-23
+
+### fix(ui): information RNCP dans un panneau latéral
+
+L’avertissement d’une certification remplacée est désormais signalé par un
+simple point d’exclamation orange placé contre le champ RNCP. Son détail et les
+choix de certification s’ouvrent dans un volet fixe à droite, sans déplacer le
+reste du formulaire. Pendant son ouverture, le contenu de configuration glisse
+vers la gauche pour rester lisible à côté du volet, puis reprend sa position à
+la fermeture.
+
+## 2026-08-22
+
+### feat(ui): formulaire manuel avant le planning
+
+« Recruter manuellement » remplace désormais le chat par un formulaire plein
+écran animé. Il collecte le RNCP, la date de début, le rythme, la durée, les
+jours habituels et le nom du professeur. Le RNCP est vérifié auprès de France
+Compétences, avec affichage du titre officiel et choix explicite entre une fiche
+inactive encore exploitable et ses éventuels remplacements. Une fois le
+formulaire valide, le planning s'ouvre avec les dates déjà préremplies.
+
+### feat(ui): accès direct au planning prérempli
+
+La fin de l'assistant propose désormais « Configurer le planning » sans bloc
+d'introduction redondant. Le clic calcule les dates à partir du début de la
+formation, de sa durée et des journées choisies, puis ouvre directement le
+planning avec ces dates déjà sélectionnées.
+
+### fix(ui): récapitulatif de recrutement sans robot
+
+Le visuel décoratif a été retiré de la carte de vérification. Le fil de
+conversation réserve désormais une gouttière stable à sa barre de défilement,
+afin qu'elle ne recouvre ni ne décale les messages lorsqu'elle apparaît.
+
+### fix(ui): sélection des jours de recrutement en bleu
+
+Les cases cochées de l’étape « jours habituels de formation » utilisent le
+bleu principal de l’espace de recrutement à la place du violet.
+
+### fix(recrutement): réponses conversationnelles avant recentrage
+
+Chaque tour transmet désormais l’historique récent et l’état réel du recrutement
+à une boucle en deux passes. La première passe LLM comprend le message et propose
+une mise à jour ; le code valide cette proposition sans laisser le modèle muter
+l’état ; la seconde passe reçoit le résultat de validation et rédige la réponse
+finale. Une demande initiale pertinente est ainsi accueillie comme le début du
+parcours au lieu d’être paraphrasée puis opposée mécaniquement au champ RNCP.
+
 ## 2026-08-20
 
 ### feat(ui): séquences personnalisées directement dans le planning

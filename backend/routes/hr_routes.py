@@ -357,7 +357,7 @@ def create_hr_blueprint():
 
     @hr_bp.route("/api/hr/recruitment/interpret", methods=["POST"])
     def interpret_hr_recruitment_answer():
-        """Extract exactly one required recruitment field from free-form text."""
+        """Process one recruitment turn from conversation history and current state."""
         denied = _require_admin()
         if denied:
             return denied
@@ -368,6 +368,7 @@ def create_hr_blueprint():
         field = str(data.get("field") or "").strip()
         message = str(data.get("message") or "").strip()
         draft = data.get("draft") if isinstance(data.get("draft"), dict) else {}
+        history = data.get("history") if isinstance(data.get("history"), list) else []
         try:
             attempt = max(0, min(5, int(data.get("attempt") or 0)))
         except (TypeError, ValueError):
@@ -380,6 +381,7 @@ def create_hr_blueprint():
                 field,
                 message,
                 draft=draft,
+                history=history,
                 attempt=attempt,
             )
         except ValueError as exc:
