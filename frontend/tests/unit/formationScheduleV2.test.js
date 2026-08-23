@@ -10,6 +10,7 @@ import {
   dateTimeInTimeZone,
   fillUnassignedTemplate,
   getCalendarMonthDays,
+  getMinimumNewModuleStartDate,
   hasMinimumLeadTime,
   isValidCalendarDate,
   normalizeSelectedTrainingDates,
@@ -119,20 +120,22 @@ test('applies one template to every selected day and replaces earlier choices', 
   })
 })
 
-test('validates complete new-module assignments and the 48-hour lead time', () => {
+test('requires J+3 by calendar date regardless of the validation time', () => {
   const result = validateFormationScheduleV2({
-    selectedDates: ['2026-08-03'],
-    assignments: { '2026-08-03': '12' },
+    selectedDates: ['2026-08-04'],
+    assignments: { '2026-08-04': '12' },
     templates: [template],
-    now: new Date('2026-08-01T06:59:00Z'),
+    now: new Date('2026-08-01T21:59:00Z'),
   })
   assert.equal(result.valid, true)
   assert.equal(hasMinimumLeadTime(
     ['2026-08-03'],
     { '2026-08-03': '12' },
     [template],
-    new Date('2026-08-01T07:01:00Z'),
+    new Date('2026-08-01T06:00:00Z'),
   ), false)
+  assert.equal(getMinimumNewModuleStartDate(new Date('2026-08-23T22:01:00Z')), '2026-08-27')
+  assert.equal(getMinimumNewModuleStartDate(new Date('2026-08-23T08:00:00Z')), '2026-08-26')
 })
 
 test('evaluates Paris wall-clock times independently from the browser timezone', () => {
@@ -183,7 +186,7 @@ test('accepts and serializes a complete custom day without creating a template',
     assignments: {},
     templates: [],
     customDays: { '2026-08-03': customBlocks },
-    now: new Date('2026-08-01T06:59:00Z'),
+    now: new Date('2026-07-31T06:59:00Z'),
   })
   assert.equal(result.valid, true)
 

@@ -13,14 +13,16 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 SCHEDULE_SCHEMA_VERSION = 2
 WORDS_PER_MINUTE = 165.7
 COURSE_AUDIO_MARGIN_MINUTES = 0.5
-MIN_NEW_MODULE_LEAD_HOURS = 48
+MIN_NEW_MODULE_LEAD_DAYS = 3
+FRANCE_TIME_ZONE = ZoneInfo("Europe/Paris")
 
 MIN_COURSES_PER_DAY = 4
 MAX_COURSES_PER_DAY = 10
@@ -867,10 +869,11 @@ def validate_new_module_lead_time(
     *,
     is_reuse: bool = False,
 ) -> bool:
-    """Require 48 real hours before the first course of a new module.
+    """Require the first course date to be at least J+3 in France.
 
     Reused modules are explicitly exempt because their audio assets already
-    exist. Exact equality at 48 hours is accepted.
+    exist. The comparison is deliberately calendar-based, so the time of day
+    at which the request is validated never changes the earliest allowed date.
     """
 
     if is_reuse:
@@ -892,19 +895,18 @@ def validate_new_module_lead_time(
         )
 
     if validation_is_aware:
-        validation = validation.astimezone(timezone.utc)
-        first_start = first_start.astimezone(timezone.utc)
+        validation = validation.astimezone(FRANCE_TIME_ZONE)
+        first_start = first_start.astimezone(FRANCE_TIME_ZONE)
 
-    earliest_start = validation + timedelta(hours=MIN_NEW_MODULE_LEAD_HOURS)
-    if first_start < earliest_start:
+    earliest_start_date = validation.date() + timedelta(days=MIN_NEW_MODULE_LEAD_DAYS)
+    if first_start.date() < earliest_start_date:
         _raise(
             "new_module_lead_time_too_short",
-            "La première journée d'un nouveau module doit commencer au moins "
-            f"{MIN_NEW_MODULE_LEAD_HOURS} heures après la validation.",
+            "La première date d'un nouveau module doit être au minimum à J+3.",
             path="first_start_at",
             details={
-                "minimum_hours": MIN_NEW_MODULE_LEAD_HOURS,
-                "earliest_start_at": earliest_start.isoformat(),
+                "minimum_days": MIN_NEW_MODULE_LEAD_DAYS,
+                "earliest_start_date": earliest_start_date.isoformat(),
             },
         )
     return True
@@ -918,7 +920,7 @@ __all__ = [
     "MIN_COURSES_PER_DAY",
     "MIN_COURSE_MINUTES",
     "MIN_DAY_AMPLITUDE_MINUTES",
-    "MIN_NEW_MODULE_LEAD_HOURS",
+    "MIN_NEW_MODULE_LEAD_DAYS",
     "MIN_TOTAL_COURSE_MINUTES",
     "SCHEDULE_SCHEMA_VERSION",
     "ScheduleValidationError",

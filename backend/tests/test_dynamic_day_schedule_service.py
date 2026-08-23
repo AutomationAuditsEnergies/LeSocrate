@@ -11,7 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from services.dynamic_day_schedule_service import (  # noqa: E402
-    MIN_NEW_MODULE_LEAD_HOURS,
+    MIN_NEW_MODULE_LEAD_DAYS,
     ScheduleValidationError,
     build_day_audio_manifest,
     calculate_course_word_budget,
@@ -530,19 +530,17 @@ class DynamicDayScheduleTest(unittest.TestCase):
             {"a": _valid_day(), "b": _valid_day()},
         )
 
-    def test_new_module_accepts_exactly_48_hours_notice(self):
-        validation_at = datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc)
-        first_start_at = validation_at + timedelta(
-            hours=MIN_NEW_MODULE_LEAD_HOURS
-        )
+    def test_new_module_accepts_j_plus_3_regardless_of_start_time(self):
+        validation_at = datetime(2026, 7, 26, 20, 0, tzinfo=timezone.utc)
+        first_start_at = datetime(2026, 7, 29, 7, 0, tzinfo=timezone.utc)
 
         self.assertTrue(
             validate_new_module_lead_time(validation_at, first_start_at)
         )
 
-    def test_new_module_rejects_less_than_48_hours_notice(self):
+    def test_new_module_rejects_a_date_before_j_plus_3(self):
         validation_at = datetime(2026, 7, 26, 9, 0)
-        first_start_at = validation_at + timedelta(hours=47, minutes=59)
+        first_start_at = validation_at + timedelta(days=MIN_NEW_MODULE_LEAD_DAYS - 1)
 
         self.assertScheduleError(
             "new_module_lead_time_too_short",
@@ -551,7 +549,7 @@ class DynamicDayScheduleTest(unittest.TestCase):
             first_start_at,
         )
 
-    def test_reused_module_is_exempt_from_48_hour_rule(self):
+    def test_reused_module_is_exempt_from_j_plus_3_rule(self):
         validation_at = datetime(2026, 7, 26, 9, 0)
         first_start_at = validation_at + timedelta(minutes=1)
 

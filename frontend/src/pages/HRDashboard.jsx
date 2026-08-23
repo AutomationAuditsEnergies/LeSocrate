@@ -41,7 +41,7 @@ import { getReusableTeacherDefaults } from '../centerWorkspace'
 import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
 import { calculateTrainingDays, RECRUITMENT_STEPS } from '../recruitmentConversation'
-import { addCalendarDays, prefillTrainingDates } from '../formationScheduleV2'
+import { getMinimumNewModuleStartDate, prefillTrainingDates } from '../formationScheduleV2'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -2607,7 +2607,7 @@ function getRecruitmentAssistantText(step, draft, matchingModule) {
 }
 
 function ManualRecruitmentForm({ colors, onBack, onComplete }) {
-  const earliestStartDate = addCalendarDays(todayDateInput(), 2)
+  const earliestStartDate = getMinimumNewModuleStartDate()
   const [form, setForm] = useState({
     rncpCode: '',
     startDate: earliestStartDate,
@@ -2724,7 +2724,7 @@ function ManualRecruitmentForm({ colors, onBack, onComplete }) {
   const weeklyDaysAreComplete = form.teachingDays.length === Number(form.weeklyCourseCount)
   const canContinue = Boolean(
     certificationIsConfirmed
-    && form.startDate
+    && form.startDate >= earliestStartDate
     && Number(form.trainingWeeks) >= 1
     && weeklyDaysAreComplete
     && form.teacherName.trim(),
@@ -2973,7 +2973,7 @@ function RecruitmentAssistant({
     trainingWeeks: '',
     weeklyCourseCount: 2,
     teachingDays: ['mardi', 'jeudi'],
-    startDate: todayDateInput(),
+    startDate: getMinimumNewModuleStartDate(),
     teacherColor: 'violet',
   })
   const [history, setHistory] = useState([])
@@ -3097,6 +3097,13 @@ function RecruitmentAssistant({
     } = {},
   ) => {
     if (!currentStep) return
+    if (currentStep.id === 'startDate' && String(value || '') < getMinimumNewModuleStartDate()) {
+      revealAssistantMessages([{
+        role: 'assistant',
+        text: `La formation peut commencer au plus tôt le ${new Intl.DateTimeFormat('fr-FR').format(new Date(`${getMinimumNewModuleStartDate()}T12:00:00`))}. Choisissez une date à partir de ce jour.`,
+      }])
+      return
+    }
     if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
       const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
       setDraft(correctedDraft)
@@ -3636,7 +3643,7 @@ function RecruitmentAssistant({
               </div>
             )}
             {!isThinking && !pendingConfirmation && currentStep.type === 'date' && (
-              <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={getMinimumNewModuleStartDate()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" disabled={draft.startDate < getMinimumNewModuleStartDate()} onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">Valider la date</button></div>
             )}
           </div>
         ) : null}
@@ -4901,11 +4908,7 @@ export function CreatePlatformView({
     }
     for (const error of schedulePlan.validation?.errors || []) {
       if (missingDays.length && error.startsWith('Affectez un template')) continue
-      if (error.includes('48 h')) {
-        errors.push('La première date doit être au minimum à J+2.')
-      } else {
-        errors.push(error)
-      }
+      errors.push(error)
     }
 
     const uniqueErrors = [...new Set(errors)]

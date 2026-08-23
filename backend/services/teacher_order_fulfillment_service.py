@@ -264,7 +264,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                     )
                 except ValueError as exc:
                     raise PermanentWorkError(
-                        "Le délai de 48 heures du planning V2 n’est pas respecté"
+                        "La première date du planning V2 doit être au minimum à J+3"
                     ) from exc
             else:
                 nb_days = int(

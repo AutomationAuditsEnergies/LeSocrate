@@ -15,6 +15,7 @@ export const TRAINING_WEEKDAYS = Object.freeze([
 ])
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+export const MIN_NEW_MODULE_LEAD_DAYS = 3
 
 function asUtcDate(value) {
   if (!ISO_DATE_PATTERN.test(String(value || ''))) return null
@@ -41,6 +42,26 @@ export function addCalendarDays(value, amount) {
   if (!date) return ''
   date.setUTCDate(date.getUTCDate() + Number(amount || 0))
   return toIsoDate(date)
+}
+
+export function calendarDateInTimeZone(
+  date = new Date(),
+  timeZone = 'Europe/Paris',
+) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const values = Object.fromEntries(
+    parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]),
+  )
+  return `${values.year}-${values.month}-${values.day}`
+}
+
+export function getMinimumNewModuleStartDate(now = new Date()) {
+  return addCalendarDays(calendarDateInTimeZone(now), MIN_NEW_MODULE_LEAD_DAYS)
 }
 
 export function normalizeSelectedTrainingDates(values) {
@@ -212,18 +233,12 @@ export function hasMinimumLeadTime(
   assignments,
   templates,
   now = new Date(),
-  minimumHours = 48,
+  minimumDays = MIN_NEW_MODULE_LEAD_DAYS,
   customDays = {},
 ) {
-  const firstSession = getFirstSessionDateTime(
-    selectedDates,
-    assignments,
-    templates,
-    'Europe/Paris',
-    customDays,
-  )
-  if (!firstSession) return false
-  return firstSession.getTime() - now.getTime() >= minimumHours * 60 * 60 * 1000
+  const [firstDate] = normalizeSelectedTrainingDates(selectedDates)
+  if (!firstDate) return false
+  return firstDate >= addCalendarDays(calendarDateInTimeZone(now), minimumDays)
 }
 
 export function fillUnassignedTemplate(assignments, selectedDates, templateId) {
@@ -337,10 +352,10 @@ export function validateFormationScheduleV2({
       normalizedAssignments,
       templates,
       now,
-      48,
+      MIN_NEW_MODULE_LEAD_DAYS,
       normalizedCustomDays,
     )) {
-      errors.push('La première journée doit commencer au moins 48 h après la validation.')
+      errors.push('La première date doit être au minimum à J+3.')
     }
   }
 

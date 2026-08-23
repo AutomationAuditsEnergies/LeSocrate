@@ -123,7 +123,7 @@ class DynamicBillingScheduleTest(unittest.TestCase):
             9 * 60,
         )
 
-    def test_new_v2_requires_48_real_hours_before_first_block(self):
+    def test_new_v2_requires_a_first_date_at_j_plus_3(self):
         now = FRANCE_TZ.localize(datetime(2026, 7, 26, 12, 0))
         with patch.object(
             billing_service,
@@ -141,7 +141,7 @@ class DynamicBillingScheduleTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 billing_service.BillingError,
-                "48 heures",
+                r"J\+3",
             ):
                 billing_service._normalize_project(
                     _new_v2_payload(["2026-07-28"]),
@@ -735,7 +735,7 @@ class DynamicOrderFulfillmentTest(unittest.TestCase):
         ) as aggregate:
             with self.assertRaisesRegex(
                 teacher_order_fulfillment_service.PermanentWorkError,
-                "48 heures",
+                r"J\+3",
             ):
                 teacher_order_fulfillment_service.fulfill_teacher_order(
                     item,

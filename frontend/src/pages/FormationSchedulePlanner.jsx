@@ -36,6 +36,7 @@ import {
   addCalendarDays,
   assignTemplateToAll,
   getCalendarMonthDays,
+  getMinimumNewModuleStartDate,
   isValidCalendarDate,
   normalizeSelectedTrainingDates,
   prefillTrainingDates,
@@ -178,7 +179,7 @@ export default function FormationSchedulePlanner({
   validating = false,
 }) {
   const today = useMemo(localToday, [])
-  const earliestSuggestedDate = reuse ? today : addCalendarDays(today, 3)
+  const earliestSuggestedDate = reuse ? today : getMinimumNewModuleStartDate()
   const safeStartHint = isValidCalendarDate(startDateHint)
     && startDateHint >= earliestSuggestedDate
     ? startDateHint

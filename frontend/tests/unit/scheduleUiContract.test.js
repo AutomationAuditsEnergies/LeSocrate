@@ -166,6 +166,10 @@ test('reviews the definitive schedule only when preparation is requested', async
     new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
     'utf8',
   )
+  const scheduleDomainSource = await readFile(
+    new URL('../../src/formationScheduleV2.js', import.meta.url),
+    'utf8',
+  )
   const plannerStyles = await readFile(
     new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
     'utf8',
@@ -186,7 +190,7 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.match(dashboardSource, /Vérifier avant le paiement/)
   assert.match(dashboardSource, /aria-label="Masquer les erreurs du planning"/)
   assert.match(dashboardSource, /setScheduleAttemptErrors\(\[\]\)/)
-  assert.match(dashboardSource, /La première date doit être au minimum à J\+2/)
+  assert.match(scheduleDomainSource, /La première date doit être au minimum à J\+3/)
   assert.match(dashboardSource, /Associez un template à/)
 })
 
