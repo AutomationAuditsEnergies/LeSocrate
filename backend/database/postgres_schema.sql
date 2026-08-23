@@ -682,6 +682,8 @@ CREATE TABLE IF NOT EXISTS ai_teacher_orders (
     review_note TEXT,
     review_email_sent_at TIMESTAMPTZ,
     payment_email_sent_at TIMESTAMPTZ,
+    admin_seen_at TIMESTAMPTZ,
+    center_seen_at TIMESTAMPTZ,
     paid_at TIMESTAMPTZ,
     refunded_at TIMESTAMPTZ,
     fulfilled_at TIMESTAMPTZ,
@@ -716,6 +718,8 @@ ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS review_note TEXT;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS review_email_sent_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS payment_email_sent_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS admin_seen_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS center_seen_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
 ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ;
@@ -1403,6 +1407,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_teacher_orders_payment_intent
     WHERE stripe_payment_intent_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_teacher_orders_fulfillment
     ON ai_teacher_orders(fulfillment_status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_ai_teacher_orders_review_queue
+    ON ai_teacher_orders(review_status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_platform_created ON formation_pipeline_jobs(platform_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_status ON formation_pipeline_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_formation_knowledge_base_job ON formation_knowledge_base(job_id);

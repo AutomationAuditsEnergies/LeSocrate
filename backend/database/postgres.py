@@ -228,6 +228,8 @@ PIPELINE_REQUIRED_SCHEMA = {
         "review_note",
         "review_email_sent_at",
         "payment_email_sent_at",
+        "admin_seen_at",
+        "center_seen_at",
     },
     "stripe_webhook_events": {"event_id", "event_type", "status", "payload_json"},
     "content_generation_jobs": {
@@ -353,6 +355,7 @@ PIPELINE_REQUIRED_INDEXES = {
     "uq_cours_folders_job_name",
     "uq_ai_teacher_orders_creation_request",
     "uq_ai_teacher_orders_public_id",
+    "idx_ai_teacher_orders_review_queue",
     "uq_pipeline_work_items_active_scope",
     "uq_pipeline_work_items_active_resource_scope",
     "uq_course_reminder_rules_system_key",

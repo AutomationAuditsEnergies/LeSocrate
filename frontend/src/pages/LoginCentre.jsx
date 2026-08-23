@@ -82,8 +82,12 @@ export default function LoginCentre({ preloadDashboardRoute }) {
         const data = await response.json().catch(() => ({}))
 
         if (!cancelled && response.ok && data.authenticated) {
-          preloadDashboardRoute?.().catch(() => {})
-          navigate('/dashboard-centre', { replace: true })
+          if (data.account?.type === 'legacy_admin') {
+            navigate('/admin/validations', { replace: true })
+          } else {
+            preloadDashboardRoute?.().catch(() => {})
+            navigate('/dashboard-centre', { replace: true })
+          }
           return
         }
 
@@ -200,8 +204,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
           return
         }
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
-        preloadDashboardRoute?.().catch(() => {})
-        navigate('/dashboard-centre')
+        navigate(data.account?.type === 'legacy_admin' ? '/admin/validations' : '/dashboard-centre')
         return
       }
 

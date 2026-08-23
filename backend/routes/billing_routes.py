@@ -12,13 +12,19 @@ from services.billing_service import (
     BillingError,
     billing_history,
     billing_context,
+    admin_review_inbox,
+    approve_teacher_order_from_admin,
     approve_teacher_order_review,
+    center_message_inbox,
     create_teacher_order,
     get_review_order,
     get_center_order,
     get_center_invoice_link,
+    mark_admin_review_seen,
+    mark_center_message_seen,
     process_stripe_webhook,
     reject_teacher_order_review,
+    reject_teacher_order_from_admin,
     retry_center_order,
     serialize_order,
     training_days_for_order,
@@ -38,6 +44,14 @@ def _center_id() -> int | None:
         return int(session.get("admin_account_id"))
     except (TypeError, ValueError):
         return None
+
+
+def _internal_admin() -> bool:
+    return bool(
+        session.get("is_admin")
+        and str(session.get("admin_account_type") or "").lower()
+        in {"legacy_admin", "superadmin"}
+    )
 
 
 def _error(exc: BillingError):
@@ -133,6 +147,75 @@ def reject_teacher_order_page(public_id):
         return _review_html("Refus impossible", f'<p style="color:#b42318">{html.escape(str(exc))}</p>', status_code=exc.status_code)
 
 
+@billing_bp.get("/api/admin/teacher-order-validations")
+def get_admin_teacher_order_validations():
+    if not _internal_admin():
+        return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
+    if not postgres_enabled():
+        return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    try:
+        return jsonify({"success": True, **admin_review_inbox()}), 200
+    except BillingError as exc:
+        return _error(exc)
+    except Exception:
+        logger.exception("AI_TEACHER_ADMIN_INBOX_FAILED")
+        return jsonify({"success": False, "error": "Impossible de charger les demandes."}), 500
+
+
+@billing_bp.post("/api/admin/teacher-order-validations/<uuid:public_id>/seen")
+def see_admin_teacher_order_validation(public_id):
+    if not _internal_admin():
+        return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
+    try:
+        return jsonify({"success": True, "order": mark_admin_review_seen(str(public_id))}), 200
+    except BillingError as exc:
+        return _error(exc)
+
+
+@billing_bp.post("/api/admin/teacher-order-validations/<uuid:public_id>/approve")
+def approve_admin_teacher_order_validation(public_id):
+    if not _internal_admin():
+        return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
+    if not postgres_enabled():
+        return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    try:
+        result = approve_teacher_order_from_admin(
+            str(public_id),
+            os.getenv("BILLING_REVIEW_NOTIFICATION_EMAIL", "secretariat@saleshacking.fr"),
+        )
+        return jsonify({
+            "success": True,
+            "order": serialize_order(result["order"], include_project=True),
+            "payment_email_sent": result["payment_email_sent"],
+        }), 200
+    except BillingError as exc:
+        return _error(exc)
+    except Exception:
+        logger.exception("AI_TEACHER_ADMIN_APPROVAL_FAILED order_id=%s", public_id)
+        return jsonify({"success": False, "error": "Impossible d’accepter la demande."}), 500
+
+
+@billing_bp.post("/api/admin/teacher-order-validations/<uuid:public_id>/reject")
+def reject_admin_teacher_order_validation(public_id):
+    if not _internal_admin():
+        return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
+    if not postgres_enabled():
+        return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    note = str((request.get_json(silent=True) or {}).get("note") or "").strip()
+    try:
+        order = reject_teacher_order_from_admin(
+            str(public_id),
+            os.getenv("BILLING_REVIEW_NOTIFICATION_EMAIL", "secretariat@saleshacking.fr"),
+            note,
+        )
+        return jsonify({"success": True, "order": serialize_order(order, include_project=True)}), 200
+    except BillingError as exc:
+        return _error(exc)
+    except Exception:
+        logger.exception("AI_TEACHER_ADMIN_REJECTION_FAILED order_id=%s", public_id)
+        return jsonify({"success": False, "error": "Impossible de refuser la demande."}), 500
+
+
 @billing_bp.get("/api/hr/billing/catalog")
 def get_billing_catalog():
     center_id = _center_id()
@@ -155,6 +238,36 @@ def get_billing_history():
         return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
     try:
         return jsonify({"success": True, "orders": billing_history(center_id)}), 200
+    except BillingError as exc:
+        return _error(exc)
+
+
+@billing_bp.get("/api/hr/messages")
+def get_center_messages():
+    center_id = _center_id()
+    if not center_id:
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    if not postgres_enabled():
+        return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    try:
+        return jsonify({"success": True, **center_message_inbox(center_id)}), 200
+    except BillingError as exc:
+        return _error(exc)
+    except Exception:
+        logger.exception("CENTER_MESSAGE_INBOX_FAILED center_id=%s", center_id)
+        return jsonify({"success": False, "error": "Impossible de charger la messagerie."}), 500
+
+
+@billing_bp.post("/api/hr/messages/<uuid:public_id>/seen")
+def see_center_message(public_id):
+    center_id = _center_id()
+    if not center_id:
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    try:
+        return jsonify({
+            "success": True,
+            "message": mark_center_message_seen(str(public_id), center_id),
+        }), 200
     except BillingError as exc:
         return _error(exc)
 

@@ -317,7 +317,8 @@ def approve_order_review(public_id: str, reviewed_by: str) -> dict[str, Any] | N
                 UPDATE ai_teacher_orders
                 SET review_status = 'approved', status = 'awaiting_payment',
                     payment_status = 'awaiting_payment', reviewed_at = NOW(),
-                    reviewed_by = %s, updated_at = NOW()
+                    reviewed_by = %s, admin_seen_at = COALESCE(admin_seen_at, NOW()),
+                    center_seen_at = NULL, updated_at = NOW()
                 WHERE id = %s
                 RETURNING *
                 """,
@@ -334,7 +335,9 @@ def reject_order_review(public_id: str, reviewed_by: str, note: str = "") -> dic
                 UPDATE ai_teacher_orders
                 SET review_status = 'rejected', status = 'rejected',
                     payment_status = 'not_requested', reviewed_at = NOW(),
-                    reviewed_by = %s, review_note = %s, updated_at = NOW()
+                    reviewed_by = %s, review_note = %s,
+                    admin_seen_at = COALESCE(admin_seen_at, NOW()),
+                    center_seen_at = NULL, updated_at = NOW()
                 WHERE public_id = %s AND review_status = 'pending'
                 RETURNING *
                 """,
@@ -398,6 +401,79 @@ def list_center_billing_orders(center_account_id: int) -> list[dict[str, Any]]:
             return list(cur.fetchall())
 
 
+def list_teacher_order_reviews(*, limit: int = 100) -> list[dict[str, Any]]:
+    """Return the internal review inbox across every training centre."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT teacher_order.*, center.username AS center_email,
+                       center.center_name
+                FROM ai_teacher_orders AS teacher_order
+                JOIN training_center_accounts AS center
+                  ON center.id = teacher_order.center_account_id
+                WHERE teacher_order.review_status IN ('pending', 'approved', 'rejected')
+                ORDER BY
+                  CASE teacher_order.review_status WHEN 'pending' THEN 0 ELSE 1 END,
+                  teacher_order.created_at DESC,
+                  teacher_order.id DESC
+                LIMIT %s
+                """,
+                (max(1, min(int(limit), 250)),),
+            )
+            return list(cur.fetchall())
+
+
+def mark_teacher_order_admin_seen(public_id: str) -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET admin_seen_at = COALESCE(admin_seen_at, NOW())
+                WHERE public_id = %s
+                RETURNING *
+                """,
+                (str(public_id),),
+            )
+            return cur.fetchone()
+
+
+def list_center_order_messages(center_account_id: int, *, limit: int = 100) -> list[dict[str, Any]]:
+    """Return one durable conversation item per teacher request."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_teacher_orders
+                WHERE center_account_id = %s
+                ORDER BY updated_at DESC, id DESC
+                LIMIT %s
+                """,
+                (int(center_account_id), max(1, min(int(limit), 250))),
+            )
+            return list(cur.fetchall())
+
+
+def mark_center_order_message_seen(
+    public_id: str,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET center_seen_at = NOW()
+                WHERE public_id = %s AND center_account_id = %s
+                RETURNING *
+                """,
+                (str(public_id), int(center_account_id)),
+            )
+            return cur.fetchone()
+
+
 def get_order_by_pipeline_job_id(
     pipeline_job_id: int,
     *,
@@ -433,7 +509,7 @@ def mark_order_pipeline_resume_requested(
                 """
                 UPDATE ai_teacher_orders
                 SET status = 'fulfilling', fulfillment_status = 'running',
-                    last_error = NULL, updated_at = NOW()
+                    last_error = NULL, center_seen_at = NULL, updated_at = NOW()
                 WHERE id = %s
                   AND pipeline_job_id = %s
                   AND payment_status IN ('paid', 'not_required')
@@ -518,7 +594,7 @@ def complete_order_pipeline_fulfillment(
                 SET status = 'fulfilled', fulfillment_status = 'fulfilled',
                     platform_id = %s, pipeline_job_id = %s,
                     fulfilled_at = COALESCE(fulfilled_at, NOW()),
-                    last_error = NULL, updated_at = NOW()
+                    last_error = NULL, center_seen_at = NULL, updated_at = NOW()
                 WHERE id = %s
                   AND payment_status IN ('paid', 'not_required')
                   AND fulfillment_status != 'fulfilled'
@@ -560,7 +636,7 @@ def fail_order_pipeline_fulfillment(
                 """
                 UPDATE ai_teacher_orders
                 SET status = 'fulfillment_failed', fulfillment_status = 'failed',
-                    last_error = %s, updated_at = NOW()
+                    last_error = %s, center_seen_at = NULL, updated_at = NOW()
                 WHERE id = %s
                   AND payment_status IN ('paid', 'not_required')
                   AND fulfillment_status != 'fulfilled'
@@ -652,7 +728,7 @@ def apply_stripe_webhook_event(event: dict[str, Any]) -> bool:
                             charged_amount_cents = %s,
                             paid_at = COALESCE(paid_at, NOW()),
                             authorized_at = COALESCE(authorized_at, NOW()),
-                            last_error = NULL, updated_at = NOW()
+                            last_error = NULL, center_seen_at = NULL, updated_at = NOW()
                         WHERE id = %s
                           AND authorization_kind = 'stripe'
                           AND payment_status IN ('awaiting_payment', 'processing', 'paid')

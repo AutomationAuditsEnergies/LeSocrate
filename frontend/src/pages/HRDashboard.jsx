@@ -85,6 +85,51 @@ const formatPrice = (amountCents, currency = 'eur') => (
 
 const PLATFORM_LOAD_TIMEOUT_MS = 30000
 
+// Fixtures purement visuelles pour travailler le roster en local sans recopier
+// de données réelles. Elles ne sont utilisées qu'en mode Vite DEV.
+const buildLocalDesignTeachers = () => {
+  const nextSession = new Date()
+  nextSession.setDate(nextSession.getDate() + 1)
+  nextSession.setHours(9, 0, 0, 0)
+  const scheduledAt = nextSession.toISOString()
+
+  return [
+    {
+      id: -101,
+      center_platform_number: 1,
+      name: 'TP CRCD',
+      teacher_name: 'Pierre',
+      source_tp_name: 'TP CRCD',
+      teacher_color: 'violet',
+      active: true,
+      status: 'ready',
+      lifecycle_status: 'archived',
+      total_session_count: 0,
+      remaining_session_count: 0,
+      teacher_preparation: { status: 'ready', progress: 100, stage: 'Professeur prêt' },
+      course_schedule: { next_session: null, upcoming_sessions: [] },
+    },
+    {
+      id: -102,
+      center_platform_number: 2,
+      name: 'TP EC',
+      teacher_name: 'oktest',
+      source_tp_name: 'TP EC',
+      teacher_color: 'violet',
+      active: true,
+      status: 'ready',
+      lifecycle_status: 'active',
+      total_session_count: 5,
+      remaining_session_count: 4,
+      teacher_preparation: { status: 'ready', progress: 100, stage: 'Professeur prêt' },
+      course_schedule: {
+        next_session: { id: -1001, session_index: 2, scheduled_at: scheduledAt, audio_status: 'scheduled' },
+        upcoming_sessions: [{ id: -1001, session_index: 2, scheduled_at: scheduledAt, audio_status: 'scheduled' }],
+      },
+    },
+  ]
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function HRDashboard() {
   const [platforms, setPlatforms] = useState([])
@@ -147,7 +192,7 @@ export default function HRDashboard() {
   const [teacherRosterFilter, setTeacherRosterFilter] = useState('all')
   const [workspaceSection, setWorkspaceSection] = useState(() => {
     const savedSection = localStorage.getItem('center_workspace_section')
-    return ['recruit', 'teachers', 'schedule-templates', 'ai-voices'].includes(savedSection)
+    return ['recruit', 'teachers', 'schedule-templates', 'ai-voices', 'messages'].includes(savedSection)
       ? savedSection
       : 'recruit'
   })
@@ -164,6 +209,10 @@ export default function HRDashboard() {
   const [failedTeacherOrderId, setFailedTeacherOrderId] = useState(null)
   const [retryingTeacherOrderId, setRetryingTeacherOrderId] = useState(null)
   const [orderNotice, setOrderNotice] = useState(null)
+  const [centerMessages, setCenterMessages] = useState([])
+  const [messagesUnreadCount, setMessagesUnreadCount] = useState(0)
+  const [messagesLoading, setMessagesLoading] = useState(true)
+  const [messagesError, setMessagesError] = useState('')
   const [showMobileSettings, setShowMobileSettings] = useState(false)
   const CARDS_PER_PAGE = 10
 
@@ -198,13 +247,19 @@ export default function HRDashboard() {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data = await resp.json()
       if (data.success) {
-        setPlatforms(data.platforms)
+        const loadedPlatforms = data.platforms || []
+        setPlatforms(import.meta.env.DEV ? [...buildLocalDesignTeachers(), ...loadedPlatforms] : loadedPlatforms)
       } else {
         setPlatformsErrorTone('error')
         setPlatformsError(data.error || 'Impossible de charger les plateformes.')
       }
     } catch (e) {
       console.error('Erreur chargement plateformes:', e)
+      if (import.meta.env.DEV) {
+        setPlatforms(buildLocalDesignTeachers())
+        setPlatformsError('')
+        return
+      }
       setPlatformsErrorTone(e.name === 'AbortError' ? 'warning' : 'error')
       setPlatformsError(
         e.name === 'AbortError'
@@ -362,6 +417,27 @@ export default function HRDashboard() {
     fetchPlatforms()
     fetchAiVoices()
   }, [])
+
+  const fetchCenterMessages = useCallback(async () => {
+    try {
+      const response = await apiFetch('/api/hr/messages')
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok || !payload.success) throw new Error(payload.error || 'Chargement impossible')
+      setCenterMessages(payload.messages || [])
+      setMessagesUnreadCount(Number(payload.unread_count || 0))
+      setMessagesError('')
+    } catch (requestError) {
+      setMessagesError(requestError.message || 'Impossible de charger la messagerie.')
+    } finally {
+      setMessagesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchCenterMessages()
+    const timer = window.setInterval(() => void fetchCenterMessages(), 20000)
+    return () => window.clearInterval(timer)
+  }, [fetchCenterMessages])
 
   useEffect(() => {
     let cancelled = false
@@ -883,6 +959,24 @@ export default function HRDashboard() {
     setModuleSearchQuery('')
   }
 
+  const showMessagesView = () => {
+    setWorkspaceSection('messages')
+    setShowModulesModal(false)
+    setShowCreateModal(false)
+    setRecruitmentPrefilled(false)
+    setModuleSearchQuery('')
+    void fetchCenterMessages()
+  }
+
+  const markCenterMessageSeen = async (messageId) => {
+    const wasUnread = centerMessages.some((message) => message.id === messageId && !message.read)
+    setCenterMessages((current) => current.map((message) => (
+      message.id === messageId ? { ...message, read: true } : message
+    )))
+    if (wasUnread) setMessagesUnreadCount((current) => Math.max(0, current - 1))
+    await apiFetch(`/api/hr/messages/${messageId}/seen`, { method: 'POST' }).catch(() => {})
+  }
+
   const createTemplateFromFormationDraft = (calendarState) => {
     if (templateRedirectTimerRef.current) return
     const scheduleDraft = {
@@ -1138,6 +1232,7 @@ export default function HRDashboard() {
         setShowCreateModal(false)
         resetCreateForm()
         setShowModulesModal(false)
+        void fetchCenterMessages()
       } else {
         throw new Error(data.error || data.message || 'Impossible de lancer la commande.')
       }
@@ -1224,6 +1319,7 @@ export default function HRDashboard() {
   const recruitmentAssistantVisible = !showModulesModal && !showCreateModal && workspaceSection === 'recruit'
   const scheduleTemplatesVisible = !showModulesModal && !showCreateModal && workspaceSection === 'schedule-templates'
   const aiVoicesVisible = !showModulesModal && !showCreateModal && workspaceSection === 'ai-voices'
+  const messagesVisible = !showModulesModal && !showCreateModal && workspaceSection === 'messages'
   const centerAccountEmail = localStorage.getItem('center_account_email') || 'Compte centre'
   const centerAccountName = localStorage.getItem('center_account_name') || 'Centre de formation'
 
@@ -1238,19 +1334,23 @@ export default function HRDashboard() {
           onShowRecruit={showRecruitView}
           onShowScheduleTemplates={showScheduleTemplatesView}
           onShowAiVoices={showAiVoicesView}
+          onShowMessages={showMessagesView}
+          messagesUnreadCount={messagesUnreadCount}
           onLogout={handleLogout}
           loggingOut={loggingOut}
         />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex h-14 items-center justify-between border-b px-4 md:hidden" style={{ borderColor: colors.borderLight, backgroundColor: colors.cardBg }}>
-            <span className="min-w-0 truncate pr-2 text-sm font-semibold" style={{ color: colors.text }}>
+            <span className="hidden min-w-0 truncate pr-2 text-sm font-semibold min-[520px]:block" style={{ color: colors.text }}>
               {workspaceSection === 'teachers'
                 ? 'Mes professeurs'
                 : workspaceSection === 'schedule-templates'
                   ? 'Organisation des cours'
                   : workspaceSection === 'ai-voices'
                     ? 'Mes voix IA'
+                    : workspaceSection === 'messages'
+                      ? 'Messagerie'
                   : 'Recruter un professeur'}
             </span>
             <div className="flex shrink-0 items-center gap-1">
@@ -1296,6 +1396,17 @@ export default function HRDashboard() {
               </button>
               <button
                 type="button"
+                onClick={showMessagesView}
+                className="relative flex h-11 w-11 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
+                aria-label="Messagerie"
+                aria-current={workspaceSection === 'messages' ? 'page' : undefined}
+                style={{ color: '#3F3F46', backgroundColor: workspaceSection === 'messages' ? '#E9E9E7' : 'transparent' }}
+              >
+                <Mail size={18} strokeWidth={1.7} aria-hidden="true" />
+                {messagesUnreadCount > 0 && <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-[#18181B] ring-2 ring-white" />}
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowMobileSettings(true)}
                 className="flex h-11 w-11 items-center justify-center rounded-lg text-[#3F3F46] transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50"
                 aria-label="Paramètres du compte"
@@ -1308,7 +1419,7 @@ export default function HRDashboard() {
         <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white ${
           showCreateModal
             ? 'overflow-hidden'
-            : `px-4 sm:px-6 lg:px-8 ${scheduleTemplatesVisible ? 'overflow-hidden' : teacherRosterVisible || recruitmentAssistantVisible || aiVoicesVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`
+            : `px-4 sm:px-6 lg:px-8 ${scheduleTemplatesVisible ? 'overflow-hidden' : teacherRosterVisible || recruitmentAssistantVisible || aiVoicesVisible || messagesVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`
         }`}>
           <div className={`mx-auto flex h-full min-h-0 w-full flex-col ${
             showCreateModal ? 'max-w-none' : 'max-w-[1480px] pt-4 md:pt-6'
@@ -1461,6 +1572,15 @@ export default function HRDashboard() {
             />
           ) : workspaceSection === 'ai-voices' ? (
             <AIVoicesView onVoicesChange={setAiVoices} />
+          ) : workspaceSection === 'messages' ? (
+            <CenterMessagesPanel
+              messages={centerMessages}
+              loading={messagesLoading}
+              error={messagesError}
+              onRetry={fetchCenterMessages}
+              onOpen={markCenterMessageSeen}
+              onShowTeachers={showDashboardView}
+            />
           ) : (
             <PlatformCardsView
               platforms={platforms}
@@ -1928,6 +2048,108 @@ export default function HRDashboard() {
   )
 }
 
+function CenterMessagesPanel({ messages, loading, error, onRetry, onOpen, onShowTeachers }) {
+  const [selectedId, setSelectedId] = useState(null)
+
+  useEffect(() => {
+    if (!messages.length) {
+      setSelectedId(null)
+      return
+    }
+    setSelectedId((current) => (
+      messages.some((message) => message.id === current) ? current : messages[0].id
+    ))
+  }, [messages])
+
+  const selected = messages.find((message) => message.id === selectedId) || messages[0] || null
+  useEffect(() => {
+    if (selected && !selected.read) void onOpen(selected.id)
+  }, [selected?.id, selected?.read])
+
+  const openMessage = (message) => {
+    setSelectedId(message.id)
+    if (!message.read) void onOpen(message.id)
+  }
+
+  if (loading) {
+    return <div className="flex h-full items-center justify-center"><AppLoader label="Chargement de la messagerie" /></div>
+  }
+
+  return (
+    <section className="flex h-full min-h-0 flex-col" aria-labelledby="center-messages-title">
+      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-[#E9E9EC] pb-4">
+        <div>
+          <h1 id="center-messages-title" className="text-xl font-semibold tracking-tight text-[#18181B]">Messagerie</h1>
+          <p className="mt-1 text-sm text-[#6B6B72]">Suivez ici la validation et la préparation de vos professeurs.</p>
+        </div>
+        <button type="button" onClick={onRetry} className="flex min-h-10 items-center gap-2 rounded-lg border border-[#D9D9DE] px-3 text-sm font-medium text-[#3F3F46] hover:bg-[#F5F5F6]">
+          <Icon name="refresh" className="text-base" /> Actualiser
+        </button>
+      </header>
+
+      {error && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={onRetry} className="font-semibold">Réessayer</button>
+        </div>
+      )}
+
+      {messages.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#F1F1EF] text-[#5F5E5A]"><Mail size={21} aria-hidden="true" /></span>
+          <h2 className="mt-4 text-base font-semibold text-[#18181B]">Aucun message pour le moment</h2>
+          <p className="mt-1 max-w-sm text-sm leading-6 text-[#6B6B72]">Les confirmations liées à vos demandes de professeurs apparaîtront ici.</p>
+        </div>
+      ) : (
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(280px,390px)_1fr]">
+          <div className="max-h-[36dvh] overflow-y-auto border-b border-[#E9E9EC] lg:max-h-none lg:border-b-0 lg:border-r">
+            {messages.map((message) => (
+              <button
+                key={message.id}
+                type="button"
+                onClick={() => openMessage(message)}
+                className="flex w-full items-start gap-3 border-b border-[#EFEFF1] px-3 py-4 text-left transition-colors hover:bg-[#F8F8F7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#18181B]/40 sm:px-4"
+                style={{ backgroundColor: selected?.id === message.id ? '#F4F4F2' : '#fff' }}
+              >
+                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${message.read ? 'bg-transparent' : 'bg-[#18181B]'}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-[#18181B]">{message.title}</span>
+                  <span className="mt-1 block truncate text-xs text-[#6B6B72]">{message.training_title}</span>
+                  <span className="mt-1 block text-[11px] text-[#8A8A91]">{formatRelativeTime(message.updated_at) || 'À l’instant'}</span>
+                </span>
+                <Icon name="chevron_right" className="mt-0.5 text-base text-[#A1A1AA]" />
+              </button>
+            ))}
+          </div>
+
+          <article className="min-h-0 overflow-y-auto px-2 py-6 sm:px-6 lg:px-10 lg:py-8">
+            {selected && (
+              <div className="mx-auto max-w-2xl">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#18181B] text-white">
+                  <Mail size={19} aria-hidden="true" />
+                </div>
+                <p className="mt-5 text-xs text-[#6B6B72]">{formatScheduleDateTime(selected.updated_at)}</p>
+                <h2 className="mt-2 text-xl font-semibold tracking-tight text-[#18181B]">{selected.title}</h2>
+                <p className="mt-3 max-w-[68ch] text-sm leading-6 text-[#3F3F46]">{selected.body}</p>
+                <div className="mt-6 rounded-xl bg-[#F7F7F5] px-4 py-4">
+                  <p className="text-xs text-[#6B6B72]">Demande concernée</p>
+                  <p className="mt-1 text-sm font-semibold text-[#18181B]">{selected.teacher_name}</p>
+                  <p className="mt-0.5 text-sm text-[#5F5E5A]">{selected.training_title}</p>
+                </div>
+                {selected.action === 'teachers' && (
+                  <button type="button" onClick={onShowTeachers} className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white">
+                    Voir mes professeurs <Icon name="arrow_forward" className="text-base" />
+                  </button>
+                )}
+              </div>
+            )}
+          </article>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function CenterWorkspaceSidebar({
   colors,
   activeSection,
@@ -1936,6 +2158,8 @@ function CenterWorkspaceSidebar({
   onShowRecruit,
   onShowScheduleTemplates,
   onShowAiVoices,
+  onShowMessages,
+  messagesUnreadCount,
   onLogout,
   loggingOut,
 }) {
@@ -1960,6 +2184,7 @@ function CenterWorkspaceSidebar({
     { id: 'teachers', label: 'Mes professeurs', icon: UsersRound, onClick: onShowTeachers },
     { id: 'schedule-templates', label: 'Organisation des cours', icon: CalendarDays, onClick: onShowScheduleTemplates },
     { id: 'ai-voices', label: 'Mes voix IA', icon: AudioWaveform, onClick: onShowAiVoices },
+    { id: 'messages', label: 'Messagerie', icon: Mail, onClick: onShowMessages, badge: messagesUnreadCount },
   ]
 
   useEffect(() => {
@@ -2026,7 +2251,7 @@ function CenterWorkspaceSidebar({
               type="button"
               onClick={item.onClick}
               aria-current={selected ? 'page' : undefined}
-              className={`flex min-h-11 w-full items-center rounded-md py-1.5 text-left text-sm font-medium transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-2'}`}
+              className={`relative flex min-h-11 w-full items-center rounded-md py-1.5 text-left text-sm font-medium transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-2'}`}
               style={{
                 backgroundColor: selected ? '#E9E9E7' : 'transparent',
                 color: selected ? '#191918' : '#5F5E5A',
@@ -2035,6 +2260,11 @@ function CenterWorkspaceSidebar({
             >
               <NavIcon size={17} strokeWidth={selected ? 1.8 : 1.6} aria-hidden="true" />
               {!collapsed && <span>{item.label}</span>}
+              {item.badge > 0 && (
+                <span className={`${collapsed ? 'absolute right-2 top-2 h-2 w-2 p-0' : 'ml-auto px-1.5 py-0.5'} rounded-full bg-[#18181B] text-[10px] font-semibold text-white`}>
+                  {!collapsed && item.badge}
+                </span>
+              )}
             </button>
           )
         })}

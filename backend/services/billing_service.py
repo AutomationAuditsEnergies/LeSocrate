@@ -23,6 +23,10 @@ from repositories.billing_repository import (
     get_order,
     get_reusable_module,
     list_center_billing_orders,
+    list_center_order_messages,
+    list_teacher_order_reviews,
+    mark_center_order_message_seen,
+    mark_teacher_order_admin_seen,
     mark_order_notification_sent,
     record_webhook_failure,
     reject_order_review,
@@ -533,6 +537,140 @@ def billing_history(center_account_id: int) -> list[dict[str, Any]]:
     return [serialize_order(order) for order in list_center_billing_orders(center_account_id)]
 
 
+def _teacher_name(order: dict[str, Any]) -> str:
+    project = order.get("request_payload_json") or {}
+    return str(project.get("teacher_name") or "Professeur IA").strip() or "Professeur IA"
+
+
+def _training_day_count(order: dict[str, Any]) -> int:
+    return training_days_for_order(order)
+
+
+def serialize_review_request(order: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **serialize_order(order),
+        "teacher_name": _teacher_name(order),
+        "training_days": _training_day_count(order),
+        "center_name": order.get("center_name") or "Centre de formation",
+        "center_email": order.get("center_email") or "",
+        "internal_api_cost_cents": order.get("internal_api_cost_cents"),
+        "review_note": order.get("review_note") or "",
+        "reviewed_at": order.get("reviewed_at"),
+        "reviewed_by": order.get("reviewed_by"),
+        "unread": order.get("admin_seen_at") is None,
+    }
+
+
+def admin_review_inbox() -> dict[str, Any]:
+    orders = [serialize_review_request(order) for order in list_teacher_order_reviews()]
+    return {
+        "requests": orders,
+        "unread_count": sum(1 for order in orders if order["unread"]),
+        "pending_count": sum(1 for order in orders if order["review_status"] == "pending"),
+        "deepseek_url": os.getenv(
+            "AI_TEXT_API_RECHARGE_URL", "https://platform.deepseek.com/top_up"
+        ),
+        "audio_url": os.getenv(
+            "AI_AUDIO_API_RECHARGE_URL", "https://fish.audio/app/credits/"
+        ),
+    }
+
+
+def mark_admin_review_seen(public_id: str) -> dict[str, Any]:
+    order = mark_teacher_order_admin_seen(public_id)
+    if not order:
+        raise BillingError("Demande introuvable.", status_code=404)
+    return serialize_order(order)
+
+
+def _center_message_copy(order: dict[str, Any]) -> tuple[str, str, str, str | None]:
+    teacher = _teacher_name(order)
+    review_status = order.get("review_status")
+    payment_status = order.get("payment_status")
+    fulfillment_status = order.get("fulfillment_status")
+    if fulfillment_status == "fulfilled":
+        return (
+            f"{teacher} est disponible",
+            f"Votre demande pour le professeur {teacher} a bien été acceptée. Il est maintenant disponible dans l’onglet Mes professeurs.",
+            "success",
+            "teachers",
+        )
+    if fulfillment_status == "failed":
+        return (
+            f"Préparation de {teacher} interrompue",
+            "Votre paiement est conservé. Vous pouvez relancer la préparation sans effectuer un nouveau paiement.",
+            "error",
+            "teachers",
+        )
+    if payment_status == "paid":
+        return (
+            f"{teacher} est en préparation",
+            "Le paiement est confirmé. Les cours sont en cours de préparation et le professeur apparaîtra automatiquement dans Mes professeurs.",
+            "info",
+            "teachers",
+        )
+    if review_status == "approved":
+        return (
+            "Votre demande est acceptée",
+            f"La demande pour {teacher} a été validée. Le lien de paiement sécurisé vous a été envoyé par e-mail.",
+            "success",
+            None,
+        )
+    if review_status == "rejected":
+        note = str(order.get("review_note") or "").strip()
+        suffix = f" Motif : {note}" if note else ""
+        return (
+            "Votre demande n’a pas été acceptée",
+            f"Aucun paiement ne sera demandé pour {teacher}.{suffix}",
+            "warning",
+            None,
+        )
+    return (
+        "Demande reçue",
+        f"La demande pour {teacher} est en cours de vérification. Vous recevrez un message dès qu’une décision sera prise.",
+        "info",
+        None,
+    )
+
+
+def serialize_center_message(order: dict[str, Any]) -> dict[str, Any]:
+    title, body, tone, action = _center_message_copy(order)
+    return {
+        "id": str(order["public_id"]),
+        "order_id": str(order["public_id"]),
+        "title": title,
+        "body": body,
+        "tone": tone,
+        "action": action,
+        "teacher_name": _teacher_name(order),
+        "training_title": order.get("training_title"),
+        "review_status": order.get("review_status"),
+        "payment_status": order.get("payment_status"),
+        "fulfillment_status": order.get("fulfillment_status"),
+        "created_at": order.get("created_at"),
+        "updated_at": order.get("updated_at"),
+        "read": order.get("center_seen_at") is not None,
+    }
+
+
+def center_message_inbox(center_account_id: int) -> dict[str, Any]:
+    messages = [
+        serialize_center_message(order)
+        for order in list_center_order_messages(center_account_id)
+    ]
+    return {
+        "messages": messages,
+        "unread_count": sum(1 for message in messages if not message["read"]),
+    }
+
+
+def mark_center_message_seen(public_id: str, center_account_id: int) -> dict[str, Any]:
+    order = mark_center_order_message_seen(public_id, center_account_id)
+    if not order:
+        raise BillingError("Message introuvable.", status_code=404)
+    return serialize_center_message(order)
+
+
 def get_center_invoice_link(public_id: str, center_account_id: int) -> dict[str, str]:
     """Resolve a hosted Stripe invoice, with the card receipt as a fallback."""
     order = get_center_order(public_id, center_account_id)
@@ -934,6 +1072,31 @@ def approve_teacher_order_review(public_id: str, token: str) -> dict[str, Any]:
     return {**result, "payment_email_sent": payment_email_sent}
 
 
+def approve_teacher_order_from_admin(
+    public_id: str,
+    reviewed_by: str = "admin",
+) -> dict[str, Any]:
+    """Approve from the authenticated internal inbox, without an e-mail token."""
+    current = get_order(public_id)
+    if not current:
+        raise BillingError("Demande introuvable.", status_code=404)
+    if current.get("review_status") != "pending":
+        raise BillingError("Cette demande a déjà été traitée.", status_code=409)
+    order = approve_order_review(public_id, reviewed_by)
+    if not order or order.get("review_status") != "approved":
+        raise BillingError("Cette demande ne peut plus être approuvée.", status_code=409)
+    center = get_center_billing_account(int(order["center_account_id"]))
+    if not center:
+        raise BillingError("Centre introuvable.", status_code=404)
+    result = _create_checkout_for_order(order, center)
+    payment_email_sent = send_payment_link(
+        result["order"], center, result["checkout_url"]
+    )
+    if payment_email_sent:
+        mark_order_notification_sent(int(order["id"]), "payment_email_sent_at")
+    return {**result, "payment_email_sent": payment_email_sent}
+
+
 def reject_teacher_order_review(public_id: str, token: str, note: str = "") -> dict[str, Any]:
     validate_review_token(public_id, token)
     order = reject_order_review(
@@ -941,6 +1104,22 @@ def reject_teacher_order_review(public_id: str, token: str, note: str = "") -> d
         os.getenv("BILLING_REVIEW_NOTIFICATION_EMAIL", "secretariat@saleshacking.fr"),
         note,
     )
+    if not order:
+        raise BillingError("Demande introuvable.", status_code=404)
+    return order
+
+
+def reject_teacher_order_from_admin(
+    public_id: str,
+    reviewed_by: str = "admin",
+    note: str = "",
+) -> dict[str, Any]:
+    current = get_order(public_id)
+    if not current:
+        raise BillingError("Demande introuvable.", status_code=404)
+    if current.get("review_status") != "pending":
+        raise BillingError("Cette demande a déjà été traitée.", status_code=409)
+    order = reject_order_review(public_id, reviewed_by, note)
     if not order:
         raise BillingError("Demande introuvable.", status_code=404)
     return order

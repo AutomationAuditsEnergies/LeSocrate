@@ -29,6 +29,7 @@ const Landing = lazy(() => import('./pages/Landing.jsx'))
 const Video = lazy(loadVideoPage)
 const TestSlides = lazy(() => import('./pages/TestSlides.jsx'))
 const HRDashboard = lazy(loadHRDashboardPage)
+const AdminValidations = lazy(() => import('./pages/AdminValidations.jsx'))
 const ScheduleConfig = lazy(() => import('./pages/ScheduleConfig.jsx'))
 const FormationPipeline = lazy(() => import('./pages/FormationPipeline.jsx'))
 const ClassEntry = lazy(loadClassEntryPage)
@@ -286,6 +287,14 @@ export default function App() {
             element={
               <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
                 <DebugCours />
+              </ProtectedAdminRoute>
+            }
+          />
+          <Route
+            path="/admin/validations"
+            element={
+              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
+                <AdminValidations />
               </ProtectedAdminRoute>
             }
           />
