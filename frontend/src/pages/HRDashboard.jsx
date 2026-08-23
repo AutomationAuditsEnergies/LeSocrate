@@ -2277,7 +2277,7 @@ function CenterWorkspaceSidebar({
               <NavIcon size={17} strokeWidth={selected ? 1.8 : 1.6} aria-hidden="true" />
               {!collapsed && <span>{item.label}</span>}
               {item.badge > 0 && (
-                <span className={`${collapsed ? 'absolute right-2 top-2 h-2 w-2 p-0' : 'ml-auto px-1.5 py-0.5'} rounded-full bg-[#18181B] text-[10px] font-semibold text-white`}>
+                <span className={`${collapsed ? 'absolute right-2 top-2 h-2 w-2 p-0' : 'ml-auto flex h-6 w-6 shrink-0 items-center justify-center p-0 tabular-nums'} rounded-full bg-[#18181B] text-[10px] font-semibold leading-none text-white`}>
                   {!collapsed && item.badge}
                 </span>
               )}
