@@ -60,12 +60,12 @@
         50% { opacity: 1; transform: translateY(-2px) scale(1); }
       }
 
-      /* La landing amorce directement son univers graphite. */
+      /* La landing amorce directement sur le même blanc que son premier écran. */
       html.landing-boot #root:empty {
-        background-color: #1c2026;
+        background-color: #ffffff;
       }
       html.landing-boot #root:empty::after {
-        color: #f4f8fc;
+        color: #0f172a;
       }
       @media (prefers-reduced-motion: reduce) {
         #root:empty::before {
@@ -79,6 +79,7 @@
         || (window.location.pathname === '/' && new URLSearchParams(window.location.search).get('p') === '3');
       if (isLanding) {
         document.documentElement.classList.add('landing-boot');
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#ffffff');
       }
     </script>
   </head>

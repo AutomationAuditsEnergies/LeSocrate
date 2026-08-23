@@ -7,9 +7,9 @@ const SURFACES = {
     muted: '#94a3b8',
   },
   landing: {
-    background: '#1c2026',
-    foreground: '#f4f8fc',
-    muted: '#a9b3c1',
+    background: '#ffffff',
+    foreground: '#0f172a',
+    muted: '#64748b',
   },
   light: {
     background: '#F8F7F5',
