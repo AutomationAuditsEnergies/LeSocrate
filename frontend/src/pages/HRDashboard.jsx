@@ -6644,20 +6644,20 @@ function PlatformCard({
             </p>
           </div>
 
-          <ul className="mt-1 space-y-1 text-[11px] leading-[1.45]" style={{ color: colors.textSecondary }}>
-            <li className="flex items-start gap-2">
+          <ul className="mt-1 h-[52px] space-y-1 overflow-hidden text-[11px] leading-[1.45]" style={{ color: colors.textSecondary }}>
+            <li className="flex min-w-0 items-start gap-2">
               <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: rosterMeta.color }} />
-              <span>{rosterMeta.label}{isPreparing ? ` · ${creationProgress}%` : ''}</span>
+              <span className="min-w-0 flex-1 truncate whitespace-nowrap">{rosterMeta.label}{isPreparing ? ` · ${creationProgress}%` : ''}</span>
             </li>
-            <li className="flex items-start gap-2">
+            <li className="flex min-w-0 items-start gap-2">
               <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#6C63FF' }} />
-              <span className="line-clamp-2">
+              <span className="min-w-0 flex-1 truncate whitespace-nowrap" title={nextCourseSession ? `Prochaine séance ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}>
                 {nextCourseSession ? `Prochaine séance ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
               </span>
             </li>
-            <li className="flex items-start gap-2">
+            <li className="flex min-w-0 items-start gap-2">
               <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#6C63FF' }} />
-              <span>{Number(p.remaining_session_count || 0)} séance(s) restante(s)</span>
+              <span className="min-w-0 flex-1 truncate whitespace-nowrap">{Number(p.remaining_session_count || 0)} séance(s) restante(s)</span>
             </li>
           </ul>
 
