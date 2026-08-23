@@ -6466,81 +6466,9 @@ function PlatformCard({
             role="dialog"
             aria-modal="true"
             aria-labelledby={`teacher-details-${p.id}`}
-            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:h-[86vh] sm:max-h-[760px] sm:flex-row"
+            className="relative flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:max-h-[760px]"
             style={{ border: `1px solid ${colors.border}` }}
           >
-            <aside
-              className={`relative shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2 ${activeTool ? 'hidden' : 'flex min-h-[430px]'} flex-col`}
-              style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
-            >
-              <div className="relative min-h-[250px] flex-1 overflow-hidden" style={{ backgroundColor: `${robotTheme.glow}12` }}>
-                <span
-                  className="absolute bottom-[12%] left-1/2 h-8 w-[58%] -translate-x-1/2 rounded-full opacity-20 blur-xl"
-                  style={{ backgroundColor: robotTheme.glow }}
-                  aria-hidden="true"
-                />
-                <img
-                  src={robotTheme.src}
-                  alt=""
-                  draggable={false}
-                  className="teacher-robot-float h-full w-full select-none object-contain px-7 pb-4 pt-10 sm:px-10 sm:pb-5 sm:pt-12"
-                />
-              </div>
-
-              <div
-                className="relative z-10 shrink-0 border-t px-5 py-4 text-left"
-                style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
-              >
-                <p className="text-[11px] font-semibold" style={{ color: colors.textMuted }}>
-                  Prochaines diffusions
-                </p>
-                {upcomingCourseSessions.length > 0 ? (
-                  <>
-                    <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                      Vos prochaines séances seront générées automatiquement 72 heures avant leur début. Vérifiez ensuite que chaque séance a bien été générée.
-                    </p>
-                    <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: colors.textMuted }}>
-                      Prochaines générations
-                    </p>
-                    <div className="mt-1 divide-y" style={{ borderColor: colors.border }}>
-                      {upcomingCourseSessions.map((session) => (
-                        <div key={session.id} className="py-2">
-                          <p className="text-[11px] font-semibold leading-4" style={{ color: colors.text }}>
-                            J{session.session_index} · {formatScheduleLongDateTime(session.scheduled_at)}
-                          </p>
-                          <p className="mt-0.5 text-[11px] leading-4" style={{ color: colors.textSecondary }}>
-                            Génération : {formatScheduleDateTimeOffset(session.scheduled_at, 72)}
-                          </p>
-                          {session.audio_status === 'error' && (
-                            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2.5">
-                              <p className="text-[11px] font-semibold text-red-700">La génération a échoué.</p>
-                              <p className="mt-1 text-[11px] leading-4 text-red-700">
-                                Signalez cette erreur technique. Vous pouvez utiliser un ancien cours pour assurer la séance.
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => openTool(
-                                  actionItems.find((item) => item.key === 'courses'),
-                                  { targetSessionId: session.id },
-                                )}
-                                className="mt-2 min-h-9 rounded-md bg-red-700 px-3 py-1.5 text-[11px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
-                              >
-                                Utiliser un ancien cours
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                    Aucune séance n’est programmée pour le moment.
-                  </p>
-                )}
-              </div>
-            </aside>
-
             <div className="relative min-h-0 flex-1 overflow-hidden" style={{ backgroundColor: colors.cardBg }}>
               <button
                 type="button"
@@ -6711,6 +6639,49 @@ function PlatformCard({
             <span>Accéder au cours</span>
             <Icon name="open_in_new" className="text-base" style={{ color: colors.textMuted }} />
           </a>
+        )}
+
+        {!activeTool && (
+          <section className="mt-5 border-t pt-4" style={{ borderColor: colors.border }}>
+            <p className="text-[11px] font-semibold" style={{ color: colors.textMuted }}>
+              Prochaines diffusions
+            </p>
+            {upcomingCourseSessions.length > 0 ? (
+              <>
+                <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                  Vos prochaines séances seront générées automatiquement 72 heures avant leur début. Vérifiez ensuite que chaque séance a bien été générée.
+                </p>
+                <div className="mt-2 divide-y" style={{ borderColor: colors.border }}>
+                  {upcomingCourseSessions.map((session) => (
+                  <div key={session.id} className="py-2">
+                    <p className="text-[11px] font-semibold leading-4" style={{ color: colors.text }}>
+                      J{session.session_index} · {formatScheduleLongDateTime(session.scheduled_at)}
+                    </p>
+                    <p className="mt-0.5 text-[11px] leading-4" style={{ color: colors.textSecondary }}>
+                      Génération : {formatScheduleDateTimeOffset(session.scheduled_at, 72)}
+                    </p>
+                    {session.audio_status === 'error' && (
+                      <button
+                        type="button"
+                        onClick={() => openTool(
+                          actionItems.find((item) => item.key === 'courses'),
+                          { targetSessionId: session.id },
+                        )}
+                        className="mt-2 min-h-9 rounded-md bg-red-700 px-3 py-1.5 text-[11px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
+                      >
+                        Utiliser un ancien cours
+                      </button>
+                    )}
+                  </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                Aucune séance n’est programmée pour le moment.
+              </p>
+            )}
+          </section>
         )}
       </div>
       ) : (
