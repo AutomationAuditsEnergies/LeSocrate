@@ -1242,7 +1242,7 @@ export default function HRDashboard() {
             ? 'Demande envoyée'
             : billing?.payment_required === false ? 'Préparation lancée' : 'Paiement confirmé',
           message: pendingReview
-            ? 'Notre équipe va vérifier les crédits API nécessaires. Après validation, vous recevrez votre lien de paiement Stripe par e-mail.'
+            ? 'Votre demande a bien été envoyée à nos équipes. Nous la traiterons dans les plus bref délais. Veuillez consulter votre messagerie.'
             : 'Votre professeur IA va apparaître dans Mes professeurs IA et se préparer en arrière-plan.',
         })
         setShowCreateModal(false)
