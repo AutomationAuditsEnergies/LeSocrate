@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
   'utf8',
 )
+const styles = readFileSync(
+  new URL('../../src/index.css', import.meta.url),
+  'utf8',
+)
 
 test('submits teacher orders for review before opening Stripe Checkout', () => {
   assert.match(source, /data\.next_action === 'pending_review'/)
@@ -23,6 +27,16 @@ test('never treats the browser success redirect as payment confirmation', () => 
   assert.match(source, /Ce retour ne vaut pas confirmation/)
   assert.match(source, /webhook Stripe signé/)
   assert.match(source, /order\.payment_status === 'paid'/)
+})
+
+test('welcomes a paid teacher into its roster card with reduced-motion support', () => {
+  assert.match(source, /checkout === 'success'[\s\S]*setWorkspaceSection\('teachers'\)/)
+  assert.match(source, /function TeacherArrivalAnimation/)
+  assert.match(source, /targetRef\.current/)
+  assert.match(source, /teacher-arrival-robot/)
+  assert.match(source, /setNewlyCreatedPlatformId\(order\.platform_id\)/)
+  assert.match(styles, /teacher-card-robot-reveal/)
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*teacher-arrival-layer/)
 })
 
 test('stops tracking cancelled, failed, expired, or refunded payments', () => {
