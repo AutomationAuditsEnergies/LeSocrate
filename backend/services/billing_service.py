@@ -63,7 +63,9 @@ PRODUCTS = {
     },
 }
 
-SERVER_EXEMPT_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
+SERVER_EXEMPT_CENTER_EMAILS = frozenset()
+SERVER_REVIEW_EXEMPT_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
+SERVER_ORDER_REVIEW_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
 WEEKDAY_IDS = {
     "lundi": 0,
     "mardi": 1,
@@ -422,6 +424,35 @@ def _center_is_exempt(center: dict[str, Any]) -> bool:
     )
 
 
+def _center_review_is_exempt(center: dict[str, Any]) -> bool:
+    normalized_username = str(center.get("username") or "").strip().lower()
+    return (
+        _center_is_exempt(center)
+        or normalized_username in SERVER_REVIEW_EXEMPT_CENTER_EMAILS
+    )
+
+
+def center_can_review_orders(center_account_id: int) -> bool:
+    """Grant the cross-centre review inbox only to explicitly trusted centres."""
+    center = get_center_billing_account(center_account_id)
+    if not center or not center.get("is_active"):
+        return False
+    normalized_username = str(center.get("username") or "").strip().lower()
+    return normalized_username in SERVER_ORDER_REVIEW_CENTER_EMAILS
+
+
+def center_can_manage_review(public_id: str, center_account_id: int) -> bool:
+    """Keep delegated reviewers scoped to requests owned by another centre."""
+    order = get_order(public_id)
+    if not order:
+        return False
+    try:
+        owner_center_id = int(order.get("center_account_id"))
+    except (TypeError, ValueError):
+        return False
+    return owner_center_id != int(center_account_id)
+
+
 def _stripe():
     try:
         import stripe
@@ -524,11 +555,16 @@ def billing_context(center_account_id: int) -> dict[str, Any]:
     if not center or not center.get("is_active"):
         raise BillingError("Compte centre introuvable ou désactivé.", status_code=403)
     exempt = _center_is_exempt(center)
+    review_exempt = _center_review_is_exempt(center)
     return {
         "center_account_id": int(center["id"]),
         "billing_mode": "exempt" if exempt else "stripe_required",
         "payment_required": not exempt,
+        "review_required": not review_exempt,
         "exemption_label": "Compte interne, paiement non requis" if exempt else None,
+        "review_exemption_label": (
+            "Compte administrateur, validation non requise" if review_exempt else None
+        ),
         "products": get_product_catalog(),
     }
 
@@ -546,9 +582,57 @@ def _training_day_count(order: dict[str, Any]) -> int:
     return training_days_for_order(order)
 
 
+def _review_schedule_summary(order: Mapping[str, Any]) -> dict[str, Any]:
+    project = order.get("request_payload_json") or {}
+    new_formation = project.get("new_formation")
+    if isinstance(new_formation, Mapping):
+        schedule = new_formation.get("schedule") or {}
+    else:
+        schedule = project.get("schedule") or {}
+    if not isinstance(schedule, Mapping):
+        schedule = {}
+
+    parsed_dates = []
+    for raw_date in schedule.get("selected_dates") or []:
+        try:
+            parsed_dates.append(datetime.fromisoformat(str(raw_date)).date())
+        except (TypeError, ValueError):
+            continue
+    parsed_dates.sort()
+
+    training_days = _training_day_count(dict(order))
+    try:
+        weekly_course_count = int(schedule.get("weekly_course_count") or 0)
+    except (TypeError, ValueError):
+        weekly_course_count = 0
+
+    if parsed_dates:
+        span_days = (parsed_dates[-1] - parsed_dates[0]).days + 1
+        training_weeks = max(1, (span_days + 6) // 7)
+        schedule_start_date = parsed_dates[0].isoformat()
+        schedule_end_date = parsed_dates[-1].isoformat()
+    else:
+        training_weeks = (
+            max(1, (training_days + weekly_course_count - 1) // weekly_course_count)
+            if training_days and weekly_course_count
+            else None
+        )
+        schedule_start_date = str(schedule.get("start_date") or "").strip() or None
+        schedule_end_date = None
+
+    return {
+        "training_weeks": training_weeks,
+        "schedule_start_date": schedule_start_date,
+        "schedule_end_date": schedule_end_date,
+        "weekly_course_count": weekly_course_count or None,
+        "scheduled_dates": [value.isoformat() for value in parsed_dates],
+    }
+
+
 def serialize_review_request(order: dict[str, Any]) -> dict[str, Any]:
     return {
         **serialize_order(order),
+        **_review_schedule_summary(order),
         "teacher_name": _teacher_name(order),
         "training_days": _training_day_count(order),
         "center_name": order.get("center_name") or "Centre de formation",
@@ -561,8 +645,13 @@ def serialize_review_request(order: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def admin_review_inbox() -> dict[str, Any]:
-    orders = [serialize_review_request(order) for order in list_teacher_order_reviews()]
+def admin_review_inbox(*, exclude_center_account_id: int | None = None) -> dict[str, Any]:
+    orders = [
+        serialize_review_request(order)
+        for order in list_teacher_order_reviews(
+            exclude_center_account_id=exclude_center_account_id,
+        )
+    ]
     return {
         "requests": orders,
         "unread_count": sum(1 for order in orders if order["unread"]),
@@ -1150,17 +1239,22 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
     internal_api_cost_cents = int(
         product.get("production_cost_per_day_cents") or _production_cost_per_day_cents()
     ) * training_days
-    exempt = _center_is_exempt(center)
-    if not exempt and not product["configured"]:
+    payment_exempt = _center_is_exempt(center)
+    review_exempt = _center_review_is_exempt(center)
+    if not payment_exempt and not product["configured"]:
         raise BillingError("Le paiement de ce service n’est pas encore configuré.", status_code=503)
 
     order, created = create_order({
         "center_account_id": int(center_account_id),
         "operation_type": operation_type,
         "source_module_id": details["source_module_id"],
-        "status": "authorized" if exempt else "awaiting_review",
-        "payment_status": "not_required" if exempt else "not_requested",
-        "review_status": "not_required" if exempt else "pending",
+        "status": (
+            "authorized" if payment_exempt
+            else "awaiting_payment" if review_exempt
+            else "awaiting_review"
+        ),
+        "payment_status": "not_required" if payment_exempt else "not_requested",
+        "review_status": "not_required" if review_exempt else "pending",
         "training_title": details["training_title"],
         "rncp_code": details["rncp_code"],
         "total_hours": details["total_hours"],
@@ -1171,9 +1265,9 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
         "stripe_price_id": product.get("stripe_price_id"),
         "catalog_amount_cents": catalog_amount_cents,
         "internal_api_cost_cents": internal_api_cost_cents,
-        "charged_amount_cents": 0 if exempt else None,
+        "charged_amount_cents": 0 if payment_exempt else None,
         "currency": product["currency"],
-        "authorization_kind": "center_exemption" if exempt else "stripe",
+        "authorization_kind": "center_exemption" if payment_exempt else "stripe",
     })
     if not created and order["request_fingerprint"] != details["request_fingerprint"]:
         raise BillingError("Cette demande existe déjà avec un autre contenu.", status_code=409)
@@ -1209,7 +1303,7 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
         return {"order": order, "next_action": "track"}
     if order.get("payment_status") in {"paid", "not_required"}:
         return {"order": _enqueue_fulfillment(order), "next_action": "track"}
-    if order.get("review_status") == "approved":
+    if order.get("review_status") in {"approved", "not_required"}:
         checkout = _create_checkout_for_order(order, center)
         return {**checkout, "next_action": "redirect"}
     if not order.get("review_email_sent_at"):

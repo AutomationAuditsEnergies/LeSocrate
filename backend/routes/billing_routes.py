@@ -16,6 +16,8 @@ from services.billing_service import (
     approve_teacher_order_from_admin,
     approve_teacher_order_review,
     center_message_inbox,
+    center_can_manage_review,
+    center_can_review_orders,
     create_teacher_order,
     get_review_order,
     get_center_order,
@@ -51,6 +53,22 @@ def _internal_admin() -> bool:
         session.get("is_admin")
         and str(session.get("admin_account_type") or "").lower()
         in {"legacy_admin", "superadmin"}
+    )
+
+
+def _review_admin_context() -> tuple[bool, int | None]:
+    if _internal_admin():
+        return True, None
+    center_id = _center_id()
+    if center_id and center_can_review_orders(center_id):
+        return True, center_id
+    return False, None
+
+
+def _delegated_review_target_allowed(public_id, reviewing_center_id: int | None) -> bool:
+    return reviewing_center_id is None or center_can_manage_review(
+        str(public_id),
+        reviewing_center_id,
     )
 
 
@@ -149,12 +167,18 @@ def reject_teacher_order_page(public_id):
 
 @billing_bp.get("/api/admin/teacher-order-validations")
 def get_admin_teacher_order_validations():
-    if not _internal_admin():
+    authorized, reviewing_center_id = _review_admin_context()
+    if not authorized:
         return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
     if not postgres_enabled():
         return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
     try:
-        return jsonify({"success": True, **admin_review_inbox()}), 200
+        inbox = (
+            admin_review_inbox()
+            if reviewing_center_id is None
+            else admin_review_inbox(exclude_center_account_id=reviewing_center_id)
+        )
+        return jsonify({"success": True, **inbox}), 200
     except BillingError as exc:
         return _error(exc)
     except Exception:
@@ -164,8 +188,11 @@ def get_admin_teacher_order_validations():
 
 @billing_bp.post("/api/admin/teacher-order-validations/<uuid:public_id>/seen")
 def see_admin_teacher_order_validation(public_id):
-    if not _internal_admin():
+    authorized, reviewing_center_id = _review_admin_context()
+    if not authorized:
         return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
+    if not _delegated_review_target_allowed(public_id, reviewing_center_id):
+        return jsonify({"success": False, "error": "Demande introuvable"}), 404
     try:
         return jsonify({"success": True, "order": mark_admin_review_seen(str(public_id))}), 200
     except BillingError as exc:
@@ -174,8 +201,11 @@ def see_admin_teacher_order_validation(public_id):
 
 @billing_bp.post("/api/admin/teacher-order-validations/<uuid:public_id>/approve")
 def approve_admin_teacher_order_validation(public_id):
-    if not _internal_admin():
+    authorized, reviewing_center_id = _review_admin_context()
+    if not authorized:
         return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
+    if not _delegated_review_target_allowed(public_id, reviewing_center_id):
+        return jsonify({"success": False, "error": "Demande introuvable"}), 404
     if not postgres_enabled():
         return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
     try:
@@ -197,8 +227,11 @@ def approve_admin_teacher_order_validation(public_id):
 
 @billing_bp.post("/api/admin/teacher-order-validations/<uuid:public_id>/reject")
 def reject_admin_teacher_order_validation(public_id):
-    if not _internal_admin():
+    authorized, reviewing_center_id = _review_admin_context()
+    if not authorized:
         return jsonify({"success": False, "error": "Compte administrateur requis"}), 403
+    if not _delegated_review_target_allowed(public_id, reviewing_center_id):
+        return jsonify({"success": False, "error": "Demande introuvable"}), 404
     if not postgres_enabled():
         return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
     note = str((request.get_json(silent=True) or {}).get("note") or "").strip()

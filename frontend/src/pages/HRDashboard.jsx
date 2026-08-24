@@ -34,6 +34,7 @@ import { apiFetch } from '../api'
 import { clearSupabaseSession, getSupabaseClient } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
+import TeacherOrderReviewInbox from '../components/TeacherOrderReviewInbox.jsx'
 import DayScheduleTemplates from './DayScheduleTemplates.jsx'
 import AIVoicesView from './AIVoicesView.jsx'
 import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
@@ -87,6 +88,11 @@ const formatPrice = (amountCents, currency = 'eur') => (
 )
 
 const PLATFORM_LOAD_TIMEOUT_MS = 30000
+const ORDER_REVIEW_CENTER_EMAIL = 'newpiprod@gmail.com'
+const isOrderReviewCenter = () => (
+  String(localStorage.getItem('center_account_email') || '').trim().toLowerCase()
+  === ORDER_REVIEW_CENTER_EMAIL
+)
 
 // Fixtures purement visuelles pour travailler le roster en local sans recopier
 // de données réelles. Elles ne sont utilisées qu'en mode Vite DEV.
@@ -430,10 +436,13 @@ export default function HRDashboard() {
 
   const fetchCenterMessages = useCallback(async () => {
     try {
-      const response = await apiFetch('/api/hr/messages')
+      const reviewMode = isOrderReviewCenter()
+      const response = await apiFetch(
+        reviewMode ? '/api/admin/teacher-order-validations' : '/api/hr/messages',
+      )
       const payload = await response.json().catch(() => ({}))
       if (!response.ok || !payload.success) throw new Error(payload.error || 'Chargement impossible')
-      setCenterMessages(payload.messages || [])
+      setCenterMessages(reviewMode ? [] : (payload.messages || []))
       setMessagesUnreadCount(Number(payload.unread_count || 0))
       setMessagesError('')
     } catch (requestError) {
@@ -1589,13 +1598,17 @@ export default function HRDashboard() {
           ) : workspaceSection === 'ai-voices' ? (
             <AIVoicesView onVoicesChange={setAiVoices} />
           ) : workspaceSection === 'messages' ? (
-            <CenterMessagesPanel
-              messages={centerMessages}
-              loading={messagesLoading}
-              error={messagesError}
-              onRetry={fetchCenterMessages}
-              onOpen={markCenterMessageSeen}
-            />
+            isOrderReviewCenter() ? (
+              <TeacherOrderReviewInbox onUnreadCountChange={setMessagesUnreadCount} />
+            ) : (
+              <CenterMessagesPanel
+                messages={centerMessages}
+                loading={messagesLoading}
+                error={messagesError}
+                onRetry={fetchCenterMessages}
+                onOpen={markCenterMessageSeen}
+              />
+            )
           ) : (
             <PlatformCardsView
               platforms={platforms}
@@ -5400,13 +5413,13 @@ export function CreatePlatformView({
 
           <footer className="create-platform-workspace__identity-actions">
             <div>
-              <p>{paymentRequired ? 'Tarif après validation' : 'Compte interne'}</p>
+              <p>{paymentRequired ? (billing?.review_required === false ? 'Tarif à régler maintenant' : 'Tarif après validation') : 'Compte interne'}</p>
               <strong>{paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}</strong>
             </div>
             <div>
               <button type="button" onClick={onCancel} disabled={creating}>Annuler</button>
               <button type="button" onClick={handleLaunchRequest} disabled={creating || !canCreateTeacher}>
-                {creating ? 'Envoi de la demande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? 'Envoyer la demande' : 'Service temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
+                {creating ? 'Envoi de la demande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? (billing.review_required === false ? 'Continuer vers le paiement' : 'Envoyer la demande') : 'Service temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
               </button>
             </div>
           </footer>

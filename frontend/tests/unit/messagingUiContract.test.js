@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const testDir = path.dirname(fileURLToPath(import.meta.url))
 const srcDir = path.resolve(testDir, '../../src')
 const dashboard = fs.readFileSync(path.join(srcDir, 'pages/HRDashboard.jsx'), 'utf8')
+const reviewInbox = fs.readFileSync(path.join(srcDir, 'components/TeacherOrderReviewInbox.jsx'), 'utf8')
 const adminValidations = fs.readFileSync(path.join(srcDir, 'pages/AdminValidations.jsx'), 'utf8')
 const app = fs.readFileSync(path.join(srcDir, 'App.jsx'), 'utf8')
 
@@ -26,4 +27,16 @@ test('gives the internal admin a protected validation inbox and API credit links
   assert.match(adminValidations, /Fish Audio/)
   assert.match(adminValidations, /DeepSeek/)
   assert.match(adminValidations, /Accepter et envoyer le paiement/)
+})
+
+test('lets only the Lyon review center validate other centers from its messaging tab', () => {
+  assert.match(dashboard, /ORDER_REVIEW_CENTER_EMAIL = 'newpiprod@gmail\.com'/)
+  assert.match(dashboard, /<TeacherOrderReviewInbox/)
+  assert.match(reviewInbox, /api\/admin\/teacher-order-validations/)
+  assert.match(reviewInbox, /pour les autres centres/)
+  assert.match(reviewInbox, /training_weeks/)
+  assert.match(reviewInbox, /training_days/)
+  assert.match(reviewInbox, /Recharger Fish Audio/)
+  assert.match(reviewInbox, /Recharger DeepSeek/)
+  assert.match(reviewInbox, /Valider et envoyer le paiement/)
 })

@@ -41,11 +41,35 @@ class BillingMessageRoutesTest(unittest.TestCase):
 
     def test_training_center_cannot_open_internal_validation_inbox(self):
         self._login("training_center", 42)
-        with patch.object(billing_routes, "admin_review_inbox") as inbox:
+        with patch.object(
+            billing_routes, "center_can_review_orders", return_value=False
+        ), patch.object(billing_routes, "admin_review_inbox") as inbox:
             response = self.client.get("/api/admin/teacher-order-validations")
 
         self.assertEqual(response.status_code, 403, response.get_json())
         inbox.assert_not_called()
+
+    def test_privileged_center_can_review_requests_from_other_centers(self):
+        self._login("training_center", 42)
+        inbox = {
+            "requests": [{"id": str(self.public_id), "review_status": "pending"}],
+            "unread_count": 1,
+            "pending_count": 1,
+            "deepseek_url": "https://deepseek.test",
+            "audio_url": "https://audio.test",
+        }
+        with patch.object(
+            billing_routes, "center_can_review_orders", return_value=True
+        ) as can_review, patch.object(
+            billing_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            billing_routes, "admin_review_inbox", return_value=inbox
+        ) as review_inbox:
+            response = self.client.get("/api/admin/teacher-order-validations")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        can_review.assert_called_once_with(42)
+        review_inbox.assert_called_once_with(exclude_center_account_id=42)
 
     def test_internal_admin_approval_uses_the_authenticated_endpoint(self):
         self._login("legacy_admin")
@@ -63,6 +87,44 @@ class BillingMessageRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertTrue(response.get_json()["payment_email_sent"])
         approve.assert_called_once()
+
+    def test_privileged_center_can_approve_a_review_request(self):
+        self._login("training_center", 42)
+        with patch.object(
+            billing_routes, "center_can_review_orders", return_value=True
+        ), patch.object(
+            billing_routes, "center_can_manage_review", return_value=True
+        ), patch.object(
+            billing_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            billing_routes,
+            "approve_teacher_order_from_admin",
+            return_value={"order": {"public_id": self.public_id}, "payment_email_sent": True},
+        ) as approve, patch.object(
+            billing_routes, "serialize_order", return_value={"id": str(self.public_id)}
+        ):
+            response = self.client.post(
+                f"/api/admin/teacher-order-validations/{self.public_id}/approve"
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        approve.assert_called_once()
+
+    def test_privileged_center_cannot_approve_its_own_request(self):
+        self._login("training_center", 42)
+        with patch.object(
+            billing_routes, "center_can_review_orders", return_value=True
+        ), patch.object(
+            billing_routes, "center_can_manage_review", return_value=False
+        ), patch.object(
+            billing_routes, "approve_teacher_order_from_admin"
+        ) as approve:
+            response = self.client.post(
+                f"/api/admin/teacher-order-validations/{self.public_id}/approve"
+            )
+
+        self.assertEqual(response.status_code, 404, response.get_json())
+        approve.assert_not_called()
 
     def test_center_message_inbox_is_scoped_to_logged_in_center(self):
         self._login("training_center", 42)

@@ -30,3 +30,9 @@ test('stops tracking cancelled, failed, expired, or refunded payments', () => {
   assert.match(source, /\['failed', 'expired'\]\.includes\(order\.payment_status\)/)
   assert.match(source, /order\.payment_status === 'refunded'/)
 })
+
+test('sends the Lyon account directly to payment without validation', () => {
+  assert.match(source, /billing\?\.review_required === false \? 'Tarif à régler maintenant'/)
+  assert.match(source, /billing\.review_required === false \? 'Continuer vers le paiement'/)
+  assert.match(source, /data\.next_action === 'redirect' && data\.checkout_url/)
+})

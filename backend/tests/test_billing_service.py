@@ -238,15 +238,15 @@ class BillingServiceTest(unittest.TestCase):
     @patch.object(billing_service, "create_order")
     @patch.object(billing_service, "get_product_catalog")
     @patch.object(billing_service, "get_center_billing_account")
-    def test_exempt_center_skips_stripe_and_queues_once(
+    def test_billing_exempt_center_skips_stripe_and_queues_once(
         self, get_center, get_catalog, create_order, enqueue, stripe_client,
     ):
         get_center.return_value = {
             "id": 42,
-            "username": "  NEWPIPROD@GMAIL.COM  ",
+            "username": "internal-billing@example.com",
             "center_name": "Le Socrate",
             "is_active": True,
-            "billing_mode": "stripe_required",
+            "billing_mode": "exempt",
         }
         get_catalog.return_value = {
             "new_teacher": {
@@ -268,6 +268,9 @@ class BillingServiceTest(unittest.TestCase):
             order["request_fingerprint"] = values["request_fingerprint"]
             self.assertEqual(values["authorization_kind"], "center_exemption")
             self.assertEqual(values["charged_amount_cents"], 0)
+            self.assertEqual(values["status"], "authorized")
+            self.assertEqual(values["review_status"], "not_required")
+            self.assertEqual(values["payment_status"], "not_required")
             return order, True
 
         create_order.side_effect = capture
@@ -278,6 +281,59 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(result["next_action"], "track")
         enqueue.assert_called_once_with(order)
         stripe_client.assert_not_called()
+
+    @patch.object(billing_service, "_create_checkout_for_order")
+    @patch.object(billing_service, "create_order")
+    @patch.object(billing_service, "get_product_catalog")
+    @patch.object(billing_service, "get_center_billing_account")
+    def test_lyon_center_skips_review_but_goes_directly_to_payment(
+        self, get_center, get_catalog, create_order, create_checkout,
+    ):
+        center = {
+            "id": 42,
+            "username": "  NEWPIPROD@GMAIL.COM  ",
+            "center_name": "Centre Lyon",
+            "is_active": True,
+            "billing_mode": "stripe_required",
+        }
+        get_center.return_value = center
+        get_catalog.return_value = {
+            "new_teacher": {
+                "pricing_key": "new_teacher",
+                "unit_amount_cents": 3000,
+                "currency": "eur",
+                "configured": True,
+            }
+        }
+        order = {
+            "id": 17,
+            "public_id": uuid4(),
+            "request_fingerprint": "unused",
+            "payment_status": "not_requested",
+            "review_status": "not_required",
+            "fulfillment_status": "not_started",
+        }
+
+        def capture(values):
+            order["request_fingerprint"] = values["request_fingerprint"]
+            self.assertEqual(values["status"], "awaiting_payment")
+            self.assertEqual(values["payment_status"], "not_requested")
+            self.assertEqual(values["review_status"], "not_required")
+            self.assertEqual(values["authorization_kind"], "stripe")
+            self.assertIsNone(values["charged_amount_cents"])
+            return order, True
+
+        create_order.side_effect = capture
+        create_checkout.return_value = {
+            "order": order,
+            "checkout_url": "https://checkout.stripe.test/lyon",
+        }
+
+        result = billing_service.create_teacher_order(42, _project())
+
+        self.assertEqual(result["next_action"], "redirect")
+        self.assertEqual(result["checkout_url"], "https://checkout.stripe.test/lyon")
+        create_checkout.assert_called_once_with(order, center)
 
     @patch.object(billing_service, "attach_checkout_session")
     @patch.object(billing_service, "_stripe")
@@ -587,6 +643,38 @@ class BillingServiceTest(unittest.TestCase):
             "cours de vérification par nos équipes. Vous recevrez un message très vite dès "
             "qu’une décision sera prise.",
         )
+
+    def test_review_request_summarizes_calendar_span_and_training_days(self):
+        message = billing_service.serialize_review_request({
+            "public_id": str(uuid4()),
+            "operation_type": "new_teacher",
+            "creation_request_id": "request-review-summary",
+            "training_title": "TP - Employé commercial",
+            "rncp_code": "37099",
+            "total_hours": 147,
+            "request_payload_json": {
+                "teacher_name": "Lina",
+                "new_formation": {
+                    "schedule": {
+                        "selected_dates": [
+                            "2026-09-01",
+                            "2026-09-03",
+                            "2026-10-08",
+                        ],
+                    },
+                },
+            },
+            "payment_status": "awaiting_payment",
+            "review_status": "pending",
+            "fulfillment_status": "not_started",
+            "center_name": "Centre Paris",
+            "center_email": "paris@example.com",
+        })
+
+        self.assertEqual(message["training_days"], 3)
+        self.assertEqual(message["training_weeks"], 6)
+        self.assertEqual(message["schedule_start_date"], "2026-09-01")
+        self.assertEqual(message["schedule_end_date"], "2026-10-08")
 
 
 if __name__ == "__main__":

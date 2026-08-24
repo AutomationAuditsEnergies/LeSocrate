@@ -401,25 +401,36 @@ def list_center_billing_orders(center_account_id: int) -> list[dict[str, Any]]:
             return list(cur.fetchall())
 
 
-def list_teacher_order_reviews(*, limit: int = 100) -> list[dict[str, Any]]:
+def list_teacher_order_reviews(
+    *,
+    limit: int = 100,
+    exclude_center_account_id: int | None = None,
+) -> list[dict[str, Any]]:
     """Return the internal review inbox across every training centre."""
+    exclusion_clause = ""
+    params: list[Any] = []
+    if exclude_center_account_id is not None:
+        exclusion_clause = "AND teacher_order.center_account_id <> %s"
+        params.append(int(exclude_center_account_id))
+    params.append(max(1, min(int(limit), 250)))
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT teacher_order.*, center.username AS center_email,
                        center.center_name
                 FROM ai_teacher_orders AS teacher_order
                 JOIN training_center_accounts AS center
                   ON center.id = teacher_order.center_account_id
                 WHERE teacher_order.review_status IN ('pending', 'approved', 'rejected')
+                  {exclusion_clause}
                 ORDER BY
                   CASE teacher_order.review_status WHEN 'pending' THEN 0 ELSE 1 END,
                   teacher_order.created_at DESC,
                   teacher_order.id DESC
                 LIMIT %s
                 """,
-                (max(1, min(int(limit), 250)),),
+                tuple(params),
             )
             return list(cur.fetchall())
 
