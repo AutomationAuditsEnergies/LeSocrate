@@ -98,6 +98,8 @@ def review_teacher_order_page(public_id):
     project = order.get("request_payload_json") or {}
     teacher = project.get("teacher_name") or "Professeur IA"
     days = training_days_for_order(order)
+    deepseek_recharge_cents = days * 314
+    fish_audio_recharge_cents = days * 625
     status = order.get("review_status") or "pending"
     deepseek_url = os.getenv("AI_TEXT_API_RECHARGE_URL", "https://platform.deepseek.com/top_up")
     fish_url = os.getenv("AI_AUDIO_API_RECHARGE_URL", "https://fish.audio/app/credits/")
@@ -115,7 +117,8 @@ def review_teacher_order_page(public_id):
 <tr><td style="padding:9px 0;color:#64748b">Formation</td><td style="text-align:right;font-weight:600">{html.escape(str(order.get('training_title') or ''))}</td></tr>
 <tr><td style="padding:9px 0;color:#64748b">Journées</td><td style="text-align:right;font-weight:600">{days}</td></tr>
 <tr><td style="padding:9px 0;color:#64748b">Prix client</td><td style="text-align:right;font-weight:700">{int(order.get('catalog_amount_cents') or 0) / 100:.2f} €</td></tr>
-<tr><td style="padding:9px 0;color:#64748b">Coût API estimé</td><td style="text-align:right;font-weight:700">{int(order.get('internal_api_cost_cents') or 0) / 100:.2f} €</td></tr>
+<tr><td style="padding:9px 0;color:#64748b">Coût API DeepSeek à recharger</td><td style="text-align:right;font-weight:700">{deepseek_recharge_cents / 100:.2f} €</td></tr>
+<tr><td style="padding:9px 0;color:#64748b">Coût API Fish Audio à recharger</td><td style="text-align:right;font-weight:700">{fish_audio_recharge_cents / 100:.2f} €</td></tr>
 </table>
 <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:24px">
 <a href="{html.escape(deepseek_url, quote=True)}" target="_blank" rel="noreferrer" style="padding:11px 14px;border:1px solid #cbd5e1;border-radius:8px;color:#334155;text-decoration:none;font-weight:600">Recharger DeepSeek</a>

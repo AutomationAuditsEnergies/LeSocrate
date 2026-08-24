@@ -38,6 +38,13 @@ const formatPrice = (cents) => new Intl.NumberFormat('fr-FR', {
   currency: 'EUR',
 }).format(Number(cents || 0) / 100)
 
+const DEEPSEEK_COST_PER_DAY_CENTS = 314
+const FISH_AUDIO_COST_PER_DAY_CENTS = 625
+
+const apiRechargeCost = (trainingDays, costPerDayCents) => (
+  formatPrice(Number(trainingDays || 0) * costPerDayCents)
+)
+
 const pluralize = (value, singular, plural = `${singular}s`) => (
   `${value} ${Number(value) > 1 ? plural : singular}`
 )
@@ -261,7 +268,8 @@ export default function TeacherOrderReviewInbox({ onUnreadCountChange }) {
                   ['Durée', formatDuration(selected)],
                   ['Période', formatPeriod(selected)],
                   ['Prix prévu', formatPrice(selected.catalog_amount_cents)],
-                  ['Coût API estimé', formatPrice(selected.internal_api_cost_cents)],
+                  ['Coût API DeepSeek à recharger', apiRechargeCost(selected.training_days, DEEPSEEK_COST_PER_DAY_CENTS)],
+                  ['Coût API Fish Audio à recharger', apiRechargeCost(selected.training_days, FISH_AUDIO_COST_PER_DAY_CENTS)],
                 ].map(([label, value]) => (
                   <div key={label} className="grid gap-1 py-3 sm:grid-cols-[150px_1fr] sm:gap-5">
                     <dt className="text-xs text-[#6B6B72]">{label}</dt>

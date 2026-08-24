@@ -94,6 +94,8 @@ def send_review_request(order: dict[str, Any], center: dict[str, Any], review_ur
     project = order.get("request_payload_json") or {}
     teacher = str(project.get("teacher_name") or "Professeur IA")
     days = _training_days(order)
+    deepseek_recharge_cents = days * 314
+    fish_audio_recharge_cents = days * 625
     body = f"""
       <table role="presentation" style="width:100%;margin-top:22px;border-collapse:collapse;font-size:14px">
         <tr><td style="padding:9px 0;color:#64748b">Centre</td><td style="padding:9px 0;text-align:right;font-weight:600">{html.escape(str(center.get('center_name') or center.get('username') or ''))}</td></tr>
@@ -101,7 +103,8 @@ def send_review_request(order: dict[str, Any], center: dict[str, Any], review_ur
         <tr><td style="padding:9px 0;color:#64748b">Formation</td><td style="padding:9px 0;text-align:right;font-weight:600">{html.escape(str(order.get('training_title') or ''))}</td></tr>
         <tr><td style="padding:9px 0;color:#64748b">Journées</td><td style="padding:9px 0;text-align:right;font-weight:600">{days}</td></tr>
         <tr><td style="padding:9px 0;color:#64748b">Prix client</td><td style="padding:9px 0;text-align:right;font-weight:700">{_format_eur(order.get('catalog_amount_cents'))}</td></tr>
-        <tr><td style="padding:9px 0;color:#64748b">Coût API estimé</td><td style="padding:9px 0;text-align:right;font-weight:700">{_format_eur(order.get('internal_api_cost_cents'))}</td></tr>
+        <tr><td style="padding:9px 0;color:#64748b">Coût API DeepSeek à recharger</td><td style="padding:9px 0;text-align:right;font-weight:700">{_format_eur(deepseek_recharge_cents)}</td></tr>
+        <tr><td style="padding:9px 0;color:#64748b">Coût API Fish Audio à recharger</td><td style="padding:9px 0;text-align:right;font-weight:700">{_format_eur(fish_audio_recharge_cents)}</td></tr>
       </table>"""
     recipient = os.getenv("BILLING_REVIEW_NOTIFICATION_EMAIL", DEFAULT_REVIEW_RECIPIENT)
     return _send_html(

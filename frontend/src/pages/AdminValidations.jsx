@@ -32,6 +32,13 @@ const formatPrice = (cents) => new Intl.NumberFormat('fr-FR', {
   currency: 'EUR',
 }).format(Number(cents || 0) / 100)
 
+const DEEPSEEK_COST_PER_DAY_CENTS = 314
+const FISH_AUDIO_COST_PER_DAY_CENTS = 625
+
+const apiRechargeCost = (trainingDays, costPerDayCents) => (
+  formatPrice(Number(trainingDays || 0) * costPerDayCents)
+)
+
 const statusMeta = {
   pending: { label: 'À valider', className: 'bg-amber-50 text-amber-800 ring-amber-200' },
   approved: { label: 'Acceptée', className: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
@@ -214,7 +221,8 @@ export default function AdminValidations() {
                   {[
                     ['Journées prévues', selected.training_days],
                     ['Prix client', formatPrice(selected.catalog_amount_cents)],
-                    ['Coût API estimé', formatPrice(selected.internal_api_cost_cents)],
+                    ['Coût API DeepSeek à recharger', apiRechargeCost(selected.training_days, DEEPSEEK_COST_PER_DAY_CENTS)],
+                    ['Coût API Fish Audio à recharger', apiRechargeCost(selected.training_days, FISH_AUDIO_COST_PER_DAY_CENTS)],
                     ['Demande reçue', formatDateTime(selected.created_at)],
                   ].map(([label, value]) => (
                     <div key={label} className="bg-white px-4 py-4">
