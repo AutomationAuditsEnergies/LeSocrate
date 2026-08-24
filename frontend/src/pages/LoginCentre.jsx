@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { getSupabaseClient } from '../supabaseClient'
@@ -347,6 +348,10 @@ export default function LoginCentre({ preloadDashboardRoute }) {
   return (
     <main className={`cadrenza-auth cadrenza-auth--center${authMode === 'signup' && !passwordRecoveryMode && !forgotPasswordMode ? ' cadrenza-auth--signup' : ''}${forgotPasswordMode ? ' cadrenza-auth--forgot' : ''}`}>
       <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
+      <a className="auth-home-return" href="/landing" aria-label="Retour à l’accueil">
+        <ArrowLeft size={20} strokeWidth={1.8} aria-hidden="true" />
+        <span>Accueil</span>
+      </a>
       <div className="auth-layout">
         <section className="auth-panel" id="auth-main">
           {!passwordRecoveryMode && !forgotPasswordMode && (

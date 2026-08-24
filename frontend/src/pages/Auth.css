@@ -604,6 +604,29 @@
   min-height: 100vh;
 }
 
+.cadrenza-auth--center .auth-home-return {
+  position: fixed;
+  top: 36px;
+  left: clamp(24px, 3.5vw, 56px);
+  z-index: 10;
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 9px;
+  border-radius: 8px;
+  color: #3f3f46;
+  padding: 8px 10px;
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-decoration: none;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.cadrenza-auth--center .auth-home-return:hover {
+  background: #f4f4f5;
+  color: #18181b;
+}
+
 .cadrenza-auth--center .auth-panel {
   min-height: 100vh;
   align-items: flex-start;
@@ -698,6 +721,11 @@
 }
 
 @media (max-width: 760px) {
+  .cadrenza-auth--center .auth-home-return {
+    top: 24px;
+    left: 14px;
+  }
+
   .cadrenza-auth--center .auth-panel {
     padding: 132px 24px 48px;
   }
@@ -709,6 +737,16 @@
 }
 
 @media (max-width: 480px) {
+  .cadrenza-auth--center .auth-home-return span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .cadrenza-auth--center .auth-panel {
     padding: 112px 20px 40px;
   }
