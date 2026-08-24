@@ -149,6 +149,21 @@ class BillingMessageRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         seen.assert_called_once_with(str(self.public_id), 42)
 
+    def test_center_can_open_payment_from_an_approved_message(self):
+        self._login("training_center", 42)
+        with patch.object(
+            billing_routes,
+            "get_center_checkout_link",
+            return_value={"url": "https://checkout.stripe.test/session"},
+        ) as checkout:
+            response = self.client.post(
+                f"/api/hr/billing/orders/{self.public_id}/checkout"
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["url"], "https://checkout.stripe.test/session")
+        checkout.assert_called_once_with(str(self.public_id), 42)
+
 
 if __name__ == "__main__":
     unittest.main()

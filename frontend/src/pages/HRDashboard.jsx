@@ -2078,6 +2078,8 @@ export default function HRDashboard() {
 
 function CenterMessagesPanel({ messages, loading, error, onRetry, onOpen }) {
   const [selectedId, setSelectedId] = useState(null)
+  const [paymentLoadingId, setPaymentLoadingId] = useState(null)
+  const [paymentError, setPaymentError] = useState('')
 
   useEffect(() => {
     if (!messages.length) {
@@ -2096,7 +2098,27 @@ function CenterMessagesPanel({ messages, loading, error, onRetry, onOpen }) {
 
   const openMessage = (message) => {
     setSelectedId(message.id)
+    setPaymentError('')
     if (!message.read) void onOpen(message.id)
+  }
+
+  const openPayment = async (message) => {
+    if (paymentLoadingId) return
+    setPaymentError('')
+    setPaymentLoadingId(message.order_id)
+    try {
+      const response = await apiFetch(`/api/hr/billing/orders/${message.order_id}/checkout`, {
+        method: 'POST',
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || 'Impossible d’ouvrir le paiement.')
+      }
+      window.location.assign(data.url)
+    } catch (paymentRequestError) {
+      setPaymentError(paymentRequestError.message || 'Impossible d’ouvrir le paiement.')
+      setPaymentLoadingId(null)
+    }
   }
 
   if (loading) {
@@ -2155,6 +2177,20 @@ function CenterMessagesPanel({ messages, loading, error, onRetry, onOpen }) {
               <div className="mx-auto max-w-2xl">
                 <p className="text-xs text-[#6B6B72]">{formatScheduleDateTime(selected.updated_at)}</p>
                 <p className="mt-4 max-w-[68ch] text-sm leading-6 text-[#3F3F46]">{selected.body}</p>
+                {selected.action === 'payment' && (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={() => openPayment(selected)}
+                      disabled={paymentLoadingId === selected.order_id}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#18181B] px-4 text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-[#2C2C30] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/45 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-wait disabled:opacity-60"
+                    >
+                      <CreditCard size={17} aria-hidden="true" />
+                      {paymentLoadingId === selected.order_id ? 'Ouverture…' : 'Payer'}
+                    </button>
+                    {paymentError && <p className="mt-2 text-sm text-rose-700" role="alert">{paymentError}</p>}
+                  </div>
+                )}
                 <p className="mt-6 text-sm font-semibold text-[#18181B]">{selected.title}</p>
               </div>
             )}

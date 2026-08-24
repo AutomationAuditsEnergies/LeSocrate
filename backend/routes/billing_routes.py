@@ -20,6 +20,7 @@ from services.billing_service import (
     center_can_review_orders,
     create_teacher_order,
     get_review_order,
+    get_center_checkout_link,
     get_center_order,
     get_center_invoice_link,
     mark_admin_review_seen,
@@ -315,6 +316,20 @@ def get_billing_invoice(public_id):
         return jsonify({"success": False, "error": "Compte centre requis"}), 403
     try:
         return jsonify({"success": True, **get_center_invoice_link(str(public_id), center_id)}), 200
+    except BillingError as exc:
+        return _error(exc)
+
+
+@billing_bp.post("/api/hr/billing/orders/<uuid:public_id>/checkout")
+def post_billing_checkout(public_id):
+    center_id = _center_id()
+    if not center_id:
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    try:
+        return jsonify({
+            "success": True,
+            **get_center_checkout_link(str(public_id), center_id),
+        }), 200
     except BillingError as exc:
         return _error(exc)
 

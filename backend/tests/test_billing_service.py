@@ -644,6 +644,44 @@ class BillingServiceTest(unittest.TestCase):
             "qu’une décision sera prise.",
         )
 
+    def test_approved_center_message_offers_payment_action(self):
+        message = billing_service.serialize_center_message({
+            "public_id": str(uuid4()),
+            "request_payload_json": {"teacher_name": "Pierrot Test"},
+            "training_title": "TP - Employé commercial",
+            "review_status": "approved",
+            "payment_status": "awaiting_payment",
+            "fulfillment_status": "not_started",
+        })
+
+        self.assertEqual(message["body"], "La demande pour Pierrot Test a été validée.")
+        self.assertEqual(message["action"], "payment")
+
+    @patch.object(billing_service, "_create_checkout_for_order")
+    @patch.object(billing_service, "get_center_billing_account")
+    @patch.object(billing_service, "get_center_order")
+    def test_center_checkout_link_reuses_the_approved_order(
+        self, get_order, get_center, create_checkout
+    ):
+        order = {
+            "public_id": str(uuid4()),
+            "review_status": "approved",
+            "payment_status": "awaiting_payment",
+        }
+        center = {"id": 42, "is_active": True}
+        get_order.return_value = order
+        get_center.return_value = center
+        create_checkout.return_value = {
+            "order": order,
+            "checkout_url": "https://checkout.stripe.test/session",
+        }
+
+        result = billing_service.get_center_checkout_link(order["public_id"], 42)
+
+        self.assertEqual(result["url"], "https://checkout.stripe.test/session")
+        get_order.assert_called_once_with(order["public_id"], 42)
+        create_checkout.assert_called_once_with(order, center)
+
     def test_review_request_summarizes_calendar_span_and_training_days(self):
         message = billing_service.serialize_review_request({
             "public_id": str(uuid4()),

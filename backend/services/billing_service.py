@@ -708,9 +708,9 @@ def _center_message_copy(order: dict[str, Any]) -> tuple[str, str, str, str | No
     if review_status == "approved":
         return (
             "Votre demande est acceptée",
-            f"La demande pour {teacher} a été validée. Le lien de paiement sécurisé vous a été envoyé par e-mail.",
+            f"La demande pour {teacher} a été validée.",
             "success",
-            None,
+            "payment",
         )
     if review_status == "rejected":
         note = str(order.get("review_note") or "").strip()
@@ -1353,6 +1353,22 @@ def get_center_order(public_id: str, center_account_id: int) -> dict[str, Any]:
     if not order:
         raise BillingError("Commande introuvable.", status_code=404)
     return order
+
+
+def get_center_checkout_link(public_id: str, center_account_id: int) -> dict[str, str]:
+    """Open or renew the Stripe Checkout session for an approved center order."""
+    order = get_center_order(public_id, center_account_id)
+    if order.get("review_status") != "approved":
+        raise BillingError("Cette demande n’est pas prête au paiement.", status_code=409)
+    if order.get("payment_status") != "awaiting_payment":
+        raise BillingError("Cette commande ne peut plus être payée.", status_code=409)
+
+    center = get_center_billing_account(center_account_id)
+    if not center or not center.get("is_active"):
+        raise BillingError("Compte centre introuvable ou désactivé.", status_code=403)
+
+    result = _create_checkout_for_order(order, center)
+    return {"url": result["checkout_url"]}
 
 
 def retry_center_order(public_id: str, center_account_id: int) -> dict[str, Any]:
