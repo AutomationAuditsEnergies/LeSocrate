@@ -23,9 +23,10 @@ test('still follows a hosted Stripe Checkout URL returned by the backend', () =>
   assert.match(source, /window\.location\.assign\(data\.checkout_url\)/)
 })
 
-test('never treats the browser success redirect as payment confirmation', () => {
-  assert.match(source, /Ce retour ne vaut pas confirmation/)
-  assert.match(source, /webhook Stripe signé/)
+test('reconciles the browser success redirect with Stripe on the server', () => {
+  assert.match(source, /checkoutSessionId = params\.get\('session_id'\)/)
+  assert.match(source, /teacher-orders\/\$\{orderId\}\/confirm-payment/)
+  assert.match(source, /Stripe confirme actuellement votre paiement/)
   assert.match(source, /order\.payment_status === 'paid'/)
 })
 

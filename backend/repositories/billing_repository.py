@@ -7,6 +7,7 @@ the durable fulfillment worker after this record is paid or explicitly exempt.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 import uuid
 
@@ -578,13 +579,136 @@ def attach_checkout_session(
                     stripe_payment_intent_id = COALESCE(%s, stripe_payment_intent_id),
                     checkout_expires_at = %s,
                     checkout_attempt_count = checkout_attempt_count + 1,
+                    status = CASE
+                        WHEN status IN ('fulfilled', 'fulfilling', 'fulfillment_queued') THEN status
+                        ELSE 'awaiting_payment'
+                    END,
+                    payment_status = CASE
+                        WHEN payment_status = 'not_requested'
+                         AND review_status IN ('approved', 'not_required')
+                        THEN 'awaiting_payment'
+                        ELSE payment_status
+                    END,
                     updated_at = NOW()
                 WHERE id = %s
+                  AND authorization_kind = 'stripe'
                 RETURNING *
                 """,
                 (checkout_session_id, payment_intent_id, expires_at, int(order_id)),
             )
             return cur.fetchone()
+
+
+def _stripe_resource_id(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        value = value.get("id")
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _apply_paid_checkout_session_in_transaction(
+    cur,
+    obj: dict[str, Any],
+    *,
+    center_account_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Authorize and enqueue one server-verified Checkout Session."""
+    session_id = str(obj.get("id") or "").strip()
+    if not session_id:
+        raise ValueError("Session Stripe absente")
+
+    tenant_clause = " AND center_account_id = %s" if center_account_id is not None else ""
+    params: tuple[Any, ...] = (
+        (session_id, int(center_account_id))
+        if center_account_id is not None
+        else (session_id,)
+    )
+    cur.execute(
+        f"SELECT * FROM ai_teacher_orders "
+        f"WHERE stripe_checkout_session_id = %s{tenant_clause} FOR UPDATE",
+        params,
+    )
+    order = cur.fetchone()
+    if not order:
+        return None
+
+    payment_status = str(obj.get("payment_status") or "").strip().lower()
+    if payment_status not in {"paid", "no_payment_required"}:
+        if order.get("payment_status") not in {"paid", "refunded"}:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET payment_status = 'processing', updated_at = NOW()
+                WHERE id = %s AND authorization_kind = 'stripe'
+                RETURNING *
+                """,
+                (int(order["id"]),),
+            )
+            return cur.fetchone() or order
+        return order
+
+    if order.get("authorization_kind") != "stripe":
+        raise ValueError("Mode d’autorisation Stripe incohérent")
+    if order.get("review_status") not in {"approved", "not_required"}:
+        raise ValueError("Commande Stripe non autorisée à être payée")
+    if str(order["public_id"]) != str(obj.get("client_reference_id") or ""):
+        raise ValueError("Référence Stripe incohérente")
+
+    metadata = dict(obj.get("metadata") or {})
+    if (
+        metadata.get("ai_teacher_order_id")
+        and str(metadata["ai_teacher_order_id"]) != str(order["id"])
+    ):
+        raise ValueError("Métadonnée de commande Stripe incohérente")
+    if (
+        metadata.get("order_public_id")
+        and str(metadata["order_public_id"]) != str(order["public_id"])
+    ):
+        raise ValueError("Métadonnée publique Stripe incohérente")
+
+    amount = int(obj.get("amount_total") or 0)
+    if amount != int(order.get("catalog_amount_cents") or -1):
+        raise ValueError("Montant Stripe incohérent")
+    if str(obj.get("currency") or "").lower() != str(order["currency"]).lower():
+        raise ValueError("Devise Stripe incohérente")
+
+    payment_intent_id = _stripe_resource_id(obj.get("payment_intent"))
+    cur.execute(
+        """
+        UPDATE ai_teacher_orders
+        SET status = CASE WHEN status = 'fulfilled' THEN status ELSE 'authorized' END,
+            payment_status = 'paid',
+            stripe_payment_intent_id = COALESCE(%s, stripe_payment_intent_id),
+            charged_amount_cents = %s,
+            paid_at = COALESCE(paid_at, NOW()),
+            authorized_at = COALESCE(authorized_at, NOW()),
+            last_error = NULL, center_seen_at = NULL, updated_at = NOW()
+        WHERE id = %s
+          AND authorization_kind = 'stripe'
+          AND payment_status IN ('not_requested', 'awaiting_payment', 'processing', 'paid')
+        RETURNING *
+        """,
+        (payment_intent_id, amount, int(order["id"])),
+    )
+    authorized_order = cur.fetchone()
+    if not authorized_order:
+        return order
+    return _enqueue_fulfillment_in_transaction(cur, authorized_order)
+
+
+def reconcile_stripe_checkout_session(
+    obj: dict[str, Any],
+    *,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    """Reconcile a Checkout Session retrieved server-side from Stripe."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            return _apply_paid_checkout_session_in_transaction(
+                cur,
+                obj,
+                center_account_id=int(center_account_id),
+            )
 
 
 def update_order_state(order_id: int, **fields) -> dict[str, Any] | None:
@@ -730,59 +854,7 @@ def apply_stripe_webhook_event(event: dict[str, Any]) -> bool:
                 "checkout.session.completed",
                 "checkout.session.async_payment_succeeded",
             }:
-                cur.execute(
-                    "SELECT * FROM ai_teacher_orders WHERE stripe_checkout_session_id = %s FOR UPDATE",
-                    (str(obj.get("id") or ""),),
-                )
-                order = cur.fetchone()
-                if order and obj.get("payment_status") in {"paid", "no_payment_required"}:
-                    if str(order["public_id"]) != str(obj.get("client_reference_id") or ""):
-                        raise ValueError("Référence Stripe incohérente")
-                    metadata = dict(obj.get("metadata") or {})
-                    if (
-                        metadata.get("ai_teacher_order_id")
-                        and str(metadata["ai_teacher_order_id"]) != str(order["id"])
-                    ):
-                        raise ValueError("Métadonnée de commande Stripe incohérente")
-                    if (
-                        metadata.get("order_public_id")
-                        and str(metadata["order_public_id"]) != str(order["public_id"])
-                    ):
-                        raise ValueError("Métadonnée publique Stripe incohérente")
-                    amount = int(obj.get("amount_total") or 0)
-                    if amount != int(order.get("catalog_amount_cents") or -1):
-                        raise ValueError("Montant Stripe incohérent")
-                    if str(obj.get("currency") or "").lower() != str(order["currency"]).lower():
-                        raise ValueError("Devise Stripe incohérente")
-                    cur.execute(
-                        """
-                        UPDATE ai_teacher_orders
-                        SET status = CASE WHEN status = 'fulfilled' THEN status ELSE 'authorized' END,
-                            payment_status = 'paid',
-                            stripe_payment_intent_id = COALESCE(%s, stripe_payment_intent_id),
-                            charged_amount_cents = %s,
-                            paid_at = COALESCE(paid_at, NOW()),
-                            authorized_at = COALESCE(authorized_at, NOW()),
-                            last_error = NULL, center_seen_at = NULL, updated_at = NOW()
-                        WHERE id = %s
-                          AND authorization_kind = 'stripe'
-                          AND payment_status IN ('awaiting_payment', 'processing', 'paid')
-                        RETURNING *
-                        """,
-                        (obj.get("payment_intent"), amount, int(order["id"])),
-                    )
-                    authorized_order = cur.fetchone()
-                    if authorized_order:
-                        order = _enqueue_fulfillment_in_transaction(cur, authorized_order)
-                elif order and order.get("payment_status") not in {"paid", "refunded"}:
-                    cur.execute(
-                        """
-                        UPDATE ai_teacher_orders
-                        SET payment_status = 'processing', updated_at = NOW()
-                        WHERE id = %s
-                        """,
-                        (int(order["id"]),),
-                    )
+                order = _apply_paid_checkout_session_in_transaction(cur, obj)
             elif event_type in {"checkout.session.async_payment_failed", "checkout.session.expired"}:
                 cur.execute(
                     """

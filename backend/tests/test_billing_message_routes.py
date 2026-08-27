@@ -164,6 +164,39 @@ class BillingMessageRoutesTest(unittest.TestCase):
         self.assertEqual(response.get_json()["url"], "https://checkout.stripe.test/session")
         checkout.assert_called_once_with(str(self.public_id), 42)
 
+    def test_center_can_reconcile_its_checkout_after_the_stripe_redirect(self):
+        self._login("training_center", 42)
+        order = {
+            "id": 7,
+            "public_id": self.public_id,
+            "payment_status": "paid",
+            "fulfillment_status": "queued",
+            "request_payload_json": {},
+        }
+        with patch.object(
+            billing_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            billing_routes,
+            "reconcile_center_checkout_payment",
+            return_value=order,
+        ) as reconcile, patch.object(
+            billing_routes,
+            "serialize_order",
+            return_value={"id": str(self.public_id), "payment_status": "paid"},
+        ):
+            response = self.client.post(
+                f"/api/hr/teacher-orders/{self.public_id}/confirm-payment",
+                json={"session_id": "cs_test_paid"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["order"]["payment_status"], "paid")
+        reconcile.assert_called_once_with(
+            str(self.public_id),
+            42,
+            returned_session_id="cs_test_paid",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

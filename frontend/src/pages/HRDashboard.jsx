@@ -477,6 +477,7 @@ export default function HRDashboard() {
     const params = new URLSearchParams(window.location.search)
     const checkout = params.get('checkout')
     const orderId = params.get('order')
+    const checkoutSessionId = params.get('session_id')
     if (!checkout || !orderId) return
     setFailedTeacherOrderId(null)
     if (checkout === 'success') {
@@ -486,11 +487,36 @@ export default function HRDashboard() {
       setCardPage(0)
       setOrderNotice({
         tone: 'info',
-        title: 'Vérification du paiement',
-        message: 'Ce retour ne vaut pas confirmation. Nous attendons le webhook Stripe signé avant de lancer la préparation de votre professeur IA.',
+        title: 'Confirmation du paiement',
+        message: 'Stripe confirme actuellement votre paiement. La préparation démarrera automatiquement dans quelques instants.',
       })
       setShowCreateModal(false)
       setShowModulesModal(false)
+      void apiFetch(`/api/hr/teacher-orders/${orderId}/confirm-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(checkoutSessionId ? { session_id: checkoutSessionId } : {}),
+      })
+        .then(async (response) => ({
+          response,
+          data: await response.json().catch(() => ({})),
+        }))
+        .then(({ response, data }) => {
+          if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Confirmation Stripe indisponible')
+          }
+          if (data.order?.payment_status === 'paid') {
+            setOrderNotice({
+              tone: 'info',
+              title: 'Paiement confirmé',
+              message: 'Votre commande est payée et sa préparation est maintenant prise en charge.',
+              action: 'view_teacher',
+            })
+          }
+        })
+        .catch((error) => {
+          console.error('Confirmation Stripe de secours impossible:', error)
+        })
     } else if (checkout === 'cancelled') {
       setActiveTeacherOrderId(null)
       setOrderNotice({

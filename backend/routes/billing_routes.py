@@ -26,6 +26,7 @@ from services.billing_service import (
     mark_admin_review_seen,
     mark_center_message_seen,
     process_stripe_webhook,
+    reconcile_center_checkout_payment,
     reject_teacher_order_review,
     reject_teacher_order_from_admin,
     retry_center_order,
@@ -374,6 +375,38 @@ def get_teacher_order(public_id):
         return jsonify({"success": True, "order": serialize_order(order, include_project=True)}), 200
     except BillingError as exc:
         return _error(exc)
+
+
+@billing_bp.post("/api/hr/teacher-orders/<uuid:public_id>/confirm-payment")
+def confirm_teacher_order_payment(public_id):
+    center_id = _center_id()
+    if not center_id:
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    if not postgres_enabled():
+        return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    payload = request.get_json(silent=True) or {}
+    try:
+        order = reconcile_center_checkout_payment(
+            str(public_id),
+            center_id,
+            returned_session_id=payload.get("session_id"),
+        )
+        return jsonify({
+            "success": True,
+            "order": serialize_order(order, include_project=True),
+        }), 200
+    except BillingError as exc:
+        return _error(exc)
+    except Exception:
+        logger.exception(
+            "AI_TEACHER_CHECKOUT_RECONCILIATION_FAILED order=%s center_id=%s",
+            public_id,
+            center_id,
+        )
+        return jsonify({
+            "success": False,
+            "error": "Impossible de confirmer le paiement pour le moment.",
+        }), 500
 
 
 @billing_bp.post("/api/hr/teacher-orders/<uuid:public_id>/retry")

@@ -28,6 +28,7 @@ from repositories.billing_repository import (
     mark_center_order_message_seen,
     mark_teacher_order_admin_seen,
     mark_order_notification_sent,
+    reconcile_stripe_checkout_session,
     record_webhook_failure,
     reject_order_review,
     retry_order_fulfillment,
@@ -461,8 +462,23 @@ def _stripe():
     secret = os.getenv("STRIPE_SECRET_KEY", "").strip()
     if not secret:
         raise BillingError("Le paiement n’est pas encore configuré.", status_code=503)
-    stripe.api_key = secret
+    return stripe.StripeClient(secret)
+
+
+def _stripe_sdk():
+    try:
+        import stripe
+    except ImportError as exc:  # pragma: no cover - deployment dependency guard
+        raise BillingError("Le service de paiement n’est pas installé.", status_code=503) from exc
     return stripe
+
+
+def _stripe_object_dict(value: Any) -> dict[str, Any]:
+    if hasattr(value, "to_dict_recursive"):
+        return dict(value.to_dict_recursive())
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise BillingError("Réponse Stripe invalide.", status_code=502)
 
 
 def _stripe_checkout_configured() -> bool:
@@ -783,9 +799,9 @@ def get_center_invoice_link(public_id: str, center_account_id: int) -> dict[str,
     stripe = _stripe()
     checkout_session_id = order.get("stripe_checkout_session_id")
     if checkout_session_id:
-        checkout = stripe.checkout.Session.retrieve(
+        checkout = stripe.v1.checkout.sessions.retrieve(
             checkout_session_id,
-            expand=["invoice", "payment_intent.latest_charge"],
+            {"expand": ["invoice", "payment_intent.latest_charge"]},
         )
         invoice = getattr(checkout, "invoice", None)
         invoice_url = getattr(invoice, "hosted_invoice_url", None)
@@ -799,9 +815,9 @@ def get_center_invoice_link(public_id: str, center_account_id: int) -> dict[str,
 
     payment_intent_id = order.get("stripe_payment_intent_id")
     if payment_intent_id:
-        payment_intent = stripe.PaymentIntent.retrieve(
+        payment_intent = stripe.v1.payment_intents.retrieve(
             payment_intent_id,
-            expand=["latest_charge"],
+            {"expand": ["latest_charge"]},
         )
         latest_charge = getattr(payment_intent, "latest_charge", None)
         receipt_url = getattr(latest_charge, "receipt_url", None)
@@ -1101,7 +1117,7 @@ def _create_checkout_for_order(order: dict[str, Any], center: dict[str, Any]) ->
     stripe = _stripe()
     existing_session_id = order.get("stripe_checkout_session_id")
     if existing_session_id:
-        existing = stripe.checkout.Session.retrieve(existing_session_id)
+        existing = stripe.v1.checkout.sessions.retrieve(existing_session_id)
         if getattr(existing, "status", None) == "open" and getattr(existing, "url", None):
             return {"order": order, "checkout_url": existing.url}
 
@@ -1136,20 +1152,29 @@ def _create_checkout_for_order(order: dict[str, Any], center: dict[str, Any]) ->
         locale="fr",
         submit_type="pay",
         invoice_creation={"enabled": True},
-        payment_method_types=["card", "link"],
         line_items=[line_item],
         client_reference_id=public_id,
         billing_address_collection="required",
         tax_id_collection={"enabled": True},
         metadata={"ai_teacher_order_id": str(order["id"]), "order_public_id": public_id},
         payment_intent_data={"metadata": {"ai_teacher_order_id": str(order["id"]), "order_public_id": public_id}},
-        success_url=f"{frontend_url}/dashboard-centre?checkout=success&order={public_id}",
+        success_url=(
+            f"{frontend_url}/dashboard-centre?checkout=success&order={public_id}"
+            "&session_id={CHECKOUT_SESSION_ID}"
+        ),
         cancel_url=f"{frontend_url}/dashboard-centre?checkout=cancelled&order={public_id}",
-        idempotency_key=f"ai-teacher-order-{order['id']}-checkout-{int(order.get('checkout_attempt_count') or 0) + 1}",
     )
     if "@" in str(center.get("username") or ""):
         checkout_params["customer_email"] = center["username"]
-    checkout = stripe.checkout.Session.create(**checkout_params)
+    checkout = stripe.v1.checkout.sessions.create(
+        checkout_params,
+        {
+            "idempotency_key": (
+                f"ai-teacher-order-{order['id']}-checkout-"
+                f"{int(order.get('checkout_attempt_count') or 0) + 1}"
+            ),
+        },
+    )
     expires_at = datetime.fromtimestamp(checkout.expires_at, tz=timezone.utc) if checkout.expires_at else None
     stored = attach_checkout_session(
         int(order["id"]),
@@ -1259,7 +1284,11 @@ def create_teacher_order(center_account_id: int, data: dict[str, Any]) -> dict[s
             else "awaiting_payment" if review_exempt
             else "awaiting_review"
         ),
-        "payment_status": "not_required" if payment_exempt else "not_requested",
+        "payment_status": (
+            "not_required" if payment_exempt
+            else "awaiting_payment" if review_exempt
+            else "not_requested"
+        ),
         "review_status": "not_required" if review_exempt else "pending",
         "training_title": details["training_title"],
         "rncp_code": details["rncp_code"],
@@ -1328,7 +1357,7 @@ def process_stripe_webhook(raw_payload: bytes, signature: str) -> None:
     secret = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
     if not secret:
         raise BillingError("Webhook Stripe non configuré.", status_code=503)
-    stripe = _stripe()
+    stripe = _stripe_sdk()
     try:
         event_obj = stripe.Webhook.construct_event(raw_payload, signature, secret)
     except (ValueError, stripe.error.SignatureVerificationError) as exc:
@@ -1359,6 +1388,30 @@ def get_center_order(public_id: str, center_account_id: int) -> dict[str, Any]:
     if not order:
         raise BillingError("Commande introuvable.", status_code=404)
     return order
+
+
+def reconcile_center_checkout_payment(
+    public_id: str,
+    center_account_id: int,
+    *,
+    returned_session_id: str | None = None,
+) -> dict[str, Any]:
+    """Confirm Checkout server-side as a reliable success-page fallback."""
+    order = get_center_order(public_id, center_account_id)
+    session_id = str(order.get("stripe_checkout_session_id") or "").strip()
+    if not session_id:
+        raise BillingError("Session Stripe introuvable.", status_code=409)
+    if returned_session_id and str(returned_session_id).strip() != session_id:
+        raise BillingError("Session Stripe incohérente.", status_code=409)
+
+    checkout = _stripe().v1.checkout.sessions.retrieve(session_id)
+    reconciled = reconcile_stripe_checkout_session(
+        _stripe_object_dict(checkout),
+        center_account_id=int(center_account_id),
+    )
+    if not reconciled:
+        raise BillingError("Commande Stripe introuvable.", status_code=404)
+    return reconciled
 
 
 def get_center_checkout_link(public_id: str, center_account_id: int) -> dict[str, str]:

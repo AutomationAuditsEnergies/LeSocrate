@@ -327,7 +327,7 @@ class BillingServiceTest(unittest.TestCase):
             "id": 17,
             "public_id": uuid4(),
             "request_fingerprint": "unused",
-            "payment_status": "not_requested",
+            "payment_status": "awaiting_payment",
             "review_status": "not_required",
             "fulfillment_status": "not_started",
         }
@@ -335,7 +335,7 @@ class BillingServiceTest(unittest.TestCase):
         def capture(values):
             order["request_fingerprint"] = values["request_fingerprint"]
             self.assertEqual(values["status"], "awaiting_payment")
-            self.assertEqual(values["payment_status"], "not_requested")
+            self.assertEqual(values["payment_status"], "awaiting_payment")
             self.assertEqual(values["review_status"], "not_required")
             self.assertEqual(values["authorization_kind"], "stripe")
             self.assertIsNone(values["charged_amount_cents"])
@@ -404,9 +404,12 @@ class BillingServiceTest(unittest.TestCase):
             id="cs_test_1", url="https://checkout.stripe.test/session",
             expires_at=None, payment_intent=None,
         ))
-        stripe_client.return_value = SimpleNamespace(
-            checkout=SimpleNamespace(Session=SimpleNamespace(create=checkout_create, retrieve=Mock())),
-        )
+        stripe_client.return_value = SimpleNamespace(v1=SimpleNamespace(
+            checkout=SimpleNamespace(sessions=SimpleNamespace(
+                create=checkout_create,
+                retrieve=Mock(),
+            )),
+        ))
         attach.return_value = order
         payload = _project()
         payload["quoted_amount_cents"] = 1
@@ -441,25 +444,31 @@ class BillingServiceTest(unittest.TestCase):
             id="cs_test_1", url="https://checkout.stripe.test/session",
             expires_at=None, payment_intent=None,
         ))
-        stripe_client.return_value = SimpleNamespace(
-            checkout=SimpleNamespace(Session=SimpleNamespace(create=checkout_create, retrieve=Mock())),
-        )
+        stripe_client.return_value = SimpleNamespace(v1=SimpleNamespace(
+            checkout=SimpleNamespace(sessions=SimpleNamespace(
+                create=checkout_create,
+                retrieve=Mock(),
+            )),
+        ))
         attach.return_value = order
         center = {"username": "centre@example.com"}
         with patch.dict(os.environ, {"PLATFORM_1_FRONTEND_URL": "https://formation.test"}):
             result = billing_service._create_checkout_for_order(order, center)
 
         self.assertEqual(result["checkout_url"], "https://checkout.stripe.test/session")
-        checkout_args = checkout_create.call_args.kwargs
+        checkout_args = checkout_create.call_args.args[0]
+        checkout_options = checkout_create.call_args.args[1]
         line_items = checkout_args["line_items"]
         self.assertEqual(line_items[0]["price_data"]["unit_amount"], 3000)
         self.assertEqual(line_items[0]["quantity"], 10)
         self.assertEqual(checkout_args["mode"], "payment")
         self.assertEqual(checkout_args["invoice_creation"], {"enabled": True})
-        self.assertEqual(checkout_args["payment_method_types"], ["card", "link"])
+        self.assertNotIn("payment_method_types", checkout_args)
+        self.assertIn("idempotency_key", checkout_options)
         self.assertEqual(checkout_args["locale"], "fr")
         self.assertEqual(checkout_args["submit_type"], "pay")
         self.assertIn(str(order["public_id"]), checkout_args["success_url"])
+        self.assertIn("{CHECKOUT_SESSION_ID}", checkout_args["success_url"])
         self.assertIn(str(order["public_id"]), checkout_args["cancel_url"])
 
     @patch.object(billing_service, "mark_order_notification_sent")
@@ -513,9 +522,10 @@ class BillingServiceTest(unittest.TestCase):
             invoice=SimpleNamespace(hosted_invoice_url="https://invoice.stripe.test/i/1"),
             payment_intent=None,
         ))
-        stripe_client.return_value = SimpleNamespace(
-            checkout=SimpleNamespace(Session=SimpleNamespace(retrieve=retrieve)),
-        )
+        stripe_client.return_value = SimpleNamespace(v1=SimpleNamespace(
+            checkout=SimpleNamespace(sessions=SimpleNamespace(retrieve=retrieve)),
+            payment_intents=SimpleNamespace(retrieve=Mock()),
+        ))
 
         result = billing_service.get_center_invoice_link("order-1", 42)
 
@@ -523,7 +533,7 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(result["url"], "https://invoice.stripe.test/i/1")
         retrieve.assert_called_once_with(
             "cs_test_invoice",
-            expand=["invoice", "payment_intent.latest_charge"],
+            {"expand": ["invoice", "payment_intent.latest_charge"]},
         )
 
     @patch.object(billing_service, "create_order")
@@ -554,16 +564,73 @@ class BillingServiceTest(unittest.TestCase):
             billing_service.create_teacher_order(9, _project())
         self.assertEqual(raised.exception.status_code, 409)
 
-    @patch.object(billing_service, "apply_stripe_webhook_event")
+    @patch.object(billing_service, "reconcile_stripe_checkout_session")
     @patch.object(billing_service, "_stripe")
-    def test_signed_webhook_uses_verified_event_object(self, stripe_client, apply_event):
+    @patch.object(billing_service, "get_center_order")
+    def test_success_page_retrieves_checkout_server_side_and_reconciles_payment(
+        self, get_order, stripe_client, reconcile,
+    ):
+        public_id = str(uuid4())
+        get_order.return_value = {
+            "id": 7,
+            "public_id": public_id,
+            "stripe_checkout_session_id": "cs_test_paid",
+        }
+        checkout = {
+            "id": "cs_test_paid",
+            "payment_status": "paid",
+            "client_reference_id": public_id,
+        }
+        retrieve = Mock(return_value=checkout)
+        stripe_client.return_value = SimpleNamespace(v1=SimpleNamespace(
+            checkout=SimpleNamespace(sessions=SimpleNamespace(retrieve=retrieve)),
+        ))
+        reconcile.return_value = {
+            **get_order.return_value,
+            "payment_status": "paid",
+            "fulfillment_status": "queued",
+        }
+
+        result = billing_service.reconcile_center_checkout_payment(
+            public_id,
+            42,
+            returned_session_id="cs_test_paid",
+        )
+
+        self.assertEqual(result["payment_status"], "paid")
+        retrieve.assert_called_once_with("cs_test_paid")
+        reconcile.assert_called_once_with(checkout, center_account_id=42)
+
+    @patch.object(billing_service, "_stripe")
+    @patch.object(billing_service, "get_center_order")
+    def test_success_page_rejects_a_checkout_session_from_another_order(
+        self, get_order, stripe_client,
+    ):
+        public_id = str(uuid4())
+        get_order.return_value = {
+            "public_id": public_id,
+            "stripe_checkout_session_id": "cs_expected",
+        }
+
+        with self.assertRaisesRegex(billing_service.BillingError, "incohérente"):
+            billing_service.reconcile_center_checkout_payment(
+                public_id,
+                42,
+                returned_session_id="cs_other",
+            )
+
+        stripe_client.assert_not_called()
+
+    @patch.object(billing_service, "apply_stripe_webhook_event")
+    @patch.object(billing_service, "_stripe_sdk")
+    def test_signed_webhook_uses_verified_event_object(self, stripe_sdk, apply_event):
         event = {
             "id": "evt_test_1",
             "type": "checkout.session.completed",
             "livemode": False,
             "data": {"object": {"id": "cs_test_1", "payment_status": "paid"}},
         }
-        stripe_client.return_value = SimpleNamespace(
+        stripe_sdk.return_value = SimpleNamespace(
             Webhook=SimpleNamespace(construct_event=Mock(return_value=event)),
             error=SimpleNamespace(SignatureVerificationError=ValueError),
         )
@@ -571,14 +638,14 @@ class BillingServiceTest(unittest.TestCase):
         with patch.dict(os.environ, {"STRIPE_WEBHOOK_SECRET": "whsec_placeholder"}):
             billing_service.process_stripe_webhook(json.dumps(event).encode(), "signed")
 
-        stripe_client.return_value.Webhook.construct_event.assert_called_once()
+        stripe_sdk.return_value.Webhook.construct_event.assert_called_once()
         apply_event.assert_called_once_with(event)
 
     @patch.object(billing_service, "record_webhook_failure")
     @patch.object(billing_service, "apply_stripe_webhook_event", side_effect=ValueError("Montant Stripe incohérent"))
-    @patch.object(billing_service, "_stripe")
+    @patch.object(billing_service, "_stripe_sdk")
     def test_invalid_verified_event_is_recorded_for_retry(
-        self, stripe_client, apply_event, record_failure,
+        self, stripe_sdk, apply_event, record_failure,
     ):
         event = {
             "id": "evt_test_2",
@@ -586,7 +653,7 @@ class BillingServiceTest(unittest.TestCase):
             "livemode": False,
             "data": {"object": {"id": "cs_test_2", "payment_status": "paid"}},
         }
-        stripe_client.return_value = SimpleNamespace(
+        stripe_sdk.return_value = SimpleNamespace(
             Webhook=SimpleNamespace(construct_event=Mock(return_value=event)),
             error=SimpleNamespace(SignatureVerificationError=ValueError),
         )
