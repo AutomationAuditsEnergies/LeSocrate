@@ -98,7 +98,13 @@ class DayScheduleTemplateRoutesTest(unittest.TestCase):
                 json={
                     "name": "Invalide",
                     "blocks": [
-                        {"type": "course", "start_minute": 540, "duration_min": 60}
+                        {"type": "course", "start_minute": 540, "duration_min": 60},
+                        {
+                            "type": "pause",
+                            "start_minute": 600,
+                            "duration_min": 10,
+                            "is_lunch": False,
+                        },
                     ],
                 },
             )

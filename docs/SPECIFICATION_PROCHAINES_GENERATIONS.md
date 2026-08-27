@@ -1,5 +1,10 @@
 # Spécifications de développement — prochaines diffusions
 
+> Les règles du chantier de planning flexible et de propriété des intros sont
+> désormais consolidées dans
+> `docs/SPECIFICATION_PLANNING_PEDAGOGIQUE_FLEXIBLE.md`. En cas de contradiction,
+> cette nouvelle spécification prévaut.
+
 - Ce document constitue le cahier des charges à transmettre à l’agent chargé du développement.
 - L’agent doit implémenter les règles ci-dessous dans l’interface et dans la logique de génération.
 - Chaque séance est traitée séparément.

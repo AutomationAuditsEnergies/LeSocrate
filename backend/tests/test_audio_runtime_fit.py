@@ -102,9 +102,15 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             next_item=("questions_reponses_5.mp3", 900, "qa", 5),
             total_courses=5,
         )
+        last_course_closes_day = cgs._course_block_role(
+            5,
+            next_item=None,
+            total_courses=5,
+        )
 
         self.assertNotIn("Fin de journée", middle_role)
-        self.assertIn("Fin de journée", last_role)
+        self.assertNotIn("Fin de journée", last_role)
+        self.assertIn("Fin de journée", last_course_closes_day)
 
     def test_default_course_budget_uses_bloc_calibration_from_fish_audio_samples(self):
         playlist = [
@@ -909,9 +915,36 @@ class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
         self.assertEqual(audio_bytes, b"AUDIO")
         self.assertEqual(mode, "fixed_fish")
 
+    def test_final_qa_owns_the_late_temporal_closing(self):
+        temporal_outro = (
+            "Cette séance est terminée. Nous nous retrouverons demain, "
+            "le vendredi quatorze août deux mille vingt-six."
+        )
+        with patch(
+            "services.playlist_tts_service._build_pause_audio",
+            return_value=b"AUDIO",
+        ) as build_pause:
+            audio_bytes, mode = cgs._build_contextual_break_audio(
+                filename="qa_9h45_9h55.mp3",
+                duration_sec=600,
+                file_type="qa",
+                bloc_num=1,
+                item_idx=1,
+                playlist_items=[
+                    ("cours.mp3", 2700, "cours", 1),
+                    ("qa_9h45_9h55.mp3", 600, "qa", 1),
+                ],
+                blocs_by_number={1: {"text": "contenu du cours"}},
+                temporal_outro=temporal_outro,
+            )
+
+        self.assertEqual(audio_bytes, b"AUDIO")
+        self.assertEqual(mode, "fixed_fish")
+        self.assertEqual(build_pause.call_args.args[1], temporal_outro)
+
 
 class BreakTransitionOwnershipTest(unittest.TestCase):
-    def test_qa_after_course_has_no_intro_when_previous_file_owns_transition(self):
+    def test_qa_after_course_owns_its_intro_and_does_not_announce_pause(self):
         playlist_items = [
             ("cours_9h00_9h45.mp3", 2700, "cours", 1),
             ("qa_9h45_9h55.mp3", 600, "qa", 1),
@@ -934,11 +967,11 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
                 model="test-model",
             )
 
-        self.assertEqual(intro, "")
+        self.assertIn("questions", intro.lower())
         self.assertIn("questions", outro)
-        self.assertIn("dix minutes de pause", outro)
+        self.assertNotIn("pause", outro.lower())
 
-    def test_pause_after_course_has_no_intro_when_previous_file_owns_transition(self):
+    def test_pause_after_course_owns_its_intro_and_announces_course_resume(self):
         playlist_items = [
             ("cours_9h00_9h45.mp3", 2700, "cours", 1),
             ("pause_9h45_9h55.mp3", 600, "pause", 1),
@@ -961,10 +994,11 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
                 model="test-model",
             )
 
-        self.assertEqual(intro, "")
+        self.assertIn("pause", intro.lower())
         self.assertIn("pause est terminée", outro)
+        self.assertIn("reprend", outro.lower())
 
-    def test_pause_midi_after_course_has_no_intro_when_previous_file_owns_transition(self):
+    def test_pause_midi_after_course_owns_its_neutral_intro(self):
         playlist_items = [
             ("cours_12h20_13h05.mp3", 2700, "cours", 4),
             ("pause_midi_13h05_14h35.mp3", 5400, "pause_midi", 4),
@@ -987,12 +1021,11 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
                 model="test-model",
             )
 
-        self.assertEqual(intro, "")
+        self.assertIn("pause déjeuner", intro.lower())
+        self.assertNotIn("repos", intro.lower())
         self.assertIn("pause déjeuner est terminée", outro)
 
-    def test_first_break_without_previous_audio_has_no_intro(self):
-        # Depuis 2026-06-12, les breaks ne portent jamais d'intro propre,
-        # même sans audio précédent : silence au début, outro seule à la fin.
+    def test_break_without_previous_audio_still_owns_its_intro(self):
         playlist_items = [
             ("pause_9h00_9h05.mp3", 300, "pause", 1),
             ("cours_9h05_9h50.mp3", 2700, "cours", 1),
@@ -1014,7 +1047,7 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
                 model="test-model",
             )
 
-        self.assertEqual(intro, "")
+        self.assertIn("pause", intro.lower())
         self.assertIn("reprend", outro)
 
     def test_schedule_neutral_current_audio_does_not_announce_next_break(self):
@@ -1040,10 +1073,10 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
                 model="test-model",
             )
 
-        self.assertEqual(intro, "")
+        self.assertIn("questions", intro.lower())
         self.assertNotIn("pause déjeuner", outro.lower())
 
-    def test_pause_after_qa_has_no_intro_when_previous_file_owns_transition(self):
+    def test_pause_after_qa_owns_its_intro(self):
         playlist_items = [
             ("cours_9h00_9h45.mp3", 2700, "cours", 1),
             ("qa_9h45_9h55.mp3", 600, "qa", 1),
@@ -1067,7 +1100,7 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
                 model="test-model",
             )
 
-        self.assertEqual(intro, "")
+        self.assertIn("pause", intro.lower())
         self.assertIn("pause est terminée", outro)
 
 
@@ -1086,7 +1119,7 @@ class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
             side_effect=fake_tts,
         ), patch.object(
             cgs, "_mp3_duration_seconds_no_ffprobe",
-            side_effect=[4.0, 3.0, 1.0],
+            side_effect=[4.0, 3.0, 1.0, 1.0],
         ), patch(
             "services.playlist_tts_service._get_recycled_qa_pause",
             side_effect=AssertionError("ne doit pas recycler audioqapause en mode Edge"),
@@ -1108,17 +1141,20 @@ class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
             )
 
         self.assertEqual(mode, "fixed_edge_timed")
-        self.assertEqual(len(seen_texts), 3)
-        self.assertEqual(seen_volumes, ["+0%", "-100%", "-100%"])
-        self.assertIn("clôt", seen_texts[0].lower())
-        self.assertIn("pause", seen_texts[0].lower())
+        self.assertEqual(len(seen_texts), 4)
+        self.assertEqual(seen_volumes, ["+0%", "+0%", "-100%", "-100%"])
+        self.assertIn("questions", seen_texts[0].lower())
+        self.assertIn("terminé", seen_texts[1].lower())
+        self.assertNotIn("pause", seen_texts[1].lower())
         self.assertNotIn("c'est le moment", " ".join(seen_texts).lower())
         self.assertEqual(audio_bytes.count(b"ID3"), 1)
         self.assertIn(b"EDGE1", audio_bytes)
         self.assertIn(b"EDGE2", audio_bytes)
         self.assertIn(b"EDGE3", audio_bytes)
-        self.assertLess(audio_bytes.index(b"EDGE2"), audio_bytes.index(b"EDGE1"))
+        self.assertIn(b"EDGE4", audio_bytes)
         self.assertLess(audio_bytes.index(b"EDGE1"), audio_bytes.index(b"EDGE3"))
+        self.assertLess(audio_bytes.index(b"EDGE3"), audio_bytes.index(b"EDGE2"))
+        self.assertLess(audio_bytes.index(b"EDGE2"), audio_bytes.index(b"EDGE4"))
 
 
 class CourseOpeningRewriteTest(unittest.TestCase):
@@ -1224,7 +1260,7 @@ class RuntimeConclusionTextTest(unittest.TestCase):
         self.assertIn("Avant de s'arrêter", conclusion)
         self.assertGreater(len(conclusion.split()), 160)
 
-    def test_runtime_conclusion_announces_next_pause_from_playlist(self):
+    def test_runtime_conclusion_leaves_next_pause_intro_to_its_own_audio(self):
         conclusion = cgs._build_runtime_conclusion_text(
             [{"text": "On a travaillé la posture professionnelle et la reformulation."}],
             remaining_sec=150,
@@ -1232,7 +1268,8 @@ class RuntimeConclusionTextTest(unittest.TestCase):
             next_playlist_item=("pause_11h00_11h05.mp3", 300, "pause", 1),
         )
 
-        self.assertIn("pause de cinq minutes", conclusion)
+        self.assertNotIn("pause de cinq minutes", conclusion)
+        self.assertIn("s'arrêter ici", conclusion)
 
 
 class BasicTTSParallelWorkersTest(unittest.TestCase):

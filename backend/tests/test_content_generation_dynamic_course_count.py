@@ -67,9 +67,9 @@ class ExtractSubPartsDynamicCountTest(unittest.TestCase):
 
     def test_rejects_counts_outside_v2_contract(self):
         with patch.object(cgs, "_deepseek_post") as post:
-            with self.assertRaisesRegex(ValueError, "entre 4 et 10"):
-                cgs.extract_sub_parts("Programme", course_count=3)
-            with self.assertRaisesRegex(ValueError, "entre 4 et 10"):
+            with self.assertRaisesRegex(ValueError, "entre 1 et 10"):
+                cgs.extract_sub_parts("Programme", course_count=0)
+            with self.assertRaisesRegex(ValueError, "entre 1 et 10"):
                 cgs.extract_sub_parts("Programme", course_count=11)
         post.assert_not_called()
 
@@ -159,10 +159,10 @@ class FolderCourseCountWiringTest(unittest.TestCase):
             "services.day_playlist_service.resolve_folder_playlist",
             return_value={
                 "schema_version": 2,
-                "playlist_items": _playlist(3),
+                "playlist_items": _playlist(0),
             },
         ):
-            with self.assertRaisesRegex(ValueError, "entre 4 et 10"):
+            with self.assertRaisesRegex(ValueError, "entre 1 et 10"):
                 cgs.resolve_folder_content_course_count(42)
 
 class HrContentJobDynamicCountTest(unittest.TestCase):
@@ -223,6 +223,116 @@ class DynamicCourseProgressAndContextTest(unittest.TestCase):
         self.assertIn("Cours 5 — consolidation et clôture", final_profile)
         self.assertTrue(late_profile)
         self.assertIn("Cours 8", late_profile)
+
+    def test_temporal_card_uses_spoken_dates_and_precise_relative_markers(self):
+        snapshot = {
+            "days": [
+                {
+                    "day_index": 1,
+                    "date": "2026-08-13",
+                    "blocks": [
+                        {"block_type": "course", "start_minute": 540, "duration_minutes": 60},
+                        {"block_type": "course", "start_minute": 600, "duration_minutes": 60},
+                    ],
+                },
+                {
+                    "day_index": 2,
+                    "date": "2026-08-14",
+                    "blocks": [
+                        {"block_type": "course", "start_minute": 840, "duration_minutes": 60},
+                    ],
+                },
+            ]
+        }
+        with patch(
+            "repositories.pipeline_repository.get_pipeline_job",
+            return_value={"schedule_snapshot_json": snapshot},
+        ):
+            first = cgs._build_course_temporal_card(
+                formation_job_id=7,
+                folder_position=0,
+                sub_part_index=0,
+            )
+            second = cgs._build_course_temporal_card(
+                formation_job_id=7,
+                folder_position=0,
+                sub_part_index=1,
+            )
+
+        self.assertIn("jeudi treize août deux mille vingt-six", first)
+        self.assertIn("neuf heures", first)
+        self.assertIn("formulation orale autorisée : juste après", first)
+        self.assertIn("vendredi quatorze août deux mille vingt-six", second)
+        self.assertIn("formulation orale autorisée : demain", second)
+
+    def test_final_qa_temporal_closing_uses_next_day_in_spoken_form(self):
+        snapshot = {
+            "days": [
+                {"day_index": 1, "date": "2026-08-13", "blocks": []},
+                {"day_index": 2, "date": "2026-08-14", "blocks": []},
+            ]
+        }
+        with patch(
+            "repositories.pipeline_repository.get_pipeline_job",
+            return_value={"schedule_snapshot_json": snapshot},
+        ):
+            closing = cgs._build_day_temporal_closing(
+                formation_job_id=7,
+                folder_position=0,
+            )
+
+        self.assertIn("demain", closing)
+        self.assertIn("vendredi quatorze août deux mille vingt-six", closing)
+        self.assertNotRegex(closing, r"\d")
+
+    def test_final_qa_temporal_closing_marks_end_of_formation(self):
+        snapshot = {
+            "days": [
+                {"day_index": 1, "date": "2026-08-13", "blocks": []},
+            ]
+        }
+        with patch(
+            "repositories.pipeline_repository.get_pipeline_job",
+            return_value={"schedule_snapshot_json": snapshot},
+        ):
+            closing = cgs._build_day_temporal_closing(
+                formation_job_id=7,
+                folder_position=0,
+            )
+
+        self.assertEqual(
+            closing,
+            "Cette séance est terminée. Nous arrivons au terme de cette formation.",
+        )
+
+    def test_late_temporal_closing_is_added_only_when_a_course_ends_the_day(self):
+        closing = "Cette séance est terminée. Nous nous retrouverons demain."
+        final_course = [
+            {"bloc_number": 1, "text": "Conclusion pédagogique.", "dirty": False}
+        ]
+        final_qa = [
+            {"bloc_number": 1, "text": "Conclusion pédagogique.", "dirty": False}
+        ]
+
+        applied = cgs._apply_late_temporal_closing_to_final_course(
+            final_course,
+            [("course_01.mp3", 3600, "cours", 1)],
+            closing,
+        )
+        skipped = cgs._apply_late_temporal_closing_to_final_course(
+            final_qa,
+            [
+                ("course_01.mp3", 3600, "cours", 1),
+                ("qa_01.mp3", 600, "qa", 1),
+            ],
+            closing,
+        )
+
+        self.assertTrue(applied)
+        self.assertTrue(final_course[0]["text"].endswith(closing))
+        self.assertTrue(final_course[0]["dirty"])
+        self.assertFalse(skipped)
+        self.assertEqual(final_qa[0]["text"], "Conclusion pédagogique.")
 
     def test_mock_generation_reports_manifest_course_count(self):
         progress = Mock()

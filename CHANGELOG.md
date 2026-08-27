@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-26
+
+### docs(spec): consolidation du planning pédagogique flexible
+
+Une spécification vivante formalise le nouveau contrat : un dossier par date,
+un nombre de cours égal aux blocs cours planifiés, un budget de mots dérivé de
+la durée de chaque cours, et des Q&R/pauses facultatifs générés seulement à
+l'étape audio. Les intros des Q&R et pauses appartiennent désormais à leur
+propre fichier au lieu d'être portées par l'outro du bloc précédent. Deux cours
+contigus reçoivent une jointure audio générique, invisible dans le planning et
+générée pendant cette même étape audio tardive.
+
 ## 2026-08-23
 
 ### fix(ui): information RNCP dans un panneau latéral

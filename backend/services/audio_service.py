@@ -294,9 +294,11 @@ def get_course_session_playlist(platform_id, occurrence=None):
     if not is_explicit_schedule_occurrence(occurrence):
         return get_playlist(platform_id)
     resolved = resolve_v2_course_session_manifest(platform_id, occurrence)
+    from services.dynamic_day_schedule_service import build_day_audio_manifest
+
     blocks_by_key = {
         str(block["block_key"]): block
-        for block in resolved["blocks"]
+        for block in build_day_audio_manifest({"blocks": resolved["blocks"]})
     }
     playlist = []
     for audio_id, item in enumerate(resolved["playlist_items"], start=1):
@@ -311,6 +313,8 @@ def get_course_session_playlist(platform_id, occurrence=None):
             label = "Questions-réponses"
         elif file_type == "pause_midi":
             label = "Pause déjeuner"
+        elif file_type == "jointure":
+            label = "Transition entre deux cours"
         else:
             label = "Pause"
         playlist.append(

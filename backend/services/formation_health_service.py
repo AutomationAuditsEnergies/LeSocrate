@@ -94,10 +94,10 @@ def _expected_structured_segment_contract(
                 for block in day.get("blocks") or []
                 if block.get("block_type") == "course"
             )
-            if not 4 <= course_count <= 10:
+            if not 1 <= course_count <= 10:
                 raise ValueError(
                     f"Le manifeste V2 de la journée {day_index} contient "
-                    f"{course_count} cours au lieu de 4 à 10"
+                    f"{course_count} cours au lieu de 1 à 10"
                 )
             course_counts.append(course_count)
         return {

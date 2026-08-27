@@ -1,12 +1,11 @@
-"""Build and persist an occurrence-bound, two-stage learner timeline.
+"""Build and persist an occurrence-bound, adaptive learner timeline.
 
-Course MP3s are allowed to keep their natural generated duration.  The Q&A or
-pause immediately following a course is the elastic buffer: it starts as soon
-as speech ends, grows when speech ends early, and shrinks when speech runs
-late.  A type-specific minimum is always protected; beyond that boundary the
-course is hard-stopped. Break MP3s are then generated to the computed effective
-duration, so the browser can play every asset normally without seeking or
-looping silence.
+Course MP3s keep their natural duration and their advance/delay propagates
+through an adjacent course chain.  A hidden jointure is inserted between two
+courses and counts as technical delay.  The first Q&A/pause after that chain is
+the elastic buffer: it grows when the chain ends early and shrinks by at most
+five minutes (without crossing its absolute type minimum).  Any remaining
+delay hard-stops the last course immediately preceding that flexible block.
 """
 
 from __future__ import annotations
@@ -59,7 +58,10 @@ def minimum_flexible_duration_seconds(file_type: str, planned_duration: int) -> 
         minimum = MIN_QA_MINUTES * 60
     else:
         minimum = MIN_SHORT_PAUSE_MINUTES * 60
-    return max(1, min(int(planned_duration or 0), int(minimum)))
+    planned = max(1, int(planned_duration or 0))
+    # A flexible block can lose at most five minutes and must also respect its
+    # absolute planning minimum (ten minutes for Q&A/short pause).
+    return max(1, min(planned, max(int(minimum), planned - 300)))
 
 
 def course_playback_cap_seconds(
@@ -73,19 +75,17 @@ def course_playback_cap_seconds(
         raise ValueError("Index de cours invalide pour le calcul de la limite audio")
 
     course_duration = items[index][1]
-    next_course_index = next(
-        (cursor for cursor in range(index + 1, len(items)) if items[cursor][2] == "cours"),
-        len(items),
-    )
-    flexible = items[index + 1:next_course_index]
-    if not flexible:
-        return max(1, course_duration)
+    following = items[index + 1] if index + 1 < len(items) else None
+    if following and following[2] in {"qa", "pause", "pause_midi"}:
+        protected = minimum_flexible_duration_seconds(
+            following[2], following[1]
+        )
+        return max(1, course_duration + following[1] - protected)
 
-    elastic = flexible[0]
-    preserved_after_elastic = sum(item[1] for item in flexible[1:])
-    protected_minimum = minimum_flexible_duration_seconds(elastic[2], elastic[1])
-    group_duration = course_duration + sum(item[1] for item in flexible)
-    return max(1, group_duration - preserved_after_elastic - protected_minimum)
+    # An earlier course in a contiguous chain is intentionally not capped:
+    # its drift propagates to n+1.  The occurrence manifest will perform the
+    # only required hard stop on the last course before the elastic block.
+    return max(1, course_duration + 24 * 60 * 60)
 
 
 def build_occurrence_playback_manifest(
@@ -94,21 +94,22 @@ def build_occurrence_playback_manifest(
     *,
     folder_id: int | None = None,
 ) -> dict[str, Any]:
-    """Compile natural course durations into a fixed-anchor daily timeline."""
+    """Compile natural course durations using the recurrence defined above."""
     items = [_playlist_item(item) for item in playlist_items]
     if not items:
         raise ValueError("Playlist vide pour le manifeste de lecture")
 
     segments: list[dict[str, Any]] = []
-    cursor = 0
-    index = 0
-    while index < len(items):
-        filename, planned_duration, file_type, course_index = items[index]
+    actual_cursor = 0
+    scheduled_cursor = 0
+    elastic_available = False
+
+    for filename, planned_duration, file_type, course_index in items:
         measured = float(media_durations.get(filename) or 0.0)
         asset_duration = measured if measured > 0 else float(planned_duration)
 
-        if file_type != "cours":
-            effective_duration = max(1, int(planned_duration))
+        if file_type == "cours":
+            natural_duration = max(1, int(math.ceil(asset_duration)))
             segments.append(
                 {
                     "filename": filename,
@@ -116,99 +117,125 @@ def build_occurrence_playback_manifest(
                     "course_index": course_index,
                     "planned_duration_sec": int(planned_duration),
                     "asset_duration_sec": round(asset_duration, 3),
-                    "effective_start_sec": cursor,
-                    "effective_duration_sec": effective_duration,
-                    "generation_target_duration_sec": effective_duration,
-                    "effective_end_sec": cursor + effective_duration,
+                    "scheduled_start_sec": scheduled_cursor,
+                    "effective_start_sec": actual_cursor,
+                    "effective_duration_sec": natural_duration,
+                    "effective_end_sec": actual_cursor + natural_duration,
+                    "hard_stop_sec": None,
                     "hard_stopped": False,
                 }
             )
-            cursor += effective_duration
-            index += 1
+            actual_cursor += natural_duration
+            scheduled_cursor += max(1, int(planned_duration))
+            elastic_available = True
             continue
 
-        course_start = cursor
-        next_course_index = next(
-            (
-                candidate
-                for candidate in range(index + 1, len(items))
-                if items[candidate][2] == "cours"
-            ),
-            len(items),
-        )
-        flexible = items[index + 1:next_course_index]
-        course_cap = course_playback_cap_seconds(items, index)
-        # Ceil avoids shaving the last partial MP3 second from a naturally
-        # ending course.  The learner may see at most one silent fraction of a
-        # second before the server-owned boundary advances.
-        natural_duration = max(1, int(math.ceil(asset_duration)))
-        effective_course_duration = min(natural_duration, course_cap)
+        if file_type == "jointure":
+            effective_duration = max(
+                1,
+                min(10, int(planned_duration), int(math.ceil(asset_duration))),
+            )
+            segments.append(
+                {
+                    "filename": filename,
+                    "type": file_type,
+                    "course_index": course_index,
+                    "planned_duration_sec": int(planned_duration),
+                    "scheduled_duration_sec": 0,
+                    "asset_duration_sec": round(asset_duration, 3),
+                    "scheduled_start_sec": scheduled_cursor,
+                    "effective_start_sec": actual_cursor,
+                    "effective_duration_sec": effective_duration,
+                    "generation_target_duration_sec": effective_duration,
+                    "effective_end_sec": actual_cursor + effective_duration,
+                    "technical_delay_sec": effective_duration,
+                    "hard_stopped": False,
+                }
+            )
+            actual_cursor += effective_duration
+            continue
+
+        planned = max(1, int(planned_duration))
+        is_elastic = elastic_available and file_type in {
+            "qa",
+            "pause",
+            "pause_midi",
+        }
+        drift_before = actual_cursor - scheduled_cursor
+        if is_elastic:
+            protected = minimum_flexible_duration_seconds(file_type, planned)
+            maximum_shrink = planned - protected
+            surplus = max(0, drift_before - maximum_shrink)
+            if surplus:
+                last_course_index = next(
+                    (
+                        candidate
+                        for candidate in range(len(segments) - 1, -1, -1)
+                        if segments[candidate]["type"] == "cours"
+                    ),
+                    None,
+                )
+                if last_course_index is not None:
+                    course_segment = segments[last_course_index]
+                    removable = max(
+                        0,
+                        int(course_segment["effective_duration_sec"]) - 1,
+                    )
+                    cut = min(int(surplus), removable)
+                    if cut:
+                        course_segment["effective_duration_sec"] -= cut
+                        course_segment["effective_end_sec"] -= cut
+                        course_segment["hard_stop_sec"] = course_segment[
+                            "effective_duration_sec"
+                        ]
+                        course_segment["hard_stopped"] = True
+                        for later in segments[last_course_index + 1:]:
+                            later["effective_start_sec"] -= cut
+                            later["effective_end_sec"] -= cut
+                        actual_cursor -= cut
+                        drift_before -= cut
+            effective_duration = max(protected, planned - drift_before)
+        else:
+            effective_duration = planned
+
         segments.append(
             {
                 "filename": filename,
                 "type": file_type,
                 "course_index": course_index,
-                "planned_duration_sec": int(planned_duration),
+                "planned_duration_sec": planned,
                 "asset_duration_sec": round(asset_duration, 3),
-                "effective_start_sec": cursor,
-                "effective_duration_sec": effective_course_duration,
-                "effective_end_sec": cursor + effective_course_duration,
-                "hard_stop_sec": course_cap,
-                "hard_stopped": natural_duration > course_cap,
+                "scheduled_start_sec": scheduled_cursor,
+                "effective_start_sec": actual_cursor,
+                "effective_duration_sec": int(effective_duration),
+                "generation_target_duration_sec": int(effective_duration),
+                "effective_end_sec": actual_cursor + int(effective_duration),
+                "drift_before_sec": drift_before,
+                "elastic": is_elastic,
+                "hard_stopped": False,
             }
         )
-        cursor += effective_course_duration
+        actual_cursor += int(effective_duration)
+        scheduled_cursor += planned
+        if is_elastic:
+            elastic_available = False
 
-        if flexible:
-            for flex_index, flex in enumerate(flexible):
-                flex_filename, flex_planned, flex_type, flex_course_index = flex
-                flex_measured = float(media_durations.get(flex_filename) or 0.0)
-                flex_asset_duration = flex_measured if flex_measured > 0 else float(flex_planned)
-                is_elastic = flex_index == 0
-                if is_elastic:
-                    planned_group_duration = planned_duration + sum(
-                        item[1] for item in flexible
-                    )
-                    group_end = course_start + planned_group_duration
-                    preserved_after_elastic = sum(
-                        item[1] for item in flexible[flex_index + 1:]
-                    )
-                    effective_flex_duration = max(
-                        1,
-                        group_end - cursor - preserved_after_elastic,
-                    )
-                else:
-                    effective_flex_duration = max(1, int(flex_planned))
-                segments.append(
-                    {
-                        "filename": flex_filename,
-                        "type": flex_type,
-                        "course_index": flex_course_index,
-                        "planned_duration_sec": int(flex_planned),
-                        "asset_duration_sec": round(flex_asset_duration, 3),
-                        "effective_start_sec": cursor,
-                    "effective_duration_sec": effective_flex_duration,
-                    "generation_target_duration_sec": effective_flex_duration,
-                        "effective_end_sec": cursor + effective_flex_duration,
-                        "elastic": is_elastic,
-                        "hard_stopped": False,
-                    }
-                )
-                cursor += effective_flex_duration
-
-        index = next_course_index
-
-    planned_total = sum(item[1] for item in items)
-    if cursor != planned_total:
-        raise ValueError(
-            f"Timeline adaptative incohérente ({cursor}s au lieu de {planned_total}s)"
-        )
+    planned_total = sum(
+        item[1] for item in items if item[2] != "jointure"
+    )
+    technical_total = sum(
+        segment["effective_duration_sec"]
+        for segment in segments
+        if segment["type"] == "jointure"
+    )
     return {
         "schema_version": PLAYBACK_MANIFEST_SCHEMA_VERSION,
-        "strategy": "natural_course_then_exact_elastic_break_assets",
+        "strategy": "recursive_course_drift_then_first_optional_flexible_block",
         "folder_id": int(folder_id) if folder_id is not None else None,
         "planned_total_duration_sec": planned_total,
-        "effective_total_duration_sec": cursor,
+        "technical_jointure_duration_sec": technical_total,
+        "effective_total_duration_sec": actual_cursor,
+        "final_drift_sec": actual_cursor - scheduled_cursor,
         "segments": segments,
     }
 
@@ -303,7 +330,7 @@ def load_occurrence_playback_manifest(
         payload = json.loads(blob.download_blob().readall().decode("utf-8"))
     except ResourceNotFoundError:
         # Historic occurrences predate adaptive manifests.  Do not cache the
-        # miss: a J-1 publisher may still be completing this immutable prefix.
+        # miss: an H-72 publisher may still be completing this immutable prefix.
         return None
     if (
         not isinstance(payload, dict)

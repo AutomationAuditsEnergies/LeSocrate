@@ -54,6 +54,54 @@ def _resolved_manifest(module_day_id=404):
 
 
 class DynamicOccurrenceAudioTest(unittest.TestCase):
+    def test_v2_occurrence_exposes_hidden_jointure_from_full_audio_manifest(self):
+        blocks = [
+            {
+                "position": 1,
+                "block_type": "course",
+                "pause_kind": None,
+                "start_minute": 540,
+                "end_minute": 600,
+                "duration_minutes": 60,
+            },
+            {
+                "position": 2,
+                "block_type": "course",
+                "pause_kind": None,
+                "start_minute": 600,
+                "end_minute": 660,
+                "duration_minutes": 60,
+            },
+        ]
+        resolved = {
+            "schema_version": 2,
+            "folder_id": 52,
+            "module_day_id": 404,
+            "blocks": blocks,
+            "playlist_items": build_playlist_items(blocks),
+        }
+        with (
+            patch(
+                "repositories.pipeline_repository.list_course_folder_ids_for_platform",
+                return_value=[52],
+            ),
+            patch(
+                "services.day_playlist_service.resolve_folder_playlist",
+                return_value=resolved,
+            ),
+        ):
+            playlist = audio_service.get_course_session_playlist(
+                12, {"module_day_id": 404, "session_index": 1}
+            )
+
+        self.assertEqual(
+            [item["type"] for item in playlist],
+            ["cours", "jointure", "cours"],
+        )
+        self.assertEqual(playlist[1]["block_key"], "jointure_01_02")
+        self.assertEqual(playlist[1]["duration"], 10)
+        self.assertIn("Transition entre deux cours", playlist[1]["title"])
+
     def test_v2_occurrence_streams_course_qa_and_pauses_in_locked_order(self):
         occurrence = {
             "module_day_id": 404,

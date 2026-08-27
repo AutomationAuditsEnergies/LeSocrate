@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  BookOpen,
   BookmarkPlus,
   Coffee,
   ChevronDown,
@@ -7,23 +8,23 @@ import {
   ChevronRight,
   GripHorizontal,
   Menu,
-  Minus,
-  PlusCircle,
+  MessageCircleQuestion,
+  Trash2,
   Utensils,
   X,
 } from 'lucide-react'
 
 import {
   DAY_SCHEDULE_RULES,
-  addScheduleSequence,
+  appendScheduleBlock,
   formatScheduleMinute,
+  getAllowedNextScheduleBlocks,
   getScheduleBlockDurationBounds,
   getScheduleSequenceDropMinute,
   getScheduleStats,
   normalizeScheduleTemplate,
   reflowScheduleBlocks,
-  removeLastScheduleSequence,
-  setSchedulePauseKind,
+  tryRemoveScheduleBlock,
   updateScheduleBlockDuration,
   validateScheduleTemplate,
 } from '../dayScheduleTemplates.js'
@@ -152,19 +153,6 @@ function normalizeInitialCustomDays(schedule) {
   )
 }
 
-function addSequenceWithDefaultLunch(blocks) {
-  const next = addScheduleSequence(blocks)
-  const stats = getScheduleStats(next)
-  if (stats.courseCount < DAY_SCHEDULE_RULES.minCourses || stats.lunchCount) return next
-  const pauseIndexes = next.flatMap((block, index) => (
-    block.block_type === 'pause' ? [index] : []
-  ))
-  const lunchIndex = pauseIndexes[Math.floor((pauseIndexes.length - 1) / 2)]
-  return Number.isInteger(lunchIndex)
-    ? setSchedulePauseKind(next, lunchIndex, 'lunch')
-    : next
-}
-
 export default function FormationSchedulePlanner({
   reuse = false,
   expectedDayCount = null,
@@ -241,9 +229,9 @@ export default function FormationSchedulePlanner({
   const eventResizeRef = useRef(null)
   const weekSwipeRef = useRef(null)
   const weekWheelRef = useRef(0)
-  const pauseClickRef = useRef({ key: '', at: 0 })
   const [resizingEventKey, setResizingEventKey] = useState('')
   const [templateQuickSave, setTemplateQuickSave] = useState(null)
+  const [scheduleActionMessage, setScheduleActionMessage] = useState('')
 
   const loadTemplates = useCallback(async () => {
     if (reuse) return
@@ -464,6 +452,7 @@ export default function FormationSchedulePlanner({
   }
   const activeBlocks = scheduleDayByDate.get(activeDate)?.blocks || []
   const activeSequenceCount = getScheduleStats(activeBlocks).courseCount
+  const activeAllowedBlocks = getAllowedNextScheduleBlocks(activeBlocks)
 
   useEffect(() => {
     onChange?.({
@@ -606,23 +595,47 @@ export default function FormationSchedulePlanner({
     setCustomDays((current) => ({ ...current, [date]: nextBlocks }))
   }
 
-  const addSequenceToDay = (date, requestedStartMinute = null) => {
+  const addBlockToDay = (
+    date,
+    blockType,
+    pauseKind = null,
+    requestedStartMinute = null,
+  ) => {
     const blocks = scheduleDayByDate.get(date)?.blocks || []
-    if (getScheduleStats(blocks).courseCount >= DAY_SCHEDULE_RULES.maxCourses) return
+    const choice = blockType === 'pause' && pauseKind === 'lunch' ? 'lunch' : blockType
+    const permission = getAllowedNextScheduleBlocks(blocks)[choice]
+    if (!permission?.allowed) {
+      setScheduleActionMessage(permission?.reason || 'Ce bloc ne peut pas être ajouté ici.')
+      return
+    }
     updateCustomDay(date, (existing) => {
-      const next = addSequenceWithDefaultLunch(existing)
-      if (existing.length || requestedStartMinute === null) return next
-      return reflowScheduleBlocks(
-        next,
-        getScheduleSequenceDropMinute(requestedStartMinute),
+      return appendScheduleBlock(
+        existing,
+        blockType,
+        pauseKind,
+        existing.length || requestedStartMinute === null
+          ? null
+          : getScheduleSequenceDropMinute(requestedStartMinute),
       )
     })
+    setScheduleActionMessage('')
   }
 
-  const removeSequenceFromDay = (date) => {
+  const removeBlockFromDay = (date, blocks, blockIndex) => {
+    if (reuse || date < today) return
+    const result = tryRemoveScheduleBlock(blocks, blockIndex)
+    if (!result.removed) {
+      setScheduleActionMessage(result.error)
+      return
+    }
+    updateCustomDay(date, () => result.blocks)
+    setScheduleActionMessage('')
+  }
+
+  const removeLastCourseFromDay = (date) => {
     const blocks = scheduleDayByDate.get(date)?.blocks || []
-    if (!getScheduleStats(blocks).courseCount) return
-    updateCustomDay(date, removeLastScheduleSequence)
+    const blockIndex = blocks.findLastIndex((block) => block.block_type === 'course')
+    if (blockIndex >= 0) removeBlockFromDay(date, blocks, blockIndex)
   }
 
   const openTemplateQuickSave = (date) => {
@@ -674,33 +687,6 @@ export default function FormationSchedulePlanner({
         error: error.message || 'Impossible d’enregistrer ce template.',
       }))
     }
-  }
-
-  const toggleLunchForDay = (event, date, blocks, blockIndex) => {
-    event.preventDefault()
-    event.stopPropagation()
-    const block = blocks[blockIndex]
-    if (reuse || date < today || block?.block_type !== 'pause') return
-    updateCustomDay(date, () => setSchedulePauseKind(
-      blocks,
-      blockIndex,
-      block.pause_kind === 'lunch' ? 'short' : 'lunch',
-    ))
-  }
-
-  const handleLunchPointerDown = (event, date, blocks, blockIndex) => {
-    const block = blocks[blockIndex]
-    const key = `${date}:${block?.block_key || blockIndex}`
-    const now = event.timeStamp
-    const previous = pauseClickRef.current
-
-    if (previous.key === key && now - previous.at <= 500) {
-      pauseClickRef.current = { key: '', at: 0 }
-      toggleLunchForDay(event, date, blocks, blockIndex)
-      return
-    }
-
-    pauseClickRef.current = { key, at: now }
   }
 
   const updateEventDuration = (date, blocks, blockIndex, duration) => {
@@ -895,34 +881,54 @@ export default function FormationSchedulePlanner({
         <section className="formation-schedule__sequence" aria-labelledby="formation-sequence-title">
           <header>
             <div>
-              <h2 id="formation-sequence-title">Séquence</h2>
-              <p>À glisser dans le calendrier</p>
+              <h2 id="formation-sequence-title">Ajouter un bloc</h2>
+              <p>La chaîne reste continue automatiquement</p>
             </div>
             <span>{activeSequenceCount}/{DAY_SCHEDULE_RULES.maxCourses}</span>
           </header>
+          <div className="formation-schedule__block-palette">
+            {[
+              { key: 'course', type: 'course', pauseKind: null, label: 'Cours vocal', Icon: BookOpen },
+              { key: 'qa', type: 'qa', pauseKind: null, label: 'Questions-réponses', Icon: MessageCircleQuestion },
+              { key: 'pause', type: 'pause', pauseKind: 'short', label: 'Pause courte', Icon: Coffee },
+              { key: 'lunch', type: 'pause', pauseKind: 'lunch', label: 'Pause déjeuner', Icon: Utensils },
+            ].map(({ key, type, pauseKind, label, Icon }) => {
+              const permission = activeAllowedBlocks[key]
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className="formation-schedule__sequence-source"
+                  draggable={!reuse && permission.allowed}
+                  disabled={reuse || !permission.allowed}
+                  title={permission.allowed ? `Ajouter ${label.toLowerCase()}` : permission.reason}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'copy'
+                    event.dataTransfer.setData('application/x-day-block', key)
+                  }}
+                  onDragEnd={() => setDropPreview(null)}
+                  onClick={() => addBlockToDay(activeDate || displayedDate, type, pauseKind)}
+                >
+                  <Icon size={14} aria-hidden="true" />
+                  {label}
+                </button>
+              )
+            })}
+          </div>
           <button
             type="button"
-            className="formation-schedule__sequence-source"
-            draggable={!reuse}
-            disabled={reuse}
-            onDragStart={(event) => {
-              event.dataTransfer.effectAllowed = 'copy'
-              event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
-            }}
-            onDragEnd={() => setDropPreview(null)}
-            onClick={() => addSequenceToDay(activeDate || displayedDate)}
-          >
-            <PlusCircle size={14} aria-hidden="true" />
-            Séquence pédagogique
-          </button>
-          <button
-            type="button"
+            className="formation-schedule__remove-course"
             disabled={reuse || activeSequenceCount === 0}
-            onClick={() => removeSequenceFromDay(activeDate)}
+            onClick={() => removeLastCourseFromDay(activeDate)}
           >
-            <Minus size={13} aria-hidden="true" />
-            Retirer la dernière séquence
+            <Trash2 size={13} aria-hidden="true" />
+            Retirer le dernier cours
           </button>
+          {scheduleActionMessage && (
+            <p className="formation-schedule__action-message" role="status" aria-live="polite">
+              {scheduleActionMessage}
+            </p>
+          )}
         </section>
       </aside>
 
@@ -1018,11 +1024,10 @@ export default function FormationSchedulePlanner({
               const scheduledDay = scheduleDayByDate.get(date)
               const blocks = scheduledDay?.blocks || []
               const isSelectedDay = selectedSet.has(date)
-              const canDropSequence = (
+              const canDropBlock = (
                 !reuse
                 && date >= today
                 && isSelectedDay
-                && getScheduleStats(blocks).courseCount < DAY_SCHEDULE_RULES.maxCourses
               )
               const events = blocks.map((block, blockIndex) => ({
                 block,
@@ -1077,14 +1082,14 @@ export default function FormationSchedulePlanner({
                     activateDate(date)
                   }}
                   onDragEnter={(event) => {
-                    if (!canDropSequence) return
-                    if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+                    if (!canDropBlock) return
+                    if (!Array.from(event.dataTransfer.types).includes('application/x-day-block')) return
                     event.preventDefault()
                     updateDropPreview(event)
                   }}
                   onDragOver={(event) => {
-                    if (!canDropSequence) return
-                    if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+                    if (!canDropBlock) return
+                    if (!Array.from(event.dataTransfer.types).includes('application/x-day-block')) return
                     event.preventDefault()
                     event.dataTransfer.dropEffect = 'copy'
                     updateDropPreview(event)
@@ -1093,13 +1098,20 @@ export default function FormationSchedulePlanner({
                     if (!event.currentTarget.contains(event.relatedTarget)) setDropPreview(null)
                   }}
                   onDrop={(event) => {
-                    if (!canDropSequence) return
-                    if (event.dataTransfer.getData('application/x-day-sequence') !== 'course-qa-pause') return
+                    if (!canDropBlock) return
+                    const choice = event.dataTransfer.getData('application/x-day-block')
+                    const blockDefinition = {
+                      course: ['course', null],
+                      qa: ['qa', null],
+                      pause: ['pause', 'short'],
+                      lunch: ['pause', 'lunch'],
+                    }[choice]
+                    if (!blockDefinition) return
                     event.preventDefault()
                     event.stopPropagation()
                     const startMinute = updateDropPreview(event)
                     setDropPreview(null)
-                    addSequenceToDay(date, startMinute)
+                    addBlockToDay(date, ...blockDefinition, startMinute)
                   }}
                 >
                   {Array.from({ length: 24 }, (_, hourIndex) => <span key={hourIndex} className="formation-schedule__hour-slot" />)}
@@ -1114,7 +1126,7 @@ export default function FormationSchedulePlanner({
                         <strong>
                           {dropPreview.mode === 'start' ? 'Début' : 'Ajout'} {formatScheduleMinute(dropPreview.minute)}
                         </strong>
-                        <span>Relâchez pour placer la séquence</span>
+                        <span>Relâchez pour placer le bloc</span>
                       </div>
                     </div>
                   )}
@@ -1130,39 +1142,6 @@ export default function FormationSchedulePlanner({
                         '--event-duration': event.duration,
                       }}
                     >
-                      {canEditDay && event.block.block_type === 'pause' && (
-                        <button
-                          type="button"
-                          className="formation-schedule__pause-toggle"
-                          aria-pressed={event.block.pause_kind === 'lunch'}
-                          aria-label={event.block.pause_kind === 'lunch'
-                            ? 'Repasser cette pause en pause courte'
-                            : 'Transformer cette pause en pause déjeuner'}
-                          data-hint={event.block.pause_kind === 'lunch'
-                            ? 'Double-cliquer pour repasser en pause courte'
-                            : 'Double-cliquer pour transformer en pause déjeuner'}
-                          title={event.block.pause_kind === 'lunch'
-                            ? 'Double-cliquer pour repasser en pause courte'
-                            : 'Double-cliquer pour transformer en pause déjeuner'}
-                          onPointerDown={(pointerEvent) => {
-                            handleLunchPointerDown(
-                              pointerEvent,
-                              date,
-                              blocks,
-                              event.blockIndex,
-                            )
-                          }}
-                          onKeyDown={(keyEvent) => {
-                            if (!['Enter', ' '].includes(keyEvent.key)) return
-                            toggleLunchForDay(
-                              keyEvent,
-                              date,
-                              blocks,
-                              event.blockIndex,
-                            )
-                          }}
-                        />
-                      )}
                       <span className="formation-schedule__week-event-heading">
                         <span>
                           {event.block.block_type === 'pause'
@@ -1174,12 +1153,20 @@ export default function FormationSchedulePlanner({
                         </span>
                         <time>{event.time}</time>
                       </span>
-                      {canEditDay && event.block.block_type === 'pause' && (
-                        <span className="formation-schedule__week-event-description">
-                          {event.block.pause_kind === 'lunch'
-                            ? 'Pause déjeuner sélectionnée'
-                            : 'Cliquer pour définir le déjeuner'}
-                        </span>
+                      {canEditDay && (
+                        <button
+                          type="button"
+                          className="formation-schedule__event-delete"
+                          aria-label={`Supprimer ${event.label}`}
+                          title={`Supprimer ${event.label}`}
+                          onClick={(clickEvent) => {
+                            clickEvent.preventDefault()
+                            clickEvent.stopPropagation()
+                            removeBlockFromDay(date, blocks, event.blockIndex)
+                          }}
+                        >
+                          <Trash2 size={11} aria-hidden="true" />
+                        </button>
                       )}
                       {canEditDay && (
                         <button

@@ -130,7 +130,14 @@ def _pad_audio_to_duration(audio_bytes, target_duration_seconds, truncate_overfl
     return output.getvalue()
 
 
-def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_func=None):
+def _build_pause_audio(
+    intro_text,
+    outro_text,
+    target_duration_seconds,
+    convert_func=None,
+    *,
+    lead_in_seconds=17,
+):
     """
     Construit un audio de pause/Q&A :
     intro TTS optionnelle + silence + outro TTS + 2s de silence final.
@@ -152,7 +159,7 @@ def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_
         outro_audio = AudioSegment.from_mp3(io.BytesIO(tts(outro_text)))
 
     target_ms = int(target_duration_seconds * 1000)
-    lead_in_ms = 17000
+    lead_in_ms = max(0, int(float(lead_in_seconds or 0) * 1000))
     outro_tail_ms = 2000
     silence_ms = target_ms - len(intro_audio) - len(outro_audio) - lead_in_ms - outro_tail_ms
 
@@ -454,10 +461,16 @@ def _build_contextual_break_audio(
     from services.break_transition_service import build_break_transition_texts
     from services.fixed_break_scripts import get_fixed_break_script
 
-    fixed = get_fixed_break_script(filename, intro_owned_by_previous=True)
+    dynamic_asset = bool(re.fullmatch(r"(?:qa|pause)_\d{2}\.mp3", filename or ""))
+    fixed = get_fixed_break_script(filename, intro_owned_by_previous=False)
     if fixed:
         try:
-            return _build_pause_audio(fixed["intro"], fixed["outro"], duration_sec)
+            return _build_pause_audio(
+                fixed["intro"],
+                fixed["outro"],
+                duration_sec,
+                lead_in_seconds=0 if dynamic_asset else 17,
+            )
         except Exception as e:
             logger.warning(f"⚠️ Q&A/Pause fixe échoué pour {filename}: {e}; fallback audioqapause")
             return _get_recycled_qa_pause(filename)
@@ -472,7 +485,12 @@ def _build_contextual_break_audio(
         get_bloc_text=lambda n: blocs_by_number.get(n, ""),
     )
     try:
-        return _build_pause_audio(intro, outro, duration_sec)
+        return _build_pause_audio(
+            intro,
+            outro,
+            duration_sec,
+            lead_in_seconds=0 if dynamic_asset else 17,
+        )
     except Exception as e:
         logger.warning(f"⚠️ Q&A/Pause contextuel échoué pour {filename}: {e}; fallback audioqapause")
         return _get_recycled_qa_pause(filename)
@@ -764,6 +782,16 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
                     playlist_items, blocs_by_number,
                 )
                 logger.info(f"   🧩 {filename}: pause midi contextuelle générée")
+
+            elif file_type == "jointure":
+                final_bytes = _build_pause_audio(
+                    "Nous allons maintenant poursuivre avec la partie suivante, "
+                    "dans le prolongement direct de ce que nous venons de voir.",
+                    "",
+                    min(10, max(1, int(duration_sec))),
+                    lead_in_seconds=0,
+                )
+                logger.info(f"   🧩 {filename}: jointure de cours générée")
 
             else:
                 raise ValueError(f"Type inconnu: {file_type}")

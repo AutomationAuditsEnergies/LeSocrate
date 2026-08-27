@@ -254,13 +254,16 @@ def _course_audio_slots_prompt(
         day_lines = []
         for day in schedule_days:
             slots = _v2_course_slots(day)
+            canonical_day = compile_day_schedule(day)
             day_number = int(
                 day.get("day_index") or day.get("day_number") or 0
             )
             day_lines.append(
                 f"Journée {day_number} : {len(slots)} cours vocaux, "
                 f"{sum(slot['duration_min'] for slot in slots)} minutes "
-                "de cours au total."
+                "de cours au total. "
+                f"Enchaînement planifié : {' → '.join(block['block_type'] for block in canonical_day['blocks'])}. "
+                f"Clôture de journée portée par : {canonical_day['ending_block_type']}."
             )
             day_lines.extend(
                 (
@@ -315,6 +318,10 @@ def _normalize_v2_day_audio_slots(
                 "course_index": slot["course_index"],
                 "course_count": len(slots),
                 "is_last_course": idx == len(slots) - 1,
+                "closes_day": (
+                    idx == len(slots) - 1
+                    and canonical_day["ending_block_type"] == "course"
+                ),
                 "audio_slot": slot["label"],
                 "block_key": slot["block_key"],
                 "start_time": slot["start"],
@@ -417,7 +424,7 @@ def _format_slot_generation_source(slot_data: dict) -> str:
     if course_count:
         internal_label = (
             f"Cours {course_index} sur {course_count}"
-            + (" (dernier cours de la journée)" if slot_data.get("is_last_course") else "")
+            + (" (clôture la journée)" if slot_data.get("closes_day") else "")
         )
     else:
         internal_label = slot_data.get("audio_slot")
@@ -617,10 +624,13 @@ RÈGLES :
 - Les exemples métier sont racontés et commentés par le professeur à l'intérieur du cours ; l'apprenant n'a aucune activité à réaliser.
 - Un module peut occuper plusieurs cours, ou plusieurs petits modules peuvent partager un cours si c'est pédagogiquement cohérent.
 - Ne coupe jamais une idée au hasard : chaque cours doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
-- Le dernier cours de chaque journée doit conclure la journée. Lui seul annonce la prochaine séance, sauf lors de la dernière journée de la formation.
+- Les Q&R et pauses sont facultatifs et sont produits plus tard comme audios génériques. Un cours ne les annonce jamais.
+- Si la journée se termine par un Q&R, son outro clôt la journée : le dernier cours conclut seulement son chapitre.
+- Si la journée se termine par un cours, ce dernier cours conclut pédagogiquement la journée, sans dater ni annoncer le prochain rendez-vous. La clôture temporelle exacte sera ajoutée lors de l'audio.
+- Deux cours contigus sont reliés plus tard par une jointure générique invisible ; ne verbalise pas cette mécanique dans le contenu des cours.
 - Jour 1 : pas de rappel. Autres jours : bref rappel de la séance précédente.
 - "day_recap" : commence par "Lors de la dernière séance, nous avons vu…" (sauf jour 1).
-- "day_transition" : commence par "À la prochaine séance, nous aborderons…" (jamais "demain" ni "la semaine prochaine").
+- "day_transition" : décrit seulement le thème qui prolongera la progression, sans date, sans rendez-vous et sans formule "à la prochaine séance".
 - "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance et progression du chapitre.
 - "generation_brief" : précise quoi couvrir, quels exemples intégrer, comment finir et quelles redites éviter.
 - Les horaires, durées, budgets, identifiants et fichiers sont strictement internes : ne les mentionne jamais dans le texte pédagogique.
@@ -644,12 +654,12 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
             "examples": ["exemple métier à développer"],
             "finish": "Type de chute ou synthèse attendue",
             "avoid": ["notion réservée à un autre cours", "redite à éviter"],
-            "handoff": "Lien naturel avec le Q&R suivant"
+            "handoff": "Conclusion du chapitre sans annoncer le bloc suivant"
           }}
         }}
       ],
       "day_recap": "Rappel de la séance précédente (vide pour le jour 1)",
-      "day_transition": "Annonce de la prochaine séance"
+      "day_transition": "Projection thématique durable vers la suite, sans date"
     }}
   ]
 }}"""
@@ -1718,7 +1728,12 @@ def _complete_day_program_shape(
     elif not str(day.get("day_recap") or "").strip():
         day["day_recap"] = "Lors de la dernière séance, nous avons vu les bases nécessaires pour aborder cette nouvelle étape."
     if not str(day.get("day_transition") or "").strip():
-        day["day_transition"] = "À la prochaine séance, nous aborderons la suite logique de cette progression."
+        day["day_transition"] = (
+            "La suite de cette progression approfondira les notions qui viennent "
+            "d'être posées."
+            if schedule_day is not None
+            else "À la prochaine séance, nous aborderons la suite logique de cette progression."
+        )
     return _normalize_day_audio_slots(day, schedule_day=schedule_day)
 
 

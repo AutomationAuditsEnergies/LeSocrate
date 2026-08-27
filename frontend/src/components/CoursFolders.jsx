@@ -13,6 +13,7 @@ const AUDIO_FILTERS = [
   { value: 'cours', label: 'Cours' },
   { value: 'qa', label: 'Q&A' },
   { value: 'pause', label: 'Pauses' },
+  { value: 'jointure', label: 'Jointures' },
   { value: 'all', label: 'Tous' },
 ]
 
@@ -20,6 +21,7 @@ const AUDIO_TYPE_META = {
   cours: { label: 'Cours', icon: 'record_voice_over', color: '#16a34a', lightBg: '#f0fdf4', darkBg: '#14532d22', lightBorder: '#bbf7d0', darkBorder: '#166534' },
   qa: { label: 'Q&A', icon: 'forum', color: '#2563eb', lightBg: '#eff6ff', darkBg: '#1d4ed822', lightBorder: '#bfdbfe', darkBorder: '#1d4ed8' },
   pause: { label: 'Pause', icon: 'free_breakfast', color: '#f59e0b', lightBg: '#fffbeb', darkBg: '#92400e22', lightBorder: '#fde68a', darkBorder: '#b45309' },
+  jointure: { label: 'Jointure', icon: 'link', color: '#64748b', lightBg: '#f8fafc', darkBg: '#33415522', lightBorder: '#cbd5e1', darkBorder: '#475569' },
 }
 
 const normalizeAudioType = (fileType = '', filename = '') => {
@@ -27,16 +29,22 @@ const normalizeAudioType = (fileType = '', filename = '') => {
   if (normalizedType === 'cours' || normalizedType === 'course') return 'cours'
   if (normalizedType === 'qa') return 'qa'
   if (normalizedType === 'pause' || normalizedType === 'pause_midi') return 'pause'
+  if (normalizedType === 'jointure') return 'jointure'
   const basename = String(filename || '').toLowerCase()
   if (/^(cours|course)(?:_|-)/.test(basename)) return 'cours'
   if (/^(qa|qr)(?:_|-)/.test(basename)) return 'qa'
+  if (/^jointure(?:_|-)/.test(basename)) return 'jointure'
   return 'pause'
 }
 
 const audioPlaylistLabel = (item = {}) => {
   const minutes = Math.round(Number(item.duration_seconds || 0) / 60)
   const type = normalizeAudioType(item.type, item.filename)
-  const typeLabel = type === 'cours' ? 'Cours' : type === 'qa' ? 'Q&A' : 'Pause'
+  const typeLabel = type === 'cours'
+    ? 'Cours'
+    : type === 'qa'
+      ? 'Q&A'
+      : type === 'jointure' ? 'Jointure' : 'Pause'
   return minutes > 0 ? `${typeLabel} · ${minutes} min` : typeLabel
 }
 
@@ -2415,12 +2423,15 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                 {(contentScriptModal.breaks?.length > 0) && (
                   <>
                     <p className="px-4 pt-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: colors.textMuted }}>
-                      Q&amp;A et pauses
+                      Transitions, Q&amp;A et pauses
                     </p>
                     {contentScriptModal.breaks.map((br) => {
                       const isActive = scriptActiveBreak === br.filename
-                      const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déj.' : 'Pause'
-                      const iconName = br.type === 'qa' ? 'forum' : br.type === 'pause_midi' ? 'restaurant' : 'pause_circle'
+                      const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déj.' : br.type === 'jointure' ? 'Jointure' : 'Pause'
+                      const iconName = br.type === 'qa' ? 'forum' : br.type === 'pause_midi' ? 'restaurant' : br.type === 'jointure' ? 'link' : 'pause_circle'
+                      const durationLabel = br.type === 'jointure'
+                        ? `${Math.round(br.duration_sec || 0)} s`
+                        : `${Math.round((br.duration_sec || 0) / 60)} min`
                       return (
                         <button
                           key={br.filename}
@@ -2441,7 +2452,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                             </span>
                             <div className="min-w-0">
                               <p className="text-xs font-semibold leading-snug" style={{ color: colors.text }}>
-                                {typeLabel} · {Math.round((br.duration_sec || 0) / 60)} min
+                                {typeLabel} · {durationLabel}
                               </p>
                               <p className="text-xs mt-0.5 truncate" style={{ color: colors.textMuted }}>
                                 {br.filename}
@@ -2466,7 +2477,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         </div>
                       )
                     }
-                    const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déjeuner' : 'Pause'
+                    const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déjeuner' : br.type === 'jointure' ? 'Jointure entre deux cours' : 'Pause'
+                    const durationLabel = br.type === 'jointure'
+                      ? `${Math.round(br.duration_sec || 0)} s`
+                      : `${Math.round((br.duration_sec || 0) / 60)} min`
                     const isEditingBreak = editingSegment?.type === 'break' && editingSegment.filename === br.filename
                     const isGeneratingBreak = playlistJob?.status === 'running' && playlistJob.filename === br.filename
                     return (
@@ -2480,7 +2494,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                               {br.filename}
                             </p>
                             <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
-                              {br.manual_edited ? 'Texte modifié' : 'Texte par défaut'} · {Math.round((br.duration_sec || 0) / 60)} min
+                              {br.manual_edited ? 'Texte modifié' : 'Texte par défaut'} · {durationLabel}
                             </p>
                           </div>
                           {isEditingBreak ? (
@@ -2504,6 +2518,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                                 {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
                               </button>
                             </div>
+                          ) : br.type === 'jointure' ? (
+                            <span className="rounded-lg px-3 py-1.5 text-xs font-semibold" style={{ border: `1px solid ${colors.border}`, color: colors.textMuted }}>
+                              Texte générique
+                            </span>
                           ) : (
                             <button
                               type="button"

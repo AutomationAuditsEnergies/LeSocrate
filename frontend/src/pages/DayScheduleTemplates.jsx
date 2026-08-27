@@ -9,7 +9,6 @@ import {
   GripHorizontal,
   LockKeyhole,
   MessageCircleQuestion,
-  Minus,
   PencilLine,
   Plus,
   Save,
@@ -20,17 +19,17 @@ import {
 } from 'lucide-react'
 
 import {
-  addScheduleSequence,
+  appendScheduleBlock,
   cloneScheduleTemplateAsDraft,
   createEmptyScheduleTemplateDraft,
   DAY_SCHEDULE_RULES,
   formatScheduleMinute,
   getScheduleBlockDurationBounds,
+  getAllowedNextScheduleBlocks,
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
-  removeLastScheduleSequence,
-  setSchedulePauseKind,
+  tryRemoveScheduleBlock,
   updateScheduleBlockDuration,
   updateScheduleBlockStart,
   validateScheduleTemplate,
@@ -116,8 +115,9 @@ function ScheduleTimeline({
   readOnly,
   blockErrors,
   onBlocksChange,
-  onAddSequence,
-  canAddSequence,
+  onAddBlock,
+  onRemoveBlock,
+  allowedBlocks,
 }) {
   const adjustmentRef = useRef(null)
   const calendarScrollRef = useRef(null)
@@ -192,11 +192,18 @@ function ScheduleTimeline({
   )
 
   const handleDrop = (event) => {
-    if (readOnly || !canAddSequence) return
-    if (event.dataTransfer.getData('application/x-day-sequence') !== 'course-qa-pause') return
+    if (readOnly) return
+    const choice = event.dataTransfer.getData('application/x-day-block')
+    const definition = {
+      course: ['course', null],
+      qa: ['qa', null],
+      pause: ['pause', 'short'],
+      lunch: ['pause', 'lunch'],
+    }[choice]
+    if (!definition || !allowedBlocks[choice]?.allowed) return
     event.preventDefault()
     setDropActive(false)
-    onAddSequence()
+    onAddBlock(...definition)
   }
 
   return (
@@ -204,14 +211,14 @@ function ScheduleTimeline({
       className="day-schedule-timeline-shell"
       data-drop-active={dropActive ? 'true' : 'false'}
       onDragEnter={(event) => {
-        if (readOnly || !canAddSequence) return
-        if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+        if (readOnly) return
+        if (!Array.from(event.dataTransfer.types).includes('application/x-day-block')) return
         event.preventDefault()
         setDropActive(true)
       }}
       onDragOver={(event) => {
-        if (readOnly || !canAddSequence) return
-        if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+        if (readOnly) return
+        if (!Array.from(event.dataTransfer.types).includes('application/x-day-block')) return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'copy'
       }}
@@ -276,12 +283,12 @@ function ScheduleTimeline({
             <button
               type="button"
               className="day-schedule-empty-timeline"
-              onClick={onAddSequence}
-              disabled={readOnly || !canAddSequence}
+              onClick={() => onAddBlock('course', null)}
+              disabled={readOnly || !allowedBlocks.course.allowed}
             >
               <Plus size={16} aria-hidden="true" />
-              <strong>Planifier une séquence</strong>
-              <span>Glissez la carte depuis la colonne de gauche.</span>
+              <strong>Planifier un cours</strong>
+              <span>Ajoutez ensuite les blocs facultatifs souhaités.</span>
             </button>
           ) : (
             <div className="day-schedule-calendar-events">
@@ -297,18 +304,6 @@ function ScheduleTimeline({
             )
             const sequenceNumber = counters.course
             const isCourse = block.block_type === 'course'
-            const canSelectAsLunch = (
-              !readOnly
-              && block.block_type === 'pause'
-            )
-            const toggleLunch = () => {
-              if (!canSelectAsLunch) return
-              onBlocksChange(setSchedulePauseKind(
-                blocks,
-                index,
-                block.pause_kind === 'lunch' ? 'short' : 'lunch',
-              ))
-            }
             return (
               <article
                 key={block.block_key}
@@ -317,28 +312,12 @@ function ScheduleTimeline({
                 data-invalid={errors.length ? 'true' : 'false'}
                 data-resizing={activeResizeIndex === index ? 'true' : 'false'}
                 data-compact={blockHeight < 34 ? 'true' : 'false'}
-                data-selectable={canSelectAsLunch ? 'true' : 'false'}
                 title={errors.join(' ')}
                 style={{
                   '--day-schedule-event-top': `${blockTop}px`,
                   '--day-schedule-event-height': `${blockHeight}px`,
                 }}
               >
-                {canSelectAsLunch && (
-                  <button
-                    type="button"
-                    className="day-schedule-pause-select"
-                    aria-label={block.pause_kind === 'lunch'
-                      ? 'Repasser cette pause en pause courte'
-                      : 'Choisir cette pause comme pause déjeuner'}
-                    aria-pressed={block.pause_kind === 'lunch'}
-                    title={block.pause_kind === 'lunch'
-                      ? 'Cliquez pour repasser en pause courte'
-                      : 'Cliquez pour choisir la pause déjeuner'}
-                    onClick={toggleLunch}
-                  />
-                )}
-
                 <div className="day-schedule-event-copy">
                   <BlockIcon size={16} strokeWidth={1.8} aria-hidden="true" />
                   <div className="min-w-0">
@@ -352,10 +331,16 @@ function ScheduleTimeline({
                   </div>
                 </div>
 
-                {canSelectAsLunch && (
-                  <span className="day-schedule-pause-kind" aria-hidden="true">
-                    {block.pause_kind === 'lunch' ? 'Déjeuner choisi' : 'Choisir déjeuner'}
-                  </span>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    className="day-schedule-event-delete"
+                    aria-label={`Supprimer ${presentation.title}`}
+                    title={`Supprimer ${presentation.title}`}
+                    onClick={() => onRemoveBlock(index)}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
                 )}
 
                 {!readOnly && (
@@ -387,7 +372,7 @@ function ScheduleTimeline({
 
       {dropActive && (
         <div className="day-schedule-drop-overlay" aria-hidden="true">
-          Relâchez pour ajouter la séquence
+          Relâchez pour ajouter le bloc
         </div>
       )}
     </div>
@@ -396,45 +381,54 @@ function ScheduleTimeline({
 
 function SequencePalette({
   blocks,
-  onAdd,
-  onRemove,
+  onAddBlock,
+  onRemoveLastCourse,
 }) {
   const courseCount = blocks.filter((block) => block.block_type === 'course').length
-  const atMaximum = courseCount >= DAY_SCHEDULE_RULES.maxCourses
   const isEmpty = courseCount === 0
+  const allowedBlocks = getAllowedNextScheduleBlocks(blocks)
   return (
-    <aside className="day-schedule-palette" aria-label="Séquence à planifier">
+    <aside className="day-schedule-palette" aria-label="Blocs à planifier">
       <div className="day-schedule-palette-title">
         <div>
-          <h2>Séquence</h2>
-          <p>À glisser dans le calendrier</p>
+          <h2>Ajouter un bloc</h2>
+          <p>Q&R et pauses sont facultatifs</p>
         </div>
         <span>{courseCount}/{DAY_SCHEDULE_RULES.maxCourses}</span>
       </div>
 
       <div className="day-schedule-palette-actions">
-        <button
-          type="button"
-          className="day-schedule-add-task day-schedule-sequence-source"
-          draggable={!atMaximum}
-          disabled={atMaximum}
-          onDragStart={(event) => {
-            event.dataTransfer.effectAllowed = 'copy'
-            event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
-          }}
-          onClick={onAdd}
-        >
-          <Plus size={18} aria-hidden="true" />
-          <span>Séquence pédagogique</span>
-        </button>
+        {[
+          { key: 'course', type: 'course', kind: null, label: 'Cours vocal', Icon: BookOpen },
+          { key: 'qa', type: 'qa', kind: null, label: 'Questions-réponses', Icon: MessageCircleQuestion },
+          { key: 'pause', type: 'pause', kind: 'short', label: 'Pause courte', Icon: Coffee },
+          { key: 'lunch', type: 'pause', kind: 'lunch', label: 'Pause déjeuner', Icon: Utensils },
+        ].map(({ key, type, kind, label, Icon }) => (
+          <button
+            key={key}
+            type="button"
+            className="day-schedule-add-task day-schedule-sequence-source"
+            draggable={allowedBlocks[key].allowed}
+            disabled={!allowedBlocks[key].allowed}
+            title={allowedBlocks[key].allowed ? `Ajouter ${label.toLowerCase()}` : allowedBlocks[key].reason}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'copy'
+              event.dataTransfer.setData('application/x-day-block', key)
+            }}
+            onClick={() => onAddBlock(type, kind)}
+          >
+            <Icon size={18} aria-hidden="true" />
+            <span>{label}</span>
+          </button>
+        ))}
         <button
           type="button"
           className="day-schedule-remove-task day-schedule-focusable"
           disabled={isEmpty}
-          onClick={onRemove}
+          onClick={onRemoveLastCourse}
         >
-          <Minus size={16} aria-hidden="true" />
-          <span>Retirer la dernière séquence</span>
+          <Trash2 size={16} aria-hidden="true" />
+          <span>Retirer le dernier cours</span>
         </button>
       </div>
     </aside>
@@ -721,6 +715,35 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
     setDraft((current) => current ? { ...current, blocks } : current)
   }
 
+  const appendDraftBlock = (blockType, pauseKind = null) => {
+    if (!draft) return
+    const next = appendScheduleBlock(draft.blocks, blockType, pauseKind)
+    if (next === draft.blocks || next.length === draft.blocks.length) {
+      const key = blockType === 'pause' && pauseKind === 'lunch' ? 'lunch' : blockType
+      const reason = getAllowedNextScheduleBlocks(draft.blocks)[key]?.reason
+      if (reason) setFeedback({ tone: 'error', validation: false, message: reason })
+      return
+    }
+    updateDraftBlocks(next)
+    setFeedback(null)
+  }
+
+  const removeDraftBlock = (blockIndex) => {
+    if (!draft) return
+    const result = tryRemoveScheduleBlock(draft.blocks, blockIndex)
+    if (!result.removed) {
+      setFeedback({ tone: 'error', validation: false, message: result.error })
+      return
+    }
+    updateDraftBlocks(result.blocks)
+    setFeedback(null)
+  }
+
+  const removeLastDraftCourse = () => {
+    const index = draft?.blocks.findLastIndex((block) => block.block_type === 'course') ?? -1
+    if (index >= 0) removeDraftBlock(index)
+  }
+
   const showTemplateOverview = mode === 'preview' && templates.length > 0
   const showSequencePalette = mode === 'edit'
   const hasSidePanel = showSequencePalette
@@ -831,8 +854,8 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
         {showSequencePalette && (
           <SequencePalette
             blocks={visibleTemplate.blocks}
-            onAdd={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
-            onRemove={() => updateDraftBlocks(removeLastScheduleSequence(draft.blocks))}
+            onAddBlock={appendDraftBlock}
+            onRemoveLastCourse={removeLastDraftCourse}
           />
         )}
 
@@ -858,7 +881,7 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
                   <Clock3 size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
                   <h2 className="mt-4 text-base font-semibold text-[#18181B]">Créez une organisation de journée</h2>
                   <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">
-                    La timeline impose l’ordre cours, questions-réponses et pause.
+                    Commencez par un cours, puis ajoutez librement les blocs facultatifs autorisés.
                   </p>
                   <button type="button" className={`${BUTTON_PRIMARY} mt-5`} onClick={startCreate}>
                     <Plus size={15} aria-hidden="true" />
@@ -874,8 +897,9 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
                   readOnly={mode !== 'edit'}
                   blockErrors={feedback?.validation ? validation.blockErrors : {}}
                   onBlocksChange={updateDraftBlocks}
-                  onAddSequence={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
-                  canAddSequence={validation.stats.courseCount < DAY_SCHEDULE_RULES.maxCourses}
+                  onAddBlock={appendDraftBlock}
+                  onRemoveBlock={removeDraftBlock}
+                  allowedBlocks={getAllowedNextScheduleBlocks(visibleTemplate.blocks)}
                 />
               </div>
               </>

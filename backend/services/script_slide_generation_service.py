@@ -2637,7 +2637,7 @@ CATALOGUE TEMPLATES:
 TEMPLATES AUTORISÉS ET SCHÉMAS:
 - welcome: data={{"title":"Bienvenue","formation_name":"nom formation","day_label":"Journée X","meta_note":"note courte"}}
 - program_year: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Parcours annuel","phases":[{{"title":"phase","desc":"1 phrase"}}]}} avec exactement 2 phases
-- day_program_7_steps: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Feuille de route","active_item":1,"items":["thème 1","thème 2"]}} avec 4 à 10 items, exactement un par cours prévu dans la journée lorsque ce nombre est fourni
+- day_program_7_steps: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Feuille de route","active_item":1,"items":["thème 1","thème 2"]}} avec 1 à 10 items, exactement un par cours prévu dans la journée lorsque ce nombre est fourni
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
 - definition: data={{"term":"mot ou notion","eyebrow":"contexte court","definition":"1 phrase","isItems":["critère","critère"]}}
@@ -3100,7 +3100,7 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
 
     if template in {"program_year", "day_program", "day_program_7_steps"}:
         # The historical template name is kept for compatibility, but V2 day
-        # plans legitimately contain 4 to 10 course themes.
+        # plans legitimately contain 1 to 10 course themes.
         max_items = 10 if template == "day_program_7_steps" else 2
         items = []
         for item in _limit_list(data.get("phases") or data.get("items") or data.get("points"), max_items):

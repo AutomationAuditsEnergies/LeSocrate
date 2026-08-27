@@ -1,17 +1,19 @@
 export const DAY_SCHEDULE_RULES = Object.freeze({
-  course: Object.freeze({ min: 35, max: 90 }),
-  qa: Object.freeze({ min: 5, max: 30 }),
-  shortPause: Object.freeze({ min: 5, max: 30 }),
-  lunchPause: Object.freeze({ min: 60, max: 120 }),
-  minCourses: 4,
+  course: Object.freeze({ min: 35, max: 90, default: 60 }),
+  qa: Object.freeze({ min: 10, max: 30, default: 15 }),
+  shortPause: Object.freeze({ min: 10, max: 30, default: 15 }),
+  lunchPause: Object.freeze({ min: 60, max: 180, default: 60 }),
+  minCourses: 1,
   maxCourses: 10,
-  minCourseMinutes: 240,
-  minDayMinutes: 360,
+  minCourseMinutes: 35,
+  minDayMinutes: 35,
 })
 
 const DEFAULT_START_MINUTE = 9 * 60
+const BLOCK_TYPES = new Set(['course', 'qa', 'pause'])
 
 function finiteMinute(value, fallback = 0) {
+  if (value === null || value === undefined || value === '') return fallback
   const parsed = Number(value)
   return Number.isFinite(parsed) ? Math.round(parsed) : fallback
 }
@@ -39,9 +41,7 @@ function blockLabel(type, pauseKind = null) {
 }
 
 function canonicalBlock(block, index, startMinute) {
-  const blockType = ['course', 'qa', 'pause'].includes(block?.block_type)
-    ? block.block_type
-    : 'course'
+  const blockType = BLOCK_TYPES.has(block?.block_type) ? block.block_type : 'course'
   const pauseKind = blockType === 'pause'
     ? (block?.pause_kind === 'lunch' ? 'lunch' : 'short')
     : null
@@ -78,38 +78,25 @@ export function reflowScheduleBlocks(blocks, startMinute = null) {
   })
 }
 
-function makeSequenceBlocks(courseNumber, includePause = true) {
-  const sequence = [
-    {
-      block_key: `course-${courseNumber}`,
-      block_type: 'course',
-      pause_kind: null,
-      duration_minutes: 60,
-    },
-    {
-      block_key: `qa-${courseNumber}`,
-      block_type: 'qa',
-      pause_kind: null,
-      duration_minutes: 15,
-    },
-  ]
-  if (includePause) {
-    sequence.push({
-      block_key: `pause-${courseNumber}`,
-      block_type: 'pause',
-      pause_kind: 'short',
-      duration_minutes: 15,
-    })
+function newScheduleBlock(type, pauseKind = null, ordinal = 1) {
+  const isLunch = type === 'pause' && pauseKind === 'lunch'
+  const duration = type === 'course'
+    ? DAY_SCHEDULE_RULES.course.default
+    : type === 'qa'
+      ? DAY_SCHEDULE_RULES.qa.default
+      : isLunch
+        ? DAY_SCHEDULE_RULES.lunchPause.default
+        : DAY_SCHEDULE_RULES.shortPause.default
+  return {
+    block_key: `${type}-${Date.now()}-${ordinal}`,
+    block_type: type,
+    pause_kind: type === 'pause' ? (isLunch ? 'lunch' : 'short') : null,
+    duration_minutes: duration,
   }
-  return sequence
 }
 
 export function createDefaultScheduleBlocks(startMinute = DEFAULT_START_MINUTE) {
-  const blocks = []
-  for (let courseNumber = 1; courseNumber <= DAY_SCHEDULE_RULES.minCourses; courseNumber += 1) {
-    blocks.push(...makeSequenceBlocks(courseNumber))
-  }
-  return reflowScheduleBlocks(blocks, startMinute)
+  return reflowScheduleBlocks([newScheduleBlock('course')], startMinute)
 }
 
 export function createScheduleTemplateDraft(name = '') {
@@ -124,10 +111,7 @@ export function createScheduleTemplateDraft(name = '') {
 }
 
 export function createEmptyScheduleTemplateDraft(name = '') {
-  return {
-    ...createScheduleTemplateDraft(name),
-    blocks: [],
-  }
+  return { ...createScheduleTemplateDraft(name), blocks: [] }
 }
 
 export function isScheduleTemplateUsed(template) {
@@ -198,6 +182,30 @@ export function getScheduleBlockDurationBounds(block) {
     : DAY_SCHEDULE_RULES.shortPause
 }
 
+function validateSequence(blocks, blockErrors, errors) {
+  const auxiliarySinceCourse = new Set()
+  blocks.forEach((block, index) => {
+    const key = block.block_key || `block-${index + 1}`
+    const messages = blockErrors[key] || []
+    if (index === 0 && block.block_type !== 'course') {
+      messages.push('La journée doit commencer par un cours vocal.')
+    }
+    if (block.block_type === 'course') {
+      auxiliarySinceCourse.clear()
+    } else if (auxiliarySinceCourse.has(block.block_type)) {
+      messages.push('Ce bloc facultatif est déjà présent depuis le dernier cours.')
+    } else if (auxiliarySinceCourse.size >= 2) {
+      messages.push('Deux blocs facultatifs au maximum sont autorisés entre deux cours.')
+    } else {
+      auxiliarySinceCourse.add(block.block_type)
+    }
+    if (messages.length) blockErrors[key] = messages
+  })
+  if (blocks.at(-1)?.block_type === 'pause') {
+    errors.push('Une journée peut finir par un cours ou un Q&R, jamais par une pause.')
+  }
+}
+
 export function validateScheduleTemplate(template) {
   const normalized = normalizeScheduleTemplate(template)
   const { blocks } = normalized
@@ -206,71 +214,36 @@ export function validateScheduleTemplate(template) {
   const blockErrors = {}
 
   if (!normalized.name.trim()) errors.push('Donnez un nom au template.')
-  if (!blocks.length) errors.push('Ajoutez au moins une séquence.')
-
+  if (!blocks.length) errors.push('Ajoutez au moins un cours vocal.')
   if (stats.courseCount < DAY_SCHEDULE_RULES.minCourses) {
-    errors.push(`Ajoutez au moins ${DAY_SCHEDULE_RULES.minCourses} cours vocaux.`)
+    errors.push(`Ajoutez au moins ${DAY_SCHEDULE_RULES.minCourses} cours vocal.`)
   }
   if (stats.courseCount > DAY_SCHEDULE_RULES.maxCourses) {
     errors.push(`Limitez la journée à ${DAY_SCHEDULE_RULES.maxCourses} cours vocaux.`)
   }
-  if (stats.courseMinutes < DAY_SCHEDULE_RULES.minCourseMinutes) {
-    errors.push(`Prévoyez au moins ${DAY_SCHEDULE_RULES.minCourseMinutes / 60} h de cours vocaux.`)
-  }
-  if (stats.dayMinutes < DAY_SCHEDULE_RULES.minDayMinutes) {
-    errors.push(`La journée doit durer au moins ${DAY_SCHEDULE_RULES.minDayMinutes / 60} h.`)
-  }
-  if (stats.lunchCount !== 1) {
-    errors.push('Prévoyez exactement une pause déjeuner.')
-  }
+  if (stats.lunchCount > 1) errors.push('Une seule pause déjeuner est autorisée.')
 
   blocks.forEach((block, index) => {
     const key = block.block_key || `block-${index + 1}`
-    const blockMessages = []
+    const messages = []
     const rule = getScheduleBlockDurationBounds(block)
     const duration = finiteMinute(block.duration_minutes)
     if (duration < rule.min || duration > rule.max) {
-      blockMessages.push(`Durée autorisée : ${rule.min} à ${rule.max} min.`)
+      messages.push(`Durée autorisée : ${rule.min} à ${rule.max} min.`)
     }
-
     if (block.start_minute < 0 || block.start_minute >= 24 * 60) {
-      blockMessages.push('L’heure de début doit appartenir à la journée.')
+      messages.push('L’heure de début doit appartenir à la journée.')
     }
-    if (block.end_minute > 24 * 60) {
-      blockMessages.push('Le bloc doit se terminer avant minuit.')
-    }
+    if (block.end_minute > 24 * 60) messages.push('Le bloc doit se terminer avant minuit.')
     if (block.end_minute - block.start_minute !== duration) {
-      blockMessages.push('Les horaires ne correspondent pas à la durée.')
+      messages.push('Les horaires ne correspondent pas à la durée.')
     }
-
     if (index > 0 && blocks[index - 1].end_minute !== block.start_minute) {
-      blockMessages.push('Aucun espace ni chevauchement n’est autorisé.')
+      messages.push('Aucun espace ni chevauchement n’est autorisé.')
     }
-
-    if (index % 3 === 0 && block.block_type !== 'course') {
-      blockMessages.push('Cette position doit contenir un cours vocal.')
-    }
-    if (index % 3 === 1 && block.block_type !== 'qa') {
-      blockMessages.push('Un Q&R doit suivre chaque cours vocal.')
-    }
-    if (index % 3 === 2 && block.block_type !== 'pause') {
-      blockMessages.push('Une pause doit séparer deux séquences.')
-    }
-
-    const isLast = index === blocks.length - 1
-    if (isLast && !['qa', 'pause'].includes(block.block_type)) {
-      blockMessages.push('La journée doit finir après un Q&R ou une pause finale.')
-    }
-    if (isLast && block.pause_kind === 'lunch') {
-      blockMessages.push('La pause déjeuner doit séparer deux cours.')
-    }
-
-    if (blockMessages.length) blockErrors[key] = blockMessages
+    if (messages.length) blockErrors[key] = messages
   })
-
-  if (![2, 0].includes(blocks.length % 3)) {
-    errors.push('Respectez l’enchaînement cours, Q&R, puis pause facultative en fin de journée.')
-  }
+  validateSequence(blocks, blockErrors, errors)
 
   return {
     valid: errors.length === 0 && Object.keys(blockErrors).length === 0,
@@ -281,6 +254,96 @@ export function validateScheduleTemplate(template) {
   }
 }
 
+export function getAllowedNextScheduleBlocks(blocks) {
+  const source = reflowScheduleBlocks(blocks)
+  const stats = getScheduleStats(source)
+  const sinceLastCourse = []
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    if (source[index].block_type === 'course') break
+    sinceLastCourse.unshift(source[index].block_type)
+  }
+  const auxiliary = new Set(sinceLastCourse)
+  const hasCourse = stats.courseCount > 0
+  const atCourseLimit = stats.courseCount >= DAY_SCHEDULE_RULES.maxCourses
+  const atMidnight = source.at(-1)?.end_minute >= 24 * 60
+
+  return {
+    course: {
+      allowed: !atCourseLimit && !atMidnight,
+      reason: atCourseLimit
+        ? `Maximum ${DAY_SCHEDULE_RULES.maxCourses} cours par journée.`
+        : atMidnight ? 'La journée atteint déjà minuit.' : '',
+    },
+    qa: {
+      allowed: hasCourse && !auxiliary.has('qa') && auxiliary.size < 2 && !atMidnight,
+      reason: !hasCourse
+        ? 'Commencez la journée par un cours.'
+        : auxiliary.has('qa')
+          ? 'Un seul Q&R est autorisé entre deux cours.'
+          : auxiliary.size >= 2
+            ? 'Ajoutez maintenant un cours.'
+            : atMidnight ? 'La journée atteint déjà minuit.' : '',
+    },
+    pause: {
+      allowed: hasCourse && !auxiliary.has('pause') && auxiliary.size < 2 && !atMidnight,
+      reason: !hasCourse
+        ? 'Commencez la journée par un cours.'
+        : auxiliary.has('pause')
+          ? 'Une seule pause est autorisée entre deux cours.'
+          : auxiliary.size >= 2
+            ? 'Ajoutez maintenant un cours.'
+            : atMidnight ? 'La journée atteint déjà minuit.' : '',
+    },
+    lunch: {
+      allowed: hasCourse
+        && !auxiliary.has('pause')
+        && auxiliary.size < 2
+        && stats.lunchCount === 0
+        && !atMidnight,
+      reason: stats.lunchCount > 0
+        ? 'Une seule pause déjeuner est autorisée.'
+        : !hasCourse
+          ? 'Commencez la journée par un cours.'
+          : auxiliary.has('pause')
+            ? 'Une pause est déjà présente depuis le dernier cours.'
+            : auxiliary.size >= 2
+              ? 'Ajoutez maintenant un cours.'
+              : atMidnight ? 'La journée atteint déjà minuit.' : '',
+    },
+  }
+}
+
+export function appendScheduleBlock(blocks, blockType, pauseKind = null, startMinute = null) {
+  const source = reflowScheduleBlocks(blocks)
+  const choice = blockType === 'pause' && pauseKind === 'lunch' ? 'lunch' : blockType
+  const permission = getAllowedNextScheduleBlocks(source)[choice]
+  if (!permission?.allowed) return source
+  const updated = [...source, newScheduleBlock(blockType, pauseKind, source.length + 1)]
+  const firstStart = source.length
+    ? source[0].start_minute
+    : finiteMinute(startMinute, DEFAULT_START_MINUTE)
+  const flowed = reflowScheduleBlocks(updated, firstStart)
+  return flowed.at(-1)?.end_minute <= 24 * 60 ? flowed : source
+}
+
+export function tryRemoveScheduleBlock(blocks, blockIndex) {
+  const source = reflowScheduleBlocks(blocks)
+  if (!source[blockIndex]) return { blocks: source, removed: false, error: 'Bloc introuvable.' }
+  const candidate = reflowScheduleBlocks(
+    source.filter((_, index) => index !== blockIndex),
+    source[0]?.start_minute ?? DEFAULT_START_MINUTE,
+  )
+  if (!candidate.length) return { blocks: candidate, removed: true, error: '' }
+  const validation = validateScheduleTemplate({ name: 'Vérification', blocks: candidate })
+  if (!validation.valid) {
+    const reason = validation.errors[0]
+      || Object.values(validation.blockErrors).flat()[0]
+      || 'Retirez d’abord les blocs associés.'
+    return { blocks: source, removed: false, error: `Suppression refusée : ${reason}` }
+  }
+  return { blocks: candidate, removed: true, error: '' }
+}
+
 export function updateScheduleBlockDuration(blocks, blockIndex, durationMinutes) {
   const source = reflowScheduleBlocks(blocks)
   if (!source[blockIndex]) return source
@@ -289,18 +352,20 @@ export function updateScheduleBlockDuration(blocks, blockIndex, durationMinutes)
       ? { ...block, duration_minutes: Math.max(1, finiteMinute(durationMinutes, 1)) }
       : block
   ))
-  return reflowScheduleBlocks(updated, source[0]?.start_minute)
+  const flowed = reflowScheduleBlocks(updated, source[0]?.start_minute)
+  return flowed.at(-1)?.end_minute <= 24 * 60 ? flowed : source
 }
 
 export function updateScheduleBlockStart(blocks, blockIndex, startMinute) {
   const source = reflowScheduleBlocks(blocks)
   const nextStart = finiteMinute(startMinute, source[blockIndex]?.start_minute)
   if (!source[blockIndex]) return source
-  if (blockIndex === 0) return reflowScheduleBlocks(source, nextStart)
-
+  if (blockIndex === 0) {
+    const flowed = reflowScheduleBlocks(source, nextStart)
+    return nextStart >= 0 && flowed.at(-1)?.end_minute <= 24 * 60 ? flowed : source
+  }
   const previous = source[blockIndex - 1]
-  const previousDuration = Math.max(1, nextStart - previous.start_minute)
-  return updateScheduleBlockDuration(source, blockIndex - 1, previousDuration)
+  return updateScheduleBlockDuration(source, blockIndex - 1, nextStart - previous.start_minute)
 }
 
 export function setSchedulePauseKind(blocks, blockIndex, pauseKind) {
@@ -327,66 +392,37 @@ export function setSchedulePauseKind(blocks, blockIndex, pauseKind) {
     }
     return block
   })
-  return reflowScheduleBlocks(updated, source[0]?.start_minute)
+  const flowed = reflowScheduleBlocks(updated, source[0]?.start_minute)
+  return flowed.at(-1)?.end_minute <= 24 * 60 ? flowed : source
 }
 
+// Compatibility helpers: a "sequence" is now one independently configurable
+// course rather than a forced course/Q&A/pause trio.
 export function addScheduleSequence(blocks) {
-  const source = reflowScheduleBlocks(blocks)
-  const stats = getScheduleStats(source)
-  if (stats.courseCount >= DAY_SCHEDULE_RULES.maxCourses) return source
-
-  const updated = [...source]
-  // Les anciens templates pouvaient finir après le Q&R. On complète d'abord
-  // leur dernière séquence afin que chaque ajout conserve le contrat Cours/Q&R/Pause.
-  if (updated.at(-1)?.block_type === 'qa') {
-    updated.push({
-      block_key: `pause-${stats.courseCount}`,
-      block_type: 'pause',
-      pause_kind: 'short',
-      duration_minutes: 15,
-    })
-  }
-  updated.push(...makeSequenceBlocks(stats.courseCount + 1))
-  return reflowScheduleBlocks(updated, source[0]?.start_minute ?? DEFAULT_START_MINUTE)
+  return appendScheduleBlock(blocks, 'course')
 }
 
 export function getScheduleSequenceDropMinute(pointerMinute, blocks = []) {
   const source = reflowScheduleBlocks(blocks)
   if (source.length) return source.at(-1).end_minute
-
-  const sequenceMinutes = addScheduleSequence([])
-    .reduce((total, block) => total + finiteMinute(block.duration_minutes), 0)
   const snapped = Math.round(finiteMinute(pointerMinute) / 5) * 5
-  return Math.min((24 * 60) - sequenceMinutes, Math.max(0, snapped))
+  return Math.min((24 * 60) - DAY_SCHEDULE_RULES.course.default, Math.max(0, snapped))
 }
 
 export function removeLastScheduleSequence(blocks) {
   const source = reflowScheduleBlocks(blocks)
-  const stats = getScheduleStats(source)
-  if (stats.courseCount === 0) return source
-
-  const updated = [...source]
-  if (updated.at(-1)?.block_type === 'pause') updated.pop()
-  if (updated.at(-1)?.block_type === 'qa') updated.pop()
-  if (updated.at(-1)?.block_type === 'course') updated.pop()
-  return reflowScheduleBlocks(updated, source[0]?.start_minute ?? DEFAULT_START_MINUTE)
+  const lastCourseIndex = source.findLastIndex((block) => block.block_type === 'course')
+  if (lastCourseIndex < 0) return source
+  return tryRemoveScheduleBlock(source, lastCourseIndex).blocks
 }
 
+// Final pauses are invalid now. The compatibility export only removes one.
 export function setScheduleFinalPause(blocks, enabled) {
   const source = reflowScheduleBlocks(blocks)
-  const hasFinalPause = source.at(-1)?.block_type === 'pause'
-  if (enabled === hasFinalPause) return source
-  if (!enabled) return reflowScheduleBlocks(source.slice(0, -1), source[0]?.start_minute)
-
-  return reflowScheduleBlocks([
-    ...source,
-    {
-      block_key: 'pause-final',
-      block_type: 'pause',
-      pause_kind: 'short',
-      duration_minutes: 15,
-    },
-  ], source[0]?.start_minute)
+  if (enabled) return source
+  return source.at(-1)?.block_type === 'pause'
+    ? reflowScheduleBlocks(source.slice(0, -1), source[0]?.start_minute)
+    : source
 }
 
 export function serializeScheduleTemplate(template) {

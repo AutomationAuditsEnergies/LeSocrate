@@ -289,8 +289,8 @@
 .day-schedule-sequence-source:focus-visible,
 .day-schedule-add-task:focus-visible,
 .day-schedule-empty-timeline:focus-visible,
-.day-schedule-resize-button:focus-visible,
-.day-schedule-pause-select:focus-visible {
+.day-schedule-event-delete:focus-visible,
+.day-schedule-resize-button:focus-visible {
   outline: 2px solid #292824;
   outline-offset: 2px;
 }
@@ -657,25 +657,6 @@
   box-shadow: rgb(0 0 0 / 12%) 0 2px 6px;
 }
 
-.day-schedule-calendar-event[data-selectable="true"] {
-  cursor: pointer;
-}
-
-.day-schedule-calendar-event[data-selectable="true"]:hover {
-  border-color: #686a6d;
-}
-
-.day-schedule-pause-select {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  width: 100%;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-}
-
 .day-schedule-event-copy {
   position: relative;
   z-index: 2;
@@ -723,28 +704,13 @@
 }
 
 .day-schedule-calendar-event[data-compact="true"] .day-schedule-event-copy > svg,
-.day-schedule-calendar-event[data-compact="true"] .day-schedule-event-copy p,
-.day-schedule-calendar-event[data-compact="true"] .day-schedule-pause-kind {
+.day-schedule-calendar-event[data-compact="true"] .day-schedule-event-copy p {
   display: none;
 }
 
 .day-schedule-calendar-event[data-compact="true"] .day-schedule-event-copy h3 {
   font-size: 10px;
   line-height: 1;
-}
-
-.day-schedule-pause-kind {
-  position: relative;
-  z-index: 2;
-  flex: none;
-  border: 1px solid rgb(0 0 0 / 12%);
-  border-radius: 3px;
-  background: rgb(255 255 255 / 66%);
-  color: inherit;
-  padding: 4px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  pointer-events: none;
 }
 
 .day-schedule-resize-button {
@@ -768,6 +734,30 @@
   transition:
     background-color 120ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.day-schedule-event-delete {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 4;
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 68%);
+  color: currentcolor;
+  cursor: pointer;
+  opacity: 0;
+  padding: 0;
+}
+
+.day-schedule-calendar-event:hover .day-schedule-event-delete,
+.day-schedule-event-delete:focus-visible {
+  opacity: 1;
 }
 
 .day-schedule-calendar-event:hover .day-schedule-resize-button,

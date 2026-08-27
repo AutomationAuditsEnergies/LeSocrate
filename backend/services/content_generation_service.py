@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import hashlib
+import math
 import os
 import re
 import json
@@ -1579,17 +1580,17 @@ def _course_conclusion_recap_beat(
     return {
         "beat_id": f"c{course_number}conclusion-recap",
         "type": "recap",
-        "role": "récapituler ce qui a été vu dans le cours avant la conclusion et le Q/R",
+        "role": "récapituler ce qui a été vu dans le cours avant la conclusion du chapitre",
         "spoken_requirement": (
-            "Faire un récapitulatif bref de ce qui vient d'être vu dans le cours, puis seulement "
-            "ensuite conclure et annoncer le temps de questions-réponses."
+            "Faire un récapitulatif bref de ce qui vient d'être vu dans le cours, "
+            "puis conclure ce chapitre sans annoncer le bloc suivant."
         ),
         "slide_anchor": {
             "enabled": True,
             "anchor_id": f"c{course_number}-conclusion-recap-slide",
             "template_type": "recap",
             "pedagogical_shape": "synthese_apres_developpement",
-            "visual_goal": "synthétiser les points vus dans le cours avant la conclusion et le Q/R",
+            "visual_goal": "synthétiser les points vus dans le cours avant sa conclusion",
             "items_expected": min(4, max(2, len(points))),
             "fields_hint": {
                 "title": "Ce qu'on retient.",
@@ -1632,6 +1633,7 @@ def _course_block_role(
     bloc_number: int,
     *,
     folder_position=None,
+    previous_item=None,
     next_item=None,
     total_courses: int = 7,
 ) -> str:
@@ -1643,7 +1645,21 @@ def _course_block_role(
         day_number = None
 
     parts = []
-    if bloc_number == 1 and day_number == 1:
+    previous_type = previous_item[2] if previous_item and len(previous_item) >= 3 else None
+    next_type = next_item[2] if next_item and len(next_item) >= 3 else None
+
+    if total_courses == 1 and day_number == 1:
+        parts.append(
+            "Cours unique de la journée et ouverture de la formation : accueil "
+            "calme, cadrage du parcours, présentation de l'unique chapitre de "
+            "la séance, développement progressif et conclusion adaptée."
+        )
+    elif total_courses == 1:
+        parts.append(
+            "Cours unique de la journée : accueil sobre, repère temporel exact, "
+            "présentation de l'unique chapitre et développement autonome."
+        )
+    elif bloc_number == 1 and day_number == 1:
         parts.append(
             "Ouverture absolue de la formation : accueil calme, présentation "
             "synthétique du parcours annuel, thèmes de la journée dans leur ordre pédagogique, "
@@ -1655,12 +1671,15 @@ def _course_block_role(
             "Ouverture de journée : reprise douce, rappel vague de la progression, "
             "objectifs de la journée, puis transition naturelle vers le premier sujet."
         )
-    elif bloc_number == 2:
+    elif previous_type in {"qa", "pause", "pause_midi"}:
         parts.append(
-            "Reprise autonome après Q&A/pause : ne jamais terminer la partie précédente. "
-            "Faire un rappel très bref de ce qui a été vu, relier la posture "
-            "d'accueil à distance au nouveau thème, annoncer l'objectif puis "
-            "un plan de 2 à 4 axes avant tout exemple."
+            "Reprise autonome après un bloc facultatif : bref rappel de la "
+            "progression, lien avec le nouveau thème, objectif puis plan oral."
+        )
+    elif previous_type == "jointure":
+        parts.append(
+            "Cours contigu au précédent : la jointure audio vient d'assurer le "
+            "raccord ; entrer directement et naturellement dans le nouveau chapitre."
         )
     else:
         parts.append(
@@ -1668,43 +1687,23 @@ def _course_block_role(
             "insérer respirations pédagogiques, exemples terrain et mini-synthèses."
         )
 
-    if bloc_number == total_courses:
+    if bloc_number == total_courses and next_type is None:
         parts.append(
             "Fin de journée : conclusion progressive, synthèse des idées essentielles, "
-            "valorisation du chemin parcouru et projection sobre vers la suite."
+            "valorisation du chemin parcouru, sans dater ni annoncer la prochaine "
+            "séance ; la clôture temporelle sera ajoutée lors de l'audio."
         )
 
-    next_type = next_item[2] if next_item and len(next_item) >= 3 else None
-    next_duration = int(next_item[1] or 0) if next_item and len(next_item) >= 2 else 0
     if next_type in {"qa", "pause", "pause_midi"}:
-        if next_type == "qa":
-            qa_outro = (
-                "Outro : annoncer que l'on va passer au temps de questions-réponses. "
-                "Le Q&A suivant démarre sans introduction propre."
-            )
-            if bloc_number == 1:
-                qa_outro += (
-                    " Pour le premier thème interne, après cette annonce, aucun nouveau "
-                    "développement ne doit suivre."
-                )
-            elif bloc_number == 2:
-                qa_outro += (
-                    " Pour le deuxième thème interne, ne pas ouvrir la suite et ne pas "
-                    "réexpliquer la partie précédente après cette annonce."
-                )
-            parts.append(qa_outro)
-        elif next_type == "pause_midi":
-            parts.append(
-                "Outro : annoncer naturellement la pause déjeuner. "
-                "Le fichier pause suivant démarre sans introduction propre."
-            )
-        else:
-            minutes = max(1, round(next_duration / 60)) if next_duration else None
-            pause_label = f" de {minutes} minutes" if minutes else ""
-            parts.append(
-                f"Outro : annoncer naturellement une pause{pause_label}. "
-                "Le fichier pause suivant démarre sans introduction propre."
-            )
+        parts.append(
+            "Outro : conclure uniquement le chapitre, sans annoncer le Q&R ou "
+            "la pause ; le bloc facultatif suivant possède sa propre intro."
+        )
+    elif next_type == "jointure":
+        parts.append(
+            "Outro : conclure uniquement ce chapitre, sans annoncer le chapitre "
+            "suivant ; la jointure technique assure le raccord."
+        )
 
     return " ".join(parts)
 
@@ -1730,8 +1729,8 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "formuler l'objectif de cette première partie et ce que l'apprenant saura mieux faire ensuite",
             "annoncer un plan oral en 2 à 4 axes et suivre ce plan dans le même ordre",
             "verbaliser chaque changement de partie avec une transition claire",
-            "conclure par 3 à 4 minutes équivalent audio : récapitulatif des points vus, utilité concrète, annonce du Q&A dans le tchat",
-            "arrêter strictement le texte après l'annonce du Q&A : aucun exemple, aucune mini-synthèse, aucun remplissage après la conclusion",
+            "conclure par un récapitulatif des points vus et leur utilité concrète, sans annoncer le bloc suivant",
+            "arrêter strictement le texte après la conclusion : aucun exemple ni remplissage supplémentaire",
         ],
         "examples": "exemples simples et explicitement fictifs, uniquement après l'annonce du cadre et du plan",
         "avoid": [
@@ -1741,13 +1740,13 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "vocabulaire littéraire ou trop abstrait pour un cours magistral professionnel",
             "blocs répétés comme 'Prenons quelques secondes pour ancrer cette idée'",
             "dire 'tout premier cours', 'ce cours', 'cours actuel' ou 'trois quarts d'heure à venir'",
-            "nouveau développement après la conclusion et l'annonce du Q&A",
+            "nouveau développement après la conclusion",
         ],
-        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat, sans transition vers le thème suivant",
+        "handoff": "conclure uniquement le chapitre, sans annoncer Q&R, pause ou thème suivant",
     },
     2: {
         "label": "Cours interne 2 — reprise autonome et nouveau thème",
-        "moment": "reprise après le Q&A et la pause qui suivent la première partie",
+        "moment": "reprise adaptée à l'élément audio qui précède réellement",
         "intention": (
             "ouvrir une nouvelle partie autonome de la journée : rappeler brièvement "
             "ce qui a été posé avant la pause, puis basculer vers le nouveau thème "
@@ -1766,13 +1765,13 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "annoncer un plan de 2 à 4 axes maximum avant tout exemple développé",
             "développer les parties dans l'ordre annoncé, chacune avec une idée nouvelle identifiable",
             "verbaliser les transitions : passons au deuxième point, maintenant que nous avons vu X, intéressons-nous à Y",
-            "conclure par 3 à 4 minutes équivalent audio : récapitulatif des points de cette partie, utilité concrète, annonce du Q&A dans le tchat",
+            "conclure par un récapitulatif des points de cette partie et leur utilité concrète, sans annoncer le bloc suivant",
         ],
         "examples": "exemples simples et explicitement fictifs si le cas n'est pas issu du programme, uniquement après le rappel, le lien et le plan",
         "avoid": [
             "commencer par 'Et puis', 'Ensuite' ou une phrase qui continue directement la conclusion de la partie précédente",
             "terminer une notion absente du texte écrit de la partie précédente",
-            "rejouer la conclusion de la partie précédente ou annoncer son Q&A",
+            "rejouer la conclusion de la partie précédente",
             "démarrer par un exemple comme Monsieur Klein avant d'avoir annoncé le nouveau thème et le plan",
             "faire une double introduction du nouveau thème",
             "dire 'ce cours' ou 'cours actuel' côté apprenant",
@@ -1780,7 +1779,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "changer de thème sans transition explicite",
             "accumuler des conseils non hiérarchisés",
         ],
-        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat si un Q&A suit, sans transition vers le thème suivant",
+        "handoff": "conclure uniquement le chapitre ; l'audio suivant porte sa propre intro",
     },
     3: {
         "label": "Cours 3 — densité avant respiration longue",
@@ -1798,7 +1797,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "entrer dans une situation plus exigeante ou un cas plus complet",
             "montrer les décisions successives à prendre",
             "insister sur les pièges, limites et critères de qualité",
-            "conclure clairement cette séquence avant le Q&A ou la pause",
+            "conclure clairement cette séquence sans annoncer le bloc suivant",
         ],
         "examples": "cas complexe, diagnostic, arbitrage, client difficile, erreur de procédure, correction commentée",
         "avoid": [
@@ -1906,7 +1905,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "terminer le dernier point prévu ou le dernier exemple utile",
             "relier les notions principales sans refaire tout le cours",
             "donner les points clés à retenir pour la pratique",
-            "conclure la journée et ouvrir vers la prochaine séance si le programme le demande",
+            "conclure pédagogiquement la journée sans dater ni annoncer la prochaine séance",
         ],
         "examples": "dernier cas d'intégration, synthèse appliquée, checklist mentale, situation de transfert au poste",
         "avoid": [
@@ -1915,7 +1914,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "finir abruptement",
             "survaloriser artificiellement ou faire une conclusion trop solennelle",
         ],
-        "handoff": "annoncer le Q&A final ou la suite de formation avec sobriété",
+        "handoff": "conclure la journée seulement si ce cours est le dernier bloc audible ; sinon conclure uniquement le chapitre",
     },
 }
 
@@ -1939,6 +1938,17 @@ def _course_slot_prompt_profile(
         passe_num = int(passe or 0)
     except (TypeError, ValueError):
         passe_num = 0
+
+    if total == 1:
+        return (
+            "- Profil : chapitre unique de la journée.\n"
+            "- Accueillir sobrement, situer la séance avec la fiche temporelle, "
+            "annoncer l'unique thème et son plan, puis le développer sans faire "
+            "croire que d'autres chapitres sont prévus ce jour-là.\n"
+            "- Conclure uniquement le chapitre ; conclure aussi la séance seulement "
+            "si aucun Q&R ne suit.\n"
+            "- Ne jamais annoncer un Q&R ou une pause : l'audio suivant possède sa propre intro."
+        )
 
     if bloc <= 1:
         profile_index = 1
@@ -1999,6 +2009,9 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
     if not course_numbers:
         raise ValueError("Le planning audio ne contient aucun cours")
     total_courses = len(course_numbers)
+    day_ends_with_course = bool(
+        playlist_items and playlist_items[-1][2] == "cours"
+    )
     raw_by_number = {}
     for item in raw_plan.get("courses") or []:
         try:
@@ -2033,7 +2046,9 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
             parts_count,
             words_per_minute=_course_words_per_minute(),
             is_last_day=is_last_day,
-            is_last_course=course_number == course_numbers[-1],
+            is_last_course=(
+                course_number == course_numbers[-1] and day_ends_with_course
+            ),
         )
 
         opening = raw.get("opening") if isinstance(raw.get("opening"), dict) else {}
@@ -2074,7 +2089,7 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
             ]
         else:
             forced_opening_include = [
-                "petite reprise naturelle cohérente avec un vocal précédent indiquant que la pause ou le Q/R est terminé",
+                "petite reprise naturelle cohérente avec l'élément audio précédent",
                 "rappel bref de la partie précédente",
                 "lien avec le nouveau thème",
                 "thème de cette nouvelle partie",
@@ -2151,7 +2166,10 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
             )
             course_conclusion["must_avoid"] = _merge_unique_strings(
                 course_conclusion.get("must_avoid"),
-                ["annonce Q/R avant la conclusion globale", "transition vers un nouveau développement"],
+                [
+                    "annoncer un Q/R ou une pause à la place du bloc suivant",
+                    "transition vers un nouveau développement",
+                ],
             )
         else:
             course_conclusion["must_include"] = _merge_unique_strings(
@@ -2159,12 +2177,14 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
                 [
                     "récapitulatif de ce qui a été vu dans le cours avant la conclusion",
                     "utilité concrète",
-                    "annonce Q/R dans le tchat",
                 ],
             )
             course_conclusion["must_avoid"] = _merge_unique_strings(
                 course_conclusion.get("must_avoid"),
-                ["nouveau développement après annonce Q/R", "transition vers le cours suivant"],
+                [
+                    "annonce Q/R ou pause",
+                    "transition vers le cours suivant",
+                ],
             )
         course_conclusion["teaching_beats"] = _merge_conclusion_teaching_beats(
             [
@@ -2178,20 +2198,22 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         )
 
         day_conclusion = None
-        if course_number == course_numbers[-1]:
+        if course_number == course_numbers[-1] and day_ends_with_course:
             raw_day = raw.get("day_conclusion") if isinstance(raw.get("day_conclusion"), dict) else {}
             day_conclusion = {
                 "target_words": budgets["day_conclusion"],
                 "must_include": _merge_unique_strings(
                     raw_day.get("must_include"),
                     "récapitulatif global de la journée",
-                    "amorce légère de la prochaine séance" if not is_last_day else "clôture finale de formation",
-                    "bonne semaine et à la semaine prochaine" if not is_last_day else "bonne continuation",
-                    "vous pouvez encore poser vos questions dans le tchat si vous voulez",
                 ),
                 "must_avoid": _merge_unique_strings(
                     raw_day.get("must_avoid"),
-                    ["nouveau développement", "mot bloc devant les élèves"],
+                    [
+                        "nouveau développement",
+                        "mot bloc devant les élèves",
+                        "date ou rendez-vous de prochaine séance",
+                        "demain, après-demain ou la semaine prochaine",
+                    ],
                 ),
             }
 
@@ -2281,6 +2303,14 @@ def _build_structured_course_plan_prompt(
         nb_days = None
     is_first_day = day_number == 1
     is_last_day = bool(nb_days and day_number == nb_days)
+    ending_type = playlist_items[-1][2] if playlist_items else None
+    ending_owner = (
+        "le dernier cours"
+        if ending_type == "cours"
+        else "le Q&R final"
+        if ending_type == "qa"
+        else "le dernier bloc audio"
+    )
     block_lines = "\n".join(
         f"- Cours {b['bloc_number']} · {b['duration_min']} min · cible {b['target_words']} mots · {b['role']}"
         for b in block_plan
@@ -2412,12 +2442,17 @@ Contraintes générales :
 - Évite aussi côté apprenant : "tout premier cours", "ce cours", "cours actuel", "le cours qui nous occupe", "pour les trois quarts d'heure à venir".
 - Les durées, horaires, budgets mots, noms de fichiers et découpages playlist sont internes. Ils ne doivent jamais apparaître dans les titres, ouvertures, transitions ou conclusions côté apprenant.
 - Ne jamais écrire une phrase du type "sans vous soucier des horaires précis" : si tu présentes la journée, énonce seulement les thèmes dans leur ordre pédagogique.
-- Un cours est toujours suivi d'un temps de questions-réponses dans le tchat.
-- Cours interne 1 de la première journée seulement : accueil, parcours annuel synthétique, thèmes de la journée, transition vers le premier grand thème, objectif/axes, conclusion + Q/R.
-- Cours interne 1 d'une journée suivante : accueil de journée, reprise douce de la progression, thèmes de la journée, transition vers le premier grand thème, objectif/axes, conclusion + Q/R. Ne refais pas la présentation annuelle complète.
-- Cours internes 2 à {max(2, course_count - 1)} : reprise naturelle cohérente avec le vocal précédent de fin de pause/Q/R, rappel bref de la partie précédente, lien avec le nouveau thème, objectif/axes, conclusion + Q/R.
-- Cours interne {course_count} : conclusion de la dernière partie, conclusion globale de journée, amorce prochaine séance, bonne semaine/à la semaine prochaine, puis mention douce du tchat.
-- Si c'est la dernière journée de formation, le cours {course_count} doit souhaiter bonne continuation au lieu d'annoncer la prochaine séance.
+- Les Q&R et les pauses sont facultatifs et ne font pas partie du texte des cours.
+- Chaque Q&R/pause porte sa propre intro et sa propre outro : le cours précédent ne l'annonce jamais.
+- Deux cours contigus sont reliés par une jointure audio générique : aucun des deux cours ne doit verbaliser ce mécanisme.
+- Si la journée comporte un seul cours, écris une ouverture et une conclusion adaptées à une séance à chapitre unique, sans faire croire qu'il existe plusieurs chapitres ce jour-là.
+- Cours interne 1 de la première journée seulement : accueil, parcours annuel synthétique, chapitres réellement prévus ce jour-là, transition vers le premier chapitre, objectif et axes.
+- Cours interne 1 d'une journée suivante : accueil de journée, reprise douce de la progression, chapitres réellement prévus ce jour-là, puis premier chapitre. Ne refais pas la présentation annuelle complète.
+- Cours internes suivants : reprise cohérente avec l'élément audio précédent, rappel bref si utile, lien avec le nouveau chapitre, objectif et axes.
+- Chaque cours conclut seulement son propre chapitre. Propriétaire de la clôture de journée : {ending_owner}.
+- Si le dernier bloc est un Q&R, le dernier cours ne clôt pas la journée : l'outro du Q&R le fera.
+- Si le dernier bloc est un cours, ce cours fait la conclusion pédagogique globale sans annoncer de date ni de prochain rendez-vous.
+- La courte clôture temporelle exacte est ajoutée plus tard, au moment de l'audio ; ne l'écris pas dans le contenu durable du cours.
 - Les exemples non sourcés doivent être fictifs ou hypothétiques avec une
   formulation naturelle. "Imaginons...", "Imaginez qu'un client...",
   "Prenons un exemple fictif..." ou "Supposons que..." suffit.
@@ -3522,6 +3557,7 @@ def _course_audio_block_plan(
         )
         min_words = _block_min_words(word_budget)
         next_item = _next_playlist_item_after_index(playlist_spec, idx)
+        previous_item = playlist_spec[idx - 1] if idx > 0 else None
         blocks.append({
             "bloc_number": int(bloc_num or 0),
             "filename": filename,
@@ -3533,6 +3569,7 @@ def _course_audio_block_plan(
             "role": _course_block_role(
                 int(bloc_num or 0),
                 folder_position=folder_position,
+                previous_item=previous_item,
                 next_item=next_item,
                 total_courses=total_courses,
             ),
@@ -3573,8 +3610,9 @@ def _build_audio_day_plan_context(generation_context=None) -> str:
         "",
         "Règles impératives :",
         "- La première partie ne démarre jamais brutalement.",
-        "- Chaque partie se ferme proprement : mini-synthèse, transition, ou annonce pause/Q&A si nécessaire.",
-        "- Si un Q&A ou une pause suit, son introduction est portée par l'outro du cours précédent.",
+        "- Chaque partie se ferme proprement par une mini-synthèse ou une conclusion de chapitre.",
+        "- Ne jamais annoncer un Q&R ou une pause : chacun porte sa propre intro.",
+        "- Entre deux cours contigus, la jointure technique porte seule le raccord.",
         "- Les Q&A et pauses ne comptent pas dans le texte de cours.",
         "- Les références entre cours restent vagues : jamais \"hier\" ni \"demain\".",
         "- Ne jamais dire \"horaire\", \"créneau\", \"planning\" ou \"sans vous soucier des horaires\".",
@@ -5060,7 +5098,7 @@ def _next_playlist_item_after(playlist_items: list | None, item_idx: int):
 
 
 def _break_intro_text_for_playlist_item(item) -> str:
-    """Retourne l'intro prévue du break, à porter par l'audio précédent."""
+    """Retourne l'intro propre du break (jamais portée par le cours)."""
     next_type = _playlist_item_type(item)
     if next_type not in {"qa", "pause", "pause_midi"}:
         return ""
@@ -5091,39 +5129,7 @@ def _break_intro_text_for_playlist_item(item) -> str:
 
 
 def _course_playlist_handoff_text(next_item) -> str:
-    """Phrase de transition portée par le fichier qui se termine."""
-    next_type = _playlist_item_type(next_item)
-    duration_sec = _playlist_item_duration(next_item)
-    planned_intro = _break_intro_text_for_playlist_item(next_item)
-    if planned_intro:
-        return planned_intro
-    if next_type in {"qa", "pause", "pause_midi"}:
-        try:
-            from services.break_transition_service import duration_label
-            label = duration_label(duration_sec, next_type)
-        except Exception:
-            label = ""
-        if next_type == "qa":
-            return (
-                "On va maintenant prendre un temps pour vos questions. "
-                "Gardez simplement les points importants en tête, et posez ce que vous voulez clarifier."
-            )
-        if next_type == "pause_midi" or label == "pause déjeuner":
-            return (
-                "On va maintenant marquer la pause déjeuner. "
-                "Prenez le temps de souffler, de vous reposer, et on reprendra ensuite calmement."
-            )
-        if label:
-            return (
-                f"On va maintenant prendre une pause de {label}. "
-                "Profitez-en pour souffler un peu avant la suite."
-            )
-        return (
-            "On va maintenant prendre une courte pause. "
-            "Profitez-en pour souffler un peu avant la suite."
-        )
-    if next_type == "cours":
-        return "On enchaînera ensuite avec la suite du parcours, en gardant cette base comme point d'appui."
+    """Le cours clôt son chapitre sans annoncer l'asset suivant."""
     return "On va donc s'arrêter ici pour ce moment, avec ces repères bien en tête."
 
 
@@ -6364,12 +6370,12 @@ def _build_audio_block_calibration_prompt(
             "- Le texte est trop court : tu dois l'enrichir en intégrant de vrais apports pédagogiques dans les parties de développement, jamais en ajoutant un appendice à la fin.\n"
             "- Ajoute une idée utile à la fois : nuance terrain, contre-exemple, mini-cas fictif, clarification méthodologique, erreur fréquente ou lien concret avec un teaching beat existant.\n"
             "- Ne rends pas simplement les phrases plus verbeuses. Chaque ajout doit apporter une valeur pédagogique identifiable.\n"
-            "- Insère les enrichissements AVANT la conclusion et AVANT toute annonce de questions-réponses ou de tchat.\n"
+            "- Insère les enrichissements AVANT la conclusion du chapitre.\n"
             "- Respecte les slides/anchors prévus : les enrichissements doivent soutenir les moments pédagogiques existants, pas créer une trajectoire parallèle.\n"
             "- Les exemples ajoutés doivent être fictifs ou hypothétiques et aider une idée précise du plan verrouillé.\n"
         )
     direction_rules += (
-        "- Si le texte contient déjà une conclusion/Q-R, elle doit rester la dernière partie du texte final. Aucun nouveau développement après cette conclusion.\n"
+        "- Si le texte contient déjà une conclusion, elle doit rester la dernière partie du texte final. Aucun nouveau développement après cette conclusion.\n"
         "- N'ajoute jamais de remplissage générique, de répétition automatique ou de paragraphe passe-partout.\n"
     )
     return f"""Tu es directeur éditorial d'un cours audio TTS Fish Audio.
@@ -6399,15 +6405,14 @@ Mission :
 - Garde les tags TTS utiles comme [pause] ou [calm], mais n'en abuse pas.
 - Respecte le plan et la fonction pédagogique du cours.
 - Ne change pas le niveau RNCP, ne rajoute pas de promesse ou contenu sensible.
-- Respecte la logique playlist : si ce cours annonce une pause ou un Q&A, cette annonce
-  reste dans l'outro du cours précédent, pas dans le fichier pause/Q&A.
+- Respecte la logique playlist : le cours ne doit jamais annoncer une pause ou un Q&A ;
+  le fichier pause/Q&A porte sa propre intro.
 - Les mots "bloc", "créneau", "horaire", "planning", les durées, les fichiers et
   les budgets sont internes : ne les mentionne jamais dans le texte final.
 - Ne gonfle pas hors budget : le résultat doit finir entre {status.get('min_words')}
   et {status.get('max_words')} mots parlés.
 - Si tu enrichis, garde l'ordre du texte existant : introduction, développement,
-  conclusion. Ne prolonge jamais le développement après une annonce Q/R, tchat,
-  temps d'échange ou fin de partie.
+  conclusion. Ne prolonge jamais le développement après la fin de partie.
 {direction_rules}
 
 Texte actuel à réécrire :
@@ -7114,8 +7119,302 @@ def _get_passe_prompts(from_scratch=False):
     return prompts
 
 
+_FRENCH_UNITS = (
+    "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept",
+    "huit", "neuf", "dix", "onze", "douze", "treize", "quatorze",
+    "quinze", "seize",
+)
+_FRENCH_TENS = {20: "vingt", 30: "trente", 40: "quarante", 50: "cinquante", 60: "soixante"}
+_FRENCH_WEEKDAYS = (
+    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+)
+_FRENCH_MONTHS = (
+    "janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+    "août", "septembre", "octobre", "novembre", "décembre",
+)
+
+
+def _french_number(value: int) -> str:
+    """Petit convertisseur déterministe pour dates/heures TTS."""
+    number = int(value)
+    if number < 0:
+        return f"moins {_french_number(-number)}"
+    if number < len(_FRENCH_UNITS):
+        return _FRENCH_UNITS[number]
+    if number < 20:
+        return f"dix-{_FRENCH_UNITS[number - 10]}"
+    if number < 70:
+        tens = (number // 10) * 10
+        unit = number % 10
+        if not unit:
+            return _FRENCH_TENS[tens]
+        connector = " et " if unit == 1 else "-"
+        return f"{_FRENCH_TENS[tens]}{connector}{_FRENCH_UNITS[unit]}"
+    if number < 80:
+        return f"soixante-{_french_number(number - 60)}"
+    if number < 100:
+        if number == 80:
+            return "quatre-vingts"
+        return f"quatre-vingt-{_french_number(number - 80)}"
+    if number < 1000:
+        hundreds, remainder = divmod(number, 100)
+        prefix = "cent" if hundreds == 1 else f"{_french_number(hundreds)} cent"
+        if not remainder:
+            return prefix + ("s" if hundreds > 1 else "")
+        return f"{prefix} {_french_number(remainder)}"
+    if number < 1_000_000:
+        thousands, remainder = divmod(number, 1000)
+        prefix = "mille" if thousands == 1 else f"{_french_number(thousands)} mille"
+        return prefix if not remainder else f"{prefix} {_french_number(remainder)}"
+    return str(number)
+
+
+def _spoken_french_date(value: str) -> str:
+    parsed = datetime.fromisoformat(str(value)).date()
+    day = "premier" if parsed.day == 1 else _french_number(parsed.day)
+    return (
+        f"{_FRENCH_WEEKDAYS[parsed.weekday()]} {day} "
+        f"{_FRENCH_MONTHS[parsed.month - 1]} {_french_number(parsed.year)}"
+    )
+
+
+def _spoken_french_time(minute: int) -> str:
+    hour, remainder = divmod(int(minute), 60)
+    if remainder:
+        return f"{_french_number(hour)} heures {_french_number(remainder)}"
+    return f"{_french_number(hour)} heures"
+
+
+def _temporal_gap_label(current_date: str, target_date: str) -> str:
+    current = datetime.fromisoformat(current_date).date()
+    target = datetime.fromisoformat(target_date).date()
+    gap = (target - current).days
+    if gap == 1:
+        return "demain"
+    if gap == 2:
+        return "après-demain"
+    return _spoken_french_date(target_date)
+
+
+def _build_day_temporal_closing(
+    *,
+    formation_job_id=None,
+    folder_position=None,
+) -> str:
+    """Clôture orale tardive d'une journée terminée par un Q&R.
+
+    Le texte est calculé au moment de l'audio à partir du planning verrouillé :
+    il ne peut donc pas conserver une ancienne date après replanification.
+    """
+    if not formation_job_id:
+        return ""
+    try:
+        from repositories.pipeline_repository import get_pipeline_job
+
+        pipeline_job = get_pipeline_job(int(formation_job_id)) or {}
+        snapshot = pipeline_job.get("schedule_snapshot_json") or {}
+        if isinstance(snapshot, str):
+            snapshot = json.loads(snapshot)
+        days = [
+            dict(day)
+            for day in snapshot.get("days") or []
+            if isinstance(day, dict) and day.get("date")
+        ]
+        days.sort(
+            key=lambda item: int(
+                item.get("day_index") or item.get("day_number") or 0
+            )
+        )
+        day_index = int(folder_position or 0)
+        if not (0 <= day_index < len(days)):
+            return ""
+
+        current_date = str(days[day_index]["date"])
+        if day_index + 1 >= len(days):
+            return (
+                "Cette séance est terminée. "
+                "Nous arrivons au terme de cette formation."
+            )
+
+        next_date = str(days[day_index + 1]["date"])
+        relative_label = _temporal_gap_label(current_date, next_date)
+        spoken_date = _spoken_french_date(next_date)
+        if relative_label in {"demain", "après-demain"}:
+            return (
+                "Cette séance est terminée. Nous nous retrouverons "
+                f"{relative_label}, le {spoken_date}, pour poursuivre la formation."
+            )
+        return (
+            "Cette séance est terminée. Nous nous retrouverons le "
+            f"{spoken_date} pour poursuivre la formation."
+        )
+    except Exception as exc:
+        logger.warning("Clôture temporelle indisponible: %s", exc)
+        return ""
+
+
+def _apply_late_temporal_closing_to_final_course(
+    blocs: list[dict],
+    playlist_items: list,
+    temporal_closing: str,
+) -> bool:
+    """Ajoute la clôture datée au TTS seulement si un cours finit la journée."""
+    if not temporal_closing or not playlist_items or playlist_items[-1][2] != "cours":
+        return False
+    final_bloc_number = int(playlist_items[-1][3] or 0)
+    final_bloc = next(
+        (
+            bloc
+            for bloc in blocs
+            if int(bloc.get("bloc_number") or 0) == final_bloc_number
+        ),
+        None,
+    )
+    if not final_bloc:
+        return False
+    current_text = (final_bloc.get("text") or "").strip()
+    if temporal_closing not in current_text:
+        final_bloc["text"] = "\n\n".join(
+            part for part in (current_text, temporal_closing.strip()) if part
+        )
+        final_bloc["word_count"] = len(final_bloc["text"].split())
+    final_bloc["late_temporal_closing"] = temporal_closing.strip()
+    # La phrase appartient à l'occurrence planifiée, pas au script durable.
+    final_bloc["dirty"] = True
+    return True
+
+
+def _build_course_temporal_card(
+    *,
+    formation_job_id=None,
+    folder_position=None,
+    sub_part_index=None,
+    total_courses=None,
+    playlist_spec=None,
+) -> str:
+    """Fiche temporelle concise, exacte et réutilisable dans chaque prompt."""
+    if not formation_job_id:
+        return ""
+    try:
+        from repositories.pipeline_repository import get_pipeline_job
+
+        pipeline_job = get_pipeline_job(int(formation_job_id)) or {}
+        snapshot = pipeline_job.get("schedule_snapshot_json") or {}
+        if isinstance(snapshot, str):
+            snapshot = json.loads(snapshot)
+        days = [dict(day) for day in snapshot.get("days") or [] if isinstance(day, dict)]
+        days.sort(key=lambda item: int(item.get("day_index") or item.get("day_number") or 0))
+        day_index = int(folder_position or 0)
+        if not (0 <= day_index < len(days)):
+            return ""
+        day = days[day_index]
+        current_date = str(day.get("date") or "")
+        if not current_date:
+            return ""
+        day_courses = [
+            block for block in day.get("blocks") or []
+            if isinstance(block, dict)
+            and str(block.get("block_type") or block.get("type")) == "course"
+        ]
+        course_index = max(0, int(sub_part_index or 0))
+        if course_index >= len(day_courses):
+            return ""
+        course = day_courses[course_index]
+        start_minute = int(course.get("start_minute") or 0)
+        duration_minutes = int(
+            course.get("duration_minutes")
+            or course.get("duration_min")
+            or 0
+        )
+
+        all_courses = []
+        total_course_minutes = 0
+        for indexed_day, scheduled_day in enumerate(days):
+            scheduled_date = str(scheduled_day.get("date") or "")
+            for scheduled_course in scheduled_day.get("blocks") or []:
+                if not isinstance(scheduled_course, dict) or str(
+                    scheduled_course.get("block_type") or scheduled_course.get("type")
+                ) != "course":
+                    continue
+                duration = int(
+                    scheduled_course.get("duration_minutes")
+                    or scheduled_course.get("duration_min")
+                    or 0
+                )
+                total_course_minutes += duration
+                all_courses.append({
+                    "day_index": indexed_day,
+                    "date": scheduled_date,
+                    "start_minute": int(scheduled_course.get("start_minute") or 0),
+                    "duration_minutes": duration,
+                })
+        global_index = sum(
+            1
+            for item in all_courses
+            if item["day_index"] < day_index
+        ) + course_index
+        previous_course = all_courses[global_index - 1] if global_index > 0 else None
+        next_course = (
+            all_courses[global_index + 1]
+            if global_index + 1 < len(all_courses)
+            else None
+        )
+        dated_days = [str(item.get("date") or "") for item in days if item.get("date")]
+        formation_weeks = 1
+        if dated_days:
+            first = datetime.fromisoformat(dated_days[0]).date()
+            last = datetime.fromisoformat(dated_days[-1]).date()
+            formation_weeks = max(1, math.ceil(((last - first).days + 1) / 7))
+
+        lines = [
+            "FICHE TEMPORELLE CONCISE — données internes exactes",
+            f"- Formation : {_french_number(formation_weeks)} semaine{'s' if formation_weeks > 1 else ''}, "
+            f"{_french_number(len(all_courses))} chapitre{'s' if len(all_courses) > 1 else ''}, "
+            f"{_french_number(total_course_minutes)} minutes de cours au total.",
+            f"- Aujourd'hui : {_spoken_french_date(current_date)}.",
+            f"- Chapitre courant : {_french_number(course_index + 1)} sur "
+            f"{_french_number(len(day_courses))} dans cette journée, "
+            f"{_french_number(global_index + 1)} sur {_french_number(len(all_courses))} dans la formation.",
+            f"- Début planifié : {_spoken_french_time(start_minute)} ; durée : "
+            f"{_french_number(duration_minutes)} minutes.",
+        ]
+        if previous_course:
+            lines.append(
+                f"- Séquence précédente : {_spoken_french_date(previous_course['date'])} "
+                f"à {_spoken_french_time(previous_course['start_minute'])}."
+            )
+        else:
+            lines.append("- Séquence précédente : aucune, ouverture de la formation.")
+        if next_course:
+            if next_course["date"] == current_date:
+                next_oral_label = (
+                    "juste après"
+                    if next_course["start_minute"] == start_minute + duration_minutes
+                    else "plus tard dans cette même journée"
+                )
+            else:
+                next_oral_label = _temporal_gap_label(
+                    current_date, next_course["date"]
+                )
+            lines.append(
+                f"- Prochaine séquence : {_spoken_french_date(next_course['date'])} "
+                f"à {_spoken_french_time(next_course['start_minute'])} ; formulation orale "
+                f"autorisée : {next_oral_label}."
+            )
+        else:
+            lines.append("- Prochaine séquence : aucune, clôture finale de la formation.")
+        lines.append(
+            "- Toute date ou heure prononcée doit rester écrite entièrement en lettres."
+        )
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.warning("Fiche temporelle indisponible: %s", exc)
+        return ""
+
+
 def _build_course_position_context(
     *,
+    formation_job_id=None,
     folder_position=None,
     nb_days=None,
     total_hours=None,
@@ -7170,6 +7469,15 @@ def _build_course_position_context(
         lines.append(f"Cours de la journée : {sub_number}/{resolved_total_courses}.")
     if passe_number:
         lines.append(f"Passe : {passe_number}/3.")
+    temporal_card = _build_course_temporal_card(
+        formation_job_id=formation_job_id,
+        folder_position=folder_position,
+        sub_part_index=sub_part_index,
+        total_courses=resolved_total_courses,
+        playlist_spec=playlist_spec,
+    )
+    if temporal_card:
+        lines.extend(["", temporal_card])
 
     if is_first_annual_course:
         lines.extend([
@@ -7258,9 +7566,9 @@ def extract_sub_parts(program_text, course_count=NUM_SUB_PARTS):
     try:
         course_count = int(course_count)
     except (TypeError, ValueError) as exc:
-        raise ValueError("Le nombre de cours doit être un entier entre 4 et 10") from exc
-    if not 4 <= course_count <= 10:
-        raise ValueError("Le nombre de cours doit être compris entre 4 et 10")
+        raise ValueError("Le nombre de cours doit être un entier entre 1 et 10") from exc
+    if not 1 <= course_count <= 10:
+        raise ValueError("Le nombre de cours doit être compris entre 1 et 10")
 
     course_examples = ",\n".join(
         f'    "Cours {index} — Nom précis du thème"'
@@ -7431,9 +7739,9 @@ def resolve_folder_content_course_count(folder_id: int) -> int:
         for item in resolved_playlist.get("playlist_items") or []
         if len(item) >= 3 and item[2] == "cours"
     )
-    if not 4 <= course_count <= 10:
+    if not 1 <= course_count <= 10:
         raise ValueError(
-            "Le manifeste audio doit contenir entre 4 et 10 cours "
+            "Le manifeste audio doit contenir entre 1 et 10 cours "
             f"(reçu : {course_count})"
         )
     return course_count
@@ -7658,6 +7966,12 @@ def _build_structured_section_prompt(
         generated_context_label = "Texte déjà généré dans cette partie interne"
         generated_context = _compact_words(generated_so_far, 900) or "(début de la partie)"
     scope_guard = _structured_section_scope_guard(section)
+    temporal_card = _build_course_temporal_card(
+        formation_job_id=job.get("formation_job_id"),
+        folder_position=job.get("folder_position"),
+        sub_part_index=max(0, int(course_plan.get("course_number") or 1) - 1),
+        total_courses=course_plan.get("total_courses"),
+    )
     teaching_beats_context = _section_teaching_beats_prompt(section)
     has_slide_display_map = bool(_display_map_expected_beats(section))
     response_instruction = (
@@ -7699,6 +8013,8 @@ Contexte utile :
 - Rappel cours précédent : {previous_course_summary or '(aucun)'}
 - {generated_context_label} : {generated_context}
 
+{temporal_card}
+
 Contenu source à utiliser :
 {_compact_words(module_content or job.get('program_text') or '', 4500)}
 
@@ -7726,7 +8042,7 @@ Contraintes absolues :
 - Si cette section est une partie, elle doit développer seulement cette partie et apporter une idée nouvelle identifiable. Elle ne doit jamais refaire l'accueil, le cadrage de la journée, l'annonce des thèmes de la journée ou le plan global déjà porté par l'introduction.
 - Si cette section contient des teaching_beats, couvre-les avec naturel. Tu peux choisir l'ordre narratif qui sert le mieux la prose, mais chaque beat ancré doit avoir un seul moment de développement principal. Ne les nomme jamais comme des beats, slides, anchors, PowerPoint ou templates.
 - Si cette section est une conclusion, elle doit récapituler sans ouvrir un nouveau développement.
-- Après l'annonce Q/R ou la mention du tchat, aucun nouveau développement.
+- La conclusion du cours ne doit jamais annoncer un Q&R ou une pause : le bloc suivant possède sa propre intro.
 
 {response_instruction}"""
 
@@ -7767,19 +8083,12 @@ def _structured_section_scope_guard(section: dict) -> str:
             must_include_text = " ".join(str(item) for item in must_include).lower()
         else:
             must_include_text = ""
-        qa_required = any(token in must_include_text for token in ("q/r", "q&a", "questions", "tchat"))
-        qa_instruction = (
-            "\n- Termine obligatoirement par l'annonce du temps de questions-réponses dans le tchat."
-            "\n- Cette annonce Q/R doit être la dernière phrase : aucun développement, exemple, synthèse ou remplissage après."
-            if qa_required
-            else ""
-        )
         return (
             "- Tu écris seulement la conclusion de cette partie interne.\n"
             "- Commence toujours par un récapitulatif bref de ce qui a été vu dans le cours.\n"
-            "- Ensuite seulement, ferme proprement le cours avant le temps de questions-réponses.\n"
+            "- Ensuite seulement, ferme proprement ce chapitre.\n"
+            "- N'annonce ni Q&R, ni pause, ni chapitre suivant : chaque audio porte sa propre transition.\n"
             "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
-            f"{qa_instruction}"
         )
     if kind == "day_conclusion":
         return (
@@ -7877,6 +8186,12 @@ def _build_structured_beat_prompt(
     next_beat = beats[beat_index + 1] if beat_index + 1 < len(beats) else None
     anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
     scope_guard = _structured_section_scope_guard(section)
+    temporal_card = _build_course_temporal_card(
+        formation_job_id=job.get("formation_job_id"),
+        folder_position=job.get("folder_position"),
+        sub_part_index=max(0, int(course_plan.get("course_number") or 1) - 1),
+        total_courses=course_plan.get("total_courses"),
+    )
     return f"""Tu écris UN MOMENT PÉDAGOGIQUE d'une section audio TTS-ready.
 
 Ce moment est une partie d'une section plus grande. Il doit s'enchaîner naturellement avec ce qui précède et préparer ce qui suit.
@@ -7927,6 +8242,8 @@ Contexte utile :
 - Rappel cours précédent : {previous_course_summary or '(aucun)'}
 - Texte déjà généré avant cette section : {_compact_words(generated_so_far, 700) or '(début de la partie)'}
 - Texte déjà généré dans cette section : {_compact_words(section_so_far, 700) or '(début de section)'}
+
+{temporal_card}
 
 Plan complet verrouillé de la partie interne :
 {json.dumps(course_plan, ensure_ascii=False, indent=2)}
@@ -9405,7 +9722,7 @@ Contraintes absolues :
   n'ajoute pas de phrase méta lourde.
 - Pour une partie de développement, ne refais pas l'accueil, le cadrage de journée ou le plan global.
 - Pour une conclusion, récapitule sans ouvrir un nouveau développement.
-- Après une annonce Q/R, tchat ou fin de partie, aucun nouveau développement.
+- Après la conclusion de partie, aucun nouveau développement.
 - Le résultat doit finir entre {status.get('min_words')} et {status.get('max_words')} mots parlés.
 {direction_rules}
 
@@ -13095,6 +13412,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                         prev_text="", from_scratch=True, module_content=module_content,
                         model=model,
                         generation_context={
+                            "formation_job_id": job.get("formation_job_id"),
                             "folder_position": job.get("folder_position"),
                             "nb_days": job.get("nb_days"),
                             "total_hours": job.get("total_hours"),
@@ -13112,6 +13430,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                         passe, sub_part_name, program_title, program_text, prev,
                         model=model,
                         generation_context={
+                            "formation_job_id": job.get("formation_job_id"),
                             "folder_position": job.get("folder_position"),
                             "nb_days": job.get("nb_days"),
                             "total_hours": job.get("total_hours"),
@@ -13464,6 +13783,70 @@ def _build_end_only_fish_break_audio_no_ffmpeg(
     return concat_mp3_bytes([pre_bytes, outro_bytes, tail_bytes]), final_duration
 
 
+def _build_two_sided_fish_break_audio_no_ffmpeg(
+    intro_text: str,
+    outro_text: str,
+    duration_sec: int,
+    *,
+    on_progress=None,
+) -> tuple[bytes, float]:
+    """Assemble intro au début et outro à la fin sans dépendre de ffmpeg."""
+    from services.basic_tts_service import concat_mp3_bytes
+    from services.tts_service import convert_to_speech
+
+    intro_text = (intro_text or "").strip()
+    outro_text = (outro_text or "").strip()
+    if not intro_text and not outro_text:
+        raise ValueError("Break Fish vide")
+
+    intro_bytes = b""
+    intro_duration = 0.0
+    if intro_text:
+        if on_progress:
+            on_progress("Fish Audio intro")
+        intro_bytes = convert_to_speech(intro_text)
+        intro_duration = _mp3_duration_seconds_no_ffprobe(intro_bytes)
+
+    outro_bytes = b""
+    outro_duration = 0.0
+    if outro_text:
+        if on_progress:
+            on_progress("Fish Audio outro")
+        outro_bytes = convert_to_speech(outro_text)
+        outro_duration = _mp3_duration_seconds_no_ffprobe(outro_bytes)
+
+    target = float(max(int(duration_sec or 0), 0))
+    tail_target = 2.0 if target >= 2.0 else 0.0
+    middle_target = max(
+        0.0,
+        target - intro_duration - outro_duration - tail_target,
+    )
+    middle_bytes, middle_duration = _fish_silent_mp3_approx_no_ffmpeg(
+        middle_target
+    )
+    final_tail_target = max(
+        0.0,
+        target - intro_duration - middle_duration - outro_duration,
+    )
+    tail_bytes, tail_duration = _fish_silent_mp3_approx_no_ffmpeg(
+        final_tail_target
+    )
+    parts = [part for part in (
+        intro_bytes,
+        middle_bytes,
+        outro_bytes,
+        tail_bytes,
+    ) if part]
+    final_duration = (
+        intro_duration + middle_duration + outro_duration + tail_duration
+    )
+    if final_duration < target - _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"Fallback Fish intro/outro trop court ({final_duration:.1f}s < {target:.1f}s)"
+        )
+    return concat_mp3_bytes(parts), final_duration
+
+
 def _course_opening_transitions_enabled() -> bool:
     value = (os.getenv("COURSE_OPENING_TRANSITIONS", "false") or "").strip().lower()
     return value not in {"0", "false", "no", "off"}
@@ -13759,6 +14142,7 @@ def _build_contextual_break_audio(
     on_progress=None,
     use_runtime_consumed_text: bool = False,
     break_overrides: dict | None = None,
+    temporal_outro: str = "",
 ):
     """Génère un Q&A/pause contextuel, fallback vers audioqapause si nécessaire."""
     from services.playlist_tts_service import (
@@ -13766,7 +14150,8 @@ def _build_contextual_break_audio(
         _generate_silence_mp3,
         _get_recycled_qa_pause,
     )
-    end_only_break = _playlist_uses_dynamic_schedule(playlist_items)
+    dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_items)
+    lead_in_seconds = 0 if dynamic_schedule else 17
 
     def _emit(message: str):
         if on_progress:
@@ -13786,54 +14171,22 @@ def _build_contextual_break_audio(
             return _generate_silence_mp3(fallback_duration), "silence_fallback"
 
     def _generic_break_texts():
-        from services.playlist_tts_service import (
-            _get_pause_midi_text,
-            _get_pause_text,
-            _get_qa_text,
-        )
         from services.break_transition_service import (
-            break_intro_owned_by_previous,
-            duration_label,
-            is_schedule_neutral_break,
+            fallback_break_transition,
             next_item_type,
         )
-        intro_owned = break_intro_owned_by_previous(playlist_items, item_idx, file_type)
-        if file_type == "qa":
-            intro, outro = _get_qa_text(bloc_num)
-            ntype = next_item_type(playlist_items, item_idx)
-            if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
-                next_item = _next_playlist_item_after(playlist_items, item_idx)
-                next_intro = _break_intro_text_for_playlist_item(next_item)
-                label = duration_label(_playlist_item_duration(next_item), ntype)
-                if next_intro:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        f"{next_intro}"
-                    )
-                elif ntype == "pause_midi" or label == "pause déjeuner":
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
-                    )
-                elif label:
-                    outro = (
-                        f"Très bien, on clôt ce temps de questions. "
-                        f"On va maintenant prendre une pause de {label}."
-                    )
-                else:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant prendre une courte pause."
-                    )
-            if intro_owned:
-                intro = ""
-            return intro, outro
-        if file_type == "pause_midi" or filename.startswith("pause_midi_"):
-            intro, outro = _get_pause_midi_text()
-        else:
-            intro, outro = _get_pause_text(bloc_num)
-        if intro_owned:
-            intro = ""
+        intro, outro = fallback_break_transition(
+            file_type,
+            bloc_num,
+            duration_sec,
+            next_item_type=next_item_type(playlist_items, item_idx),
+        )
+        return _apply_temporal_outro(intro, outro)
+
+    def _apply_temporal_outro(intro: str, outro: str) -> tuple[str, str]:
+        """Le dernier Q&R possède la clôture temporelle de la journée."""
+        if temporal_outro and file_type == "qa" and item_idx == len(playlist_items) - 1:
+            return intro, temporal_outro.strip()
         return intro, outro
 
     def _generic_basic_tts_break():
@@ -13852,13 +14205,41 @@ def _build_contextual_break_audio(
     if mock:
         return _generate_silence_mp3(1), "mock"
 
+    if file_type == "jointure":
+        jointure_text = (
+            "Nous allons maintenant poursuivre avec la partie suivante, "
+            "dans le prolongement direct de ce que nous venons de voir."
+        )
+        _emit(f"{filename} — jointure entre deux cours...")
+        if basic_tts:
+            audio_bytes, _final_duration = _build_timed_edge_break_audio(
+                jointure_text,
+                "",
+                min(10, max(1, int(duration_sec))),
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            return audio_bytes, "jointure_edge_timed"
+        try:
+            return _build_pause_audio(
+                jointure_text,
+                "",
+                min(10, max(1, int(duration_sec))),
+                lead_in_seconds=0,
+            ), "jointure_fish"
+        except Exception:
+            audio_bytes, _final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                jointure_text,
+                "",
+                min(10, max(1, int(duration_sec))),
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            return audio_bytes, "jointure_fish_no_ffmpeg"
+
     manual_break = (break_overrides or {}).get(filename)
     if manual_break:
         intro = (manual_break.get("intro") or "").strip()
         outro = (manual_break.get("outro") or "").strip()
-        if end_only_break:
-            outro = outro or intro
-            intro = ""
+        intro, outro = _apply_temporal_outro(intro, outro)
         _emit(f"{filename} — texte manuel...")
         if basic_tts:
             audio_bytes, final_duration = _build_timed_edge_break_audio(
@@ -13872,7 +14253,12 @@ def _build_contextual_break_audio(
             )
             return audio_bytes, "manual_edge_timed"
         try:
-            return _build_pause_audio(intro, outro, duration_sec), "manual_fish"
+            return _build_pause_audio(
+                intro,
+                outro,
+                duration_sec,
+                lead_in_seconds=lead_in_seconds,
+            ), "manual_fish"
         except Exception as fish_break_error:
             logger.warning(
                 "⚠️ Break Fish manuel %s impossible à assembler (%s); "
@@ -13880,9 +14266,9 @@ def _build_contextual_break_audio(
                 filename,
                 str(fish_break_error)[:240],
             )
-            fallback_outro = outro or intro
-            audio_bytes, final_duration = _build_end_only_fish_break_audio_no_ffmpeg(
-                fallback_outro,
+            audio_bytes, final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                intro,
+                outro,
                 duration_sec,
                 on_progress=lambda msg: _emit(f"{filename} — {msg}"),
             )
@@ -13890,7 +14276,7 @@ def _build_contextual_break_audio(
                 f"{filename} — fallback Fish manuel calé "
                 f"({final_duration:.1f}s/{duration_sec}s)"
             )
-            return audio_bytes, "manual_fish_end_only_fallback"
+            return audio_bytes, "manual_fish_two_sided_fallback"
 
     try:
         from services.break_transition_service import break_intro_owned_by_previous
@@ -13907,6 +14293,7 @@ def _build_contextual_break_audio(
         if fixed_break:
             intro = fixed_break["intro"]
             outro = fixed_break["outro"]
+            intro, outro = _apply_temporal_outro(intro, outro)
             _emit(f"{filename} — script fixe...")
             if basic_tts:
                 audio_bytes, final_duration = _build_timed_edge_break_audio(
@@ -13920,7 +14307,12 @@ def _build_contextual_break_audio(
                 )
                 return audio_bytes, "fixed_edge_timed"
             try:
-                return _build_pause_audio(intro, outro, duration_sec), "fixed_fish"
+                return _build_pause_audio(
+                    intro,
+                    outro,
+                    duration_sec,
+                    lead_in_seconds=lead_in_seconds,
+                ), "fixed_fish"
             except Exception as fish_break_error:
                 logger.warning(
                     "⚠️ Break Fish fixe %s impossible à assembler (%s); "
@@ -13928,7 +14320,8 @@ def _build_contextual_break_audio(
                     filename,
                     str(fish_break_error)[:240],
                 )
-                audio_bytes, final_duration = _build_end_only_fish_break_audio_no_ffmpeg(
+                audio_bytes, final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                    intro,
                     outro,
                     duration_sec,
                     on_progress=lambda msg: _emit(f"{filename} — {msg}"),
@@ -13937,7 +14330,7 @@ def _build_contextual_break_audio(
                     f"{filename} — fallback Fish fixe calé "
                     f"({final_duration:.1f}s/{duration_sec}s)"
                 )
-                return audio_bytes, "fixed_fish_end_only_fallback"
+                return audio_bytes, "fixed_fish_two_sided_fallback"
     except Exception as e:
         logger.warning(f"⚠️ Script fixe {filename} indisponible : {e}")
 
@@ -13976,9 +14369,7 @@ def _build_contextual_break_audio(
             get_bloc_text=_get_bloc_text_for_break,
             model=llm_model,
         )
-        if end_only_break:
-            outro = outro or intro
-            intro = ""
+        intro, outro = _apply_temporal_outro(intro, outro)
         _emit(f"{filename} — synthèse audio transition...")
         if basic_tts:
             audio_bytes, final_duration = _build_timed_edge_break_audio(
@@ -13993,7 +14384,12 @@ def _build_contextual_break_audio(
             )
             return audio_bytes, "contextual_edge_timed"
         try:
-            return _build_pause_audio(intro, outro, duration_sec), "contextual_fish"
+            return _build_pause_audio(
+                intro,
+                outro,
+                duration_sec,
+                lead_in_seconds=lead_in_seconds,
+            ), "contextual_fish"
         except Exception as fish_break_error:
             logger.warning(
                 "⚠️ Break Fish contextuel %s impossible à assembler (%s); "
@@ -14001,9 +14397,9 @@ def _build_contextual_break_audio(
                 filename,
                 str(fish_break_error)[:240],
             )
-            fallback_outro = outro or intro
-            audio_bytes, final_duration = _build_end_only_fish_break_audio_no_ffmpeg(
-                fallback_outro,
+            audio_bytes, final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                intro,
+                outro,
                 duration_sec,
                 on_progress=lambda msg: _emit(f"{filename} — {msg}"),
             )
@@ -14011,7 +14407,7 @@ def _build_contextual_break_audio(
                 f"{filename} — fallback Fish contextuel calé "
                 f"({final_duration:.1f}s/{duration_sec}s)"
             )
-            return audio_bytes, "contextual_fish_end_only_fallback"
+            return audio_bytes, "contextual_fish_two_sided_fallback"
     except Exception as e:
         logger.warning(f"⚠️ Break contextuel {filename} échoué : {e}; fallback audioqapause")
         return _fallback(type(e).__name__)
@@ -14159,6 +14555,10 @@ def generate_audio_from_script(
 
     job_id = job["id"]
     formation_job_id = job.get("formation_job_id")
+    day_temporal_closing = _build_day_temporal_closing(
+        formation_job_id=formation_job_id,
+        folder_position=job.get("folder_position"),
+    )
     playlist_items = _playlist_items_for_platform(
         platform_id,
         folder_id=int(folder_id),
@@ -14320,6 +14720,18 @@ def generate_audio_from_script(
                 int(bloc.get("target_sec") or 0),
             )
     _apply_course_bloc_overrides(blocs, saved_script_plan.get("course_bloc_overrides"))
+    if _apply_late_temporal_closing_to_final_course(
+        blocs,
+        playlist_items,
+        day_temporal_closing,
+    ):
+        logger.info(
+            "PIPELINE_AUDIO_LATE_TEMPORAL_CLOSING formation_job_id=%s "
+            "content_job_id=%s folder_id=%s owner=final_course",
+            formation_job_id,
+            job_id,
+            folder_id,
+        )
     if target_filename:
         matching_item = next((item for item in playlist_items if item[0] == target_filename), None)
         if not matching_item:
@@ -14334,8 +14746,8 @@ def generate_audio_from_script(
             f"vers folder {next_folder_id}"
         )
 
-    # Les fins de blocs sont désormais portées par le texte calibré en amont.
-    # On n'ajoute plus de closing au moment de l'audio.
+    # Les conclusions pédagogiques restent dans le texte calibré. Seule la
+    # courte projection temporelle, propre à cette occurrence, est ajoutée ici.
 
     blocs_by_number = {b["bloc_number"]: b for b in blocs}
     dirty_count = sum(1 for b in blocs if b["dirty"])
@@ -14662,6 +15074,7 @@ def generate_audio_from_script(
                 on_progress=lambda msg: _progress(step, len(playlist_items), msg),
                 use_runtime_consumed_text=runtime_fit_enabled,
                 break_overrides=saved_script_plan.get("break_overrides"),
+                temporal_outro=day_temporal_closing,
             )
             try:
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
@@ -14975,6 +15388,7 @@ def generate_audio_from_script(
                 on_progress=lambda msg: _progress(step, len(playlist_items), msg),
                 use_runtime_consumed_text=runtime_fit_enabled,
                 break_overrides=saved_script_plan.get("break_overrides"),
+                temporal_outro=day_temporal_closing,
             )
             try:
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
@@ -16296,7 +16710,20 @@ def _build_breaks_for_ui(platform_id: int, *, folder_id: int | None = None) -> l
         if file_type == "cours":
             continue
         intro_owned = break_intro_owned_by_previous(items, idx, file_type)
-        fixed = get_fixed_break_script(filename, intro_owned_by_previous=intro_owned)
+        if file_type == "jointure":
+            fixed = {
+                "intro": (
+                    "Nous allons maintenant poursuivre avec la partie suivante, "
+                    "dans le prolongement direct de ce que nous venons de voir."
+                ),
+                "outro": "",
+                "handoff": "",
+            }
+        else:
+            fixed = get_fixed_break_script(
+                filename,
+                intro_owned_by_previous=intro_owned,
+            )
         if not fixed:
             if file_type == "qa":
                 intro, outro = _get_qa_text(bloc_num)
@@ -17200,6 +17627,7 @@ def _run_content_review_pass(
         original_text = text_content or ""
         current_text = original_text
         review_context = _build_course_position_context(
+            formation_job_id=job.get("formation_job_id"),
             folder_position=job.get("folder_position"),
             nb_days=job.get("nb_days"),
             total_hours=job.get("total_hours"),

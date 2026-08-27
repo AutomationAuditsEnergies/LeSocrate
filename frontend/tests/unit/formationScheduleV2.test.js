@@ -2,8 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  addScheduleSequence,
-  setSchedulePauseKind,
+  appendScheduleBlock,
 } from '../../src/dayScheduleTemplates.js'
 import {
   assignTemplateToAll,
@@ -22,8 +21,10 @@ import {
 const templateHash = 'a'.repeat(64)
 
 let customBlocks = []
-for (let index = 0; index < 4; index += 1) customBlocks = addScheduleSequence(customBlocks)
-customBlocks = setSchedulePauseKind(customBlocks, 5, 'lunch')
+customBlocks = appendScheduleBlock(customBlocks, 'course')
+customBlocks = appendScheduleBlock(customBlocks, 'qa')
+customBlocks = appendScheduleBlock(customBlocks, 'pause', 'lunch')
+customBlocks = appendScheduleBlock(customBlocks, 'course')
 
 const template = {
   id: 12,
@@ -197,8 +198,8 @@ test('accepts and serializes a complete custom day without creating a template',
   })
   assert.deepEqual(payload.template_assignments, {})
   assert.deepEqual(payload.template_hashes, {})
-  assert.equal(payload.custom_days['2026-08-03'].blocks.length, 12)
-  assert.equal(payload.custom_days['2026-08-03'].blocks[5].pause_kind, 'lunch')
+  assert.equal(payload.custom_days['2026-08-03'].blocks.length, 4)
+  assert.equal(payload.custom_days['2026-08-03'].blocks[2].pause_kind, 'lunch')
 })
 
 test('builds a complete six-week calendar grid', () => {

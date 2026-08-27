@@ -61,7 +61,10 @@ def build_playlist_items(
     playlist: list[tuple[str, int, str, int]] = []
     for block in manifest:
         block_type = str(block["block_type"])
-        duration_sec = int(block["duration_minutes"]) * 60
+        duration_sec = int(
+            block.get("duration_seconds")
+            or int(block["duration_minutes"]) * 60
+        )
         course_index = int(block["course_index"])
         filename = str(block["filename"])
         if block_type == "course":
@@ -74,6 +77,8 @@ def build_playlist_items(
                 file_type = "pause_midi"
             else:
                 file_type = "pause"
+        elif block_type == "jointure":
+            file_type = "jointure"
         else:
             raise ValueError(f"Type de bloc V2 inconnu : {block_type or '(vide)'}")
         playlist.append((filename, duration_sec, file_type, course_index))

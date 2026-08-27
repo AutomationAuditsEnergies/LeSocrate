@@ -2,172 +2,177 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  addScheduleSequence,
+  DAY_SCHEDULE_RULES,
+  appendScheduleBlock,
   cloneScheduleTemplateAsDraft,
   createEmptyScheduleTemplateDraft,
   createScheduleTemplateDraft,
   formatScheduleMinute,
+  getAllowedNextScheduleBlocks,
   getScheduleBlockDurationBounds,
   getScheduleSequenceDropMinute,
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
-  removeLastScheduleSequence,
   serializeScheduleTemplate,
-  setScheduleFinalPause,
   setSchedulePauseKind,
+  tryRemoveScheduleBlock,
   updateScheduleBlockDuration,
   updateScheduleBlockStart,
   validateScheduleTemplate,
 } from '../../src/dayScheduleTemplates.js'
 
-test('creates a valid full-day template with four course sequences', () => {
-  const draft = createScheduleTemplateDraft('Journée standard')
-  const pauseIndexes = draft.blocks
-    .map((block, index) => block.block_type === 'pause' ? index : -1)
-    .filter((index) => index >= 0)
-  const blocks = setSchedulePauseKind(draft.blocks, pauseIndexes[1], 'lunch')
-  const result = validateScheduleTemplate({ ...draft, blocks })
+function append(blocks, type, pauseKind = null) {
+  return appendScheduleBlock(blocks, type, pauseKind)
+}
+
+test('creates a valid one-course day without mandatory Q&R or pause', () => {
+  const draft = createScheduleTemplateDraft('Séance courte')
+  const result = validateScheduleTemplate(draft)
 
   assert.equal(result.valid, true)
   assert.deepEqual(result.stats, {
-    blockCount: 12,
-    courseCount: 4,
-    courseMinutes: 240,
-    dayMinutes: 405,
-    lunchCount: 1,
-    hasFinalPause: true,
+    blockCount: 1,
+    courseCount: 1,
+    courseMinutes: 60,
+    dayMinutes: 60,
+    lunchCount: 0,
+    hasFinalPause: false,
   })
 })
 
-test('adds and removes complete course, Q&R and pause sequences', () => {
-  const draft = createScheduleTemplateDraft('Journée longue')
-  const withFifthCourse = addScheduleSequence(draft.blocks)
-
-  assert.equal(getScheduleStats(withFifthCourse).courseCount, 5)
-  assert.equal(withFifthCourse.length, 15)
-  assert.equal(withFifthCourse.at(-1).block_type, 'pause')
-
-  const restored = removeLastScheduleSequence(withFifthCourse)
-  assert.equal(getScheduleStats(restored).courseCount, 4)
-  assert.equal(restored.length, 12)
-})
-
-test('starts the interactive builder empty and adds one locked trio at a time', () => {
-  const emptyDraft = createEmptyScheduleTemplateDraft('Nouvelle journée')
-  const firstSequence = addScheduleSequence(emptyDraft.blocks)
-
-  assert.equal(emptyDraft.blocks.length, 0)
-  assert.deepEqual(firstSequence.map((block) => block.block_type), ['course', 'qa', 'pause'])
-  assert.equal(firstSequence.at(-1).pause_kind, 'short')
-  assert.equal(getScheduleStats(firstSequence).lunchCount, 0)
-  assert.equal(removeLastScheduleSequence(firstSequence).length, 0)
-})
-
-test('supports an optional final short pause', () => {
-  const draft = createScheduleTemplateDraft('Avec pause finale')
-  const firstPauseIndex = draft.blocks.findIndex((block) => block.block_type === 'pause')
-  const withLunch = setSchedulePauseKind(draft.blocks, firstPauseIndex, 'lunch')
-  const withPause = setScheduleFinalPause(withLunch, true)
-
-  assert.equal(withPause.length, 12)
-  assert.equal(withPause.at(-1).block_type, 'pause')
-  assert.equal(withPause.at(-1).pause_kind, 'short')
-  assert.equal(validateScheduleTemplate({ ...draft, blocks: withPause }).valid, true)
-  assert.equal(setScheduleFinalPause(withPause, false).length, 11)
-})
-
-test('moves the unique lunch designation and keeps both pause durations valid', () => {
-  const draft = createScheduleTemplateDraft('Déjeuner tardif')
-  const pauseIndexes = draft.blocks
-    .map((block, index) => block.block_type === 'pause' ? index : -1)
-    .filter((index) => index >= 0)
-  const withEarlierLunch = setSchedulePauseKind(draft.blocks, pauseIndexes[1], 'lunch')
-  const updated = setSchedulePauseKind(withEarlierLunch, pauseIndexes[2], 'lunch')
-
-  assert.equal(updated[pauseIndexes[2]].pause_kind, 'lunch')
-  assert.equal(updated[pauseIndexes[2]].duration_minutes, 60)
-  assert.equal(updated[pauseIndexes[1]].pause_kind, 'short')
-  assert.equal(updated[pauseIndexes[1]].duration_minutes, 30)
-  assert.equal(getScheduleStats(updated).lunchCount, 1)
-})
-
-test('allows the lunch break to be stretched to two hours', () => {
-  const draft = createScheduleTemplateDraft('Déjeuner de deux heures')
-  const lunchIndex = draft.blocks
-    .map((block, index) => block.block_type === 'pause' ? index : -1)
-    .filter((index) => index >= 0)[1]
-  const withLunch = setSchedulePauseKind(draft.blocks, lunchIndex, 'lunch')
-  const stretched = updateScheduleBlockDuration(withLunch, lunchIndex, 120)
-
-  assert.equal(stretched[lunchIndex].duration_minutes, 120)
-  assert.equal(
-    stretched[lunchIndex].end_minute - stretched[lunchIndex].start_minute,
-    120,
+test('adds every block independently in either optional-block order', () => {
+  let qaThenPause = append([], 'course')
+  qaThenPause = append(qaThenPause, 'qa')
+  qaThenPause = append(qaThenPause, 'pause', 'short')
+  qaThenPause = append(qaThenPause, 'course')
+  assert.deepEqual(
+    qaThenPause.map((block) => block.block_type),
+    ['course', 'qa', 'pause', 'course'],
   )
-  assert.equal(validateScheduleTemplate({ ...draft, blocks: stretched }).valid, true)
+
+  let pauseThenQa = append([], 'course')
+  pauseThenQa = append(pauseThenQa, 'pause', 'short')
+  pauseThenQa = append(pauseThenQa, 'qa')
+  assert.equal(
+    validateScheduleTemplate({ name: 'Pause puis Q&R', blocks: pauseThenQa }).valid,
+    true,
+  )
 })
 
-test('shares the same duration bounds between templates and formation days', () => {
-  assert.deepEqual(getScheduleBlockDurationBounds({ block_type: 'course' }), { min: 35, max: 90 })
-  assert.deepEqual(getScheduleBlockDurationBounds({ block_type: 'qa' }), { min: 5, max: 30 })
+test('enforces the allowed-next grammar in the builder', () => {
+  assert.equal(getAllowedNextScheduleBlocks([]).course.allowed, true)
+  assert.equal(getAllowedNextScheduleBlocks([]).qa.allowed, false)
+  assert.equal(getAllowedNextScheduleBlocks([]).pause.allowed, false)
+
+  let blocks = append([], 'course')
+  blocks = append(blocks, 'qa')
+  assert.equal(getAllowedNextScheduleBlocks(blocks).qa.allowed, false)
+  assert.equal(getAllowedNextScheduleBlocks(blocks).pause.allowed, true)
+  blocks = append(blocks, 'pause', 'short')
+  assert.equal(getAllowedNextScheduleBlocks(blocks).qa.allowed, false)
+  assert.equal(getAllowedNextScheduleBlocks(blocks).pause.allowed, false)
+  assert.equal(getAllowedNextScheduleBlocks(blocks).course.allowed, true)
+})
+
+test('allows a final Q&R but rejects a final pause', () => {
+  let withQa = append([], 'course')
+  withQa = append(withQa, 'qa')
+  assert.equal(validateScheduleTemplate({ name: 'Final Q&R', blocks: withQa }).valid, true)
+
+  let withPause = append([], 'course')
+  withPause = append(withPause, 'pause', 'short')
+  const result = validateScheduleTemplate({ name: 'Final pause', blocks: withPause })
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((message) => message.includes('jamais par une pause')))
+})
+
+test('refuses a course deletion that would orphan its attached optional blocks', () => {
+  let blocks = append([], 'course')
+  blocks = append(blocks, 'qa')
+  const result = tryRemoveScheduleBlock(blocks, 0)
+
+  assert.equal(result.removed, false)
+  assert.match(result.error, /Suppression refusée/)
+  assert.equal(result.blocks.length, 2)
+})
+
+test('keeps at most one lunch and allows it up to three hours', () => {
+  let blocks = append([], 'course')
+  blocks = append(blocks, 'pause', 'lunch')
+  blocks = append(blocks, 'course')
+  blocks = append(blocks, 'pause', 'short')
+  blocks = append(blocks, 'qa')
+  const secondPause = blocks.findLastIndex((block) => block.block_type === 'pause')
+  const movedLunch = setSchedulePauseKind(blocks, secondPause, 'lunch')
+  const lunchIndexes = movedLunch.flatMap((block, index) => (
+    block.pause_kind === 'lunch' ? [index] : []
+  ))
+  assert.deepEqual(lunchIndexes, [secondPause])
+
+  const stretched = updateScheduleBlockDuration(movedLunch, secondPause, 180)
+  assert.equal(stretched[secondPause].duration_minutes, 180)
+  assert.equal(validateScheduleTemplate({ name: 'Déjeuner long', blocks: stretched }).valid, true)
+})
+
+test('shares the confirmed duration bounds between both planners', () => {
+  assert.deepEqual(getScheduleBlockDurationBounds({ block_type: 'course' }), DAY_SCHEDULE_RULES.course)
+  assert.deepEqual(getScheduleBlockDurationBounds({ block_type: 'qa' }), DAY_SCHEDULE_RULES.qa)
   assert.deepEqual(
     getScheduleBlockDurationBounds({ block_type: 'pause', pause_kind: 'short' }),
-    { min: 5, max: 30 },
+    DAY_SCHEDULE_RULES.shortPause,
   )
   assert.deepEqual(
     getScheduleBlockDurationBounds({ block_type: 'pause', pause_kind: 'lunch' }),
-    { min: 60, max: 120 },
+    DAY_SCHEDULE_RULES.lunchPause,
   )
+  assert.equal(DAY_SCHEDULE_RULES.course.min, 35)
+  assert.equal(DAY_SCHEDULE_RULES.course.max, 90)
+  assert.equal(DAY_SCHEDULE_RULES.qa.min, 10)
+  assert.equal(DAY_SCHEDULE_RULES.lunchPause.max, 180)
 })
 
-test('snaps the first dropped sequence to five minutes and appends later sequences', () => {
+test('snaps the first course to five minutes and appends later blocks continuously', () => {
   assert.equal(getScheduleSequenceDropMinute(8 * 60 + 17), 8 * 60 + 15)
-  assert.equal(getScheduleSequenceDropMinute(23 * 60 + 55), 22 * 60 + 30)
+  assert.equal(getScheduleSequenceDropMinute(23 * 60 + 55), 23 * 60)
 
-  const existing = addScheduleSequence([])
-  assert.equal(getScheduleSequenceDropMinute(7 * 60, existing), 10 * 60 + 30)
+  const existing = append([], 'course')
+  assert.equal(getScheduleSequenceDropMinute(7 * 60, existing), 10 * 60)
 })
 
-test('reflows subsequent blocks after duration and boundary changes', () => {
-  const draft = createScheduleTemplateDraft('Horaires libres')
-  const longerCourse = updateScheduleBlockDuration(draft.blocks, 0, 75)
+test('reflows all following blocks after duration and start changes', () => {
+  let blocks = append([], 'course')
+  blocks = append(blocks, 'qa')
+  blocks = append(blocks, 'course')
+  const longerCourse = updateScheduleBlockDuration(blocks, 0, 75)
 
   assert.equal(longerCourse[0].end_minute, 10 * 60 + 15)
   assert.equal(longerCourse[1].start_minute, 10 * 60 + 15)
+  assert.equal(longerCourse[2].start_minute, 10 * 60 + 30)
 
-  const movedQa = updateScheduleBlockStart(longerCourse, 1, 10 * 60 + 7)
-  assert.equal(movedQa[0].duration_minutes, 67)
-  assert.equal(movedQa[1].start_minute, 10 * 60 + 7)
+  const movedQaBoundary = updateScheduleBlockStart(longerCourse, 1, 10 * 60 + 5)
+  assert.equal(movedQaBoundary[0].duration_minutes, 65)
+  assert.equal(movedQaBoundary[1].start_minute, 10 * 60 + 5)
 })
 
-test('rejects invalid block durations and an undersized day', () => {
-  const draft = createScheduleTemplateDraft('Journée invalide')
-  const blocks = updateScheduleBlockDuration(draft.blocks, 0, 20)
-  const result = validateScheduleTemplate({ ...draft, blocks })
-
+test('rejects invalid durations and explicit gaps', () => {
+  let blocks = append([], 'course')
+  blocks = append(blocks, 'qa')
+  blocks[0] = { ...blocks[0], duration_minutes: 20, end_minute: blocks[0].start_minute + 20 }
+  blocks[1] = {
+    ...blocks[1],
+    start_minute: blocks[0].end_minute + 7,
+    end_minute: blocks[0].end_minute + 7 + blocks[1].duration_minutes,
+  }
+  const result = validateScheduleTemplate({ name: 'Invalide', blocks })
   assert.equal(result.valid, false)
-  assert.match(result.blockErrors['course-1'][0], /35 à 90/)
-  assert.ok(result.errors.some((message) => message.includes('4 h')))
+  assert.match(result.blockErrors[blocks[0].block_key].join(' '), /35 à 90/)
+  assert.match(result.blockErrors[blocks[1].block_key].join(' '), /Aucun espace/)
 })
 
-test('rejects gaps instead of silently moving the following block', () => {
-  const draft = createScheduleTemplateDraft('Journée avec un trou')
-  const blocks = draft.blocks.map((block, index) => (
-    index === 1
-      ? { ...block, start_minute: block.start_minute + 7, end_minute: block.end_minute + 7 }
-      : block
-  ))
-  const result = validateScheduleTemplate({ ...draft, blocks })
-
-  assert.equal(result.valid, false)
-  assert.match(result.blockErrors['qa-1'].join(' '), /Aucun espace/)
-})
-
-test('serializes only the stable V2 data contract', () => {
+test('serializes only the stable V2 contract', () => {
   const draft = createScheduleTemplateDraft('  Journée stable  ')
   const payload = serializeScheduleTemplate(draft)
-
   assert.equal(payload.name, 'Journée stable')
   assert.equal(payload.schedule_schema_version, 2)
   assert.equal(payload.blocks[0].position, 0)
@@ -175,23 +180,22 @@ test('serializes only the stable V2 data contract', () => {
   assert.equal(payload.blocks[0].start_minute, 540)
 })
 
-test('recognizes immutable templates and duplicates them into editable drafts', () => {
+test('recognizes immutable templates and duplicates them into drafts', () => {
   const used = {
     ...createScheduleTemplateDraft('Journée certifiée'),
     id: 18,
     used_at: '2026-07-26T12:00:00Z',
   }
   const duplicate = cloneScheduleTemplateAsDraft(used)
-
   assert.equal(isScheduleTemplateUsed(used), true)
   assert.equal(duplicate.id, null)
   assert.equal(duplicate.used_at, null)
   assert.equal(duplicate.name, 'Copie de Journée certifiée')
-  assert.equal(duplicate.blocks.length, used.blocks.length)
 })
 
 test('parses and formats schedule times at minute precision', () => {
   assert.equal(parseScheduleTime('10:07'), 607)
   assert.equal(parseScheduleTime('24:00'), null)
   assert.equal(formatScheduleMinute(607), '10:07')
+  assert.equal(createEmptyScheduleTemplateDraft('Vide').blocks.length, 0)
 })

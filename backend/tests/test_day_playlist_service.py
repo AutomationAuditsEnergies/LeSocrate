@@ -55,7 +55,7 @@ class DynamicDayPlaylistServiceTest(unittest.TestCase):
         self.assertEqual(playlist[5], ("pause_02.mp3", 3600, "pause_midi", 2))
         self.assertEqual(playlist[-1], ("qa_04.mp3", 900, "qa", 4))
 
-    def test_optional_final_pause_adds_one_file(self):
+    def test_final_pause_is_rejected_by_the_canonical_compiler(self):
         blocks = [
             _block(0, "course", 540, 585),
             _block(1, "qa", 585, 595),
@@ -70,9 +70,24 @@ class DynamicDayPlaylistServiceTest(unittest.TestCase):
             _block(10, "qa", 890, 900),
             _block(11, "pause", 900, 910, pause_kind="short"),
         ]
+        with self.assertRaisesRegex(ValueError, "ne peut pas se terminer"):
+            build_playlist_items(blocks)
+
+    def test_adjacent_courses_receive_a_hidden_ten_second_jointure(self):
+        blocks = [
+            _block(0, "course", 540, 600),
+            _block(1, "course", 600, 645),
+            _block(2, "qa", 645, 655),
+        ]
+
         self.assertEqual(
-            build_playlist_items(blocks)[-1],
-            ("pause_04.mp3", 600, "pause", 4),
+            build_playlist_items(blocks),
+            [
+                ("course_01.mp3", 3600, "cours", 1),
+                ("jointure_01_02.mp3", 10, "jointure", 1),
+                ("course_02.mp3", 2700, "cours", 2),
+                ("qa_01.mp3", 600, "qa", 2),
+            ],
         )
 
     def test_rejects_unknown_block_type(self):

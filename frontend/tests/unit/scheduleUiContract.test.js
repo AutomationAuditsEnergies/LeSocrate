@@ -187,7 +187,8 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.match(plannerStyles, /\.formation-schedule__template-select select\s*\{[^}]*min-height: 44px[^}]*appearance: none/)
   assert.match(plannerSource, /formation-schedule__validate-toolbar/)
   assert.match(plannerSource, /onClick=\{onValidate\}/)
-  assert.match(dashboardSource, /Vérifier avant le paiement/)
+  assert.doesNotMatch(dashboardSource, /Vérifier avant le paiement/)
+  assert.match(dashboardSource, /Nom de votre centre de formation sur les diapositives/)
   assert.match(dashboardSource, /aria-label="Masquer les erreurs du planning"/)
   assert.match(dashboardSource, /setScheduleAttemptErrors\(\[\]\)/)
   assert.match(scheduleDomainSource, /La première date doit être au minimum à J\+3/)
@@ -232,12 +233,12 @@ test('creates a missing template without losing the current formation draft', as
   assert.match(createPlatformStyles, /recruitment-saved-draft-enter/)
 })
 
-test('uses locked sequence drops and resize handles instead of per-block forms', async () => {
+test('uses independent allowed block drops with resize and atomic deletion', async () => {
   const source = await readFile(new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url), 'utf8')
 
-  assert.match(source, /draggable=\{!atMaximum\}/)
-  assert.match(source, /application\/x-day-sequence/)
-  assert.match(source, /Séquence pédagogique/)
+  assert.match(source, /draggable=\{allowedBlocks\[key\]\.allowed\}/)
+  assert.match(source, /application\/x-day-block/)
+  assert.match(source, /Q&R et pauses sont facultatifs/)
   assert.equal(
     (source.match(/className="day-schedule-add-task day-schedule-sequence-source"/g) || []).length,
     1,
@@ -254,8 +255,9 @@ test('uses locked sequence drops and resize handles instead of per-block forms',
   assert.match(source, /day-schedule-template-card/)
   assert.match(source, /day-schedule-layout--overview/)
   assert.match(source, /day-schedule-empty-state/)
-  assert.match(source, /Retirer la dernière séquence/)
-  assert.match(source, /removeLastScheduleSequence\(draft\.blocks\)/)
+  assert.match(source, /Retirer le dernier cours/)
+  assert.match(source, /tryRemoveScheduleBlock\(draft\.blocks, blockIndex\)/)
+  assert.match(source, /onRemoveBlock\(index\)/)
   assert.doesNotMatch(source, /<small>1 h 30<\/small>/)
   assert.doesNotMatch(source, /index < blocks\.length - 1/)
   assert.match(source, /onPointerDown=\{\(event\) => beginAdjustment\(event, index\)\}/)
@@ -264,40 +266,42 @@ test('uses locked sequence drops and resize handles instead of per-block forms',
   assert.doesNotMatch(source, /Déplacer le début du bloc/)
 })
 
-test('adds pedagogical sequences directly to formation days', async () => {
+test('adds independent pedagogical blocks directly to formation days', async () => {
   const source = await readFile(
     new URL('../../src/pages/FormationSchedulePlanner.jsx', import.meta.url),
     'utf8',
   )
+  const templateSource = await readFile(
+    new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url),
+    'utf8',
+  )
 
-  assert.match(source, /draggable=\{!reuse\}/)
-  assert.match(source, /setData\('application\/x-day-sequence', 'course-qa-pause'\)/)
+  assert.match(source, /draggable=\{!reuse && permission\.allowed\}/)
+  assert.match(source, /setData\('application\/x-day-block', key\)/)
   assert.match(source, /onDrop=\{\(event\) => \{/)
-  assert.match(source, /addSequenceToDay\(date, startMinute\)/)
-  assert.match(source, /onClick=\{\(\) => addSequenceToDay\(activeDate \|\| displayedDate\)\}/)
-  assert.match(source, /onClick=\{\(\) => removeSequenceFromDay\(activeDate\)\}/)
-  assert.match(source, /toggleLunchForDay/)
-  assert.match(source, /setSchedulePauseKind\(/)
+  assert.match(source, /addBlockToDay\(date, \.\.\.blockDefinition, startMinute\)/)
+  assert.match(source, /onClick=\{\(\) => addBlockToDay\(activeDate \|\| displayedDate, type, pauseKind\)\}/)
+  assert.match(source, /tryRemoveScheduleBlock\(blocks, blockIndex\)/)
+  assert.match(source, /label: 'Pause courte'/)
+  assert.match(source, /label: 'Pause déjeuner'/)
+  assert.match(templateSource, /label: 'Pause courte'/)
+  assert.match(templateSource, /label: 'Pause déjeuner'/)
+  assert.doesNotMatch(source, /toggleLunchForDay|setSchedulePauseKind|Double-cliquer/)
+  assert.doesNotMatch(templateSource, /day-schedule-pause-select|setSchedulePauseKind/)
   assert.match(source, /beginEventResize/)
   assert.match(source, /updateScheduleBlockDuration\(/)
   assert.match(source, /getScheduleBlockDurationBounds/)
-  assert.match(source, /Transformer cette pause en pause déjeuner/)
-  assert.match(source, /Double-cliquer pour transformer en pause déjeuner/)
-  assert.match(source, /handleLunchPointerDown/)
-  assert.match(source, /now - previous\.at <= 500/)
-  assert.match(source, /if \(!\['Enter', ' '\]\.includes\(keyEvent\.key\)\) return/)
   assert.match(source, /onPointerDown=\{\(pointerEvent\) => beginEventResize\(/)
   assert.match(source, /getScheduleSequenceDropMinute\(pointerMinute, blocks\)/)
   assert.match(source, /Début.*formatScheduleMinute\(dropPreview\.minute\)/)
-  assert.match(source, /Relâchez pour placer la séquence/)
+  assert.match(source, /Relâchez pour placer le bloc/)
   assert.doesNotMatch(source, /onClick=\{\(\) => assignTemplate\(activeDate \|\| helperStartDate, '__create__'\)\}/)
 
   const styles = await readFile(
     new URL('../../src/pages/FormationSchedulePlanner.css', import.meta.url),
     'utf8',
   )
-  assert.match(styles, /\.formation-schedule__pause-toggle::after\s*\{[^}]*content: attr\(data-hint\)[^}]*opacity: 0/)
-  assert.match(styles, /\.formation-schedule__week-event:hover \.formation-schedule__pause-toggle::after[^}]*visibility: visible; opacity: 1/)
+  assert.doesNotMatch(styles, /formation-schedule__pause-toggle/)
 })
 
 test('selects training days only from the mini calendar', async () => {
@@ -311,7 +315,7 @@ test('selects training days only from the mini calendar', async () => {
   assert.doesNotMatch(activateDateSource, /setSelectedDates/)
   assert.match(source, /if \(isSelectedDay\) activateDate\(date\)/)
   assert.match(source, /aria-disabled=\{!isSelectedDay\}/)
-  assert.match(source, /&& isSelectedDay\s*&& getScheduleStats/)
+  assert.match(source, /&& isSelectedDay/)
   assert.equal((source.match(/onClick=\{\(\) => toggleDate\(day\.date\)\}/g) || []).length, 1)
 })
 
