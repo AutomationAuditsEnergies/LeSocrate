@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   GripHorizontal,
+  Info,
   Menu,
   MessageCircleQuestion,
   Trash2,
@@ -36,8 +37,10 @@ import {
   TRAINING_WEEKDAYS,
   addCalendarDays,
   assignTemplateToAll,
+  getFirstSessionDateTime,
   getCalendarMonthDays,
   getMinimumNewModuleStartDate,
+  MIN_NEW_MODULE_LEAD_HOURS,
   isValidCalendarDate,
   normalizeSelectedTrainingDates,
   prefillTrainingDates,
@@ -85,6 +88,18 @@ function formatLongDate(value) {
     year: 'numeric',
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+function formatLeadTimeDateTime(value) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return ''
+  return new Intl.DateTimeFormat('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Paris',
+  }).format(value).replace(':', ' h ')
 }
 
 function monthLabel(year, monthIndex) {
@@ -358,6 +373,24 @@ export default function FormationSchedulePlanner({
     templates,
     validationNow,
   ])
+  const firstSessionStart = useMemo(() => getFirstSessionDateTime(
+    normalizedDates,
+    cleanAssignments,
+    templates,
+    'Europe/Paris',
+    cleanCustomDays,
+  ), [cleanAssignments, cleanCustomDays, normalizedDates, templates])
+  const earliestAllowedFirstSession = useMemo(
+    () => new Date(
+      validationNow.getTime() + (MIN_NEW_MODULE_LEAD_HOURS * 60 * 60 * 1000),
+    ),
+    [validationNow],
+  )
+  const leadTimeIsTooShort = Boolean(
+    !reuse
+    && firstSessionStart
+    && firstSessionStart.getTime() < earliestAllowedFirstSession.getTime(),
+  )
   const payload = useMemo(() => serializeFormationScheduleV2({
     selectedDates: normalizedDates,
     assignments: cleanAssignments,
@@ -878,6 +911,21 @@ export default function FormationSchedulePlanner({
           </div>
         </section>
 
+        {!reuse && (
+          <div
+            className="formation-schedule__lead-time-note"
+            data-warning={leadTimeIsTooShort || undefined}
+            role={leadTimeIsTooShort ? 'alert' : 'note'}
+          >
+            <Info size={15} aria-hidden="true" />
+            <p>
+              {leadTimeIsTooShort
+                ? `Le premier cours commence trop tôt. Placez-le au plus tôt le ${formatLeadTimeDateTime(earliestAllowedFirstSession)}.`
+                : 'Le premier cours doit commencer au moins 24 heures après la validation.'}
+            </p>
+          </div>
+        )}
+
         <section className="formation-schedule__sequence" aria-labelledby="formation-sequence-title">
           <header>
             <div>
@@ -1315,7 +1363,21 @@ export default function FormationSchedulePlanner({
             </button>
           </header>
           <div className="formation-schedule__helper-content">
-            <label><span>Date de début</span><input type="date" min={earliestSuggestedDate} value={helperStartDate} onChange={(event) => { setHelperStartDate(event.target.value); setHelperError('') }} /></label>
+            <label>
+              <span className="formation-schedule__helper-label">
+                Date de début
+                <span
+                  className="formation-schedule__info-point"
+                  role="img"
+                  aria-label="Le lendemain peut être sélectionné. Les 24 heures exactes sont contrôlées avec l’heure du premier cours dans le planning."
+                  title="Le lendemain peut être sélectionné. Les 24 heures exactes sont contrôlées avec l’heure du premier cours dans le planning."
+                  tabIndex="0"
+                >
+                  <Info size={13} aria-hidden="true" />
+                </span>
+              </span>
+              <input type="date" min={earliestSuggestedDate} value={helperStartDate} onChange={(event) => { setHelperStartDate(event.target.value); setHelperError('') }} />
+            </label>
             <div className="formation-schedule__helper-numbers">
               <label><span>Semaines</span><input type="number" min="1" max="104" value={helperWeeks} onChange={(event) => setHelperWeeks(event.target.value)} /></label>
               <label><span>Jours / semaine</span><input type="number" min="1" max="7" value={helperDaysPerWeek} onChange={(event) => setHelperDaysPerWeek(event.target.value)} /></label>

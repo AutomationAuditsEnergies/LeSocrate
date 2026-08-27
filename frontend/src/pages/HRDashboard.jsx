@@ -14,6 +14,7 @@ import {
   FileCheck2,
   FolderOpen,
   Globe2,
+  Info,
   KeyRound,
   LayoutTemplate,
   LogIn,
@@ -3148,7 +3149,18 @@ function ManualRecruitmentForm({ colors, onBack, onComplete }) {
 
             <div className="grid gap-5 sm:grid-cols-2">
               <label className="text-sm font-medium text-[#2C2C2A]" htmlFor="manual-start-date">
-                Date de début
+                <span className="flex items-center gap-1.5">
+                  Date de début
+                  <span
+                    className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border border-[#B9BDC5] text-[#626773] outline-none transition-colors hover:border-[#191918] hover:text-[#191918] focus-visible:border-[#191918] focus-visible:text-[#191918]"
+                    role="img"
+                    aria-label="Vous pouvez choisir dès demain. Les 24 heures exactes seront contrôlées selon l’heure du premier cours dans le planning."
+                    title="Vous pouvez choisir dès demain. Les 24 heures exactes seront contrôlées selon l’heure du premier cours dans le planning."
+                    tabIndex="0"
+                  >
+                    <Info size={12} aria-hidden="true" />
+                  </span>
+                </span>
                 <input id="manual-start-date" type="date" min={earliestStartDate} value={form.startDate} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} className={fieldClassName} />
               </label>
               <label className="text-sm font-medium text-[#2C2C2A]" htmlFor="manual-training-weeks">
@@ -3947,7 +3959,19 @@ function RecruitmentAssistant({
               </div>
             )}
             {!isThinking && !pendingConfirmation && currentStep.type === 'date' && (
-              <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={getMinimumNewModuleStartDate()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" disabled={draft.startDate < getMinimumNewModuleStartDate()} onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">Valider la date</button></div>
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}>
+                <input type="date" min={getMinimumNewModuleStartDate()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} />
+                <span
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#B9BDC5] text-[#626773] outline-none transition-colors hover:border-[#191918] hover:text-[#191918] focus-visible:border-[#191918] focus-visible:text-[#191918]"
+                  role="img"
+                  aria-label="Vous pouvez choisir dès demain. Les 24 heures exactes seront contrôlées selon l’heure du premier cours dans le planning."
+                  title="Vous pouvez choisir dès demain. Les 24 heures exactes seront contrôlées selon l’heure du premier cours dans le planning."
+                  tabIndex="0"
+                >
+                  <Info size={14} aria-hidden="true" />
+                </span>
+                <button type="button" disabled={draft.startDate < getMinimumNewModuleStartDate()} onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">Valider la date</button>
+              </div>
             )}
           </div>
         ) : null}
