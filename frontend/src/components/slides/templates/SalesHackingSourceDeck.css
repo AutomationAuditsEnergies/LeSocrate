@@ -114,6 +114,15 @@
       display: flex; align-items: flex-end; gap: 10px;
 }
 
+.sales-source-deck-shell .chrome .brand .mark,
+.sales-source-deck-shell .chrome .brand .tag {
+  display: block;
+  max-width: 720px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sales-source-deck-shell .chrome .brand .mark {
   font-family: var(--f-script); font-size: 26px; letter-spacing: 0;
       color: #fff; line-height: 1;

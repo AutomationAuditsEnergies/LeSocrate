@@ -8,6 +8,7 @@ from urllib.parse import unquote, urlsplit
 
 import state
 from repositories.course_schedule_repository import get_audio_generation_session
+from repositories.billing_repository import get_platform_slide_brand_name
 from services.audio_service import (
     get_course_session_audio_info,
     get_course_session_playlist,
@@ -24,6 +25,20 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 video_bp = Blueprint("video", __name__)
+
+
+def _platform_slide_brand_name(platform_id):
+    try:
+        return get_platform_slide_brand_name(platform_id)
+    except Exception:
+        logger.warning(
+            "Nom d’entreprise des diapositives indisponible platform=%s",
+            platform_id,
+            exc_info=True,
+        )
+        return "Le Socrate"
+
+
 class StudentCourseAccessError(Exception):
     def __init__(self, status_code=401):
         super().__init__("Accès au cours refusé")
@@ -441,6 +456,7 @@ def video_slides():
             {
                 "authenticated": True,
                 "status": "success",
+                "brand_name": _platform_slide_brand_name(context["platform_id"]),
                 "audio_sync": _sanitize_deck_audio_references(deck.get("audio_sync") or {}),
                 "slides": _sanitize_deck_audio_references(deck.get("slides") or []),
             }

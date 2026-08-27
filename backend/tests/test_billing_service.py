@@ -54,6 +54,24 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(len(project["teacher_description"]), 600)
         self.assertFalse(project["teacher_description"].startswith(" "))
 
+    def test_slide_brand_name_is_trimmed_bounded_and_defaults_to_le_socrate(self):
+        payload = _project()
+        payload["project"]["slide_brand_name"] = f"  {'A' * 140}  "
+
+        _, project, _ = billing_service._normalize_project(payload, 42)
+
+        self.assertEqual(len(project["slide_brand_name"]), 120)
+        self.assertFalse(project["slide_brand_name"].startswith(" "))
+
+        payload = _project()
+        _, project, _ = billing_service._normalize_project(payload, 42)
+        self.assertEqual(project["slide_brand_name"], "Le Socrate")
+
+        payload = _project()
+        payload["project"]["slide_brand_name"] = ""
+        _, project, _ = billing_service._normalize_project(payload, 42)
+        self.assertEqual(project["slide_brand_name"], "")
+
     def test_catalog_uses_fixed_daily_selling_price(self):
         with patch.dict(os.environ, {
             "AI_TEACHER_COST_PER_DAY_CENTS": "1500",

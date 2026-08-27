@@ -230,6 +230,10 @@ class StudentCourseAccessTest(unittest.TestCase):
             "get_latest_script_slide_deck_for_audio",
             return_value=deck,
         ) as get_deck, patch.object(
+            video_routes,
+            "_platform_slide_brand_name",
+            return_value="Entreprise Test",
+        ), patch.object(
             video_routes.http_requests,
             "get",
             return_value=storage_response,
@@ -254,6 +258,7 @@ class StudentCourseAccessTest(unittest.TestCase):
         self.assertNotIn("deck_id", slides.get_json())
         self.assertNotIn("folder_id", slides.get_json())
         self.assertNotIn("blob.core.windows.net", slides.get_data(as_text=True))
+        self.assertEqual(slides.get_json()["brand_name"], "Entreprise Test")
         self.assertEqual(
             slides.get_json()["audio_sync"]["timings"][0]["audio_filename"],
             "cours_01.mp3",

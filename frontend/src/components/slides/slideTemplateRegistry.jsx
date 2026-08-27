@@ -26,7 +26,7 @@ import {
 
 export const COMMON_SLIDE_PROPS = {
   badge: 'TP-CRCD',
-  brandName: 'SALES HACKING',
+  brandName: 'LE SOCRATE',
 }
 
 export const OFFICIAL_SOURCE_TEMPLATE_IDS = new Set([
@@ -471,6 +471,7 @@ export function renderSlideTemplate(slide = {}, extraProps = {}) {
   const props = {
     ...normalizeRegistryData(canonicalType, originalType, data),
     ...COMMON_SLIDE_PROPS,
+    ...(slide.brand_name ? { brandName: slide.brand_name } : {}),
     ...extraProps,
   }
 

@@ -53,9 +53,9 @@
 }
 .deck-slide > * { position: relative; z-index: 2; }
 .deck-chrome { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
-.deck-brand { position: absolute; top: 32px; left: 50px; display: flex; align-items: flex-end; gap: 7px; }
-.deck-brand-mark { font-family: var(--f-script); font-weight: 700; color: #fff; font-size: 19px; line-height: 1; transform: translateY(-1px) rotate(-6deg); }
-.deck-brand-tag { font-family: var(--f-script); color: var(--coral); font-size: 22px; line-height: 1; transform: rotate(-6deg); }
+.deck-brand { position: absolute; top: 32px; left: 50px; display: flex; max-width: 62%; align-items: flex-end; gap: 7px; }
+.deck-brand-mark { max-width: 42%; overflow: hidden; font-family: var(--f-script); font-weight: 700; color: #fff; font-size: 19px; line-height: 1; text-overflow: ellipsis; white-space: nowrap; transform: translateY(-1px) rotate(-6deg); }
+.deck-brand-tag { max-width: 58%; overflow: hidden; font-family: var(--f-script); color: var(--coral); font-size: 22px; line-height: 1; text-overflow: ellipsis; white-space: nowrap; transform: rotate(-6deg); }
 .deck-rec { position: absolute; top: 34px; right: 50px; display: inline-flex; align-items: center; gap: 8px; font: 500 8px/1 JetBrains Mono, monospace; color: var(--dim); letter-spacing: .18em; }
 .deck-rec span { width: 6px; height: 6px; border-radius: 999px; background: var(--coral); box-shadow: 0 0 0 3px rgba(255,93,108,.18); }
 .deck-pages { position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); font: 500 8px/1 JetBrains Mono, monospace; letter-spacing: .22em; color: var(--mute); }

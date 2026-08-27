@@ -123,20 +123,20 @@ const getRecapCardFit = (title = '', desc = '') => {
   };
 };
 
-const getDeckBrandParts = (brandName = 'Sales hacking') => {
-  const normalizedBrandName = String(brandName || 'Sales hacking').trim();
-  const isSalesHackingBrand = normalizedBrandName.toLowerCase() === 'sales hacking';
+const getDeckBrandParts = (brandName = 'Le Socrate') => {
+  const normalizedBrandName = brandName == null ? 'Le Socrate' : String(brandName).trim();
+  if (!normalizedBrandName) return { brandHead: '', brandTail: '' };
   const brandParts = normalizedBrandName.split(/\s+/);
   return {
-    brandHead: isSalesHackingBrand ? 'Sales' : (brandParts[0] || 'Sales'),
-    brandTail: isSalesHackingBrand ? 'hacking' : (brandParts.slice(1).join(' ') || 'hacking'),
+    brandHead: brandParts[0] || 'Le',
+    brandTail: brandParts.slice(1).join(' '),
   };
 };
 
-const DeckSlide = ({ children, type = 'TEMPLATE', page = '01', className = '', danger = false, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) => (
+const DeckSlide = ({ children, type = 'TEMPLATE', page = '01', className = '', danger = false, badge = 'TP-CRCD', brandName = 'LE SOCRATE' }) => (
   <div className={`deck-slide ${danger ? 'deck-slide--danger' : ''} ${className}`}>
     <div className="deck-chrome">
-      <div className="deck-brand"><span className="deck-brand-mark">{brandName.split(/\s+/)[0] || 'Sales'}</span><span className="deck-brand-tag">{brandName.split(/\s+/).slice(1).join(' ') || 'Hacking'}</span></div>
+      <div className="deck-brand"><span className="deck-brand-mark">{getDeckBrandParts(brandName).brandHead}</span>{getDeckBrandParts(brandName).brandTail && <span className="deck-brand-tag">{getDeckBrandParts(brandName).brandTail}</span>}</div>
       <div className="deck-rec"><span />EN DIRECT · {badge}</div>
       <div className="deck-pages"><b>{page}</b> / 19</div>
       <div className="deck-section">TYPE · {type}</div>
@@ -314,25 +314,25 @@ const svgBodyBlock = (value = '', maxChars = 44, maxLines = 2) => {
   };
 };
 
-const deckChrome = (brandName = 'Sales hacking') => {
+const deckChrome = (brandName = 'Le Socrate') => {
   const { brandHead, brandTail } = getDeckBrandParts(brandName);
   return (
     <div className="deck-chrome">
       <div className="deck-brand">
         <span className="deck-brand-mark">{brandHead}</span>
-        <span className="deck-brand-tag">{brandTail}</span>
+        {brandTail && <span className="deck-brand-tag">{brandTail}</span>}
       </div>
     </div>
   );
 };
 
-const sourceChrome = (brandName = 'Sales hacking') => {
+const sourceChrome = (brandName = 'Le Socrate') => {
   const { brandHead, brandTail } = getDeckBrandParts(brandName);
   return (
     <div className="chrome">
       <div className="brand">
         <span className="mark">{brandHead}</span>
-        <span className="tag">{brandTail}</span>
+        {brandTail && <span className="tag">{brandTail}</span>}
       </div>
     </div>
   );
@@ -1274,14 +1274,15 @@ export const DeckTransition = ({ title = 'On passe à la pratique.', from_topic,
   </DeckSlide>
 );
 
-export const DeckPause = ({ duration_label }) => (
+export const DeckPause = ({ duration_label, brandName }) => (
   <SalesHackingSourceSlide
     sourceId="pause"
+    brandName={brandName}
     replacements={duration_label ? { '5 minutes.': `${duration_label}.` } : undefined}
   />
 );
 
-export const DeckQA = () => <SalesHackingSourceSlide sourceId="qa" />;
+export const DeckQA = ({ brandName }) => <SalesHackingSourceSlide sourceId="qa" brandName={brandName} />;
 
 export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [], brandName }) => {
   const sourceCols = Array.isArray(cols) ? cols : [];

@@ -382,6 +382,30 @@ def get_order(public_id: str, *, center_account_id: int | None = None) -> dict[s
             return cur.fetchone()
 
 
+def get_platform_slide_brand_name(platform_id: int) -> str:
+    """Return the per-promotion slide label stored with its teacher order."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT CASE
+                         WHEN request_payload_json ? 'slide_brand_name'
+                           THEN BTRIM(request_payload_json->>'slide_brand_name')
+                         ELSE 'Le Socrate'
+                       END AS slide_brand_name
+                FROM ai_teacher_orders
+                WHERE platform_id = %s
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (int(platform_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return "Le Socrate"
+            return str(row.get("slide_brand_name") or "")[:120]
+
+
 def list_center_billing_orders(center_account_id: int) -> list[dict[str, Any]]:
     """Return the centre's durable payment history, newest charge first."""
     with get_postgres_connection() as conn:

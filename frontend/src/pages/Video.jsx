@@ -67,7 +67,7 @@ export default function Video() {
   const [error, setError] = useState(null)
   const [showPlayPrompt, setShowPlayPrompt] = useState(false)
   const [breakRemaining, setBreakRemaining] = useState(null)
-  const [slideDeck, setSlideDeck] = useState({ slides: [], audioSync: {} })
+  const [slideDeck, setSlideDeck] = useState({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
   const [slideView, setSlideView] = useState('professor')
   const [playbackTime, setPlaybackTime] = useState(0)
   const audioRef = useRef(null)
@@ -249,7 +249,7 @@ export default function Video() {
     const resetTimer = window.setTimeout(() => {
       if (cancelled) return
       setSlideView('professor')
-      setSlideDeck({ slides: [], audioSync: {} })
+      setSlideDeck({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
     }, 0)
 
     if (audioInfo?.status !== 'playing' || isCurrentBreakAudio || !currentAudioName) {
@@ -270,6 +270,7 @@ export default function Video() {
           setSlideDeck({
             slides: Array.isArray(data.slides) ? data.slides : [],
             audioSync: data.audio_sync || {},
+            brandName: data.brand_name == null ? 'Le Socrate' : String(data.brand_name),
           })
         }
       })
@@ -509,6 +510,7 @@ export default function Video() {
                     data: { duration_label: breakDurationLabel(audioInfo.duration) },
                   }}
                   maxWidth={896}
+                  renderProps={{ brandName: slideDeck.brandName }}
                   padding={0}
                   className="h-full w-full"
                   style={{ width: '100%', height: '100%', background: '#020617' }}
@@ -539,6 +541,7 @@ export default function Video() {
                     data: { duration_label: breakDurationLabel(audioInfo.nextAudio.duration) },
                   }}
                   maxWidth={896}
+                  renderProps={{ brandName: slideDeck.brandName }}
                   padding={0}
                   className="h-full w-full"
                   style={{ width: '100%', height: '100%', background: '#020617' }}
@@ -549,6 +552,7 @@ export default function Video() {
                 <SlidePreviewFrame
                   slide={activeSlideTiming.slide}
                   maxWidth={896}
+                  renderProps={{ brandName: slideDeck.brandName }}
                   padding={0}
                   className="h-full w-full"
                   style={{ width: '100%', height: '100%', background: '#020617' }}

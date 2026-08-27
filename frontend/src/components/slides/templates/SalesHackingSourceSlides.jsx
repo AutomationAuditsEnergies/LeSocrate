@@ -461,11 +461,23 @@ const useSourceSlideScale = () => {
 
 // `replacements` : remplacements littéraux { "texte source": "texte affiché" }
 // appliqués au HTML statique (ex : durée réelle de la pause).
-export const SalesHackingSourceSlide = ({ sourceId, replacements }) => {
+const escapeBrandHtml = (value) => String(value == null ? 'Le Socrate' : value)
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#039;');
+
+export const SalesHackingSourceSlide = ({ sourceId, replacements, brandName = 'Le Socrate' }) => {
   const source = SOURCE_SLIDE_CATALOG[sourceId] || SOURCE_SLIDES.welcome;
   const [shellRef, scale] = useSourceSlideScale();
 
   let html = source.html;
+  const safeBrand = escapeBrandHtml(String(brandName ?? 'Le Socrate').trim());
+  html = html.replace(
+    /<div class="brand"><span class="mark">Sales<\/span><span class="tag">hacking<\/span><\/div>/g,
+    `<div class="brand"><span class="mark">${safeBrand}</span></div>`,
+  );
   if (replacements) {
     for (const [from, to] of Object.entries(replacements)) {
       html = html.split(from).join(to);

@@ -39,6 +39,7 @@ import TeacherOrderReviewInbox from '../components/TeacherOrderReviewInbox.jsx'
 import DayScheduleTemplates from './DayScheduleTemplates.jsx'
 import AIVoicesView from './AIVoicesView.jsx'
 import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
+import { SlidePreviewFrame } from '../components/slides/PipelineSlidePreview.jsx'
 import './CreatePlatformView.css'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession } from '../courseSchedule'
@@ -1156,7 +1157,7 @@ export default function HRDashboard() {
     return () => window.clearTimeout(timeoutId)
   }, [newlyCreatedPlatformId])
 
-  const handleCreatePlatform = async (teacherDescription = '', schedule = null) => {
+  const handleCreatePlatform = async (teacherDescription = '', schedule = null, slideBrandName = 'Le Socrate') => {
     if (creatingRef.current) return
     setCreateOrderError('')
     const teacherName = teacherFirstName.trim()
@@ -1172,6 +1173,7 @@ export default function HRDashboard() {
       teacher_name: teacherName,
       teacher_color: teacherColor || 'violet',
       teacher_description: String(teacherDescription || '').trim(),
+      slide_brand_name: slideBrandName == null ? 'Le Socrate' : String(slideBrandName).trim(),
       ai_voice_id: selectedAiVoiceId ? Number(selectedAiVoiceId) : null,
     }
     let operationType = 'new_teacher'
@@ -5312,6 +5314,9 @@ export function CreatePlatformView({
   })
   const [scheduleAttemptErrors, setScheduleAttemptErrors] = useState([])
   const [scheduleReviewOpen, setScheduleReviewOpen] = useState(false)
+  const [postPlanningStep, setPostPlanningStep] = useState('voice')
+  const [slideBrandEnabled, setSlideBrandEnabled] = useState(true)
+  const [slideBrandName, setSlideBrandName] = useState('')
   const descriptionEditedRef = useRef(false)
   const operationType = formationMode === 'existing' ? 'reuse_teacher' : 'new_teacher'
   const product = billing?.products?.[operationType]
@@ -5350,9 +5355,19 @@ export function CreatePlatformView({
     setScheduleAttemptErrors([])
   }, [])
 
+  const openPostPlanningFlow = () => {
+    const selectedVoiceStillExists = !selectedAiVoiceId || (aiVoices || []).some(
+      (voice) => String(voice.id) === String(selectedAiVoiceId),
+    )
+    if (!selectedVoiceStillExists) setSelectedAiVoiceId('')
+    setPostPlanningStep('voice')
+    setScheduleReviewOpen(true)
+  }
+
   const handleLaunchRequest = () => {
     if (usesLegacyReuseSchedule) {
-      onCreate(teacherDescription, legacySchedulePayload)
+      setScheduleAttemptErrors([])
+      openPostPlanningFlow()
       return
     }
 
@@ -5380,12 +5395,17 @@ export function CreatePlatformView({
     }
 
     setScheduleAttemptErrors([])
-    setScheduleReviewOpen(true)
+    openPostPlanningFlow()
   }
 
   const confirmScheduleAndCreate = () => {
+    if (slideBrandEnabled && !slideBrandName.trim()) return
     setScheduleReviewOpen(false)
-    onCreate(teacherDescription, schedulePlan.payload)
+    onCreate(
+      teacherDescription,
+      usesLegacyReuseSchedule ? legacySchedulePayload : schedulePlan.payload,
+      slideBrandEnabled ? slideBrandName.trim() : '',
+    )
   }
 
   useEffect(() => {
@@ -5578,26 +5598,6 @@ export function CreatePlatformView({
               <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Pierre" autoFocus className={inputClassName} />
             </div>
 
-            <div>
-              <label htmlFor="teacher-ai-voice">Voix du professeur</label>
-              <select
-                id="teacher-ai-voice"
-                value={selectedAiVoiceId}
-                onChange={(event) => setSelectedAiVoiceId(event.target.value)}
-                className={inputClassName}
-              >
-                <option value="">Voix Fish Audio par défaut</option>
-                {(aiVoices || []).map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.name}{voice.measured_wpm ? ` · ${Math.round(voice.measured_wpm)} mots/min` : ''}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1.5 text-xs leading-5 text-[#64748B]">
-                La vitesse calibrée de cette voix sera appliquée aux cours générés.
-              </p>
-            </div>
-
             {formationMode === 'existing' ? (
               <div className="create-platform-workspace__existing-module">
                 <span>Formation conservée</span>
@@ -5681,56 +5681,192 @@ export function CreatePlatformView({
           <section
             role="dialog"
             aria-modal="true"
-            aria-labelledby="schedule-review-title"
-            className="flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white text-[#18181B] sm:max-w-[640px] sm:rounded-2xl"
+            aria-labelledby={postPlanningStep === 'voice' ? 'teacher-voice-title' : 'slide-brand-title'}
+            className="flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white text-[#18181B] sm:max-w-[760px] sm:rounded-2xl"
           >
             <header className="border-b border-[#E4E4E7] px-5 py-4 sm:px-6">
-              <p className="m-0 text-xs font-semibold text-[#71717A]">
-                {schedulePlan.dayCount} journée{schedulePlan.dayCount > 1 ? 's' : ''}
-              </p>
-              <h2 id="schedule-review-title" className="mt-1 text-xl font-bold tracking-[-0.025em]">
-                Vérifier avant le paiement
-              </h2>
-              <p className="mt-2 max-w-[58ch] text-sm leading-6 text-[#52525B]">
-                Vérifiez les dates et leurs templates avant de valider votre demande. Cette organisation ne pourra ensuite plus être modifiée.
-              </p>
+              <ol className="flex items-center gap-2 text-xs font-semibold text-[#71717A]" aria-label="Étapes de finalisation">
+                <li className={postPlanningStep === 'voice' ? 'text-[#18181B]' : ''}>1. Voix</li>
+                <li aria-hidden="true">›</li>
+                <li className={postPlanningStep === 'slides' ? 'text-[#18181B]' : ''}>2. Diapositives</li>
+              </ol>
             </header>
 
-            <ol className="m-0 min-h-0 flex-1 list-none overflow-y-auto p-0">
-              {(schedulePlan.days || []).map((day) => (
-                <li key={day.date} className="grid grid-cols-[32px_minmax(0,1fr)] items-center gap-3 border-b border-[#E4E4E7] px-5 py-3 last:border-b-0 sm:px-6">
-                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#E4E4E7] text-xs font-bold text-[#3F3F46]">
-                    {day.dayNumber}
-                  </span>
-                  <div className="min-w-0">
-                    <strong className="block text-sm capitalize">{day.label}</strong>
-                    <span className="mt-0.5 block truncate text-xs text-[#71717A]">
-                      {day.templateName}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ol>
+            {postPlanningStep === 'voice' ? (
+              <>
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+                  <h2 id="teacher-voice-title" className="text-lg font-semibold tracking-[-0.02em] text-[#18181B]">
+                    Choisissez la voix du professeur
+                  </h2>
+                  <p className="mt-1.5 max-w-[65ch] text-sm leading-6 text-[#52525B]">
+                    Cette voix sera utilisée pour tous les cours, les transitions et les séquences audio de la formation.
+                  </p>
 
-            <footer className="flex flex-col-reverse gap-2 border-t border-[#E4E4E7] bg-[#FAFAFA] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
-              <button
-                type="button"
-                onClick={() => setScheduleReviewOpen(false)}
-                disabled={creating}
-                autoFocus
-                className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-50"
-              >
-                Revenir au planning
-              </button>
-              <button
-                type="button"
-                onClick={confirmScheduleAndCreate}
-                disabled={creating}
-                className="min-h-11 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white hover:bg-[#27272A] disabled:bg-[#A1A1AA]"
-              >
-                {creating ? 'Préparation en cours…' : 'Valider la demande'}
-              </button>
-            </footer>
+                  <div className="mt-5 grid gap-2" role="radiogroup" aria-labelledby="teacher-voice-title">
+                    {[
+                      {
+                        id: '',
+                        name: 'Voix Fish Audio par défaut',
+                        description: 'Voix standard disponible immédiatement',
+                      },
+                      ...(aiVoices || []).map((voice) => ({
+                        id: String(voice.id),
+                        name: voice.name,
+                        description: voice.measured_wpm
+                          ? `Débit calibré à ${Math.round(voice.measured_wpm)} mots par minute`
+                          : 'Voix personnalisée de votre centre',
+                      })),
+                    ].map((voice) => {
+                      const selected = String(selectedAiVoiceId || '') === voice.id
+                      return (
+                        <button
+                          key={voice.id || 'default'}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setSelectedAiVoiceId(voice.id)}
+                          className={`flex min-h-16 w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/35 ${selected ? 'border-[#18181B] bg-[#F4F4F5]' : 'border-[#D4D4D8] bg-white hover:bg-[#FAFAFA]'}`}
+                        >
+                          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${selected ? 'bg-[#18181B] text-white' : 'bg-[#F1F1F0] text-[#52525B]'}`} aria-hidden="true">
+                            <AudioWaveform size={17} strokeWidth={1.8} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <strong className="block truncate text-sm font-semibold text-[#18181B]">{voice.name}</strong>
+                            <span className="mt-0.5 block text-xs leading-5 text-[#52525B]">{voice.description}</span>
+                          </span>
+                          <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${selected ? 'border-[#18181B] bg-[#18181B] text-white' : 'border-[#A1A1AA] text-transparent'}`} aria-hidden="true">
+                            <Icon name="check" className="text-sm" />
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {(aiVoices || []).length === 0 && (
+                    <p className="mt-3 text-xs leading-5 text-[#64748B]">
+                      Aucune voix personnalisée n’est enregistrée. Vous pouvez continuer avec la voix par défaut.
+                    </p>
+                  )}
+                </div>
+
+                <footer className="flex flex-wrap justify-end gap-2 border-t border-[#E4E4E7] bg-[#FAFAFA] px-5 py-4 sm:px-6">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleReviewOpen(false)}
+                    disabled={creating}
+                    className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-50"
+                  >
+                    Revenir au planning
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPostPlanningStep('slides')}
+                    disabled={creating}
+                    className="min-h-11 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white hover:bg-[#27272A] disabled:bg-[#A1A1AA]"
+                  >
+                    Continuer vers les diapositives
+                  </button>
+                </footer>
+              </>
+            ) : (
+              <>
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  <section className="grid gap-5 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_240px] sm:px-6" aria-labelledby="slide-brand-title">
+                    <div>
+                      <h2 id="slide-brand-title" className="text-lg font-semibold tracking-[-0.02em] text-[#18181B]">
+                        Nom de votre centre de formation sur les diapositives
+                      </h2>
+                      <p className="mt-1.5 text-sm leading-6 text-[#52525B]">
+                        Souhaitez-vous afficher le nom de votre centre de formation en haut à gauche des diapositives présentées par le professeur ?
+                      </p>
+
+                      <div className="mt-4 flex gap-2" role="group" aria-label="Personnaliser les diapositives">
+                        <button
+                          type="button"
+                          aria-pressed={slideBrandEnabled}
+                          onClick={() => setSlideBrandEnabled(true)}
+                          className={`min-h-10 rounded-lg border px-3.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30 ${slideBrandEnabled ? 'border-[#18181B] bg-[#18181B] text-white' : 'border-[#D4D4D8] bg-white text-[#52525B] hover:bg-[#F4F4F5]'}`}
+                        >
+                          Oui, personnaliser
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={!slideBrandEnabled}
+                          onClick={() => setSlideBrandEnabled(false)}
+                          className={`min-h-10 rounded-lg border px-3.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/30 ${!slideBrandEnabled ? 'border-[#18181B] bg-[#18181B] text-white' : 'border-[#D4D4D8] bg-white text-[#52525B] hover:bg-[#F4F4F5]'}`}
+                        >
+                          Non
+                        </button>
+                      </div>
+
+                      {slideBrandEnabled ? (
+                        <div className="mt-4">
+                          <label htmlFor="slide-brand-name" className="mb-1.5 block text-sm font-medium text-[#3F3F46]">
+                            Nom du centre de formation
+                          </label>
+                          <input
+                            id="slide-brand-name"
+                            type="text"
+                            value={slideBrandName}
+                            maxLength={120}
+                            onChange={(event) => setSlideBrandName(event.target.value)}
+                            placeholder="Ex. Atelier Martin"
+                            autoComplete="organization"
+                            className={inputClassName}
+                            aria-describedby="slide-brand-hint"
+                          />
+                          <p id="slide-brand-hint" className="mt-1.5 text-xs leading-5 text-[#64748B]">
+                            Ce nom sera reproduit à l’identique sur toutes les diapositives de cette formation.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="mt-4 text-xs leading-5 text-[#64748B]">
+                          Aucun nom ne sera affiché sur les diapositives.
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <p className="mb-2 text-xs font-semibold text-[#52525B]">Aperçu</p>
+                      <div className="overflow-hidden rounded-lg border border-[#D4D4D8] bg-[#020617]">
+                        <SlidePreviewFrame
+                          slide={{
+                            template_type: 'reprise_recap',
+                            data: {
+                              title: 'On reprend le fil.',
+                              points: ['Double obligation de prix', 'Une étiquette claire', 'La confiance du client'],
+                            },
+                          }}
+                          renderProps={{ brandName: slideBrandEnabled ? (slideBrandName.trim() || 'Votre centre') : '' }}
+                          maxWidth={240}
+                          padding={0}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs leading-5 text-[#71717A]">Le contenu de la diapositive reste inchangé.</p>
+                    </div>
+                  </section>
+                </div>
+
+                <footer className="flex flex-wrap justify-end gap-2 border-t border-[#E4E4E7] bg-[#FAFAFA] px-5 py-4 sm:px-6">
+                  <button
+                    type="button"
+                    onClick={() => setPostPlanningStep('voice')}
+                    disabled={creating}
+                    className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 text-sm font-semibold text-[#3F3F46] hover:bg-[#F4F4F5] disabled:opacity-50"
+                  >
+                    Revenir au choix de la voix
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmScheduleAndCreate}
+                    disabled={creating || (slideBrandEnabled && !slideBrandName.trim())}
+                    className="min-h-11 rounded-lg bg-[#18181B] px-4 text-sm font-semibold text-white hover:bg-[#27272A] disabled:bg-[#A1A1AA]"
+                  >
+                    {creating ? 'Préparation en cours…' : 'Valider la demande'}
+                  </button>
+                </footer>
+              </>
+            )}
           </section>
         </div>,
         document.body,
