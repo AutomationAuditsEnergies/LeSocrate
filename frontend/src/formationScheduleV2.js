@@ -15,7 +15,10 @@ export const TRAINING_WEEKDAYS = Object.freeze([
 ])
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
-export const MIN_NEW_MODULE_LEAD_DAYS = 3
+export const MIN_NEW_MODULE_LEAD_HOURS = 24
+// Le premier formulaire ne connaît pas encore l'heure du premier cours : il
+// autorise donc J+1, puis le planning applique les 24 heures exactes.
+export const MIN_NEW_MODULE_LEAD_DAYS = 1
 
 function asUtcDate(value) {
   if (!ISO_DATE_PATTERN.test(String(value || ''))) return null
@@ -233,12 +236,18 @@ export function hasMinimumLeadTime(
   assignments,
   templates,
   now = new Date(),
-  minimumDays = MIN_NEW_MODULE_LEAD_DAYS,
+  minimumHours = MIN_NEW_MODULE_LEAD_HOURS,
   customDays = {},
 ) {
-  const [firstDate] = normalizeSelectedTrainingDates(selectedDates)
-  if (!firstDate) return false
-  return firstDate >= addCalendarDays(calendarDateInTimeZone(now), minimumDays)
+  const firstStart = getFirstSessionDateTime(
+    selectedDates,
+    assignments,
+    templates,
+    'Europe/Paris',
+    customDays,
+  )
+  if (!firstStart) return false
+  return firstStart.getTime() >= now.getTime() + (Number(minimumHours) * 60 * 60 * 1000)
 }
 
 export function fillUnassignedTemplate(assignments, selectedDates, templateId) {
@@ -352,10 +361,10 @@ export function validateFormationScheduleV2({
       normalizedAssignments,
       templates,
       now,
-      MIN_NEW_MODULE_LEAD_DAYS,
+      MIN_NEW_MODULE_LEAD_HOURS,
       normalizedCustomDays,
     )) {
-      errors.push('La première date doit être au minimum à J+3.')
+      errors.push('La première séance doit commencer au moins 24 heures après la validation.')
     }
   }
 

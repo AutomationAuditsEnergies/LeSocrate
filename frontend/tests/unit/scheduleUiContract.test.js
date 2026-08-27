@@ -191,7 +191,7 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.match(dashboardSource, /Nom de votre centre de formation sur les diapositives/)
   assert.match(dashboardSource, /aria-label="Masquer les erreurs du planning"/)
   assert.match(dashboardSource, /setScheduleAttemptErrors\(\[\]\)/)
-  assert.match(scheduleDomainSource, /La première date doit être au minimum à J\+3/)
+  assert.match(scheduleDomainSource, /La première séance doit commencer au moins 24 heures après la validation/)
   assert.match(dashboardSource, /Associez un template à/)
 })
 

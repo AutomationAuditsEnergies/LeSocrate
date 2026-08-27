@@ -121,22 +121,22 @@ test('applies one template to every selected day and replaces earlier choices', 
   })
 })
 
-test('requires J+3 by calendar date regardless of the validation time', () => {
+test('requires 24 exact hours before the first scheduled course', () => {
   const result = validateFormationScheduleV2({
-    selectedDates: ['2026-08-04'],
-    assignments: { '2026-08-04': '12' },
+    selectedDates: ['2026-08-02'],
+    assignments: { '2026-08-02': '12' },
     templates: [template],
-    now: new Date('2026-08-01T21:59:00Z'),
+    now: new Date('2026-08-01T06:00:00Z'),
   })
   assert.equal(result.valid, true)
   assert.equal(hasMinimumLeadTime(
-    ['2026-08-03'],
-    { '2026-08-03': '12' },
+    ['2026-08-02'],
+    { '2026-08-02': '12' },
     [template],
-    new Date('2026-08-01T06:00:00Z'),
+    new Date('2026-08-01T08:00:00Z'),
   ), false)
-  assert.equal(getMinimumNewModuleStartDate(new Date('2026-08-23T22:01:00Z')), '2026-08-27')
-  assert.equal(getMinimumNewModuleStartDate(new Date('2026-08-23T08:00:00Z')), '2026-08-26')
+  assert.equal(getMinimumNewModuleStartDate(new Date('2026-08-23T22:01:00Z')), '2026-08-25')
+  assert.equal(getMinimumNewModuleStartDate(new Date('2026-08-23T08:00:00Z')), '2026-08-24')
 })
 
 test('evaluates Paris wall-clock times independently from the browser timezone', () => {
