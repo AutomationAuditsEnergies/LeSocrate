@@ -187,7 +187,7 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.match(plannerStyles, /\.formation-schedule__template-select select\s*\{[^}]*min-height: 44px[^}]*appearance: none/)
   assert.match(plannerSource, /formation-schedule__validate-toolbar/)
   assert.match(plannerSource, /onClick=\{onValidate\}/)
-  assert.doesNotMatch(dashboardSource, /Vérifier avant le paiement/)
+  assert.match(dashboardSource, /Vérifier avant le paiement/)
   assert.match(dashboardSource, /Nom de votre centre de formation sur les diapositives/)
   assert.match(dashboardSource, /aria-label="Masquer les erreurs du planning"/)
   assert.match(dashboardSource, /setScheduleAttemptErrors\(\[\]\)/)
