@@ -188,7 +188,7 @@ test('reviews the definitive schedule only when preparation is requested', async
   assert.match(plannerSource, /formation-schedule__validate-toolbar/)
   assert.match(plannerSource, /onClick=\{onValidate\}/)
   assert.match(dashboardSource, /Vérifier avant le paiement/)
-  assert.match(dashboardSource, /Nom de votre centre de formation sur les diapositives/)
+  assert.doesNotMatch(dashboardSource, /Nom de votre centre de formation sur les diapositives/)
   assert.match(dashboardSource, /aria-label="Masquer les erreurs du planning"/)
   assert.match(dashboardSource, /setScheduleAttemptErrors\(\[\]\)/)
   assert.match(scheduleDomainSource, /La première séance doit commencer au moins 24 heures après la validation/)
