@@ -15,6 +15,7 @@ test('allows tomorrow during configuration and explains the exact 24-hour planni
   assert.match(dashboardSource, /min=\{earliestStartDate\}/)
   assert.match(dashboardSource, /Vous pouvez choisir dès demain/)
   assert.match(plannerSource, /leadTimeIsTooShort/)
-  assert.match(plannerSource, /Le premier cours commence trop tôt/)
+  assert.match(plannerSource, /Pour respecter le délai de traitement/)
+  assert.match(plannerSource, /24 heures après l’heure actuelle/)
   assert.match(plannerSource, /Le lendemain peut être sélectionné/)
 })

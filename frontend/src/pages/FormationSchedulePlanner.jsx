@@ -920,8 +920,8 @@ export default function FormationSchedulePlanner({
             <Info size={15} aria-hidden="true" />
             <p>
               {leadTimeIsTooShort
-                ? `Le premier cours commence trop tôt. Placez-le au plus tôt le ${formatLeadTimeDateTime(earliestAllowedFirstSession)}.`
-                : 'Le premier cours doit commencer au moins 24 heures après la validation.'}
+                ? `Pour respecter le délai de traitement, le premier cours doit commencer au moins 24 heures après l’heure actuelle. Placez-le au plus tôt le ${formatLeadTimeDateTime(earliestAllowedFirstSession)}.`
+                : 'Le premier cours doit commencer au moins 24 heures après l’heure actuelle afin de laisser le temps nécessaire au traitement.'}
             </p>
           </div>
         )}
