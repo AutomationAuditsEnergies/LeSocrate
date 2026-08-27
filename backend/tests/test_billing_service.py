@@ -576,11 +576,12 @@ class BillingServiceTest(unittest.TestCase):
             "public_id": public_id,
             "stripe_checkout_session_id": "cs_test_paid",
         }
-        checkout = {
+        checkout_payload = {
             "id": "cs_test_paid",
             "payment_status": "paid",
             "client_reference_id": public_id,
         }
+        checkout = SimpleNamespace(to_dict=Mock(return_value=checkout_payload))
         retrieve = Mock(return_value=checkout)
         stripe_client.return_value = SimpleNamespace(v1=SimpleNamespace(
             checkout=SimpleNamespace(sessions=SimpleNamespace(retrieve=retrieve)),
@@ -599,7 +600,7 @@ class BillingServiceTest(unittest.TestCase):
 
         self.assertEqual(result["payment_status"], "paid")
         retrieve.assert_called_once_with("cs_test_paid")
-        reconcile.assert_called_once_with(checkout, center_account_id=42)
+        reconcile.assert_called_once_with(checkout_payload, center_account_id=42)
 
     @patch.object(billing_service, "_stripe")
     @patch.object(billing_service, "get_center_order")

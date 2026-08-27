@@ -476,6 +476,8 @@ def _stripe_sdk():
 def _stripe_object_dict(value: Any) -> dict[str, Any]:
     if hasattr(value, "to_dict_recursive"):
         return dict(value.to_dict_recursive())
+    if hasattr(value, "to_dict"):
+        return dict(value.to_dict())
     if isinstance(value, Mapping):
         return dict(value)
     raise BillingError("Réponse Stripe invalide.", status_code=502)
