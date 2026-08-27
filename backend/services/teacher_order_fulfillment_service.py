@@ -115,14 +115,14 @@ def _authorization_datetime(value) -> datetime | None:
 
 
 def _new_module_validation_at(order: dict) -> datetime:
-    """Use the latest real authorization/worker time, never order creation."""
+    """Use payment authorization time so internal queue delays stay neutral."""
+    authorized_at = _authorization_datetime(order.get("authorized_at"))
+    if authorized_at is not None:
+        return authorized_at
     now = _fulfillment_now()
     if now.tzinfo is None or now.utcoffset() is None:
-        now = FRANCE_TZ.localize(now)
-    else:
-        now = now.astimezone(FRANCE_TZ)
-    authorized_at = _authorization_datetime(order.get("authorized_at"))
-    return max(now, authorized_at) if authorized_at is not None else now
+        return FRANCE_TZ.localize(now)
+    return now.astimezone(FRANCE_TZ)
 
 
 def _v2_first_start_at(schedule: dict) -> datetime:

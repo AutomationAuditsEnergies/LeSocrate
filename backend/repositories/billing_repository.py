@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any
 import uuid
 
@@ -611,6 +612,7 @@ def _apply_paid_checkout_session_in_transaction(
     obj: dict[str, Any],
     *,
     center_account_id: int | None = None,
+    authorized_at: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Authorize and enqueue one server-verified Checkout Session."""
     session_id = str(obj.get("id") or "").strip()
@@ -680,15 +682,21 @@ def _apply_paid_checkout_session_in_transaction(
             payment_status = 'paid',
             stripe_payment_intent_id = COALESCE(%s, stripe_payment_intent_id),
             charged_amount_cents = %s,
-            paid_at = COALESCE(paid_at, NOW()),
-            authorized_at = COALESCE(authorized_at, NOW()),
+            paid_at = COALESCE(paid_at, %s, NOW()),
+            authorized_at = COALESCE(authorized_at, %s, NOW()),
             last_error = NULL, center_seen_at = NULL, updated_at = NOW()
         WHERE id = %s
           AND authorization_kind = 'stripe'
           AND payment_status IN ('not_requested', 'awaiting_payment', 'processing', 'paid')
         RETURNING *
         """,
-        (payment_intent_id, amount, int(order["id"])),
+        (
+            payment_intent_id,
+            amount,
+            authorized_at,
+            authorized_at,
+            int(order["id"]),
+        ),
     )
     authorized_order = cur.fetchone()
     if not authorized_order:
@@ -854,7 +862,21 @@ def apply_stripe_webhook_event(event: dict[str, Any]) -> bool:
                 "checkout.session.completed",
                 "checkout.session.async_payment_succeeded",
             }:
-                order = _apply_paid_checkout_session_in_transaction(cur, obj)
+                event_created_at = event.get("created")
+                authorized_at = None
+                if event_created_at not in (None, ""):
+                    try:
+                        authorized_at = datetime.fromtimestamp(
+                            int(event_created_at),
+                            tz=timezone.utc,
+                        )
+                    except (TypeError, ValueError, OSError):
+                        authorized_at = None
+                order = _apply_paid_checkout_session_in_transaction(
+                    cur,
+                    obj,
+                    authorized_at=authorized_at,
+                )
             elif event_type in {"checkout.session.async_payment_failed", "checkout.session.expired"}:
                 cur.execute(
                     """

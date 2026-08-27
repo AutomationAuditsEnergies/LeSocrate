@@ -688,7 +688,7 @@ class DynamicOrderFulfillmentTest(unittest.TestCase):
         )
         bind_days.assert_called_once_with(42, 8, 120, [401, 402])
 
-    def test_new_v2_revalidates_24_hours_from_fulfillment_time(self):
+    def test_new_v2_revalidates_24_hours_from_payment_authorization(self):
         snapshot = compile_module_schedule(
             ["2026-07-28"],
             {"2026-07-28": 11},
@@ -744,8 +744,9 @@ class DynamicOrderFulfillmentTest(unittest.TestCase):
 
         aggregate.assert_not_called()
 
-    def test_new_module_validation_time_never_precedes_the_worker_clock(self):
+    def test_new_module_validation_time_ignores_internal_worker_delay(self):
         worker_time = FRANCE_TZ.localize(datetime(2026, 7, 26, 10, 0))
+        authorization_time = FRANCE_TZ.localize(datetime(2026, 7, 26, 8, 0))
         with patch.object(
             teacher_order_fulfillment_service,
             "_fulfillment_now",
@@ -761,7 +762,7 @@ class DynamicOrderFulfillmentTest(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(validation_at, worker_time)
+        self.assertEqual(validation_at, authorization_time)
 
     def test_reuse_worker_rejects_every_v1_v2_schema_mismatch_before_creation(self):
         cases = (

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 from uuid import UUID
 
@@ -42,13 +43,55 @@ class BillingRepositoryRetryTest(unittest.TestCase):
             "repositories.billing_repository._enqueue_fulfillment_in_transaction",
             return_value=queued,
         ) as enqueue:
-            result = _apply_paid_checkout_session_in_transaction(cursor, checkout)
+            paid_at = datetime(2026, 8, 27, 13, 32, 24, tzinfo=timezone.utc)
+            result = _apply_paid_checkout_session_in_transaction(
+                cursor,
+                checkout,
+                authorized_at=paid_at,
+            )
 
         self.assertEqual(result["fulfillment_status"], "queued")
         update_sql, update_params = cursor.execute.call_args_list[1].args
         self.assertIn("'not_requested'", update_sql)
         self.assertEqual(update_params[0], "pi_test_paid")
+        self.assertEqual(update_params[2], paid_at)
+        self.assertEqual(update_params[3], paid_at)
         enqueue.assert_called_once_with(cursor, authorized)
+
+    def test_webhook_uses_stripe_event_time_for_authorization(self):
+        event_time = datetime(2026, 8, 27, 13, 32, 24, tzinfo=timezone.utc)
+        event = {
+            "id": "evt_paid_time",
+            "type": "checkout.session.completed",
+            "livemode": False,
+            "created": int(event_time.timestamp()),
+            "data": {"object": {"id": "cs_paid_time"}},
+        }
+        cursor = Mock()
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+        connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+        with patch(
+            "repositories.billing_repository.get_postgres_connection",
+            return_value=connection,
+        ), patch(
+            "repositories.billing_repository._claim_webhook_event",
+            return_value=True,
+        ), patch(
+            "repositories.billing_repository._apply_paid_checkout_session_in_transaction",
+        ) as apply_paid:
+            from repositories.billing_repository import apply_stripe_webhook_event
+
+            self.assertTrue(apply_stripe_webhook_event(event))
+
+        apply_paid.assert_called_once_with(
+            cursor,
+            {"id": "cs_paid_time"},
+            authorized_at=event_time,
+        )
 
     def test_paid_checkout_cannot_bypass_a_pending_review(self):
         order = {
