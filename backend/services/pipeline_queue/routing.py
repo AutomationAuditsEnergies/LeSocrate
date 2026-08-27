@@ -15,6 +15,7 @@ AUDIO_TASK_TYPES = frozenset(
     {
         "hr_playlist_generate",
         "hr_playlist_item",
+        "scheduled_audio_item",
         "voice_reference_calibration",
     }
 )

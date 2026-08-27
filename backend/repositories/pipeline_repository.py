@@ -2803,6 +2803,7 @@ def list_due_audio_generation_sessions(
     retry_due_before=None,
     max_auto_attempts: int = 4,
     batch_size: int = 50,
+    reconcile_manifest: bool = False,
 ) -> list[dict[str, Any]]:
     try:
         batch_size = int(batch_size)
@@ -2815,15 +2816,29 @@ def list_due_audio_generation_sessions(
     params: list[Any] = [lower_bound, upper_bound]
     stale_heartbeat_before = stale_updated_before or stale_started_before
     retry_due_before = retry_due_before or upper_bound
-    retry_conditions = f"""
-              cs.audio_generation_started_at IS NULL
-              OR (
-                  COALESCE(cs.audio_generation_status, 'pending') = 'error'
-                  AND cs.audio_generation_completed_at IS NULL
-                  AND (cs.audio_generation_next_retry_at IS NULL OR cs.audio_generation_next_retry_at <= {ph})
-                  AND COALESCE(cs.audio_generation_attempts, 0) < {ph}
-              )
-    """
+    if reconcile_manifest:
+        # A completed row is deliberately revisited while it remains inside
+        # the H-72 window. Blob Storage is the physical proof and the scheduler
+        # must repair a file lost after PostgreSQL was marked complete.
+        retry_conditions = f"""
+                  COALESCE(cs.audio_generation_status, 'pending') IN
+                      ('pending', 'waiting_content', 'queued', 'running', 'processing', 'completed')
+                  OR (
+                      COALESCE(cs.audio_generation_status, 'pending') = 'error'
+                      AND (cs.audio_generation_next_retry_at IS NULL OR cs.audio_generation_next_retry_at <= {ph})
+                      AND COALESCE(cs.audio_generation_attempts, 0) < {ph}
+                  )
+        """
+    else:
+        retry_conditions = f"""
+                  cs.audio_generation_started_at IS NULL
+                  OR (
+                      COALESCE(cs.audio_generation_status, 'pending') = 'error'
+                      AND cs.audio_generation_completed_at IS NULL
+                      AND (cs.audio_generation_next_retry_at IS NULL OR cs.audio_generation_next_retry_at <= {ph})
+                      AND COALESCE(cs.audio_generation_attempts, 0) < {ph}
+                  )
+        """
     params.extend([retry_due_before, int(max_auto_attempts)])
     if stale_heartbeat_before:
         retry_conditions += f"""

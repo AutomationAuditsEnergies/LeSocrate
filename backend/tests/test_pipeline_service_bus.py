@@ -127,6 +127,32 @@ class PipelineServiceBusTest(unittest.TestCase):
 
         self.assertEqual(client.queue_name, "formation-audio")
 
+    def test_sender_routes_scheduled_audio_repair_to_the_audio_queue(self):
+        client = _FakeClient()
+        transport = ServiceBusTransport(
+            self._settings(),
+            client=client,
+            sdk={"ServiceBusMessage": _FakeMessage},
+        )
+        delivery = OutboxDelivery(
+            id="outbox-scheduled-audio",
+            delivery_id="delivery-scheduled-audio",
+            work_item_id="work-scheduled-audio",
+            payload={
+                "version": 1,
+                "work_item_id": "work-scheduled-audio",
+                "pipeline_job_id": 8,
+                "task_type": "scheduled_audio_item",
+            },
+            available_at=None,
+            publish_attempts=1,
+            lease_token="lease",
+        )
+
+        transport.send(delivery)
+
+        self.assertEqual(client.queue_name, "formation-audio")
+
     def test_worker_kind_selects_its_receiver_queue(self):
         settings = self._settings()
         ai = QueueSettings(**{**settings.__dict__, "worker_kind": "ai"})

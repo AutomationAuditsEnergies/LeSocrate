@@ -1784,7 +1784,7 @@ def _finalize_text_ready_state(job_id: int) -> dict:
 
 
 def _persist_daily_teacher_audio_assets(job_id: int, folder_id: int) -> dict:
-    """Snapshot one J-1 playlist as soon as that training day is complete."""
+    """Snapshot one H-72 playlist as soon as that training day is complete."""
     from repositories.pipeline_repository import get_formation_module_for_pipeline_job
     from services.teacher_asset_service import ensure_module_asset_manifest
 
@@ -1875,7 +1875,7 @@ def start_folder_audio_generation(
 ):
     """Lance l'audio d'une seule journée.
 
-    Utilisé par le bouton manuel d'une journée et par le timer 48h avant cours.
+    Utilisé par le bouton manuel d'une journée et par le rattrapage H-72.
     Retourne (payload, http_status) pour rester réutilisable hors route Flask.
     """
     job = get_job(job_id)
@@ -2507,7 +2507,7 @@ def _dispatch_auto_pilot_tick(
     """Place one resumable pipeline step in the durable queue."""
     from services.pipeline_queue import enqueue_work_item, get_latest_work_item
 
-    latest = get_latest_work_item(job_id)
+    latest = get_latest_work_item(job_id, scope_key="pipeline")
     if latest and not latest.terminal and not force_new_run:
         return {
             "mode": "queue",
@@ -2550,7 +2550,7 @@ def _queue_status_for_job(job_id: int) -> dict:
     try:
         from services.pipeline_queue import get_latest_work_item
 
-        item = get_latest_work_item(job_id)
+        item = get_latest_work_item(job_id, scope_key="pipeline")
         if not item:
             return {"mode": "queue", "status": "missing"}
         return {
@@ -3285,7 +3285,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict, *, checkpoint=None) -> N
     elif step == "audio":
         if not _legacy_bulk_audio_enabled():
             raise RuntimeError(
-                "Synthèse audio bulk désactivée : utiliser le déclenchement durable J-1 par séance"
+                "Synthèse audio bulk désactivée : utiliser le déclenchement durable H-72 par séance"
             )
         from services.content_generation_service import generate_audio_from_script
         from services.formation_pipeline_service import get_expected_course_folders
@@ -3413,7 +3413,7 @@ def resume_auto_pilot(job_id):
     force = bool((request.get_json(silent=True) or {}).get("force"))
     from services.pipeline_queue import get_latest_work_item
 
-    active_item = get_latest_work_item(job_id)
+    active_item = get_latest_work_item(job_id, scope_key="pipeline")
     if active_item and not active_item.terminal:
         if force and active_item.status != "running":
             active_item = None
@@ -3490,7 +3490,7 @@ def resume_auto_pilot(job_id):
     if force:
         from services.pipeline_queue import cancel_latest_work_item
 
-        cancel_latest_work_item(job_id)
+        cancel_latest_work_item(job_id, scope_key="pipeline")
     dispatch = _dispatch_auto_pilot_tick(
         job_id,
         reason="manual_resume",

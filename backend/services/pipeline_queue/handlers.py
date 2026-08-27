@@ -20,6 +20,10 @@ def handle_pipeline_work_item(item: WorkItem, lease) -> WorkResult:
         from services.hr_playlist_pipeline_service import handle_hr_playlist_work_item
 
         return handle_hr_playlist_work_item(item, lease)
+    if item.task_type == "scheduled_audio_item":
+        from services.hr_playlist_pipeline_service import handle_scheduled_audio_work_item
+
+        return handle_scheduled_audio_work_item(item, lease)
     if item.task_type == "ai_teacher_fulfillment":
         from services.teacher_order_fulfillment_service import fulfill_teacher_order
 
@@ -329,7 +333,7 @@ def mark_pipeline_dead_letter(item: WorkItem, error: str) -> None:
     if item.task_type == "auto_pilot_tick":
         mark_auto_pilot_dead_letter(item, error)
         return
-    if item.task_type in {"hr_playlist_generate", "hr_playlist_item"}:
+    if item.task_type in {"hr_playlist_generate", "hr_playlist_item", "scheduled_audio_item"}:
         _log_event(
             item,
             "hr_playlist_dead_lettered",
@@ -339,6 +343,19 @@ def mark_pipeline_dead_letter(item: WorkItem, error: str) -> None:
             error=error[:500],
             data={"folder_id": item.folder_id, "task_type": item.task_type},
         )
+        if item.task_type == "scheduled_audio_item" and item.payload.get("session_id"):
+            try:
+                from datetime import datetime
+                from config import FRANCE_TZ
+                from repositories.course_schedule_repository import fail_audio_generation_session
+
+                fail_audio_generation_session(
+                    int(item.payload["session_id"]),
+                    error=error,
+                    failed_at=datetime.now(FRANCE_TZ),
+                )
+            except Exception:
+                pass
         return
     if item.task_type == "ai_teacher_fulfillment":
         from services.teacher_order_fulfillment_service import mark_teacher_order_dead_letter

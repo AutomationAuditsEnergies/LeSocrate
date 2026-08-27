@@ -1,4 +1,4 @@
-"""Run course scheduling, J-1 audio and reminder ticks outside the web process.
+"""Run course scheduling, H-72 audio reconciliation and reminders.
 
 Use ``python -m workers.course_scheduler_worker`` for a dedicated singleton
 scheduler, or add ``--once`` for deployment smoke tests and cron-style runs.
@@ -60,6 +60,8 @@ def run_scheduler_tick_once(*, wait_for_audio: bool = False) -> dict[str, Any]:
     callbacks: tuple[tuple[str, Callable[[], Any]], ...] = (
         ("schedule", advance_course_schedules),
         (
+            # Stable telemetry key retained for dashboard compatibility. The
+            # business window is H-72 even though the historic key says J-1.
             "audio_j_minus_1",
             lambda: process_due_audio_generations(
                 wait_for_completion=wait_for_audio,
@@ -103,7 +105,7 @@ def run_scheduler_tick_once(*, wait_for_audio: bool = False) -> dict[str, Any]:
     log = logger.info if healthy else logger.warning
     log(
         "COURSE_SCHEDULER_HEARTBEAT healthy=%s started_at=%s duration_seconds=%s "
-        "schedule=%s audio_j_minus_1=%s reminders=%s attendance_exports=%s",
+        "schedule=%s audio_h72=%s reminders=%s attendance_exports=%s",
         healthy,
         started_at.isoformat(),
         duration,
@@ -178,10 +180,9 @@ def main(argv=None) -> int:
     configure_logging()
 
     if args.once:
-        # A one-shot process cannot leave claimed audio in a daemon thread:
-        # the interpreter would terminate it as soon as main returns. Run each
-        # due occurrence inline so cron/smoke mode exits only after completion
-        # (or after the durable claim has been marked failed).
+        # The scheduler only persists work-items/outbox rows. Expensive TTS is
+        # always owned by the isolated audio Container App, including one-shot
+        # cron and smoke-test executions.
         return 0 if run_scheduler_tick_once(wait_for_audio=True)["healthy"] else 1
 
     stop_event = threading.Event()

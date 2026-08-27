@@ -13,7 +13,7 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -21,21 +21,26 @@ from zoneinfo import ZoneInfo
 SCHEDULE_SCHEMA_VERSION = 2
 WORDS_PER_MINUTE = 165.7
 COURSE_AUDIO_MARGIN_MINUTES = 0.5
-MIN_NEW_MODULE_LEAD_DAYS = 3
+MIN_NEW_MODULE_LEAD_HOURS = 24
+# Compatibility export for callers that still display the delay in days.
+MIN_NEW_MODULE_LEAD_DAYS = 1
 FRANCE_TIME_ZONE = ZoneInfo("Europe/Paris")
 
-MIN_COURSES_PER_DAY = 4
+MIN_COURSES_PER_DAY = 1
 MAX_COURSES_PER_DAY = 10
 MIN_COURSE_MINUTES = 35
 MAX_COURSE_MINUTES = 90
-MIN_QA_MINUTES = 5
+MIN_QA_MINUTES = 10
 MAX_QA_MINUTES = 30
-MIN_SHORT_PAUSE_MINUTES = 5
+MIN_SHORT_PAUSE_MINUTES = 10
 MAX_SHORT_PAUSE_MINUTES = 30
 MIN_LUNCH_MINUTES = 60
-MAX_LUNCH_MINUTES = 120
-MIN_TOTAL_COURSE_MINUTES = 240
-MIN_DAY_AMPLITUDE_MINUTES = 360
+MAX_LUNCH_MINUTES = 180
+# Compatibility exports for callers that import the old daily thresholds. The
+# flexible planner no longer imposes a daily course-total or amplitude floor.
+MIN_TOTAL_COURSE_MINUTES = MIN_COURSE_MINUTES
+MIN_DAY_AMPLITUDE_MINUTES = MIN_COURSE_MINUTES
+JOINTURE_DURATION_SECONDS = 10
 
 BLOCK_TYPES = ("course", "qa", "pause")
 _TIME_RE = re.compile(r"^(?P<hour>[01]\d|2[0-3]):(?P<minute>[0-5]\d)$")
@@ -473,7 +478,7 @@ def compile_day_schedule(
     )
 
     previous: Mapping[str, Any] | None = None
-    expected_cycle = ("course", "qa", "pause")
+    auxiliary_types_since_course: set[str] = set()
     for index, block in enumerate(chronological):
         position = index + 1
         _validate_duration(block, chronological_index=position)
@@ -494,25 +499,45 @@ def compile_day_schedule(
                     details={"position": position},
                 )
 
-        expected_type = expected_cycle[index % len(expected_cycle)]
-        if block["block_type"] != expected_type:
+        block_type = block["block_type"]
+        if index == 0 and block_type != "course":
             _raise(
                 "invalid_block_sequence",
-                "L'ordre obligatoire est cours, Q&R, pause, puis cours.",
+                "Une journée doit obligatoirement commencer par un cours.",
                 path=f"blocks[{block['_source_index']}].type",
                 details={
                     "position": position,
-                    "expected": expected_type,
-                    "actual": block["block_type"],
+                    "expected": "course",
+                    "actual": block_type,
                 },
             )
+
+        if block_type == "course":
+            auxiliary_types_since_course.clear()
+        else:
+            if block_type in auxiliary_types_since_course:
+                _raise(
+                    "duplicate_auxiliary_block",
+                    "Un même type de bloc facultatif ne peut apparaître "
+                    "qu'une fois entre deux cours.",
+                    path=f"blocks[{block['_source_index']}].type",
+                    details={"position": position, "actual": block_type},
+                )
+            if len(auxiliary_types_since_course) >= 2:
+                _raise(
+                    "too_many_auxiliary_blocks",
+                    "Deux blocs facultatifs au maximum sont autorisés entre "
+                    "deux cours.",
+                    path=f"blocks[{block['_source_index']}].type",
+                    details={"position": position},
+                )
+            auxiliary_types_since_course.add(block_type)
         previous = block
 
-    remainder = len(chronological) % 3
-    if remainder not in (0, 2):
+    if chronological[-1]["block_type"] == "pause":
         _raise(
-            "incomplete_final_sequence",
-            "La journée doit se terminer après un Q&R ou une pause finale.",
+            "pause_cannot_be_final",
+            "Une journée ne peut pas se terminer par une pause.",
             path="blocks",
         )
 
@@ -531,18 +556,12 @@ def compile_day_schedule(
     lunches = [
         block for block in chronological if block["pause_kind"] == "lunch"
     ]
-    if len(lunches) != 1:
+    if len(lunches) > 1:
         _raise(
             "invalid_lunch_count",
-            "Une journée doit contenir exactement une pause déjeuner.",
+            "Une journée ne peut contenir qu'une seule pause déjeuner.",
             path="blocks",
             details={"lunch_count": len(lunches)},
-        )
-    if chronological[-1]["pause_kind"] == "lunch":
-        _raise(
-            "lunch_cannot_be_final",
-            "La pause finale facultative doit être une pause courte.",
-            path=f"blocks[{chronological[-1]['_source_index']}].is_lunch",
         )
 
     total_course_minutes = sum(
@@ -550,26 +569,9 @@ def compile_day_schedule(
         for block in chronological
         if block["block_type"] == "course"
     )
-    if total_course_minutes < MIN_TOTAL_COURSE_MINUTES:
-        _raise(
-            "insufficient_course_minutes",
-            f"Une journée doit contenir au moins "
-            f"{MIN_TOTAL_COURSE_MINUTES} minutes de cours.",
-            path="blocks",
-            details={"total_course_minutes": total_course_minutes},
-        )
-
     start_minute = chronological[0]["start_minute"]
     end_minute = chronological[-1]["end_minute"]
     amplitude_minutes = end_minute - start_minute
-    if amplitude_minutes < MIN_DAY_AMPLITUDE_MINUTES:
-        _raise(
-            "day_amplitude_too_short",
-            f"L'amplitude d'une journée doit atteindre au moins "
-            f"{MIN_DAY_AMPLITUDE_MINUTES} minutes.",
-            path="blocks",
-            details={"amplitude_minutes": amplitude_minutes},
-        )
 
     counters = {block_type: 0 for block_type in BLOCK_TYPES}
     current_course_index = 0
@@ -595,6 +597,11 @@ def compile_day_schedule(
             )
         compiled_blocks.append(compiled)
 
+    jointure_count = sum(
+        current["block_type"] == "course"
+        and following["block_type"] == "course"
+        for current, following in zip(compiled_blocks, compiled_blocks[1:])
+    )
     day_without_hash: dict[str, Any] = {
         "schema_version": SCHEDULE_SCHEMA_VERSION,
         "blocks": compiled_blocks,
@@ -609,8 +616,10 @@ def compile_day_schedule(
             block["block_type"] == "pause" for block in chronological
         ),
         "total_course_minutes": total_course_minutes,
-        "audio_file_count": len(compiled_blocks),
+        "jointure_count": jointure_count,
+        "audio_file_count": len(compiled_blocks) + jointure_count,
         "has_final_pause": compiled_blocks[-1]["block_type"] == "pause",
+        "ending_block_type": compiled_blocks[-1]["block_type"],
     }
     day_without_hash["schedule_hash"] = _hash_days([day_without_hash])
     return day_without_hash
@@ -633,20 +642,51 @@ def build_day_audio_manifest(
     # merely by setting schema_version or block_key themselves.
     compiled_day = compile_day_schedule(day)
 
-    return [
-        {
-            "position": block["position"],
-            "block_key": block["block_key"],
-            "block_type": block["block_type"],
-            "pause_kind": block["pause_kind"],
-            "course_index": block["course_index"],
-            "filename": f"{block['block_key']}.mp3",
-            "start_minute": block["start_minute"],
-            "end_minute": block["end_minute"],
-            "duration_minutes": block["duration_minutes"],
-        }
-        for block in compiled_day["blocks"]
-    ]
+    manifest: list[dict[str, Any]] = []
+    blocks = compiled_day["blocks"]
+    for index, block in enumerate(blocks):
+        manifest.append(
+            {
+                "position": len(manifest) + 1,
+                "block_key": block["block_key"],
+                "block_type": block["block_type"],
+                "pause_kind": block["pause_kind"],
+                "course_index": block["course_index"],
+                "filename": f"{block['block_key']}.mp3",
+                "start_minute": block["start_minute"],
+                "end_minute": block["end_minute"],
+                "duration_minutes": block["duration_minutes"],
+                "duration_seconds": block["duration_minutes"] * 60,
+                "technical": False,
+            }
+        )
+        next_block = blocks[index + 1] if index + 1 < len(blocks) else None
+        if next_block is None or not (
+            block["block_type"] == "course"
+            and next_block["block_type"] == "course"
+        ):
+            continue
+        jointure_key = (
+            f"jointure_{block['course_index']:02d}_"
+            f"{next_block['course_index']:02d}"
+        )
+        manifest.append(
+            {
+                "position": len(manifest) + 1,
+                "block_key": jointure_key,
+                "block_type": "jointure",
+                "pause_kind": None,
+                "course_index": block["course_index"],
+                "next_course_index": next_block["course_index"],
+                "filename": f"{jointure_key}.mp3",
+                "start_minute": block["end_minute"],
+                "end_minute": block["end_minute"],
+                "duration_minutes": 0,
+                "duration_seconds": JOINTURE_DURATION_SECONDS,
+                "technical": True,
+            }
+        )
+    return manifest
 
 
 def _normalise_date(value: Any, *, path: str) -> str:
@@ -869,11 +909,12 @@ def validate_new_module_lead_time(
     *,
     is_reuse: bool = False,
 ) -> bool:
-    """Require the first course date to be at least J+3 in France.
+    """Require a new module to start at least 24 exact hours after validation.
 
     Reused modules are explicitly exempt because their audio assets already
-    exist. The comparison is deliberately calendar-based, so the time of day
-    at which the request is validated never changes the earliest allowed date.
+    exist.  The comparison is timestamp-based in Europe/Paris: a validation on
+    Wednesday at 08:00 permits Thursday at 09:00, while Wednesday at 10:00
+    does not.
     """
 
     if is_reuse:
@@ -897,16 +938,23 @@ def validate_new_module_lead_time(
     if validation_is_aware:
         validation = validation.astimezone(FRANCE_TIME_ZONE)
         first_start = first_start.astimezone(FRANCE_TIME_ZONE)
+        earliest_utc = validation.astimezone(timezone.utc) + timedelta(
+            hours=MIN_NEW_MODULE_LEAD_HOURS
+        )
+        earliest_start_at = earliest_utc.astimezone(FRANCE_TIME_ZONE)
+        starts_too_soon = first_start.astimezone(timezone.utc) < earliest_utc
+    else:
+        earliest_start_at = validation + timedelta(hours=MIN_NEW_MODULE_LEAD_HOURS)
+        starts_too_soon = first_start < earliest_start_at
 
-    earliest_start_date = validation.date() + timedelta(days=MIN_NEW_MODULE_LEAD_DAYS)
-    if first_start.date() < earliest_start_date:
+    if starts_too_soon:
         _raise(
             "new_module_lead_time_too_short",
-            "La première date d'un nouveau module doit être au minimum à J+3.",
+            "La première séance d'un nouveau module doit commencer au moins 24 heures après sa validation.",
             path="first_start_at",
             details={
-                "minimum_days": MIN_NEW_MODULE_LEAD_DAYS,
-                "earliest_start_date": earliest_start_date.isoformat(),
+                "minimum_hours": MIN_NEW_MODULE_LEAD_HOURS,
+                "earliest_start_at": earliest_start_at.isoformat(),
             },
         )
     return True
@@ -915,11 +963,13 @@ def validate_new_module_lead_time(
 __all__ = [
     "BLOCK_TYPES",
     "COURSE_AUDIO_MARGIN_MINUTES",
+    "JOINTURE_DURATION_SECONDS",
     "MAX_COURSES_PER_DAY",
     "MAX_COURSE_MINUTES",
     "MIN_COURSES_PER_DAY",
     "MIN_COURSE_MINUTES",
     "MIN_DAY_AMPLITUDE_MINUTES",
+    "MIN_NEW_MODULE_LEAD_HOURS",
     "MIN_NEW_MODULE_LEAD_DAYS",
     "MIN_TOTAL_COURSE_MINUTES",
     "SCHEDULE_SCHEMA_VERSION",

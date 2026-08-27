@@ -91,32 +91,7 @@ class CourseSchedulerWorkerTest(unittest.TestCase):
         self.assertTrue(result["healthy"])
         self.assertEqual(result["steps"]["audio_j_minus_1"]["processed"], 1)
 
-    def test_once_waits_for_claimed_audio_to_finish_before_process_exit(self):
-        audio_started = threading.Event()
-        allow_audio_to_finish = threading.Event()
-        claim_released = threading.Event()
-        capacity_released = threading.Event()
-        main_returned = threading.Event()
-        main_results = []
-        main_errors = []
-
-        def fake_generate_audio(*_args, **_kwargs):
-            audio_started.set()
-            allow_audio_to_finish.wait(3.0)
-            raise RuntimeError("forced generation failure after the wait assertion")
-
-        def mark_claim_failed(*_args, **_kwargs):
-            claim_released.set()
-            return True
-
-        def run_main():
-            try:
-                main_results.append(worker.main(["--once"]))
-            except BaseException as exc:  # pragma: no cover - asserted below
-                main_errors.append(exc)
-            finally:
-                main_returned.set()
-
+    def test_once_only_queues_audio_and_does_not_run_tts_in_scheduler(self):
         due_session = {
             "id": 9,
             "platform_id": 12,
@@ -125,89 +100,28 @@ class CourseSchedulerWorkerTest(unittest.TestCase):
             "formation_job_id": 8,
             "name": "Centre test",
         }
-
         with (
             patch.object(worker, "configure_logging"),
             patch.object(worker, "advance_course_schedules", return_value=[]),
             patch.object(worker, "process_due_reminders", return_value=[]),
+            patch.object(worker, "process_due_attendance_exports", return_value=[]),
             patch.object(
                 scheduled_audio_service,
                 "list_due_audio_generation_sessions",
                 return_value=[due_session],
             ),
-            patch.object(
-                scheduled_audio_service,
-                "get_expected_course_folders",
-                return_value={"folder_ids": [55]},
-            ),
             patch.object(scheduled_audio_service, "_scheduled_tts_mode", return_value="mock"),
             patch.object(
-                formation_routes,
-                "get_job",
-                return_value={
-                    "id": 8,
-                    "platform_id": 7,
-                    "status": "text_ready",
-                    "nb_days": 1,
-                    "auto_pilot_tts_mode": "mock",
-                },
-            ),
-            patch.object(
-                formation_routes,
-                "_resolve_continue_after_text_folder",
-                return_value=(55, {"strategy": "exact"}),
-            ),
-            patch.object(
-                formation_routes,
-                "_folder_text_reviews_ready",
-                return_value=(True, {"segments_completed": 1, "reviewed_current": 1}),
-            ),
-            patch.object(formation_routes, "_try_acquire_scheduled_audio_capacity", return_value=True),
-            patch.object(
-                formation_routes,
-                "_release_scheduled_audio_capacity",
-                side_effect=capacity_released.set,
-            ),
-            patch.object(formation_routes, "update_job"),
-            patch.object(formation_routes.logger, "error"),
-            patch(
-                "services.formation_pipeline_service.get_expected_course_folders",
-                return_value={"folder_ids": [55]},
+                scheduled_audio_service,
+                "reconcile_scheduled_audio_session",
+                return_value={"success": True, "queued_files": [{"filename": "cours_01.mp3"}]},
             ),
             patch(
-                "services.content_generation_service.generate_audio_from_script",
-                side_effect=fake_generate_audio,
-            ),
-            patch(
-                "repositories.course_schedule_repository.claim_audio_generation_session",
-                return_value=True,
-            ),
-            patch(
-                "repositories.course_schedule_repository.fail_audio_generation_session",
-                side_effect=mark_claim_failed,
-            ),
-            patch("services.formation_observability_service.log_pipeline_event"),
+                "services.content_generation_service.generate_audio_from_script"
+            ) as generate_audio,
         ):
-            runner = threading.Thread(target=run_main, name="test-scheduler-once")
-            runner.start()
-            try:
-                self.assertTrue(audio_started.wait(1.0))
-                self.assertTrue(runner.is_alive())
-                self.assertFalse(main_returned.is_set())
-                self.assertFalse(claim_released.is_set())
-
-                allow_audio_to_finish.set()
-                self.assertTrue(claim_released.wait(1.0))
-                self.assertTrue(capacity_released.wait(1.0))
-                runner.join(1.0)
-            finally:
-                allow_audio_to_finish.set()
-                runner.join(1.0)
-
-        self.assertFalse(runner.is_alive())
-        self.assertTrue(main_returned.is_set())
-        self.assertEqual(main_errors, [])
-        self.assertEqual(main_results, [1])
+            self.assertEqual(worker.main(["--once"]), 0)
+        generate_audio.assert_not_called()
 
     def test_tick_runs_schedule_audio_and_reminders_in_order(self):
         calls = []

@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 from azure.core.exceptions import ResourceExistsError
@@ -15,6 +16,153 @@ from services.platform_storage_service import (
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def inspect_published_audio_manifest(platform_id, destination_prefix, filenames):
+    """Compare an occurrence's immutable manifest with Blob Storage.
+
+    PostgreSQL owns the expected filenames; Blob Storage is checked for the
+    physical proof.  Empty objects and non-MP3 content types are considered
+    missing/corrupt so a completed database flag can never hide a lost upload.
+    """
+    audio_conn = _audio_storage_connection_string()
+    if not audio_conn:
+        raise ValueError("Connexion Azure audio manquante")
+    platform_id = int(platform_id)
+    occurrence_prefix = _safe_occurrence_prefix(destination_prefix)
+    if not occurrence_prefix:
+        raise ValueError("Préfixe de séance audio requis")
+    expected = {
+        os.path.basename(str(name).split("?", 1)[0])
+        for name in filenames
+        if name
+    }
+    bsc = BlobServiceClient.from_connection_string(audio_conn)
+    container = bsc.get_container_client(_platform_audio_container(platform_id))
+    present = {}
+    invalid = {}
+    for filename in sorted(expected):
+        blob_name = f"{occurrence_prefix}/{filename}"
+        client = container.get_blob_client(blob_name)
+        try:
+            props = client.get_blob_properties()
+        except Exception as exc:
+            # Azure returns ResourceNotFoundError for a normal cache miss.  A
+            # transient storage failure must still fail the scheduler tick so
+            # it is retried instead of being mistaken for hundreds of misses.
+            if (
+                getattr(exc, "status_code", None) == 404
+                or exc.__class__.__name__ == "ResourceNotFoundError"
+            ):
+                continue
+            raise
+        size = int(getattr(props, "size", 0) or 0)
+        content_type = str(
+            getattr(getattr(props, "content_settings", None), "content_type", "")
+            or ""
+        ).lower()
+        proof = {
+            "blob_name": blob_name,
+            "etag": str(getattr(props, "etag", "") or ""),
+            "size_bytes": size,
+            "content_type": content_type,
+        }
+        if size <= 0 or (
+            content_type and content_type not in {"audio/mpeg", "audio/mp3"}
+        ):
+            invalid[filename] = proof
+        else:
+            present[filename] = proof
+    missing = sorted(expected - set(present))
+    return {
+        "expected": sorted(expected),
+        "present": present,
+        "missing": missing,
+        "invalid": invalid,
+        "ready": not missing,
+        "destination_prefix": occurrence_prefix,
+    }
+
+
+def verify_published_audio_file(platform_id, destination_prefix, filename):
+    """Return durable physical proofs only after reading the uploaded MP3."""
+    state = inspect_published_audio_manifest(
+        platform_id,
+        destination_prefix,
+        [filename],
+    )
+    clean_name = os.path.basename(str(filename).split("?", 1)[0])
+    if not state["ready"]:
+        raise RuntimeError(f"Fichier audio publié absent ou invalide: {clean_name}")
+    audio_conn = _audio_storage_connection_string()
+    bsc = BlobServiceClient.from_connection_string(audio_conn)
+    container = bsc.get_container_client(
+        _platform_audio_container(int(platform_id))
+    )
+    blob_name = state["present"][clean_name]["blob_name"]
+    audio_bytes = container.get_blob_client(blob_name).download_blob().readall()
+    if not audio_bytes:
+        raise RuntimeError(f"Fichier audio publié vide: {clean_name}")
+    return {
+        **state["present"][clean_name],
+        "filename": clean_name,
+        "sha256": hashlib.sha256(audio_bytes).hexdigest(),
+        "verified": True,
+    }
+
+
+def ensure_occurrence_playback_manifest(
+    platform_id,
+    folder_id,
+    destination_prefix,
+    filenames,
+):
+    """Build the playback manifest from already verified occurrence blobs."""
+    state = inspect_published_audio_manifest(
+        platform_id,
+        destination_prefix,
+        filenames,
+    )
+    if not state["ready"]:
+        raise RuntimeError(
+            "Manifeste de séance incomplet: " + ", ".join(state["missing"])
+        )
+    audio_conn = _audio_storage_connection_string()
+    bsc = BlobServiceClient.from_connection_string(audio_conn)
+    container = bsc.get_container_client(
+        _platform_audio_container(int(platform_id))
+    )
+    from services.content_generation_service import _mp3_duration_seconds_no_ffprobe
+    from services.adaptive_playback_service import (
+        build_occurrence_playback_manifest,
+        upload_occurrence_playback_manifest,
+    )
+    from services.day_playlist_service import resolve_folder_playlist
+
+    resolved = resolve_folder_playlist(int(folder_id))
+    if int(resolved.get("schema_version") or 1) != 2:
+        return {"created": False, "reason": "legacy_v1"}
+    durations = {}
+    for filename, proof in state["present"].items():
+        audio_bytes = (
+            container.get_blob_client(proof["blob_name"])
+            .download_blob()
+            .readall()
+        )
+        durations[filename] = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+    manifest = build_occurrence_playback_manifest(
+        resolved["playlist_items"],
+        durations,
+        folder_id=int(folder_id),
+    )
+    blob_name = upload_occurrence_playback_manifest(
+        int(platform_id),
+        state["destination_prefix"],
+        manifest,
+        blob_service_client=bsc,
+    )
+    return {"created": True, "blob_name": blob_name, "manifest": manifest}
+
 
 def _audio_storage_connection_string():
     return os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING") or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")

@@ -491,3 +491,133 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
             "attempt": item.attempt_count,
         }
     )
+
+
+def handle_scheduled_audio_work_item(item: WorkItem, lease) -> WorkResult:
+    """Generate, publish and prove one missing file for a scheduled day."""
+    if item.task_type != "scheduled_audio_item":
+        raise PermanentWorkError(f"task_type audio planifié inconnu: {item.task_type}")
+    payload = dict(item.payload or {})
+    session_id = int(payload.get("session_id") or 0)
+    folder_id = int(item.folder_id or payload.get("folder_id") or 0)
+    target_platform_id = int(payload.get("target_platform_id") or 0)
+    source_platform_id = int(payload.get("source_platform_id") or 0)
+    filename = os.path.basename(str(payload.get("filename") or "").split("?", 1)[0])
+    if not session_id or not folder_id or not target_platform_id or not source_platform_id or not filename:
+        raise PermanentWorkError("Identité incomplète du fichier audio planifié")
+
+    folder = get_course_folder_identity(folder_id)
+    if not folder or int(folder["platform_id"]) != source_platform_id:
+        raise PermanentWorkError("Le dossier source de l'audio planifié a changé")
+    from repositories.course_schedule_repository import (
+        get_audio_generation_session,
+        mark_audio_generation_processing,
+    )
+    session = get_audio_generation_session(target_platform_id, session_id)
+    if not session or int(session.get("platform_id") or 0) != target_platform_id:
+        raise PermanentWorkError("Séance audio planifiée introuvable")
+    if session.get("status") not in {"planned", "active"}:
+        raise PermanentWorkError("La séance audio n'est plus générable")
+
+    from services.day_playlist_service import required_audio_filenames
+    expected_files = sorted(required_audio_filenames(folder_id))
+    if filename not in expected_files:
+        raise PermanentWorkError(
+            f"Le fichier {filename} n'appartient pas au manifeste verrouillé"
+        )
+    destination_prefix = f"course-sessions/{session_id}"
+    voice_type = str(payload.get("voice_type") or "gtts").lower()
+    if voice_type not in {"fish_audio", "gtts", "mock"}:
+        raise PermanentWorkError(f"Moteur TTS planifié invalide: {voice_type}")
+
+    now = datetime.now(FRANCE_TZ)
+    mark_audio_generation_processing(session_id, updated_at=now)
+    progress = {
+        "status": "running",
+        "step": 0,
+        "total_steps": 1,
+        "message": f"Rattrapage de {filename}",
+        "filename": filename,
+        "session_id": session_id,
+        "attempt": item.attempt_count,
+    }
+    lease.report_progress(progress)
+    lease.checkpoint()
+
+    from services.audio_publish_service import (
+        inspect_published_audio_manifest,
+        publish_playlist_audio_to_platform,
+        verify_published_audio_file,
+    )
+    before = inspect_published_audio_manifest(
+        target_platform_id,
+        destination_prefix,
+        [filename],
+    )
+    generation = {"generated": 0, "skipped": 1, "reason": "already_published"}
+    publish = {"published": [], "publish_errors": []}
+    if not before["ready"]:
+        from services.content_generation_service import generate_audio_from_script
+
+        generation = generate_audio_from_script(
+            folder_id,
+            on_progress=lambda step, total, message: lease.report_progress({
+                **progress,
+                "step": int(step),
+                "total_steps": max(1, int(total)),
+                "message": str(message),
+            }),
+            force_all=True,
+            mock=voice_type == "mock",
+            basic_tts=voice_type == "gtts",
+            target_filename=filename,
+            sync_slides=bool(payload.get("sync_slides")),
+            auto_generate_slides=bool(payload.get("auto_generate_slides")),
+            preserve_existing=True,
+        )
+        lease.checkpoint()
+        publish = publish_playlist_audio_to_platform(
+            target_platform_id,
+            folder_id,
+            filenames=[filename],
+            source_platform_id=source_platform_id,
+            archive_existing=False,
+            destination_prefix=destination_prefix,
+            create_playback_manifest=False,
+        )
+        if publish.get("publish_errors") or filename not in set(publish.get("published") or []):
+            raise RetryableWorkError(
+                f"Publication incomplète du fichier planifié {filename}"
+            )
+    lease.checkpoint()
+    proof = verify_published_audio_file(
+        target_platform_id,
+        destination_prefix,
+        filename,
+    )
+    lease.checkpoint()
+
+    from services.scheduled_audio_service import finalize_scheduled_audio_session_if_ready
+
+    finalization = finalize_scheduled_audio_session_if_ready(
+        session,
+        job_id=int(item.pipeline_job_id or session.get("formation_job_id") or 0),
+        folder_id=folder_id,
+        expected_files=expected_files,
+        voice_type=voice_type,
+    )
+    return WorkResult(result={
+        "status": "completed",
+        "step": 1,
+        "total_steps": 1,
+        "message": f"{filename} vérifié",
+        "session_id": session_id,
+        "filename": filename,
+        "generation": generation,
+        "publish": publish,
+        "proof": proof,
+        "manifest_ready": bool(finalization.get("ready")),
+        "session_completed": bool(finalization.get("completed")),
+        "finalization": finalization,
+        "attempt": item.attempt_count,
+    })

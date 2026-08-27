@@ -4077,7 +4077,7 @@ def create_hr_blueprint():
 
         Sans corps `schedule`, utilise le planning persistant créé par le flow
         "Nouveau professeur IA", pousse la prochaine séance dans cours_config,
-        puis lance l'audio uniquement pour les séances dues dans la fenêtre 48h.
+        puis lance l'audio uniquement pour les séances dues dans la fenêtre H-72.
         """
         api_key = request.headers.get("X-Platform-Key", "")
         expected_key = os.environ.get("PLATFORM_API_KEY", "")

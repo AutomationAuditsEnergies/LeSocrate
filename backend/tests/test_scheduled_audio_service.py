@@ -11,7 +11,7 @@ from services import scheduled_audio_service as service
 class ScheduledAudioServiceTest(unittest.TestCase):
     def test_default_readiness_target_is_h72(self):
         with patch.dict(service.os.environ, {}, clear=True):
-            self.assertEqual(service._scheduled_audio_window_hours(), (72.0, 2.0))
+            self.assertEqual(service._scheduled_audio_window_hours(), (72.0, 0.0))
 
     def test_v2_starts_at_h24_while_v1_keeps_h26_buffer(self):
         now = FRANCE_TZ.localize(datetime(2026, 9, 1, 9, 0))
@@ -173,12 +173,12 @@ class ScheduledAudioServiceTest(unittest.TestCase):
             service.timedelta(hours=11.5),
         )
 
-    def test_backpressure_stops_the_tick_without_claiming_later_sessions(self):
+    def test_tick_reconciles_every_due_session_without_running_tts_locally(self):
         calls = []
 
-        def fake_launch(session, **_kwargs):
+        def fake_reconcile(session, **_kwargs):
             calls.append(session["id"])
-            return {"session_id": session["id"], "success": False, "status": 429}
+            return {"session_id": session["id"], "success": True, "queued_files": []}
 
         due = [
             {"id": 9, "platform_id": 12, "session_index": 1, "scheduled_at": "2030-01-01"},
@@ -186,20 +186,14 @@ class ScheduledAudioServiceTest(unittest.TestCase):
         ]
         with (
             patch.object(service, "list_due_audio_generation_sessions", return_value=due),
-            patch.object(service, "launch_scheduled_audio_session", side_effect=fake_launch),
+            patch.object(service, "reconcile_scheduled_audio_session", side_effect=fake_reconcile),
         ):
             results = service.process_due_audio_generations()
 
-        self.assertEqual(calls, [9])
-        self.assertEqual(results[0]["status"], 429)
+        self.assertEqual(calls, [9, 10])
+        self.assertTrue(all(result["success"] for result in results))
 
     def test_manual_retry_reuses_the_failed_occurrence(self):
-        captured = {}
-
-        def fake_start(job_id, folder_id, payload, **kwargs):
-            captured.update({"job_id": job_id, "folder_id": folder_id, "payload": payload, **kwargs})
-            return {"message": "ok"}, 202
-
         with (
             patch.object(service, "get_audio_generation_session", return_value={
                 "id": 9,
@@ -212,18 +206,17 @@ class ScheduledAudioServiceTest(unittest.TestCase):
                 "formation_job_id": 8,
                 "name": "Centre test",
             }),
-            patch.object(service, "get_expected_course_folders", return_value={"folder_ids": [55]}),
-            patch.dict(sys.modules, {
-                "routes.formation_routes": types.SimpleNamespace(start_folder_audio_generation=fake_start),
-            }),
+            patch.object(
+                service,
+                "reconcile_scheduled_audio_session",
+                return_value={"success": True, "queued_files": [{"filename": "course_01.mp3"}]},
+            ) as reconcile,
         ):
             payload, status = service.retry_scheduled_audio_generation(12, 9)
 
         self.assertEqual(status, 202)
         self.assertTrue(payload["success"])
-        self.assertEqual(captured["schedule_session_id"], 9)
-        self.assertEqual(captured["trigger_source"], "manual_schedule_retry")
-        self.assertTrue(captured["payload"]["preserve_existing"])
+        self.assertEqual(reconcile.call_args.args[0]["id"], 9)
 
     def test_missing_pipeline_marks_occurrence_as_waiting_for_content(self):
         with patch.object(service, "mark_audio_waiting_for_content") as mark_waiting:
@@ -239,41 +232,30 @@ class ScheduledAudioServiceTest(unittest.TestCase):
         self.assertFalse(result["success"])
         mark_waiting.assert_called_once()
 
-    def test_scheduled_launch_preserves_existing_playlist_files(self):
-        captured = {}
-
-        def fake_start_folder_audio_generation(job_id, folder_id, payload, **kwargs):
-            captured["job_id"] = job_id
-            captured["folder_id"] = folder_id
-            captured["payload"] = payload
-            captured["kwargs"] = kwargs
-            return {"message": "ok"}, 202
-
-        fake_routes = types.SimpleNamespace(
-            start_folder_audio_generation=fake_start_folder_audio_generation
-        )
-
+    def test_scheduled_tick_delegates_missing_files_to_durable_reconciliation(self):
+        session = {
+            "id": 9,
+            "platform_id": 12,
+            "session_index": 1,
+            "scheduled_at": "2026-07-05 13:45:00",
+            "name": "Centre test",
+            "formation_job_id": 8,
+        }
         with (
             patch.object(
                 service,
                 "list_due_audio_generation_sessions",
-                return_value=[
-                    {
-                        "id": 9,
-                        "platform_id": 12,
-                        "session_index": 1,
-                        "scheduled_at": "2026-07-05 13:45:00",
-                        "name": "Centre test",
-                        "formation_job_id": 8,
-                    }
-                ],
+                return_value=[session],
             ),
             patch.object(
                 service,
-                "get_expected_course_folders",
-                return_value={"folder_ids": [55]},
-            ),
-            patch.dict(sys.modules, {"routes.formation_routes": fake_routes}),
+                "reconcile_scheduled_audio_session",
+                return_value={
+                    "success": True,
+                    "missing_files": ["course_02.mp3"],
+                    "queued_files": [{"filename": "course_02.mp3"}],
+                },
+            ) as reconcile,
         ):
             results = service.process_due_audio_generations(
                 platform_ids=[12],
@@ -281,14 +263,8 @@ class ScheduledAudioServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(results[0]["success"], True)
-        self.assertEqual(captured["job_id"], 8)
-        self.assertEqual(captured["folder_id"], 55)
-        self.assertEqual(captured["payload"]["force_all"], True)
-        self.assertEqual(captured["payload"]["preserve_existing"], True)
-        self.assertEqual(captured["payload"]["sync_slides"], True)
-        self.assertEqual(captured["kwargs"]["schedule_session_id"], 9)
-        self.assertEqual(captured["kwargs"]["target_platform_id"], 12)
-        self.assertTrue(captured["kwargs"]["wait_for_completion"])
+        self.assertEqual(results[0]["missing_files"], ["course_02.mp3"])
+        reconcile.assert_called_once_with(session, tts_mode=None)
 
     def test_v2_launch_refuses_missing_manifest_before_generation_route(self):
         with (

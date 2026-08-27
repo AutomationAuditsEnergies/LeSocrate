@@ -588,18 +588,29 @@ class WorkItemRepository:
             row = _row_dict(cur.fetchone(), cur)
             return _to_work_item(row) if row else None
 
-    def latest_for_job(self, pipeline_job_id: int) -> WorkItem | None:
+    def latest_for_job(
+        self,
+        pipeline_job_id: int,
+        *,
+        scope_key: str | None = None,
+    ) -> WorkItem | None:
         self.ensure_schema()
         ph = "%s" if self.is_postgres else "?"
+        scope_clause = f" AND scope_key = {ph}" if scope_key is not None else ""
+        params = (
+            (int(pipeline_job_id), str(scope_key))
+            if scope_key is not None
+            else (int(pipeline_job_id),)
+        )
         with self._connection() as conn:
             cur = conn.cursor()
             cur.execute(
                 f"""
                 SELECT * FROM pipeline_work_items
-                WHERE pipeline_job_id = {ph}
+                WHERE pipeline_job_id = {ph}{scope_clause}
                 ORDER BY created_at DESC LIMIT 1
                 """,
-                (pipeline_job_id,),
+                params,
             )
             row = _row_dict(cur.fetchone(), cur)
             return _to_work_item(row) if row else None

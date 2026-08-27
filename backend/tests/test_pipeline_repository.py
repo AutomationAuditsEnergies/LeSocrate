@@ -689,6 +689,38 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], [110])
         self.assertEqual(rows[0]["formation_job_id"], job_id)
 
+    def test_manifest_reconciliation_revisits_completed_sessions(self):
+        repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Test",
+            rncp_code="RNCP123",
+            total_hours=7,
+            nb_days=1,
+        )
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO course_sessions
+                (id, platform_id, session_index, scheduled_at, status,
+                 audio_generation_status, audio_generation_started_at,
+                 audio_generation_completed_at)
+            VALUES
+                (112, 7, 1, '2026-01-01 10:00:00', 'planned',
+                 'completed', '2026-01-01 08:00:00', '2026-01-01 09:00:00')
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        rows = repo.list_due_audio_generation_sessions(
+            lower_bound="2026-01-01 00:00:00",
+            upper_bound="2026-01-02 00:00:00",
+            platform_ids=[7],
+            reconcile_manifest=True,
+        )
+
+        self.assertEqual([row["id"] for row in rows], [112])
+
     def test_due_audio_generation_sessions_retry_stale_running_session(self):
         job_id = repo.create_pipeline_job(
             platform_id=7,

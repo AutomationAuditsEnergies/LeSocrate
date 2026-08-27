@@ -405,6 +405,26 @@ class PipelineWorkQueueTest(unittest.TestCase):
         )
         self.assertNotEqual(replacement.id, first.id)
 
+    def test_pipeline_scope_is_not_masked_by_a_newer_audio_item(self):
+        pipeline_item = self._enqueue()
+        audio_item = self.repo.enqueue(
+            WorkItemSpec(
+                pipeline_job_id=42,
+                folder_id=118,
+                resource_key="course-session:91:audio:course_01.mp3",
+                scope_key="scheduled_audio:91:course_01.mp3",
+                run_id="audio-run",
+                task_type="scheduled_audio_item",
+                dedupe_key="audio-run:course_01.mp3",
+            )
+        )
+
+        self.assertEqual(get_latest_work_item(42, repository=self.repo).id, audio_item.id)
+        self.assertEqual(
+            get_latest_work_item(42, scope_key="pipeline", repository=self.repo).id,
+            pipeline_item.id,
+        )
+
     def test_outbox_publishes_once_and_keeps_database_authoritative(self):
         item = self.repo.enqueue(
             WorkItemSpec(

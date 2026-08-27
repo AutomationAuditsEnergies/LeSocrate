@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from services.hr_playlist_pipeline_service import (
     _finalize_module_if_ready,
     handle_hr_playlist_work_item,
+    handle_scheduled_audio_work_item,
 )
 from services.pipeline_queue.contracts import PermanentWorkError, WorkItem
 
@@ -60,6 +61,79 @@ def _item(attempt=1):
 
 
 class HrPlaylistQueueHandlerTest(unittest.TestCase):
+    def test_scheduled_item_records_blob_proof_before_completion(self):
+        item = replace(
+            _item(),
+            pipeline_job_id=8,
+            task_type="scheduled_audio_item",
+            resource_key="course-session:91:audio:course_01.mp3",
+            scope_key="scheduled_audio:91:course_01.mp3",
+            payload={
+                "session_id": 91,
+                "folder_id": 118,
+                "source_platform_id": 16,
+                "target_platform_id": 12,
+                "filename": "course_01.mp3",
+                "voice_type": "gtts",
+            },
+        )
+        proof = {
+            "filename": "course_01.mp3",
+            "etag": "etag-1",
+            "size_bytes": 1234,
+            "sha256": "abc",
+            "verified": True,
+        }
+        with (
+            patch(
+                "services.hr_playlist_pipeline_service.get_course_folder_identity",
+                return_value={"id": 118, "platform_id": 16, "formation_job_id": 8},
+            ),
+            patch(
+                "repositories.course_schedule_repository.get_audio_generation_session",
+                return_value={
+                    "id": 91,
+                    "platform_id": 12,
+                    "status": "planned",
+                    "formation_job_id": 8,
+                },
+            ),
+            patch(
+                "repositories.course_schedule_repository.mark_audio_generation_processing",
+                return_value=True,
+            ),
+            patch(
+                "services.day_playlist_service.required_audio_filenames",
+                return_value={"course_01.mp3", "course_02.mp3"},
+            ),
+            patch(
+                "services.audio_publish_service.inspect_published_audio_manifest",
+                return_value={"ready": False, "missing": ["course_01.mp3"]},
+            ),
+            patch(
+                "services.content_generation_service.generate_audio_from_script",
+                return_value={"generated": 1, "skipped": 0},
+            ) as generate,
+            patch(
+                "services.audio_publish_service.publish_playlist_audio_to_platform",
+                return_value={"published": ["course_01.mp3"], "publish_errors": []},
+            ),
+            patch(
+                "services.audio_publish_service.verify_published_audio_file",
+                return_value=proof,
+            ),
+            patch(
+                "services.scheduled_audio_service.finalize_scheduled_audio_session_if_ready",
+                return_value={"ready": False, "completed": False},
+            ),
+        ):
+            result = handle_scheduled_audio_work_item(item, _Lease())
+
+        self.assertTrue(generate.call_args.kwargs["preserve_existing"])
+        self.assertEqual(generate.call_args.kwargs["target_filename"], "course_01.mp3")
+        self.assertEqual(result.result["proof"], proof)
+        self.assertFalse(result.result["session_completed"])
+
     def test_retry_resumes_item_without_regenerating_existing_audio(self):
         calls = []
         content = types.ModuleType("services.content_generation_service")

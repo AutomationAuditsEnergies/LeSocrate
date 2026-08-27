@@ -63,9 +63,13 @@ def get_work_item(
 def get_latest_work_item(
     pipeline_job_id: int,
     *,
+    scope_key: str | None = None,
     repository: WorkItemRepository | None = None,
 ) -> WorkItem | None:
-    return (repository or new_repository()).latest_for_job(int(pipeline_job_id))
+    return (repository or new_repository()).latest_for_job(
+        int(pipeline_job_id),
+        scope_key=scope_key,
+    )
 
 
 def get_latest_folder_work_item(
@@ -83,10 +87,14 @@ def get_latest_folder_work_item(
 def cancel_latest_work_item(
     pipeline_job_id: int,
     *,
+    scope_key: str | None = None,
     repository: WorkItemRepository | None = None,
 ) -> WorkItem | None:
     repository = repository or new_repository()
-    item = repository.latest_for_job(int(pipeline_job_id))
+    item = repository.latest_for_job(
+        int(pipeline_job_id),
+        scope_key=scope_key,
+    )
     if item and not item.terminal:
         repository.cancel(item.id)
         return repository.get(item.id)

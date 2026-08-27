@@ -1,9 +1,12 @@
 import os
+import uuid
 from datetime import datetime, timedelta
 
 from config import FRANCE_TZ
 from repositories.course_schedule_repository import (
+    complete_audio_generation_session,
     get_audio_generation_session,
+    mark_audio_generation_queued,
     mark_audio_waiting_for_content,
 )
 from repositories.pipeline_repository import list_due_audio_generation_sessions
@@ -16,7 +19,262 @@ logger = get_logger(__name__)
 _DEFAULT_SCHEDULED_AUDIO_BATCH_SIZE = 50
 _MAX_SCHEDULED_AUDIO_BATCH_SIZE = 1000
 _DEFAULT_AUDIO_READY_HOURS_BEFORE = 72.0
-_DEFAULT_AUDIO_BUILD_BUFFER_HOURS = 2.0
+_DEFAULT_AUDIO_BUILD_BUFFER_HOURS = 0.0
+
+
+def _resolve_scheduled_folder(session: dict) -> tuple[int, int]:
+    """Resolve the immutable day folder for one scheduled occurrence."""
+    job_id = int(session.get("formation_job_id") or 0)
+    if not job_id:
+        raise ValueError("Aucun job pipeline lié")
+    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+    index = int(session.get("session_index") or 0) - 1
+    if index < 0 or index >= len(folder_ids):
+        raise ValueError("Aucun dossier cours pour cette séance")
+    return job_id, int(folder_ids[index])
+
+
+def _resume_text_pipeline_if_needed(job_id: int) -> dict | None:
+    """Ensure a late H-72 reconciliation also catches an unfinished AI run."""
+    try:
+        from routes import formation_routes
+
+        job = formation_routes.get_job(int(job_id))
+        if not job or not job.get("auto_pilot_enabled"):
+            return None
+        if formation_routes._determine_next_ap_step(int(job_id)) is None:
+            return None
+        return formation_routes._dispatch_auto_pilot_tick(
+            int(job_id),
+            reason="scheduled_audio_h72_content_recovery",
+        )
+    except Exception:
+        logger.exception("SCHEDULED_AUDIO_PIPELINE_RECOVERY_FAILED job=%s", job_id)
+        return None
+
+
+def _folder_content_ready(folder_id: int) -> bool:
+    from services.content_generation_service import get_job_from_db
+
+    content_job = get_job_from_db(int(folder_id))
+    return bool(content_job and content_job.get("status") == "completed")
+
+
+def _scheduled_voice_type(job_id: int, explicit_mode=None) -> str:
+    mode = explicit_mode or _scheduled_tts_mode()
+    if mode:
+        return str(mode)
+    try:
+        from routes import formation_routes
+
+        job = formation_routes.get_job(int(job_id)) or {}
+        return str(job.get("auto_pilot_tts_mode") or "gtts").lower()
+    except Exception:
+        return "gtts"
+
+
+def _enqueue_scheduled_audio_file(
+    session: dict,
+    *,
+    job_id: int,
+    folder_id: int,
+    filename: str,
+    expected_files: list[str],
+    voice_type: str,
+):
+    from repositories.pipeline_repository import get_course_folder_identity
+    from services.pipeline_queue import enqueue_work_item
+
+    folder = get_course_folder_identity(int(folder_id))
+    if not folder:
+        raise ValueError(f"Dossier {folder_id} introuvable")
+    session_id = int(session["id"])
+    run_id = uuid.uuid4().hex
+    clean_name = os.path.basename(str(filename).split("?", 1)[0])
+    scope_key = f"scheduled_audio:{session_id}:{clean_name}"
+    item = enqueue_work_item(
+        pipeline_job_id=int(job_id),
+        folder_id=int(folder_id),
+        resource_key=f"course-session:{session_id}:audio:{clean_name}",
+        task_type="scheduled_audio_item",
+        scope_key=scope_key,
+        run_id=run_id,
+        dedupe_key=f"course-session:{session_id}:audio:{clean_name}:run:{run_id}",
+        payload={
+            "session_id": session_id,
+            "folder_id": int(folder_id),
+            "source_platform_id": int(folder["platform_id"]),
+            "target_platform_id": int(session["platform_id"]),
+            "filename": clean_name,
+            "expected_files": list(expected_files),
+            "destination_prefix": f"course-sessions/{session_id}",
+            "voice_type": voice_type,
+            "sync_slides": clean_name.lower().startswith(("cours_", "course_")),
+            "auto_generate_slides": True,
+        },
+        priority=100,
+        max_attempts=5,
+    )
+    return item, item.run_id != run_id
+
+
+def finalize_scheduled_audio_session_if_ready(
+    session: dict,
+    *,
+    job_id: int,
+    folder_id: int,
+    expected_files: list[str],
+    voice_type: str,
+) -> dict:
+    """Verify every physical file before committing aggregate completion."""
+    from services.audio_publish_service import (
+        ensure_occurrence_playback_manifest,
+        inspect_published_audio_manifest,
+    )
+
+    session_id = int(session["id"])
+    platform_id = int(session["platform_id"])
+    destination_prefix = f"course-sessions/{session_id}"
+    state = inspect_published_audio_manifest(
+        platform_id,
+        destination_prefix,
+        expected_files,
+    )
+    if not state["ready"]:
+        return {**state, "completed": False}
+
+    playback = ensure_occurrence_playback_manifest(
+        platform_id,
+        int(folder_id),
+        destination_prefix,
+        expected_files,
+    )
+    from routes.formation_routes import (
+        _finalize_scheduled_audio_module_if_ready,
+        _persist_daily_teacher_audio_assets,
+    )
+
+    daily_manifest = _persist_daily_teacher_audio_assets(int(job_id), int(folder_id))
+    module_readiness = _finalize_scheduled_audio_module_if_ready(
+        int(job_id),
+        voice_type,
+        completing_session_id=session_id,
+    )
+    completed_at = datetime.now(FRANCE_TZ)
+    completed = complete_audio_generation_session(
+        session_id,
+        completed_at=completed_at,
+    )
+    # Another file worker may have won the final compare-and-set. The manifest
+    # is nevertheless complete, so this is an idempotent success.
+    current = get_audio_generation_session(platform_id, session_id) or {}
+    aggregate_completed = bool(
+        completed or current.get("audio_generation_completed_at")
+    )
+    return {
+        **state,
+        "completed": aggregate_completed,
+        "completed_at": completed_at.isoformat(),
+        "playback_manifest": playback,
+        "daily_asset_manifest": daily_manifest,
+        "module_readiness": module_readiness,
+    }
+
+
+def reconcile_scheduled_audio_session(session: dict, *, tts_mode=None) -> dict:
+    """Queue exactly the missing files for one occurrence and nothing else."""
+    session_id = int(session["id"])
+    platform_id = int(session["platform_id"])
+    result = {
+        "session_id": session_id,
+        "platform_id": platform_id,
+        "session_index": int(session.get("session_index") or 0),
+        "scheduled_at": session.get("scheduled_at"),
+    }
+    try:
+        job_id, folder_id = _resolve_scheduled_folder(session)
+        result.update({"formation_job_id": job_id, "folder_id": folder_id})
+        from services.day_playlist_service import required_audio_filenames
+        from services.audio_publish_service import inspect_published_audio_manifest
+
+        expected_files = sorted(required_audio_filenames(folder_id))
+        if not expected_files:
+            raise ValueError("Le manifeste audio attendu est vide")
+        state = inspect_published_audio_manifest(
+            platform_id,
+            f"course-sessions/{session_id}",
+            expected_files,
+        )
+        voice_type = _scheduled_voice_type(job_id, tts_mode)
+        if state["ready"]:
+            finalized = finalize_scheduled_audio_session_if_ready(
+                session,
+                job_id=job_id,
+                folder_id=folder_id,
+                expected_files=expected_files,
+                voice_type=voice_type,
+            )
+            return {
+                **result,
+                "success": True,
+                "skipped": True,
+                "reason": "manifest_already_complete",
+                "manifest": finalized,
+            }
+
+        if not _folder_content_ready(folder_id):
+            mark_audio_waiting_for_content(
+                session_id,
+                updated_at=datetime.now(FRANCE_TZ),
+            )
+            recovery = _resume_text_pipeline_if_needed(job_id)
+            return {
+                **result,
+                "success": False,
+                "skipped": True,
+                "waiting_for_content": True,
+                "missing_files": state["missing"],
+                "pipeline_recovery": recovery,
+            }
+
+        # Persist aggregate intent before publishing outbox notifications. A
+        # very fast audio replica can therefore never finish a file while the
+        # session still claims to be completed from an older manifest.
+        mark_audio_generation_queued(
+            session_id,
+            job_id=job_id,
+            folder_id=folder_id,
+            queued_at=datetime.now(FRANCE_TZ),
+            reset_completed=bool(session.get("audio_generation_completed_at")),
+        )
+        queued = []
+        active = []
+        for filename in state["missing"]:
+            item, deduplicated = _enqueue_scheduled_audio_file(
+                session,
+                job_id=job_id,
+                folder_id=folder_id,
+                filename=filename,
+                expected_files=expected_files,
+                voice_type=voice_type,
+            )
+            target = active if deduplicated else queued
+            target.append({
+                "filename": filename,
+                "work_item_id": item.id,
+                "status": item.status,
+            })
+        return {
+            **result,
+            "success": True,
+            "missing_files": state["missing"],
+            "queued_files": queued,
+            "active_files": active,
+            "expected_file_count": len(expected_files),
+        }
+    except Exception as exc:
+        logger.exception("SCHEDULED_AUDIO_RECONCILIATION_FAILED session=%s", session_id)
+        return {**result, "success": False, "error": str(exc)}
 
 
 def _scheduled_tts_mode():
@@ -44,15 +302,12 @@ def _scheduled_audio_batch_size() -> int:
 
 
 def _scheduled_audio_window_hours(horizon_hours=None) -> tuple[float, float]:
-    """Return the readiness target and the proactive generation buffer.
+    """Return the rolling H-72 reconciliation window.
 
-    The pedagogical contract is that a day's files are ready 72 hours before
-    class so the operator can verify them at H-24. Generation therefore has to
-    start *before* H-72; starting at H-72
-    would only guarantee that the work was queued, not that it was finished.
-    ``SCHEDULED_AUDIO_HORIZON_HOURS`` remains a compatibility fallback for
-    existing deployments and internal callers can override the target through
-    ``horizon_hours``.
+    At every tick, every validated day at or below H-72 is inspected and each
+    missing file is queued immediately. An optional build buffer remains for
+    deployments that deliberately want to enter the window earlier, but the
+    product default is exactly 72 hours.
     """
     ready_raw = (
         horizon_hours
@@ -208,12 +463,11 @@ def retry_scheduled_audio_generation(platform_id: int, session_id: int):
     if str(session.get("audio_generation_status") or "pending") != "error":
         return {"success": False, "error": "La génération audio n'est pas en erreur"}, 409
 
-    result = launch_scheduled_audio_session(
+    result = reconcile_scheduled_audio_session(
         session,
         tts_mode=_scheduled_tts_mode(),
-        trigger_source="manual_schedule_retry",
     )
-    return result, int(result.get("status") or (202 if result.get("success") else 500))
+    return result, (202 if result.get("success") else 500)
 
 
 def process_due_audio_generations(
@@ -223,12 +477,12 @@ def process_due_audio_generations(
     *,
     wait_for_completion=False,
 ):
-    """Launch one day's audio before its H-72 readiness deadline.
+    """Reconcile every expected audio file inside the rolling H-72 window.
 
     Database claims, fencing tokens and retry timestamps make repeated timer
-    calls safe across restarts and multiple Azure instances. V2 occurrences
-    enter at H-72 for their immutable day manifest. Historic V1 occurrences
-    keep the proactive build buffer and enter at the full claim horizon.
+    calls safe across restarts and multiple Azure instances. Every pass also
+    revisits completed occurrences so a Blob missing after a prior success is
+    put back into PostgreSQL/outbox/Service Bus immediately.
     """
     ready_hours, build_buffer_hours = _scheduled_audio_window_hours(horizon_hours)
     claim_horizon_hours = ready_hours + build_buffer_hours
@@ -251,6 +505,7 @@ def process_due_audio_generations(
         retry_due_before=now,
         max_auto_attempts=max_auto_attempts,
         batch_size=batch_size,
+        reconcile_manifest=True,
     )
 
     results = []
@@ -280,15 +535,6 @@ def process_due_audio_generations(
                 "dry_run": True,
             })
             continue
-        launched = launch_scheduled_audio_session(
-            session,
-            tts_mode=tts_mode,
-            stale_started_before=stale_started_before,
-            wait_for_completion=wait_for_completion,
-        )
+        launched = reconcile_scheduled_audio_session(session, tts_mode=tts_mode)
         results.append(launched)
-        if int(launched.get("status") or 0) == 429:
-            # Remaining rows were never claimed and stay due. Avoid hammering
-            # the route while this process has reached its provider capacity.
-            break
     return results

@@ -3097,6 +3097,111 @@ def claim_audio_generation_session(
         conn.close()
 
 
+def mark_audio_generation_queued(
+    session_id: int,
+    *,
+    job_id: int,
+    folder_id: int,
+    queued_at,
+    reset_completed: bool = False,
+) -> bool:
+    """Record one scheduler reconciliation batch before its file tasks run."""
+    storage_prefix = f"course-sessions/{int(session_id)}"
+    if schedule_store_is_postgres():
+        completed_sql = "NULL" if reset_completed else "audio_generation_completed_at"
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE course_sessions
+                    SET audio_generation_status = 'queued',
+                        audio_generation_completed_at = {completed_sql},
+                        audio_generation_error = NULL,
+                        audio_generation_next_retry_at = NULL,
+                        audio_generation_attempts = COALESCE(audio_generation_attempts, 0) + 1,
+                        audio_job_id = %s,
+                        audio_folder_id = %s,
+                        audio_storage_prefix = %s,
+                        updated_at = %s
+                    WHERE id = %s AND status IN ('planned', 'active')
+                      AND (
+                          COALESCE(audio_generation_status, 'pending') NOT IN ('queued', 'processing')
+                          OR audio_generation_completed_at IS NOT NULL
+                      )
+                    RETURNING id
+                    """,
+                    (job_id, folder_id, storage_prefix, queued_at, session_id),
+                )
+                return cur.fetchone() is not None
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        completed_sql = "NULL" if reset_completed else "audio_generation_completed_at"
+        value = _sqlite_datetime(queued_at)
+        cursor.execute(
+            f"""
+            UPDATE course_sessions
+            SET audio_generation_status = 'queued',
+                audio_generation_completed_at = {completed_sql},
+                audio_generation_error = NULL,
+                audio_generation_next_retry_at = NULL,
+                audio_generation_attempts = COALESCE(audio_generation_attempts, 0) + 1,
+                audio_job_id = ?, audio_folder_id = ?, audio_storage_prefix = ?,
+                updated_at = ?
+            WHERE id = ? AND status IN ('planned', 'active')
+              AND (
+                  COALESCE(audio_generation_status, 'pending') NOT IN ('queued', 'processing')
+                  OR audio_generation_completed_at IS NOT NULL
+              )
+            """,
+            (job_id, folder_id, storage_prefix, value, session_id),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def mark_audio_generation_processing(session_id: int, *, updated_at) -> bool:
+    """Heartbeat aggregate session state while an individual file is running."""
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE course_sessions
+                    SET audio_generation_status = 'processing',
+                        audio_generation_started_at = COALESCE(audio_generation_started_at, %s),
+                        updated_at = %s
+                    WHERE id = %s AND status IN ('planned', 'active')
+                      AND audio_generation_completed_at IS NULL
+                    """,
+                    (updated_at, updated_at, session_id),
+                )
+                return cur.rowcount == 1
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        value = _sqlite_datetime(updated_at)
+        cursor.execute(
+            """
+            UPDATE course_sessions
+            SET audio_generation_status = 'processing',
+                audio_generation_started_at = COALESCE(audio_generation_started_at, ?),
+                updated_at = ?
+            WHERE id = ? AND status IN ('planned', 'active')
+              AND audio_generation_completed_at IS NULL
+            """,
+            (value, value, session_id),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
 def touch_audio_generation_session(session_id: int, *, updated_at, expected_started_at=None) -> bool:
     if schedule_store_is_postgres():
         owner_sql = " AND audio_generation_started_at = %s" if expected_started_at is not None else ""
