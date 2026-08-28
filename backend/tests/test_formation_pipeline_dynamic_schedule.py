@@ -215,6 +215,25 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         )
         self.assertEqual(fps._learner_activity_violations(legitimate), [])
 
+        certification_description = (
+            "Modalités d'évaluation : l'épreuve de certification comprend une "
+            "mise en situation professionnelle. Le candidat est évalué par un "
+            "jury de professionnels dans le cadre du titre professionnel."
+        )
+        self.assertEqual(
+            fps._learner_activity_violations(certification_description),
+            [],
+        )
+
+        learner_instruction = (
+            "Évaluation formative : les apprenants réalisent une mise en situation "
+            "en binôme pendant le cours."
+        )
+        self.assertEqual(
+            fps._learner_activity_violations(learner_instruction),
+            ["mise en situation"],
+        )
+
         for forbidden in (
             "Séance d'exercices",
             "Cas pratique guidé",

@@ -749,7 +749,10 @@ def _learner_activity_violation_details(text: str) -> list[dict]:
     for label, pattern in _LEARNER_ACTIVITY_PATTERNS:
         matches = []
         for match in pattern.finditer(scan_text):
-            if _activity_match_is_negated(scan_text, match):
+            if (
+                _activity_match_is_negated(scan_text, match)
+                or _activity_match_is_certification_context(scan_text, match)
+            ):
                 continue
             excerpt_start = max(0, match.start() - 120)
             excerpt_end = min(len(source_text), match.end() + 160)
@@ -787,6 +790,17 @@ _ACTIVITY_NEGATION_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CERTIFICATION_EVALUATION_HEADING_RE = re.compile(
+    r"\bmodalit[ée]s?\s+d['’][ée]valuation\b|"
+    r"\b[ée]preuves?\s+(?:de|du)\s+(?:la\s+)?certification\b",
+    re.IGNORECASE,
+)
+
+_CERTIFICATION_EVALUATION_ACTOR_RE = re.compile(
+    r"\b(?:candidat(?:e|s|es)?|jury|certificateur|titre\s+professionnel)\b",
+    re.IGNORECASE,
+)
+
 
 def _activity_match_is_negated(text: str, match) -> bool:
     """Ignore seulement une négation qui qualifie directement l'activité."""
@@ -795,6 +809,15 @@ def _activity_match_is_negated(text: str, match) -> bool:
     return bool(
         _ACTIVITY_NEGATION_PREFIX_RE.search(prefix)
         or _ACTIVITY_NEGATION_SUFFIX_RE.search(suffix)
+    )
+
+
+def _activity_match_is_certification_context(text: str, match) -> bool:
+    """Ignore la description d'une épreuve officielle, pas une activité de cours."""
+    context = text[max(0, match.start() - 500):match.end() + 500]
+    return bool(
+        _CERTIFICATION_EVALUATION_HEADING_RE.search(context)
+        and _CERTIFICATION_EVALUATION_ACTOR_RE.search(context)
     )
 
 
