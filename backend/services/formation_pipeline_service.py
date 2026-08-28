@@ -15,6 +15,7 @@ import re
 import math
 import json
 import time
+import uuid
 from html import unescape
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
@@ -737,15 +738,38 @@ _LEGITIMATE_EXERCISE_CONTEXT_RE = re.compile(
 )
 
 
-def _learner_activity_violations(text: str) -> list[str]:
-    """Détecte les activités apprenant, sans confondre l'exercice d'un métier."""
-    scan_text = _LEGITIMATE_EXERCISE_CONTEXT_RE.sub("", str(text or ""))
+def _learner_activity_violation_details(text: str) -> list[dict]:
+    """Locate forbidden learner activities and keep a readable source excerpt."""
+    source_text = str(text or "")
+    scan_text = _LEGITIMATE_EXERCISE_CONTEXT_RE.sub(
+        lambda match: " " * len(match.group(0)),
+        source_text,
+    )
     violations = []
     for label, pattern in _LEARNER_ACTIVITY_PATTERNS:
-        matches = pattern.finditer(scan_text)
-        if any(not _activity_match_is_negated(scan_text, match) for match in matches):
-            violations.append(label)
+        matches = []
+        for match in pattern.finditer(scan_text):
+            if _activity_match_is_negated(scan_text, match):
+                continue
+            excerpt_start = max(0, match.start() - 120)
+            excerpt_end = min(len(source_text), match.end() + 160)
+            matches.append(
+                {
+                    "match": source_text[match.start():match.end()],
+                    "line": source_text.count("\n", 0, match.start()) + 1,
+                    "start": match.start(),
+                    "end": match.end(),
+                    "excerpt": source_text[excerpt_start:excerpt_end].strip(),
+                }
+            )
+        if matches:
+            violations.append({"label": label, "matches": matches})
     return violations
+
+
+def _learner_activity_violations(text: str) -> list[str]:
+    """Détecte les activités apprenant, sans confondre l'exercice d'un métier."""
+    return [item["label"] for item in _learner_activity_violation_details(text)]
 
 
 _ACTIVITY_NEGATION_PREFIX_RE = re.compile(
@@ -792,11 +816,15 @@ def _repair_lecture_only_output(
     json_output: bool = False,
     checkpoint: Callable[[], None] | None = None,
     http_max_attempts: int = 1,
+    on_rejected: Callable[[str, list[dict], str], None] | None = None,
 ) -> str:
     """Effectue au plus une correction sémantique avant le retry durable."""
-    violations = _learner_activity_violations(text)
-    if not violations:
+    violation_details = _learner_activity_violation_details(text)
+    if not violation_details:
         return text
+    violations = [item["label"] for item in violation_details]
+    if on_rejected:
+        on_rejected(text, violation_details, "initial")
 
     output_contract = (
         "Réponds uniquement avec le JSON corrigé, sans balise Markdown."
@@ -833,7 +861,14 @@ RÈGLES DE CORRECTION :
     )
     if checkpoint:
         checkpoint()
-    _assert_lecture_only_program(repaired, context=context)
+    repaired_violation_details = _learner_activity_violation_details(repaired)
+    if repaired_violation_details:
+        if on_rejected:
+            on_rejected(repaired, repaired_violation_details, "repair")
+        raise ValueError(
+            f"{context} contient une activité apprenant interdite : "
+            + ", ".join(item["label"] for item in repaired_violation_details)
+        )
     return repaired
 
 
@@ -1458,6 +1493,42 @@ def generate_global_program(
             min_value=1,
             max_value=3,
         )
+        generation_run_id = uuid.uuid4().hex
+
+        def record_rejected_program(
+            output_text: str,
+            violations: list[dict],
+            phase: str,
+        ) -> None:
+            from services.formation_observability_service import (
+                REJECTED_GLOBAL_PROGRAM_EVENT,
+                log_pipeline_event,
+            )
+
+            phase_label = (
+                "correction automatique"
+                if phase == "repair"
+                else "première génération"
+            )
+            labels = [item.get("label") for item in violations if item.get("label")]
+            log_pipeline_event(
+                job_id,
+                REJECTED_GLOBAL_PROGRAM_EVENT,
+                step="global_program",
+                status="blocked",
+                model=used_model,
+                message=(
+                    f"Programme global refusé ({phase_label}) : "
+                    + ", ".join(labels)
+                ),
+                data={
+                    "run_id": generation_run_id,
+                    "phase": phase,
+                    "violations": violations,
+                    "output_text": output_text,
+                    "character_count": len(output_text),
+                },
+            )
 
         if checkpoint:
             checkpoint()
@@ -1474,6 +1545,7 @@ def generate_global_program(
             max_tokens=16000,
             checkpoint=checkpoint,
             http_max_attempts=transport_attempts,
+            on_rejected=record_rejected_program,
         )
         if checkpoint:
             checkpoint()

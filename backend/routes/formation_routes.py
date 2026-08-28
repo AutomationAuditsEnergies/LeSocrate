@@ -3594,6 +3594,28 @@ def formation_pipeline_events(job_id):
     return jsonify({"events": list_pipeline_events(job_id, limit=limit)}), 200
 
 
+@formation_bp.route(
+    "/api/formation/<int:job_id>/rejected-global-programs",
+    methods=["GET"],
+)
+def formation_rejected_global_programs(job_id):
+    """Retourne les textes complets refusés par le contrôle du programme global."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+    try:
+        limit = int(request.args.get("limit", 30))
+    except (TypeError, ValueError):
+        limit = 30
+    from services.formation_observability_service import list_rejected_global_programs
+
+    return jsonify({
+        "outputs": list_rejected_global_programs(job_id, limit=limit),
+    }), 200
+
+
 @formation_bp.route("/api/formation/<int:job_id>/diagnostic", methods=["GET"])
 def formation_pipeline_diagnostic(job_id):
     """Snapshot exploitable par l'UI : état job + health + événements récents.

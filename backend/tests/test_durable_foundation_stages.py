@@ -401,7 +401,9 @@ class DurableFoundationStagesTest(unittest.TestCase):
             fps,
             "_deepseek_post",
             side_effect=[invalid_program, repaired_program],
-        ) as deepseek:
+        ) as deepseek, patch(
+            "services.formation_observability_service.log_pipeline_event",
+        ) as log_event:
             fps.generate_global_program(42)
 
         self.assertEqual(deepseek.call_count, 2)
@@ -422,6 +424,16 @@ class DurableFoundationStagesTest(unittest.TestCase):
                     global_program_generated_via="api",
                 ),
             ],
+        )
+        log_event.assert_called_once()
+        self.assertEqual(
+            log_event.call_args.kwargs["data"]["output_text"],
+            invalid_program,
+        )
+        self.assertEqual(log_event.call_args.kwargs["data"]["phase"], "initial")
+        self.assertEqual(
+            log_event.call_args.kwargs["data"]["violations"][0]["matches"][0]["line"],
+            1,
         )
 
     def test_global_program_delegates_failed_semantic_repair_to_durable_retry(self):
@@ -451,11 +463,22 @@ class DurableFoundationStagesTest(unittest.TestCase):
             fps,
             "_deepseek_post",
             return_value=invalid_program,
-        ) as deepseek:
+        ) as deepseek, patch(
+            "services.formation_observability_service.log_pipeline_event",
+        ) as log_event:
             with self.assertRaisesRegex(ValueError, "activité apprenant interdite"):
                 fps.generate_global_program(42)
 
         self.assertEqual(deepseek.call_count, 2)
+        self.assertEqual(log_event.call_count, 2)
+        self.assertEqual(
+            [call_item.kwargs["data"]["phase"] for call_item in log_event.call_args_list],
+            ["initial", "repair"],
+        )
+        self.assertEqual(
+            log_event.call_args_list[0].kwargs["data"]["run_id"],
+            log_event.call_args_list[1].kwargs["data"]["run_id"],
+        )
         self.assertEqual(update.call_args_list[0], call(42, status="global_generating"))
         self.assertEqual(update.call_args_list[-1][0], (42,))
         self.assertEqual(update.call_args_list[-1].kwargs["status"], "error")

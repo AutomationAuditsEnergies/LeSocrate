@@ -17,10 +17,13 @@ from repositories.pipeline_repository import (
     insert_pipeline_event,
     insert_review_report,
     list_pipeline_event_rows,
+    list_pipeline_event_rows_by_type,
 )
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+REJECTED_GLOBAL_PROGRAM_EVENT = "global_program_output_rejected"
 
 
 def ensure_observability_tables() -> None:
@@ -188,6 +191,13 @@ def list_pipeline_events(job_id: int, *, limit: int = 200) -> list[dict]:
             data = json.loads(row.get("data_json") or "{}")
         except Exception:
             data = {}
+        if row.get("event_type") == REJECTED_GLOBAL_PROGRAM_EVENT:
+            # Le programme complet est volontairement chargé uniquement dans
+            # la modale d'audit. Le diagnostic principal est pollé toutes les
+            # cinq secondes et ne doit pas transporter plusieurs gros textes.
+            data = dict(data)
+            output_text = data.pop("output_text", "")
+            data["output_available"] = bool(output_text)
         events.append(
             {
                 "id": row.get("id"),
@@ -205,6 +215,35 @@ def list_pipeline_events(job_id: int, *, limit: int = 200) -> list[dict]:
             }
         )
     return events
+
+
+def list_rejected_global_programs(job_id: int, *, limit: int = 30) -> list[dict]:
+    """Expose les programmes complets refusés, uniquement à la demande."""
+    rows = list_pipeline_event_rows_by_type(
+        job_id,
+        REJECTED_GLOBAL_PROGRAM_EVENT,
+        limit=limit,
+    )
+    outputs = []
+    for row in reversed(rows):
+        try:
+            data = json.loads(row.get("data_json") or "{}")
+        except Exception:
+            data = {}
+        outputs.append(
+            {
+                "id": row.get("id"),
+                "run_id": data.get("run_id"),
+                "phase": data.get("phase"),
+                "violations": data.get("violations") or [],
+                "output_text": data.get("output_text") or "",
+                "character_count": data.get("character_count") or 0,
+                "model": row.get("model"),
+                "message": row.get("message"),
+                "created_at": row.get("created_at"),
+            }
+        )
+    return outputs
 
 
 def clear_pipeline_events(

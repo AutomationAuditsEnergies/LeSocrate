@@ -1389,7 +1389,7 @@ function pipelineStageStatusLabel(stage) {
 }
 
 function PipelineStepAuditModal({ job, stage, index, folders, events, onClose }) {
-  const [payload, setPayload] = useState({ artifacts: [], reports: [], slideDecks: [], kb: null })
+  const [payload, setPayload] = useState({ artifacts: [], reports: [], slideDecks: [], kb: null, rejectedPrograms: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -1409,6 +1409,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
       const reports = []
       const slideDecks = []
       let kb = null
+      let rejectedPrograms = []
 
       try {
         if (stage.auditMode === 'kb') {
@@ -1419,6 +1420,16 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           } catch {
             kb = { entries: [], stats: {}, error: 'Erreur réseau Knowledge Base' }
           }
+        }
+
+        if (stage.auditMode === 'global_program') {
+          const resp = await apiFetch(
+            `/api/formation/${job.id}/rejected-global-programs?limit=30`,
+            { credentials: 'include' },
+          )
+          const data = await resp.json()
+          if (!resp.ok) throw new Error(data.error || 'Historique des programmes refusés indisponible')
+          rejectedPrograms = data.outputs || []
         }
 
         if (artifactNames.length > 0) {
@@ -1482,7 +1493,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           slideDecks.push(...deckResults)
         }
 
-        if (!cancelled) setPayload({ artifacts, reports, slideDecks, kb })
+        if (!cancelled) setPayload({ artifacts, reports, slideDecks, kb, rejectedPrograms })
       } catch {
         if (!cancelled) setError('Impossible de charger le détail de cette étape.')
       } finally {
@@ -1538,6 +1549,9 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
             <AuditStatCard label="Decks slides" value={loadedSlideDecks.length} color="#f59e0b" />
             <AuditStatCard label="Patches appliqués" value={patchStats.applied} color="#60a5fa" />
             <AuditStatCard label="Patches rejetés" value={patchStats.rejected} color="#fb923c" />
+            {stage.auditMode === 'global_program' && (
+              <AuditStatCard label="Sorties refusées" value={payload.rejectedPrograms.length} color="#f87171" />
+            )}
           </div>
 
           {loading && <div style={{ color: '#94a3b8', fontSize: '13px' }}>Chargement du détail…</div>}
@@ -1553,7 +1567,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
             <KnowledgeBaseAuditView kb={payload.kb} />
           )}
           {!loading && stage.auditMode === 'global_program' && (
-            <GlobalProgramAuditView job={job} />
+            <GlobalProgramAuditView job={job} rejectedPrograms={payload.rejectedPrograms} />
           )}
           {!loading && stage.auditMode === 'daily_programs' && (
             <DailyProgramsAuditView job={job} />
@@ -1714,28 +1728,91 @@ function KnowledgeBaseAuditView({ kb }) {
   )
 }
 
-function GlobalProgramAuditView({ job }) {
+function GlobalProgramAuditView({ job, rejectedPrograms = [] }) {
   const text = job.global_program || ''
-  if (!text.trim()) {
+  if (!text.trim() && rejectedPrograms.length === 0) {
     return (
       <AuditEmptyState
         icon="auto_stories"
         title="Programme global non disponible"
-        detail="Le programme global n'a pas encore été généré ou n'est pas renvoyé par l'API du job."
+        detail="Aucun programme validé ni aucune sortie refusée n'a encore été enregistré. Les prochaines tentatives bloquées seront conservées ici en entier."
       />
     )
   }
 
+  const attemptByRun = new Map()
+  rejectedPrograms.forEach(output => {
+    const runKey = output.run_id || `legacy-${output.id}`
+    if (!attemptByRun.has(runKey)) attemptByRun.set(runKey, attemptByRun.size + 1)
+  })
+
   return (
-    <AuditInfoPanel
-      icon="auto_stories"
-      title="Programme global"
-      detail={`${formatAuditNumber(countAuditWords(text))} mots · validation ${job.global_program_validated ? 'effectuée' : 'en attente'}.`}
-    >
-      <div style={{ background: 'rgba(15,23,42,0.6)', borderRadius: '10px', padding: '16px', maxHeight: '560px', overflowY: 'auto', fontSize: '13px', color: '#cbd5e1', lineHeight: '1.6', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-        {text}
-      </div>
-    </AuditInfoPanel>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {text.trim() && (
+        <AuditInfoPanel
+          icon="auto_stories"
+          title="Programme global retenu"
+          detail={`${formatAuditNumber(countAuditWords(text))} mots · validation ${job.global_program_validated ? 'effectuée' : 'en attente'}.`}
+        >
+          <AuditTextBlock text={text} />
+        </AuditInfoPanel>
+      )}
+
+      {rejectedPrograms.length > 0 && (
+        <AuditInfoPanel
+          icon="error"
+          title="Programmes refusés et blocages exacts"
+          detail={`${rejectedPrograms.length} sortie${rejectedPrograms.length > 1 ? 's' : ''} conservée${rejectedPrograms.length > 1 ? 's' : ''}. Chaque carte montre le motif détecté puis le programme complet envoyé au contrôle.`}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {rejectedPrograms.map((output, index) => {
+              const runKey = output.run_id || `legacy-${output.id}`
+              const attempt = attemptByRun.get(runKey)
+              const phaseLabel = output.phase === 'repair' ? 'correction automatique' : 'première génération'
+              const violations = Array.isArray(output.violations) ? output.violations : []
+              return (
+                <details
+                  key={output.id || index}
+                  open={index === rejectedPrograms.length - 1}
+                  style={{
+                    padding: '12px', borderRadius: '9px',
+                    background: 'rgba(127,29,29,0.10)',
+                    border: '1px solid rgba(248,113,113,0.25)',
+                  }}
+                >
+                  <summary style={{ cursor: 'pointer', color: '#fecaca', fontSize: '13px', fontWeight: 800 }}>
+                    Tentative {attempt} · {phaseLabel} · {formatJobTimestamp(output.created_at)}
+                  </summary>
+                  <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {violations.map((violation, violationIndex) => (
+                      <div key={`${violation.label}-${violationIndex}`} style={{ padding: '10px 12px', background: 'rgba(239,68,68,0.08)', borderRadius: '8px' }}>
+                        <div style={{ color: '#f87171', fontSize: '12px', fontWeight: 900 }}>
+                          Bloqué par : « {violation.label} »
+                        </div>
+                        {(violation.matches || []).map((match, matchIndex) => (
+                          <div key={matchIndex} style={{ marginTop: '7px', color: '#cbd5e1', fontSize: '12px', lineHeight: 1.55 }}>
+                            Ligne {match.line || '—'} · terme détecté « {match.match || violation.label} »
+                            <div style={{ marginTop: '4px', color: '#fca5a5', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                              {match.excerpt}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    <div>
+                      <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 800, marginBottom: '6px' }}>
+                        Programme complet refusé · {formatAuditNumber(output.character_count)} caractères
+                      </div>
+                      <AuditTextBlock text={output.output_text} />
+                    </div>
+                  </div>
+                </details>
+              )
+            })}
+          </div>
+        </AuditInfoPanel>
+      )}
+    </div>
   )
 }
 
