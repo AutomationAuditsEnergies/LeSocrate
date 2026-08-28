@@ -9569,7 +9569,7 @@ def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) 
         "duration_min": course_plan.get("duration_minutes"),
         "target_words": target_words,
         "min_words": _structured_course_min_words(target_words),
-        "max_words": target_words,
+        "max_words": _structured_course_max_words(course_plan),
         "word_budget": target_words,
         "role": course_plan.get("pedagogical_role") or "",
     }
@@ -9591,11 +9591,40 @@ def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) 
 _PLAN_ADHERENCE_REVIEW_VERSION = "2026-05-28-plan-adherence-v6-early"
 
 
+def _structured_course_max_words(course_plan: dict) -> int:
+    """Align the per-course ceiling with the final day audio budget.
+
+    The final day guard allows a small scheduling margin (2% or 350 words per
+    day).  Keeping the structured course ceiling at the exact target made a
+    valid one-course day fail before it could reach that authoritative guard.
+    The fixed daily margin is shared across the day's courses.
+    """
+    target_words = int(course_plan.get("target_words") or 0)
+    if target_words <= 0:
+        return 0
+    try:
+        total_courses = max(1, int(course_plan.get("total_courses") or 1))
+    except (TypeError, ValueError):
+        total_courses = 1
+    max_ratio = _env_float(
+        "FORMATION_TTS_DAY_WORD_MAX_RATIO",
+        1.02,
+        min_value=1.0,
+        max_value=1.20,
+    )
+    try:
+        day_max_extra = max(0, int(os.getenv("FORMATION_TTS_DAY_WORD_MAX_EXTRA", "350")))
+    except (TypeError, ValueError):
+        day_max_extra = 350
+    course_extra = (day_max_extra + total_courses - 1) // total_courses
+    return max(int(target_words * max_ratio), target_words + course_extra)
+
+
 def _structured_course_budget_status(course_plan: dict, text: str) -> dict:
     target_words = int(course_plan.get("target_words") or 0)
     words = count_tts_spoken_words(text)
     min_words = _structured_course_min_words(target_words) if target_words else 0
-    max_words = target_words
+    max_words = _structured_course_max_words(course_plan)
     if target_words <= 0:
         status = "unknown"
         ok = True

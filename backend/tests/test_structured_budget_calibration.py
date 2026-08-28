@@ -9,6 +9,40 @@ def words(count):
 
 
 class StructuredBudgetCalibrationTest(unittest.TestCase):
+    def test_one_course_day_accepts_the_final_audio_budget_margin(self):
+        course_plan = {
+            "course_number": 1,
+            "total_courses": 1,
+            "target_words": 6498,
+        }
+
+        status = cgs._structured_course_budget_status(course_plan, words(6573))
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["status"], "ok")
+        self.assertEqual(status["max_words"], 6848)
+
+    def test_course_budget_still_rejects_text_beyond_the_daily_margin(self):
+        course_plan = {
+            "course_number": 1,
+            "total_courses": 1,
+            "target_words": 6498,
+        }
+
+        status = cgs._structured_course_budget_status(course_plan, words(6849))
+
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["status"], "too_long")
+
+    def test_fixed_daily_margin_is_shared_between_multiple_courses(self):
+        course_plan = {
+            "course_number": 1,
+            "total_courses": 4,
+            "target_words": 1000,
+        }
+
+        self.assertEqual(cgs._structured_course_max_words(course_plan), 1088)
+
     def test_residual_shortfall_is_strict_by_default(self):
         with patch.dict("os.environ", {}, clear=True):
             self.assertFalse(cgs._structured_allow_residual_too_short())
