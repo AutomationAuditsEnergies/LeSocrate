@@ -42,6 +42,7 @@ from services.dynamic_day_schedule_service import (
 )
 from services.billing_email_service import send_payment_link, send_review_request
 from utils.logger import get_logger
+from utils.planning_summary import summarize_v2_schedule
 
 
 logger = get_logger(__name__)
@@ -648,11 +649,24 @@ def _review_schedule_summary(order: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def serialize_review_request(order: dict[str, Any]) -> dict[str, Any]:
+    project = order.get("request_payload_json") or {}
+    new_formation = project.get("new_formation")
+    schedule = (
+        new_formation.get("schedule")
+        if isinstance(new_formation, Mapping)
+        else project.get("schedule")
+    ) or {}
+    schedule_schema_version = _schedule_schema_version(schedule)
     return {
         **serialize_order(order),
         **_review_schedule_summary(order),
         "teacher_name": _teacher_name(order),
         "training_days": _training_day_count(order),
+        "schedule_schema_version": schedule_schema_version,
+        "planning_summary": summarize_v2_schedule(
+            schedule,
+            schema_version=schedule_schema_version,
+        ),
         "center_name": order.get("center_name") or "Centre de formation",
         "center_email": order.get("center_email") or "",
         "internal_api_cost_cents": order.get("internal_api_cost_cents"),

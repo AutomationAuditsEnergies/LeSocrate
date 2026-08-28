@@ -253,7 +253,18 @@ def _storage_backend_from_env() -> str:
 
 
 def _json(value: Mapping[str, Any] | None) -> str:
-    return json.dumps(dict(value or {}), ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        dict(value or {}),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=_json_default,
+    )
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _decode_json(value: Any) -> Mapping[str, Any]:

@@ -9,6 +9,7 @@ from services.pipeline_queue.handlers import (
     handle_auto_pilot_work_item,
     handle_voice_reference_calibration_work_item,
     mark_auto_pilot_dead_letter,
+    mark_pipeline_dead_letter,
 )
 from utils.deepseek_client import DeepSeekAPIError
 
@@ -272,9 +273,11 @@ class PipelineQueueHandlerTest(unittest.TestCase):
         self.assertEqual(calls[1], ("order", 73, "attempts exhausted"))
 
     def test_voice_reference_calibration_runs_before_first_auto_pilot_step(self):
+        updates = []
         routes_module = types.SimpleNamespace(
             get_job=lambda _job_id: {"id": 42, "platform_id": 120},
             _determine_next_ap_step=lambda _job_id: "content",
+            update_job=lambda job_id, **fields: updates.append((job_id, fields)),
         )
         routes_package = types.ModuleType("routes")
         routes_package.formation_routes = routes_module
@@ -304,6 +307,44 @@ class PipelineQueueHandlerTest(unittest.TestCase):
         self.assertEqual(result.next_items[0].task_type, "auto_pilot_tick")
         self.assertEqual(result.next_items[0].payload["expected_step"], "content")
         self.assertEqual(result.next_items[0].payload["teacher_order_id"], 73)
+        self.assertEqual(updates, [(42, {
+            "auto_pilot_step": "voice_calibration",
+            "auto_pilot_error": None,
+        })])
+
+    def test_voice_calibration_dead_letter_marks_the_real_pipeline_step(self):
+        calls = []
+        pipeline = types.ModuleType("services.formation_pipeline_service")
+        pipeline.update_job = lambda job_id, **fields: calls.append(
+            ("job", job_id, fields)
+        )
+        fulfillment = types.ModuleType("services.teacher_order_fulfillment_service")
+        fulfillment.fail_teacher_order_pipeline = lambda item, error: calls.append(
+            ("order", item.payload["teacher_order_id"], error)
+        )
+        item = replace(
+            _item({"teacher_order_id": 73}),
+            task_type="voice_reference_calibration",
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "services.formation_pipeline_service": pipeline,
+                "services.teacher_order_fulfillment_service": fulfillment,
+            },
+        ):
+            mark_pipeline_dead_letter(item, "datetime is not JSON serializable")
+
+        self.assertEqual(calls[0], ("job", 42, {
+            "auto_pilot_step": "voice_calibration",
+            "auto_pilot_error": "datetime is not JSON serializable",
+        }))
+        self.assertEqual(calls[1], (
+            "order",
+            73,
+            "datetime is not JSON serializable",
+        ))
 
 
 if __name__ == "__main__":

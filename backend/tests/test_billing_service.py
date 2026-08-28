@@ -785,6 +785,18 @@ class BillingServiceTest(unittest.TestCase):
                             "2026-09-03",
                             "2026-10-08",
                         ],
+                        "days": [
+                            {
+                                "day_index": index,
+                                "blocks": [
+                                    {
+                                        "block_type": "course",
+                                        "duration_minutes": 35,
+                                    },
+                                ],
+                            }
+                            for index in range(1, 4)
+                        ],
                     },
                 },
             },
@@ -799,6 +811,9 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(message["training_weeks"], 6)
         self.assertEqual(message["schedule_start_date"], "2026-09-01")
         self.assertEqual(message["schedule_end_date"], "2026-10-08")
+        self.assertEqual(message["schedule_schema_version"], 2)
+        self.assertEqual(message["planning_summary"]["course_count"], 3)
+        self.assertEqual(message["planning_summary"]["course_minutes"], 105)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
+import json
 import os
-import sys
 import sqlite3
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -258,6 +259,48 @@ class PipelineRepositoryTest(unittest.TestCase):
         jobs = repo.list_pipeline_jobs()
         self.assertEqual([item["id"] for item in jobs], [job_id])
         self.assertEqual(jobs[0]["platform_label"], "P7")
+
+    def test_job_responses_include_real_v2_planning_summary(self):
+        job_id = repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Employé commercial",
+            rncp_code="37099",
+            total_hours=35,
+            nb_days=5,
+        )
+        # Run the repository compatibility migration before writing the V2
+        # fields on this intentionally old SQLite fixture.
+        repo.get_pipeline_job(job_id)
+        snapshot = {
+            "schema_version": 2,
+            "days": [
+                {
+                    "day_index": index,
+                    "blocks": [
+                        {"block_type": "course", "duration_minutes": 35},
+                    ],
+                }
+                for index in range(1, 6)
+            ],
+        }
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            UPDATE formation_pipeline_jobs
+            SET schedule_schema_version = 2, schedule_snapshot_json = ?
+            WHERE id = ?
+            """,
+            (json.dumps(snapshot), job_id),
+        )
+        conn.commit()
+        conn.close()
+
+        job = repo.get_pipeline_job(job_id)
+        listed = repo.list_pipeline_jobs()[0]
+
+        self.assertEqual(job["planning_summary"]["course_minutes"], 175)
+        self.assertEqual(listed["planning_summary"]["day_count"], 5)
+        self.assertEqual(listed["planning_summary"]["uniform_daily_course_count"], 1)
 
     def test_pipeline_platform_and_job_link_share_authoritative_store(self):
         platform = repo.create_pipeline_platform(

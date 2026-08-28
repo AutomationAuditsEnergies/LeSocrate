@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from services.pipeline_queue.contracts import (
     LeaseLostError,
@@ -223,6 +224,22 @@ class PipelineWorkQueueTest(unittest.TestCase):
         self.assertEqual(created[0].id, created[1].id)
         self.assertEqual(self.repo.get(item.id).status, WorkStatus.COMPLETED.value)
         self.assertEqual(self.repo.latest_for_job(42).task_type, "next")
+
+    def test_complete_serializes_datetime_results_from_voice_calibration(self):
+        item = self._enqueue()
+        claimed = self.repo.claim(item.id, owner="worker", lease_seconds=60)
+        calibrated_at = datetime(2026, 8, 27, 14, 38, 13, tzinfo=timezone.utc)
+
+        self.repo.complete(
+            item.id,
+            claimed.lease_token,
+            result={"voice": {"calibrated_at": calibrated_at}},
+        )
+
+        self.assertEqual(
+            self.repo.get(item.id).result["voice"]["calibrated_at"],
+            "2026-08-27T14:38:13+00:00",
+        )
 
     def test_worker_retries_then_completes_without_duplicate_side_effect(self):
         item = self._enqueue()

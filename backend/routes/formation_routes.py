@@ -2556,6 +2556,7 @@ def _queue_status_for_job(job_id: int) -> dict:
         return {
             "mode": "queue",
             "status": item.status,
+            "task_type": item.task_type,
             "work_item_id": item.id,
             "run_id": item.run_id,
             "attempt": item.attempt_count,

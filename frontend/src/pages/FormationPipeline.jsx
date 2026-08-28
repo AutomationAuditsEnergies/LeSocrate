@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { apiDownload, apiFetch } from '../api'
 import { renderSlideTemplate } from '../components/slides/slideTemplateRegistry'
+import { formatJobPlanning } from '../formationPlanningDisplay'
 
 const Icon = ({ name, className = '', style = {} }) => (
   <span className={`material-icons ${className}`} style={{ fontSize: 'inherit', ...style }}>{name}</span>
@@ -23,7 +24,7 @@ const TEXT_AVAILABLE_STATUSES = new Set([
   'audio_error',
 ])
 const CONTENT_POLLING_STATUSES = new Set(['tts_launched', 'audio_running'])
-const QUEUE_TERMINAL_STATUSES = new Set(['completed', 'missing'])
+const QUEUE_TERMINAL_STATUSES = new Set(['completed', 'dead_lettered', 'cancelled', 'missing'])
 const DEEPSEEK_PRO_MODEL = 'deepseek-v4-pro'
 const DEEPSEEK_FLASH_MODEL = 'deepseek-v4-flash'
 
@@ -113,6 +114,7 @@ const STEP_LABELS = [
 
 const AUTO_PILOT_STEP_LABELS = {
   start: 'démarrage',
+  voice_calibration: 'calibration de la voix IA',
   reac: 'téléchargement REAC',
   kb: 'enrichissement Knowledge Base',
   global: 'programme global',
@@ -1609,7 +1611,7 @@ function JobInitializationAuditView({ job, folders }) {
     ['Titre professionnel', job.tp_name || 'Non renseigné'],
     ['RNCP', job.rncp_code ? `RNCP ${job.rncp_code}` : 'Non renseigné'],
     ['Plateforme', job.platform_id ? `#${job.platform_id}` : 'Non liée'],
-    ['Durée', `${job.total_hours || 0}h · ${job.nb_days || 0} journée${Number(job.nb_days || 0) > 1 ? 's' : ''}`],
+    ['Planning réel', formatJobPlanning(job)],
     ['Statut actuel', job.status || 'Inconnu'],
     ['Dossiers cours', folders.length],
   ]
@@ -4770,7 +4772,7 @@ function JobCard({ job, onSelect, selected }) {
           {job.platform_name || 'Plateforme sans nom'}
         </div>
         <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <span>{job.total_hours}h · {job.nb_days} jour{job.nb_days > 1 ? 's' : ''}</span>
+          <span>{formatJobPlanning(job)}</span>
           <span>RNCP {job.rncp_code}</span>
           {createdAt && <span>Créé le {createdAt}</span>}
         </div>
@@ -5828,11 +5830,18 @@ export default function FormationPipeline() {
   )
   const audioBusy = AUDIO_ACTIVE_STATUSES.has(job?.status) && !audioStale
   const selectedPipelineModel = pipelineModelLabel(job?.auto_pilot_model)
-  const canStopAutoPilot = Boolean(
+  const detachedQueue = hasDetachedQueue(job, autoPilotState)
+  const canStopAutoPilot = !detachedQueue && Boolean(
     (job?.auto_pilot_enabled && job?.auto_pilot_step !== 'done') ||
     ['running', 'starting', 'error'].includes(autoPilotState?.status)
   )
-  const detachedQueue = hasDetachedQueue(job, autoPilotState)
+  const interruptedTaskType = autoPilotState?.queue?.task_type
+  const interruptedStep = interruptedTaskType === 'voice_reference_calibration'
+    ? 'voice_calibration'
+    : (autoPilotState?.step || autoPilotState?.next_step || job?.auto_pilot_step || '?')
+  const interruptedStepLabel = AUTO_PILOT_STEP_LABELS[interruptedStep]
+    || String(interruptedStep).replace(/_/g, ' ')
+  const interruptedBeforeReac = interruptedStep === 'voice_calibration'
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -5887,7 +5896,7 @@ export default function FormationPipeline() {
                     </div>
                   )}
                   <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>
-                    RNCP {job.rncp_code} · {job.total_hours}h · {job.nb_days} journée{job.nb_days > 1 ? 's' : ''}
+                    RNCP {job.rncp_code} · {formatJobPlanning(job)}
                     {job.reac_length ? <span style={{ color: '#34d399', marginLeft: 6 }}>✓ REAC {(job.reac_length / 1000).toFixed(0)}k</span> : <span style={{ color: '#64748b', marginLeft: 6 }}>REAC non téléchargé</span>}
                     {job.rc_length > 0 && <span style={{ color: '#34d399', marginLeft: 6 }}>✓ RC {(job.rc_length / 1000).toFixed(0)}k</span>}
                     {job.rome_length > 0 && <span style={{ color: '#34d399', marginLeft: 6 }}>✓ ROME {(job.rome_length / 1000).toFixed(0)}k</span>}
@@ -5953,12 +5962,14 @@ export default function FormationPipeline() {
                 flexWrap: 'wrap',
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <Icon name="error_outline" /> <strong>Auto-pilot interrompu</strong> à l'étape <em>{autoPilotState.step || '?'}</em>
-                  {autoPilotState.next_step && autoPilotState.next_step !== autoPilotState.step ? (
+                  <Icon name="error_outline" /> <strong>Auto-pilot interrompu</strong> pendant <em>{interruptedStepLabel}</em>
+                  {interruptedBeforeReac ? (
+                    <> · le téléchargement REAC n’a pas commencé</>
+                  ) : autoPilotState.next_step && autoPilotState.next_step !== autoPilotState.step ? (
                     <> · prochaine étape réelle : <em>{autoPilotState.next_step}</em></>
                   ) : null}
                   {detachedQueue
-                    ? <> : aucune tâche durable ne traite actuellement cette étape.</>
+                    ? <> : la tâche durable est terminée en échec{autoPilotState.queue?.last_error ? <> ({autoPilotState.queue.last_error})</> : null}.</>
                     : autoPilotState.error ? <> : {autoPilotState.error}</> : null}
                 </div>
                 <button
@@ -6411,7 +6422,7 @@ export default function FormationPipeline() {
             <StepBlock stepIndex={4} currentStep={currentStep} status={job.status} title={`Programmes journée (${job.nb_days} jours)`} icon="calendar_view_week">
               {job.status === 'daily_splitting' ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#fbbf24', fontSize: '14px' }}>
-                  <Icon name="hourglass_empty" /> Découpage en cours… ({job.nb_days} journées de 7h)
+                  <Icon name="hourglass_empty" /> Découpage en cours… ({formatJobPlanning(job)})
                 </div>
               ) : job.status === 'daily_ready' || job.status === 'daily_validated' || currentStep > 4 ? (
                 <div>
@@ -6503,7 +6514,7 @@ export default function FormationPipeline() {
               ) : (
                 <div>
                   <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '16px' }}>
-                    {selectedPipelineModel} va découper le programme global en <strong style={{ color: '#a78bfa' }}>{job.nb_days} journées</strong> de 7h, chacune avec 6 modules.
+                    {selectedPipelineModel} va découper le programme global selon le planning verrouillé : <strong style={{ color: '#a78bfa' }}>{formatJobPlanning(job)}</strong>.
                   </p>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     <button style={S.btn('primary')} onClick={() => handleSplitDaily()} disabled={actionLoading || !job.global_program_validated}>
@@ -7006,7 +7017,7 @@ export default function FormationPipeline() {
               ) : (
                 <div>
                   <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}>
-                    Crée <strong style={{ color: '#a78bfa' }}>{job.nb_days} dossiers cours</strong> et génère le texte complet de chaque journée (6 modules × 3 passes avec {selectedPipelineModel}).
+                    Crée <strong style={{ color: '#a78bfa' }}>{job.nb_days} dossiers cours</strong> et génère le texte de chaque journée selon le planning verrouillé ({formatJobPlanning(job)}) avec {selectedPipelineModel}.
                   </p>
                   <p style={{ fontSize: '13px', color: '#475569', marginBottom: '16px' }}>
                     Volume calibré selon les créneaux cours audio. Cette étape ne fait pas encore la synthèse audio — vous pourrez relire les textes et les télécharger en PDF avant de lancer le TTS.
@@ -8105,7 +8116,7 @@ function FolderTextModal({ jobId, folder, onClose }) {
               Jour {folder.day_number} — {folder.day_title}
             </div>
             <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-              {folder.total_words.toLocaleString('fr-FR')} mots · 6 modules × 3 passes
+              {folder.total_words.toLocaleString('fr-FR')} mots · {folder.segments_total || 0} segments de génération
             </div>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>

@@ -33,7 +33,9 @@ test('keeps the current authenticated API client and durable resume', () => {
   assert.match(source, /\/run-auto\/resume/)
   assert.match(source, /\/diagnostic\?events_limit=80/)
   assert.match(source, /hasDetachedQueue/)
-  assert.match(source, /aucune tâche durable ne traite actuellement cette étape/)
+  assert.match(source, /voice_reference_calibration/)
+  assert.match(source, /le téléchargement REAC n’a pas commencé/)
+  assert.match(source, /la tâche durable est terminée en échec/)
 })
 
 test('restores document, slides and audio inspection controls', () => {

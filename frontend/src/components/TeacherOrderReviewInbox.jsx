@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Check, ChevronRight, ExternalLink, RefreshCw, X } from 'lucide-react'
 import { apiFetch } from '../api'
 import AppLoader from './AppLoader.jsx'
+import { formatPlanningSummary } from '../formationPlanningDisplay'
 
 const statusMeta = {
   pending: { label: 'À valider', className: 'bg-[#F4F4F2] text-[#3F3F46]' },
@@ -62,8 +63,11 @@ const rncpLabel = (value) => String(value || '').replace(/^RNCP\s*/i, '')
 const formatDuration = (requestItem) => {
   const segments = []
   if (requestItem.training_weeks) segments.push(pluralize(requestItem.training_weeks, 'semaine'))
-  if (requestItem.training_days) segments.push(pluralize(requestItem.training_days, 'journée'))
-  if (requestItem.total_hours) segments.push(`${requestItem.total_hours} h`)
+  segments.push(formatPlanningSummary(requestItem.planning_summary, {
+    fallbackHours: requestItem.total_hours,
+    fallbackDays: requestItem.training_days,
+    scheduleSchemaVersion: requestItem.schedule_schema_version,
+  }))
   return segments.join(' · ') || 'Durée à confirmer'
 }
 

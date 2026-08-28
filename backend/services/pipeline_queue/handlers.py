@@ -45,6 +45,11 @@ def handle_voice_reference_calibration_work_item(item: WorkItem, lease) -> WorkR
     platform_id = int(job.get("platform_id") or 0)
     if not platform_id:
         raise PermanentWorkError("Plateforme absente de la calibration vocale")
+    routes.update_job(
+        item.pipeline_job_id,
+        auto_pilot_step="voice_calibration",
+        auto_pilot_error=None,
+    )
     lease.checkpoint()
     result = calibrate_platform_voice(platform_id)
     lease.checkpoint()
@@ -363,6 +368,21 @@ def mark_pipeline_dead_letter(item: WorkItem, error: str) -> None:
         mark_teacher_order_dead_letter(item, error)
         return
     if item.task_type == "voice_reference_calibration":
+        from services.formation_pipeline_service import update_job
+
+        update_job(
+            item.pipeline_job_id,
+            auto_pilot_step="voice_calibration",
+            auto_pilot_error=error[:500],
+        )
+        _log_event(
+            item,
+            "voice_reference_calibration_dead_lettered",
+            step="voice_calibration",
+            status="error",
+            message="Calibration vocale abandonnée après épuisement des tentatives",
+            error=error[:500],
+        )
         if item.payload.get("teacher_order_id"):
             from services.teacher_order_fulfillment_service import fail_teacher_order_pipeline
 

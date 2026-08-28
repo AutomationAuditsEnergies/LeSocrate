@@ -18,6 +18,7 @@ from database.db import get_db_connection
 from database.postgres import get_postgres_connection, postgres_enabled
 from repositories.course_schedule_repository import schedule_store_is_postgres
 from utils.logger import get_logger
+from utils.planning_summary import summarize_v2_schedule
 from utils.slug import slugify
 
 
@@ -5239,6 +5240,11 @@ def _job_result(row: dict[str, Any] | sqlite3.Row | None) -> dict[str, Any] | No
     data = dict(row)
     job_id = data.get("id")
     platform_id = data.get("platform_id")
+    schedule_schema_version = int(data.get("schedule_schema_version") or 1)
+    planning_summary = summarize_v2_schedule(
+        data.get("schedule_snapshot_json"),
+        schema_version=schedule_schema_version,
+    )
     return {
         "id": job_id,
         "job_label": f"Job #{job_id}",
@@ -5248,10 +5254,9 @@ def _job_result(row: dict[str, Any] | sqlite3.Row | None) -> dict[str, Any] | No
         "rncp_code": data.get("rncp_code"),
         "total_hours": data.get("total_hours"),
         "nb_days": data.get("nb_days"),
-        "schedule_schema_version": int(
-            data.get("schedule_schema_version") or 1
-        ),
+        "schedule_schema_version": schedule_schema_version,
         "schedule_snapshot_json": data.get("schedule_snapshot_json"),
+        "planning_summary": planning_summary,
         "schedule_hash": data.get("schedule_hash"),
         "schedule_locked_at": data.get("schedule_locked_at"),
         "reac_text": data.get("reac_text"),
@@ -5556,6 +5561,8 @@ def list_pipeline_jobs(
             "rncp_code",
             "total_hours",
             "nb_days",
+            "schedule_schema_version",
+            "schedule_snapshot_json",
             "status",
             "global_program_validated",
             "daily_programs_validated",
@@ -5582,6 +5589,7 @@ def list_pipeline_jobs(
     else:
         conn = _as_sqlite_row_connection()
         try:
+            _ensure_sqlite_schedule_contract_columns(conn)
             cursor = conn.cursor()
             cursor.execute(
                 f"""
@@ -5601,6 +5609,7 @@ def list_pipeline_jobs(
     for row in rows:
         data = dict(row)
         platform = data.get("platform_id")
+        schedule_schema_version = int(data.get("schedule_schema_version") or 1)
         result.append(
             {
                 "id": data.get("id"),
@@ -5609,6 +5618,11 @@ def list_pipeline_jobs(
                 "job_label": f"Job #{data.get('id')}",
                 "total_hours": data.get("total_hours"),
                 "nb_days": data.get("nb_days"),
+                "schedule_schema_version": schedule_schema_version,
+                "planning_summary": summarize_v2_schedule(
+                    data.get("schedule_snapshot_json"),
+                    schema_version=schedule_schema_version,
+                ),
                 "status": data.get("status"),
                 "global_program_validated": bool(data.get("global_program_validated")),
                 "daily_programs_validated": bool(data.get("daily_programs_validated")),
