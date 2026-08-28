@@ -38,6 +38,12 @@ test('keeps the current authenticated API client and durable resume', () => {
   assert.match(source, /la tâche durable est terminée en échec/)
 })
 
+test('does not present a stale job error while a resumed auto-pilot is active', () => {
+  assert.match(source, /const autoPilotIsActive = \['running', 'starting'\]\.includes\(autoPilotState\?\.status\)/)
+  assert.match(source, /const showJobError = Boolean\(job\?\.error_message\) && !autoPilotIsActive/)
+  assert.match(source, /auto-pilot en cours/)
+})
+
 test('restores document, slides and audio inspection controls', () => {
   assert.match(source, /Word 2/)
   assert.match(source, /Slides anchor-first/)

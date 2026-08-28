@@ -5908,6 +5908,11 @@ export default function FormationPipeline() {
   const audioBusy = AUDIO_ACTIVE_STATUSES.has(job?.status) && !audioStale
   const selectedPipelineModel = pipelineModelLabel(job?.auto_pilot_model)
   const detachedQueue = hasDetachedQueue(job, autoPilotState)
+  const autoPilotIsActive = ['running', 'starting'].includes(autoPilotState?.status)
+  const displayedJobStatus = autoPilotIsActive && ['error', 'audio_error'].includes(job?.status)
+    ? 'running'
+    : job?.status
+  const showJobError = Boolean(job?.error_message) && !autoPilotIsActive
   const canStopAutoPilot = !detachedQueue && Boolean(
     (job?.auto_pilot_enabled && job?.auto_pilot_step !== 'done') ||
     ['running', 'starting', 'error'].includes(autoPilotState?.status)
@@ -5998,20 +6003,22 @@ export default function FormationPipeline() {
                     </button>
                   )}
                   <span style={S.tag(
-                    AUDIO_DONE_STATUSES.has(job.status) ? 'green'
-                    : AUDIO_ACTIVE_STATUSES.has(job.status) ? 'amber'
-                    : (job.status === 'error' || job.status === 'audio_error') ? 'red'
+                    AUDIO_DONE_STATUSES.has(displayedJobStatus) ? 'green'
+                    : (AUDIO_ACTIVE_STATUSES.has(displayedJobStatus) || displayedJobStatus === 'running') ? 'amber'
+                    : (displayedJobStatus === 'error' || displayedJobStatus === 'audio_error') ? 'red'
                     : 'violet'
                   )}>
-                    {AUDIO_DONE_STATUSES.has(job.status)
+                    {AUDIO_DONE_STATUSES.has(displayedJobStatus)
                       ? 'Clôturée'
-                      : AUDIO_ACTIVE_STATUSES.has(job.status)
+                      : AUDIO_ACTIVE_STATUSES.has(displayedJobStatus)
                         ? 'Audio en cours'
-                      : job.status?.replace(/_/g, ' ')}
+                      : displayedJobStatus === 'running'
+                        ? 'auto-pilot en cours'
+                        : displayedJobStatus?.replace(/_/g, ' ')}
                   </span>
                 </div>
               </div>
-              {job.error_message && (
+              {showJobError && (
                 <div style={{ marginTop: '12px', padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px', fontSize: '13px', color: '#f87171' }}>
                   <strong>Erreur :</strong> {job.error_message}
                 </div>
