@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from services import content_generation_service as cgs
+from services.content_pipeline.calibration import course_section_budget_defaults
 
 
 def words(count):
@@ -9,6 +10,42 @@ def words(count):
 
 
 class StructuredBudgetCalibrationTest(unittest.TestCase):
+    def test_single_course_day_reserves_only_light_conclusions(self):
+        budgets = course_section_budget_defaults(
+            1,
+            6498,
+            3,
+            words_per_minute=190,
+            is_last_day=False,
+            is_last_course=True,
+            total_courses=1,
+        )
+
+        self.assertLessEqual(budgets["course_conclusion"], 260)
+        self.assertLessEqual(budgets["day_conclusion"], 80)
+        self.assertGreater(budgets["day_conclusion"], 0)
+        self.assertEqual(
+            budgets["opening"]
+            + sum(budgets["parts"])
+            + budgets["course_conclusion"]
+            + budgets["day_conclusion"],
+            6498,
+        )
+
+    def test_multi_course_day_keeps_full_final_conclusion(self):
+        budgets = course_section_budget_defaults(
+            4,
+            1600,
+            3,
+            words_per_minute=190,
+            is_last_day=False,
+            is_last_course=True,
+            total_courses=4,
+        )
+
+        self.assertGreaterEqual(budgets["course_conclusion"], 320)
+        self.assertGreater(budgets["day_conclusion"], 80)
+
     def test_one_course_day_accepts_the_final_audio_budget_margin(self):
         course_plan = {
             "course_number": 1,

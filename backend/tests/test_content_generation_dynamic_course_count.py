@@ -193,6 +193,93 @@ class HrContentJobDynamicCountTest(unittest.TestCase):
 
 
 class DynamicCourseProgressAndContextTest(unittest.TestCase):
+    def test_single_course_plan_uses_one_light_recap_and_slide_free_closing(self):
+        playlist = [("course_01.mp3", 2100, "cours", 1)]
+        raw_plan = {
+            "courses": [
+                {
+                    "course_number": 1,
+                    "course_title": "Chapitre unique",
+                    "parts": [
+                        {"title": "Repère 1"},
+                        {"title": "Repère 2"},
+                        {"title": "Repère 3"},
+                    ],
+                    "course_conclusion": {
+                        "must_include": ["récapitulatif exhaustif de toute la journée"],
+                        "teaching_beats": [{
+                            "beat_id": "duplicate-heavy-conclusion",
+                            "type": "warning",
+                            "slide_anchor": {"enabled": True, "template_type": "warning"},
+                        }],
+                    },
+                    "day_conclusion": {
+                        "must_include": ["récapitulatif global de la journée"],
+                    },
+                }
+            ]
+        }
+
+        plan = cgs._normalize_structured_course_plans(
+            raw_plan,
+            job={"folder_position": 0, "nb_days": 5},
+            playlist_items=playlist,
+            sub_parts=["Chapitre unique"],
+        )
+
+        course = plan["courses"][0]
+        conclusion = course["course_conclusion"]
+        day_closing = course["day_conclusion"]
+        self.assertTrue(conclusion["single_course_light"])
+        self.assertTrue(day_closing["single_course_light"])
+        self.assertTrue(day_closing["suppress_slide"])
+        self.assertLessEqual(conclusion["target_words"], 260)
+        self.assertLessEqual(day_closing["target_words"], 80)
+        self.assertIn("deux ou trois repères", " ".join(conclusion["must_include"]))
+        self.assertIn("sans nouveau récapitulatif", " ".join(day_closing["must_include"]))
+        self.assertNotIn("exhaustif", " ".join(conclusion["must_include"]))
+        self.assertNotIn("global", " ".join(day_closing["must_include"]))
+        self.assertEqual(len(conclusion["teaching_beats"]), 1)
+
+    def test_single_course_day_closing_prompt_forbids_second_recap(self):
+        guard = cgs._structured_section_scope_guard({
+            "kind": "day_conclusion",
+            "single_course_light": True,
+        })
+
+        self.assertIn("une à trois phrases", guard)
+        self.assertIn("ne récapitule aucun contenu", guard)
+        self.assertIn("ni nouvelle synthèse", guard)
+
+    def test_single_course_before_qa_still_gets_a_light_course_conclusion(self):
+        playlist = [
+            ("course_01.mp3", 2100, "cours", 1),
+            ("qa_01.mp3", 600, "qa", 1),
+        ]
+        plan = cgs._normalize_structured_course_plans(
+            {
+                "courses": [{
+                    "course_number": 1,
+                    "course_title": "Chapitre unique",
+                    "parts": [{"title": "A"}, {"title": "B"}],
+                }],
+            },
+            job={"folder_position": 0, "nb_days": 1},
+            playlist_items=playlist,
+            sub_parts=["Chapitre unique"],
+        )
+
+        course = plan["courses"][0]
+        self.assertTrue(course["course_conclusion"]["single_course_light"])
+        self.assertLessEqual(course["course_conclusion"]["target_words"], 260)
+        self.assertIsNone(course["day_conclusion"])
+        self.assertEqual(
+            course["opening"]["target_words"]
+            + sum(part["target_words"] for part in course["parts"])
+            + course["course_conclusion"]["target_words"],
+            course["target_words"],
+        )
+
     def test_position_context_uses_explicit_or_playlist_total(self):
         explicit = cgs._build_course_position_context(
             sub_part_index=4,

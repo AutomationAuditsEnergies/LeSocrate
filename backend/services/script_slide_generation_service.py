@@ -1351,6 +1351,7 @@ def _course_section_records_from_artifact(source: dict) -> list[dict]:
                         else []
                     ),
                     "display_map_status": section.get("display_map_status") or "none",
+                    "suppress_slide": bool(section.get("suppress_slide")),
                 }
             )
     return records
@@ -1980,6 +1981,12 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         section = prepared["section"]
         units = prepared["units"]
         section_anchors = prepared["anchors"]
+
+        # A mono-course day already has its single recap slide on the course
+        # conclusion. The final one-to-three spoken sentences deliberately keep
+        # that slide on screen instead of creating a duplicate recap.
+        if section.get("suppress_slide"):
+            continue
 
         if not section_anchors:
             blocks.append(

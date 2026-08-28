@@ -1564,6 +1564,7 @@ def _course_conclusion_recap_beat(
     course_number: int,
     course_title: str | None,
     parts: list[dict],
+    single_course_day: bool = False,
 ) -> dict:
     clean_course_title = _strip_internal_schedule_from_label(str(course_title or "")).strip() or f"Cours {course_number}"
     points = [
@@ -1580,9 +1581,16 @@ def _course_conclusion_recap_beat(
     return {
         "beat_id": f"c{course_number}conclusion-recap",
         "type": "recap",
-        "role": "récapituler ce qui a été vu dans le cours avant la conclusion du chapitre",
+        "role": (
+            "fixer les repères essentiels du chapitre unique sans refaire une synthèse de journée"
+            if single_course_day
+            else "récapituler ce qui a été vu dans le cours avant la conclusion du chapitre"
+        ),
         "spoken_requirement": (
-            "Faire un récapitulatif bref de ce qui vient d'être vu dans le cours, "
+            "Rappeler seulement deux ou trois repères essentiels, puis conclure brièvement "
+            "le chapitre unique sans refaire ensuite ce récapitulatif."
+            if single_course_day
+            else "Faire un récapitulatif bref de ce qui vient d'être vu dans le cours, "
             "puis conclure ce chapitre sans annoncer le bloc suivant."
         ),
         "slide_anchor": {
@@ -1590,8 +1598,12 @@ def _course_conclusion_recap_beat(
             "anchor_id": f"c{course_number}-conclusion-recap-slide",
             "template_type": "recap",
             "pedagogical_shape": "synthese_apres_developpement",
-            "visual_goal": "synthétiser les points vus dans le cours avant sa conclusion",
-            "items_expected": min(4, max(2, len(points))),
+            "visual_goal": (
+                "fixer une seule synthèse légère du chapitre unique"
+                if single_course_day
+                else "synthétiser les points vus dans le cours avant sa conclusion"
+            ),
+            "items_expected": min(3 if single_course_day else 4, max(2, len(points))),
             "fields_hint": {
                 "title": "Ce qu'on retient.",
                 "subtitle": clean_course_title,
@@ -2049,6 +2061,7 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
             is_last_course=(
                 course_number == course_numbers[-1] and day_ends_with_course
             ),
+            total_courses=total_courses,
         )
 
         opening = raw.get("opening") if isinstance(raw.get("opening"), dict) else {}
@@ -2156,7 +2169,24 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
 
         course_conclusion = raw.get("course_conclusion") if isinstance(raw.get("course_conclusion"), dict) else {}
         course_conclusion["target_words"] = budgets["course_conclusion"]
-        if course_number == course_numbers[-1]:
+        single_course_day = total_courses == 1
+        course_conclusion["single_course_light"] = single_course_day
+        if single_course_day:
+            course_conclusion["must_include"] = [
+                "synthèse courte de deux ou trois repères essentiels du chapitre unique",
+                "utilité concrète des points vus",
+            ]
+            course_conclusion["must_avoid"] = _merge_unique_strings(
+                course_conclusion.get("must_avoid"),
+                [
+                    "récapitulatif exhaustif",
+                    "répéter le plan complet",
+                    "seconde conclusion de journée",
+                    "annoncer un Q/R ou une pause à la place du bloc suivant",
+                    "transition vers un nouveau développement",
+                ],
+            )
+        elif course_number == course_numbers[-1]:
             course_conclusion["must_include"] = _merge_unique_strings(
                 course_conclusion.get("must_include"),
                 [
@@ -2192,28 +2222,50 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
                     course_number=course_number,
                     course_title=title,
                     parts=parts,
+                    single_course_day=single_course_day,
                 )
             ],
-            course_conclusion.get("teaching_beats") if isinstance(course_conclusion.get("teaching_beats"), list) else [],
+            (
+                []
+                if single_course_day
+                else course_conclusion.get("teaching_beats")
+                if isinstance(course_conclusion.get("teaching_beats"), list)
+                else []
+            ),
         )
 
         day_conclusion = None
         if course_number == course_numbers[-1] and day_ends_with_course:
             raw_day = raw.get("day_conclusion") if isinstance(raw.get("day_conclusion"), dict) else {}
+            day_must_include = (
+                "fermeture très brève de la journée en une à trois phrases, sans nouveau récapitulatif"
+                if single_course_day
+                else "récapitulatif global de la journée"
+            )
+            day_must_avoid = [
+                "nouveau développement",
+                "mot bloc devant les élèves",
+                "date ou rendez-vous de prochaine séance",
+                "demain, après-demain ou la semaine prochaine",
+            ]
+            if single_course_day:
+                day_must_avoid.extend([
+                    "récapituler le contenu déjà conclu",
+                    "liste de points à retenir",
+                    "nouvelle synthèse détaillée",
+                    "nouvelle slide de récapitulatif",
+                ])
             day_conclusion = {
                 "target_words": budgets["day_conclusion"],
+                "single_course_light": single_course_day,
+                "suppress_slide": single_course_day,
                 "must_include": _merge_unique_strings(
-                    raw_day.get("must_include"),
-                    "récapitulatif global de la journée",
+                    [] if single_course_day else raw_day.get("must_include"),
+                    day_must_include,
                 ),
                 "must_avoid": _merge_unique_strings(
                     raw_day.get("must_avoid"),
-                    [
-                        "nouveau développement",
-                        "mot bloc devant les élèves",
-                        "date ou rendez-vous de prochaine séance",
-                        "demain, après-demain ou la semaine prochaine",
-                    ],
+                    day_must_avoid,
                 ),
             }
 
@@ -2445,7 +2497,7 @@ Contraintes générales :
 - Les Q&R et les pauses sont facultatifs et ne font pas partie du texte des cours.
 - Chaque Q&R/pause porte sa propre intro et sa propre outro : le cours précédent ne l'annonce jamais.
 - Deux cours contigus sont reliés par une jointure audio générique : aucun des deux cours ne doit verbaliser ce mécanisme.
-- Si la journée comporte un seul cours, écris une ouverture et une conclusion adaptées à une séance à chapitre unique, sans faire croire qu'il existe plusieurs chapitres ce jour-là.
+- Si la journée comporte un seul cours, applique la règle `mono-cours light` : une seule synthèse courte dans la conclusion du cours, puis une fermeture de journée de une à trois phrases sans répéter le contenu. Ne prévois jamais une deuxième synthèse ni une deuxième slide `recap`.
 - Cours interne 1 de la première journée seulement : accueil, parcours annuel synthétique, chapitres réellement prévus ce jour-là, transition vers le premier chapitre, objectif et axes.
 - Cours interne 1 d'une journée suivante : accueil de journée, reprise douce de la progression, chapitres réellement prévus ce jour-là, puis premier chapitre. Ne refais pas la présentation annuelle complète.
 - Cours internes suivants : reprise cohérente avec l'élément audio précédent, rappel bref si utile, lien avec le nouveau chapitre, objectif et axes.
@@ -2961,6 +3013,8 @@ def _section_artifact_metadata(section: dict) -> dict:
         "must_avoid": section.get("must_avoid") if isinstance(section.get("must_avoid"), list) else [],
         "teaching_beats": teaching_beats,
         "slide_anchors": slide_anchors,
+        "single_course_light": bool(section.get("single_course_light")),
+        "suppress_slide": bool(section.get("suppress_slide")),
     }
 
 
@@ -7957,8 +8011,12 @@ def _build_structured_section_prompt(
     base_style = prompt_parts["base_style"]
     section_contract = prompt_parts["section_contract"]
     target_words = int(section.get("target_words") or 500)
-    min_words = max(120, int(target_words * 0.82))
-    max_words = max(min_words + 50, int(target_words * 1.10))
+    if section.get("single_course_light") and section.get("kind") == "day_conclusion":
+        min_words = max(25, int(target_words * 0.70))
+        max_words = max(min_words + 20, int(target_words * 1.15))
+    else:
+        min_words = max(120, int(target_words * 0.82))
+        max_words = max(min_words + 50, int(target_words * 1.10))
     if section.get("kind") == "opening" and (generated_so_far or "").strip():
         generated_context_label = "Contenu principal déjà généré à cadrer dans cette ouverture"
         generated_context = _compact_words(generated_so_far, 900) or "(aucun)"
@@ -8083,6 +8141,14 @@ def _structured_section_scope_guard(section: dict) -> str:
             must_include_text = " ".join(str(item) for item in must_include).lower()
         else:
             must_include_text = ""
+        if section.get("single_course_light"):
+            return (
+                "- Tu écris la conclusion légère du chapitre unique de la journée.\n"
+                "- Rappelle seulement deux ou trois repères essentiels, sans reprendre le plan complet.\n"
+                "- Ferme ensuite brièvement le chapitre ; la fermeture de journée séparée ne fera aucun autre récapitulatif.\n"
+                "- N'annonce ni Q&R, ni pause, ni chapitre suivant.\n"
+                "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
+            )
         return (
             "- Tu écris seulement la conclusion de cette partie interne.\n"
             "- Commence toujours par un récapitulatif bref de ce qui a été vu dans le cours.\n"
@@ -8091,6 +8157,13 @@ def _structured_section_scope_guard(section: dict) -> str:
             "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
         )
     if kind == "day_conclusion":
+        if section.get("single_course_light"):
+            return (
+                "- Tu écris uniquement une fermeture légère de journée en une à trois phrases.\n"
+                "- Le chapitre unique vient déjà d'être résumé et conclu : ne récapitule aucun contenu.\n"
+                "- N'ajoute ni liste, ni points à retenir, ni nouvelle synthèse, ni nouveau développement.\n"
+                "- Termine simplement et chaleureusement la séance."
+            )
         return (
             "- Tu écris seulement la conclusion globale de journée.\n"
             "- Fais une synthèse de journée, puis ferme. Ne crée pas un nouveau développement."

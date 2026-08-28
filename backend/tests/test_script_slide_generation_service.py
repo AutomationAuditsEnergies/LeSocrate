@@ -251,6 +251,69 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             ),
         )
 
+    def test_single_course_day_closing_does_not_create_a_second_slide_block(self):
+        sections = [
+            {
+                "course_number": 1,
+                "course_title": "Chapitre unique",
+                "sub_part_index": 0,
+                "sub_part_name": "Chapitre unique · conclusion du cours",
+                "section_index": 1,
+                "section_label": "conclusion du cours",
+                "part_number": 900,
+                "kind": "course_conclusion",
+                "title": "Conclusion du cours",
+                "text": "Premier repère. Deuxième repère. Conclusion brève.",
+                "slide_display_map": [],
+                "display_order_declared": [],
+                "display_map_status": "none",
+                "suppress_slide": False,
+            },
+            {
+                "course_number": 1,
+                "course_title": "Chapitre unique",
+                "sub_part_index": 0,
+                "sub_part_name": "Chapitre unique · conclusion de journée",
+                "section_index": 2,
+                "section_label": "conclusion globale de la journée",
+                "part_number": 901,
+                "kind": "day_conclusion",
+                "title": "Conclusion de journée",
+                "text": "Merci pour votre attention. La séance est terminée.",
+                "slide_display_map": [],
+                "display_order_declared": [],
+                "display_map_status": "none",
+                "suppress_slide": True,
+            },
+        ]
+        anchor = {
+            "anchor_id": "c1-conclusion-recap-slide",
+            "beat_id": "c1conclusion-recap",
+            "course_number": 1,
+            "part_number": 900,
+            "beat_order": 1,
+            "template_type": "recap",
+        }
+
+        with patch.object(slides, "_course_section_records_from_artifact", return_value=sections), \
+             patch.object(slides, "_display_map_mode", return_value="off"), \
+             patch.object(
+                 slides,
+                 "_align_section_to_slide_anchors",
+                 return_value=(
+                     [{"anchor_id": anchor["anchor_id"], "unit_start": 0, "unit_end": 0}],
+                     {"status": "test"},
+                 ),
+             ):
+            result = slides._build_section_aligned_source_blocks({}, [anchor], "test-model")
+
+        self.assertIsNotNone(result)
+        blocks, word_cursor, _debug = result
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0]["source_alignment"], "section_slide_alignment")
+        self.assertNotIn("La séance est terminée", blocks[0]["text"])
+        self.assertEqual(word_cursor, sum(len(section["text"].split()) for section in sections))
+
     def test_display_map_blocks_follow_real_text_order(self):
         section = {
             "course_number": 1,
