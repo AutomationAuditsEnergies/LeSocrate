@@ -3,7 +3,14 @@ import unittest
 from services import content_generation_service as cgs
 
 
-def _slide(slide_id: str, old_start: int, old_end: int, source_text: str) -> dict:
+def _slide(
+    slide_id: str,
+    old_start: int,
+    old_end: int,
+    source_text: str,
+    *,
+    course_number: int = 4,
+) -> dict:
     return {
         "slide_id": slide_id,
         "source_text": source_text,
@@ -11,7 +18,7 @@ def _slide(slide_id: str, old_start: int, old_end: int, source_text: str) -> dic
             "word_start": old_start,
             "word_end": old_end,
             "word_count": old_end - old_start,
-            "segments": [{"course_number": 4}],
+            "segments": [{"course_number": course_number}],
         },
     }
 
@@ -120,8 +127,20 @@ class AudioSlideReprojectionTest(unittest.TestCase):
             "target_duration_sec": 1200,
         }
         slides = [
-            _slide("intro-slide", 0, len(intro_words), " ".join(intro_words)),
-            _slide("body-slide", len(intro_words), len(audio_words), " ".join(body_words)),
+            _slide(
+                "intro-slide",
+                0,
+                len(intro_words),
+                " ".join(intro_words),
+                course_number=1,
+            ),
+            _slide(
+                "body-slide",
+                len(intro_words),
+                len(audio_words),
+                " ".join(body_words),
+                course_number=1,
+            ),
         ]
 
         timings, detail = cgs._repair_bloc_timings_from_timeline(
@@ -179,6 +198,38 @@ class AudioSlideReprojectionTest(unittest.TestCase):
 
         self.assertEqual(len(chunks), 1)
         self.assertIsNone(chunks[0]["slide_id"])
+
+    def test_declared_course_wins_over_stale_overlapping_word_ranges(self):
+        bloc = {
+            "bloc_number": 1,
+            "start_w": 0,
+            "end_w": 8,
+            "text": "un deux trois quatre cinq six sept huit",
+        }
+        slides = [
+            {
+                "slide_id": "wrong-course",
+                "source_text": "ancien texte qui chevauchait ce bloc",
+                "source_ref": {
+                    "word_start": 0,
+                    "word_end": 4,
+                    "segments": [{"course_number": 2}],
+                },
+            },
+            {
+                "slide_id": "right-course",
+                "source_text": "un deux trois quatre",
+                "source_ref": {
+                    "word_start": 0,
+                    "word_end": 8,
+                    "segments": [{"course_number": 1}],
+                },
+            },
+        ]
+
+        chunks = cgs._build_slide_audio_chunks(bloc, slides)
+
+        self.assertEqual([chunk["slide_id"] for chunk in chunks], ["right-course"])
 
 
 if __name__ == "__main__":

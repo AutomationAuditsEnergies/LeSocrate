@@ -1430,6 +1430,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
                 mock=False,
                 basic_tts=True,
                 sync_slides=False,
+                _allow_unsynced_course_audio_for_tests=True,
                 next_folder_id=124,
                 is_last_folder=False,
             )
@@ -1463,6 +1464,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
                     mock=False,
                     basic_tts=True,
                     sync_slides=False,
+                    _allow_unsynced_course_audio_for_tests=True,
                     next_folder_id=124,
                     is_last_folder=False,
                 )

@@ -179,6 +179,55 @@ class PostgresPipelineWorkQueueTest(unittest.TestCase):
                 )
                 self.assertEqual(cur.fetchone()[0], 1)
 
+    def test_competing_workers_serialize_different_items_for_same_folder(self):
+        first = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                resource_key="course-session:91:audio:course_01.mp3",
+                task_type="scheduled_audio_item",
+                scope_key="scheduled_audio:91:course_01.mp3",
+                run_id="pg-folder-1",
+                dedupe_key="pg-folder-1:course_01.mp3",
+            )
+        )
+        second = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                resource_key="course-session:91:audio:course_02.mp3",
+                task_type="scheduled_audio_item",
+                scope_key="scheduled_audio:91:course_02.mp3",
+                run_id="pg-folder-2",
+                dedupe_key="pg-folder-2:course_02.mp3",
+            )
+        )
+
+        def claim(item_id, owner):
+            return WorkItemRepository(storage_backend="postgres").claim(
+                item_id,
+                owner=owner,
+                lease_seconds=60,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(
+                pool.map(
+                    lambda args: claim(*args),
+                    ((first.id, "audio-a"), (second.id, "audio-b")),
+                )
+            )
+
+        winners = [result for result in results if result is not None]
+        self.assertEqual(len(winners), 1)
+        loser_id = second.id if winners[0].id == first.id else first.id
+        self.repo.complete(
+            winners[0].id,
+            winners[0].lease_token,
+            result={"ok": True},
+        )
+        self.assertIsNotNone(
+            self.repo.claim(loser_id, owner="audio-c", lease_seconds=60)
+        )
+
     def test_transactional_outbox_references_persisted_item(self):
         item = self.repo.enqueue(
             WorkItemSpec(

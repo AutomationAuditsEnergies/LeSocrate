@@ -132,6 +132,40 @@ class PipelineWorkQueueTest(unittest.TestCase):
         self.assertNotEqual(audio_item.id, pipeline_item.id)
         self.assertEqual(audio_item.scope_key, "audio:session-1")
 
+    def test_workers_serialize_different_audio_items_for_the_same_folder(self):
+        first = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                resource_key="course-session:91:audio:course_01.mp3",
+                task_type="scheduled_audio_item",
+                scope_key="scheduled_audio:91:course_01.mp3",
+                run_id="scheduled-1",
+                dedupe_key="scheduled-1:course_01.mp3",
+            )
+        )
+        second = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                resource_key="course-session:91:audio:course_02.mp3",
+                task_type="scheduled_audio_item",
+                scope_key="scheduled_audio:91:course_02.mp3",
+                run_id="scheduled-2",
+                dedupe_key="scheduled-2:course_02.mp3",
+            )
+        )
+
+        claimed_first = self.repo.claim(first.id, owner="audio-a", lease_seconds=60)
+        self.assertIsNotNone(claimed_first)
+        self.assertIsNone(
+            self.repo.claim(second.id, owner="audio-b", lease_seconds=60),
+            "Deux workers ne doivent jamais réécrire le même deck en parallèle",
+        )
+
+        self.repo.complete(first.id, claimed_first.lease_token, result={"ok": True})
+        self.assertIsNotNone(
+            self.repo.claim(second.id, owner="audio-b", lease_seconds=60)
+        )
+
     def test_folder_resource_without_pipeline_job_is_durable_and_deduplicated(self):
         first = self.repo.enqueue(
             WorkItemSpec(

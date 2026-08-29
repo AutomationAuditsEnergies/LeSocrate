@@ -693,31 +693,53 @@ class WorkItemRepository:
         normalized_task_types = normalize_task_types(task_types)
 
         if self.is_postgres:
-            id_filter = "AND id = %s" if work_item_id else ""
+            id_filter = "AND candidate_item.id = %s" if work_item_id else ""
             task_filter = ""
             if normalized_task_types:
                 task_placeholders = ", ".join(["%s"] * len(normalized_task_types))
-                task_filter = f"AND task_type IN ({task_placeholders})"
+                task_filter = f"AND candidate_item.task_type IN ({task_placeholders})"
             params: list[Any] = [now, now]
             if work_item_id:
                 params.append(work_item_id)
             params.extend(normalized_task_types)
-            params.extend([owner, token, expires, now, now])
+            params.extend([now, owner, token, expires, now, now])
             with self._connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""
                         WITH candidate AS (
-                            SELECT id
-                            FROM pipeline_work_items
-                            WHERE attempt_count < max_attempts
+                            SELECT candidate_item.id
+                            FROM pipeline_work_items AS candidate_item
+                            WHERE candidate_item.attempt_count < candidate_item.max_attempts
                               AND (
-                                  (status IN ('queued', 'retry_scheduled') AND available_at <= %s)
-                                  OR (status = 'running' AND lease_expires_at < %s)
+                                  (candidate_item.status IN ('queued', 'retry_scheduled') AND candidate_item.available_at <= %s)
+                                  OR (candidate_item.status = 'running' AND candidate_item.lease_expires_at < %s)
                               )
                               {id_filter}
                               {task_filter}
-                            ORDER BY priority DESC, available_at, created_at
+                              AND (
+                                  candidate_item.folder_id IS NULL
+                                  OR NOT EXISTS (
+                                      SELECT 1
+                                      FROM pipeline_work_items AS active_item
+                                      WHERE active_item.folder_id = candidate_item.folder_id
+                                        AND active_item.id <> candidate_item.id
+                                        AND active_item.status = 'running'
+                                        AND active_item.lease_expires_at >= %s
+                                  )
+                              )
+                              AND (
+                                  candidate_item.folder_id IS NULL
+                                  OR pg_try_advisory_xact_lock(
+                                      hashtextextended(
+                                          'pipeline-folder:' || candidate_item.folder_id::text,
+                                          0
+                                      )
+                                  )
+                              )
+                            ORDER BY candidate_item.priority DESC,
+                                     candidate_item.available_at,
+                                     candidate_item.created_at
                             FOR UPDATE SKIP LOCKED
                             LIMIT 1
                         )
@@ -746,24 +768,39 @@ class WorkItemRepository:
             params: list[Any] = [now_s, now_s]
             id_filter = ""
             if work_item_id:
-                id_filter = "AND id = ?"
+                id_filter = "AND candidate_item.id = ?"
                 params.append(work_item_id)
             task_filter = ""
             if normalized_task_types:
                 task_placeholders = ", ".join(["?"] * len(normalized_task_types))
-                task_filter = f"AND task_type IN ({task_placeholders})"
+                task_filter = f"AND candidate_item.task_type IN ({task_placeholders})"
                 params.extend(normalized_task_types)
+            params.append(now_s)
             cur.execute(
                 f"""
-                SELECT id FROM pipeline_work_items
-                WHERE attempt_count < max_attempts
+                SELECT candidate_item.id
+                FROM pipeline_work_items AS candidate_item
+                WHERE candidate_item.attempt_count < candidate_item.max_attempts
                   AND (
-                      (status IN ('queued', 'retry_scheduled') AND available_at <= ?)
-                      OR (status = 'running' AND lease_expires_at < ?)
+                      (candidate_item.status IN ('queued', 'retry_scheduled') AND candidate_item.available_at <= ?)
+                      OR (candidate_item.status = 'running' AND candidate_item.lease_expires_at < ?)
                   )
                   {id_filter}
                   {task_filter}
-                ORDER BY priority DESC, available_at, created_at
+                  AND (
+                      candidate_item.folder_id IS NULL
+                      OR NOT EXISTS (
+                          SELECT 1
+                          FROM pipeline_work_items AS active_item
+                          WHERE active_item.folder_id = candidate_item.folder_id
+                            AND active_item.id <> candidate_item.id
+                            AND active_item.status = 'running'
+                            AND active_item.lease_expires_at >= ?
+                      )
+                  )
+                ORDER BY candidate_item.priority DESC,
+                         candidate_item.available_at,
+                         candidate_item.created_at
                 LIMIT 1
                 """,
                 params,

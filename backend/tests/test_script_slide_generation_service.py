@@ -102,6 +102,97 @@ def _unanchored_conclusion_block(index: int) -> dict:
 
 
 class ScriptSlideGenerationServiceTest(unittest.TestCase):
+    def test_audio_sync_update_clears_bindings_missing_from_new_payload(self):
+        deck = {
+            "deck_id": 17,
+            "slides": [
+                {
+                    "slide_id": "slide-1",
+                    "audio_segments": [{"audio_filename": "old.mp3"}],
+                    "audio_filename": "old.mp3",
+                    "trigger_time": 1.0,
+                    "end_time": 2.0,
+                    "audio_start_time": 1.0,
+                    "audio_end_time": 2.0,
+                },
+                {
+                    "slide_id": "slide-2",
+                    "audio_segments": [{"audio_filename": "stale.mp3"}],
+                    "audio_filename": "stale.mp3",
+                    "trigger_time": 2.0,
+                    "end_time": 3.0,
+                    "audio_start_time": 2.0,
+                    "audio_end_time": 3.0,
+                },
+            ],
+            "timeline": [
+                {
+                    "slide_index": 0,
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                    "audio_filename": "old.mp3",
+                },
+                {
+                    "slide_index": 1,
+                    "start_time": 2.0,
+                    "end_time": 3.0,
+                    "audio_filename": "stale.mp3",
+                },
+            ],
+            "stats": {},
+            "pipeline_debug": {},
+        }
+        current_sync = {
+            "mode": "word_ratio",
+            "generated_files": ["course_01.mp3"],
+            "timings": [
+                {
+                    "slide_id": "slide-1",
+                    "audio_filename": "course_01.mp3",
+                    "start_time": 0.0,
+                    "end_time": 5.0,
+                }
+            ],
+        }
+
+        with patch.object(slides, "_ensure_slide_deck_tables"), patch.object(
+            slides, "get_script_slide_deck_row", return_value=object()
+        ), patch.object(slides, "_decode_deck_row", return_value=deck), patch.object(
+            slides, "update_script_slide_deck_audio_sync_row"
+        ) as persist:
+            updated = slides.update_script_slide_deck_audio_sync(17, current_sync)
+
+        self.assertEqual(updated["slides"][0]["audio_filename"], "course_01.mp3")
+        self.assertNotIn("audio_filename", updated["slides"][1])
+        self.assertNotIn("audio_segments", updated["slides"][1])
+        self.assertIsNone(updated["timeline"][1]["start_time"])
+        self.assertIsNone(updated["timeline"][1]["end_time"])
+        self.assertIsNone(updated["timeline"][1]["audio_filename"])
+        persist.assert_called_once()
+
+    def test_slide_regeneration_repairs_existing_audio_plan(self):
+        generation_result = {"stats": {}, "pipeline_debug": {}}
+        repair_result = {
+            "success": True,
+            "status": "repaired",
+            "timings_repaired": 2,
+        }
+        with patch.object(slides, "_load_script_source", return_value={"folder_id": 118}), patch.object(
+            slides, "_prefer_beat_aligned_source", side_effect=lambda source: source
+        ), patch.object(
+            slides, "_run_slide_generation_from_source", return_value=generation_result
+        ) as generate, patch(
+            "services.content_generation_service.repair_audio_sync_from_existing_timelines",
+            return_value=repair_result,
+        ) as repair:
+            result = slides.generate_slides_from_script(118)
+
+        generate.assert_called_once()
+        self.assertTrue(generate.call_args.kwargs["persist"])
+        repair.assert_called_once_with(118)
+        self.assertEqual(result["stats"]["audio_sync_repair"], repair_result)
+        self.assertEqual(result["pipeline_debug"]["audio_sync_repair"], repair_result)
+
     def test_section_aligned_prompt_keeps_anchor_template_as_weak_hint(self):
         prompt = slides._prompt_for_blocks(
             [_strict_block(1)],

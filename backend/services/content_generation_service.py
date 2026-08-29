@@ -4034,10 +4034,20 @@ def _word_slice(text: str, start: int, end: int) -> str:
 def _slides_for_bloc(slides: list, bloc: dict) -> list:
     bloc_start = int(bloc.get("start_w") or 0)
     bloc_end = int(bloc.get("end_w") or bloc_start)
+    try:
+        bloc_number = int(bloc.get("bloc_number") or 0)
+    except (TypeError, ValueError):
+        bloc_number = 0
     raw_relevant = []
     seen = set()
 
     for slide_idx, slide in enumerate(slides or []):
+        declared_course = _slide_declared_course_number(slide)
+        if declared_course and bloc_number and declared_course != bloc_number:
+            # Numeric word ranges can become stale after the final script
+            # review.  A canonical course anchor is more trustworthy than an
+            # overlapping range from an older text layout.
+            continue
         source_ref = slide.get("source_ref") or {}
         try:
             start = int(source_ref.get("word_start"))
@@ -4066,10 +4076,6 @@ def _slides_for_bloc(slides: list, bloc: dict) -> list:
         # numeric ranges no longer overlap, but structured slide anchors still
         # carry the canonical course number. Reproject those slides across the
         # current bloc instead of producing an audio chunk with no slide_id.
-        try:
-            bloc_number = int(bloc.get("bloc_number") or 0)
-        except (TypeError, ValueError):
-            bloc_number = 0
         declared = [
             (slide_idx, slide)
             for slide_idx, slide in enumerate(slides or [])
@@ -4594,8 +4600,33 @@ def repair_audio_sync_from_existing_timelines(folder_id: int, *, dry_run: bool =
         },
     }
 
+    readiness = None
     if not dry_run:
-        update_script_slide_deck_audio_sync(deck["deck_id"], repaired_sync)
+        updated_deck = update_script_slide_deck_audio_sync(
+            deck["deck_id"],
+            repaired_sync,
+        )
+        if not updated_deck:
+            raise RuntimeError(
+                f"Échec de persistance de la réparation du deck {deck['deck_id']}"
+            )
+        from services.audio_asset_validation_service import inspect_audio_sync_payload
+
+        expected_files = [
+            str(bloc.get("filename") or "")
+            for bloc in course_blocs
+            if bloc.get("filename")
+        ]
+        readiness = inspect_audio_sync_payload(
+            updated_deck,
+            expected_files,
+            require_all_slides=True,
+        )
+        if not readiness.get("ready"):
+            raise RuntimeError(
+                "Réparation de synchronisation incomplète après persistance: "
+                f"{readiness}"
+            )
 
     return {
         "success": True,
@@ -4607,6 +4638,7 @@ def repair_audio_sync_from_existing_timelines(folder_id: int, *, dry_run: bool =
         "timings_repaired": len(repaired_timings),
         "timings_preserved": len(preserved_timings),
         "details": details,
+        "readiness": readiness,
     }
 
 
@@ -14637,6 +14669,7 @@ def generate_audio_from_script(
     include_breaks=True,
     parallel_breaks=False,
     preserve_existing=False,
+    _allow_unsynced_course_audio_for_tests=False,
 ):
     """
     Génère (ou régénère) la playlist MP3 depuis le script TTS stocké en DB :
@@ -14724,6 +14757,32 @@ def generate_audio_from_script(
     )
     saved_script_plan = _load_saved_course_script_plan(platform_id, folder_id) or {}
     target_filename = os.path.basename((target_filename or "").split("?", 1)[0]) or None
+    target_playlist_item = next(
+        (item for item in playlist_items if item[0] == target_filename),
+        None,
+    ) if target_filename else None
+    generates_course_audio = bool(
+        not mock
+        and (
+            target_filename is None
+            or (target_playlist_item and target_playlist_item[2] == "cours")
+        )
+    )
+    if generates_course_audio and not _allow_unsynced_course_audio_for_tests:
+        if not sync_slides or not auto_generate_slides:
+            logger.warning(
+                "PIPELINE_AUDIO_SYNC_FORCED folder_id=%s target_filename=%s "
+                "requested_sync_slides=%s requested_auto_generate_slides=%s",
+                folder_id,
+                target_filename,
+                bool(sync_slides),
+                bool(auto_generate_slides),
+            )
+        # Enforce the invariant at the service boundary as well as in HTTP and
+        # queue callers.  A future caller cannot accidentally create a real
+        # course MP3 without a slide deck and persisted timings.
+        sync_slides = True
+        auto_generate_slides = True
     try:
         audio_budget_audit = assert_course_day_word_budget(folder_id, context="audio_generation")
     except Exception as exc:
@@ -14781,6 +14840,7 @@ def generate_audio_from_script(
                 max_slides=slide_max_slides,
                 pace=slide_pace,
                 model=slide_model,
+                repair_existing_audio_sync=False,
             )
             slide_deck = get_latest_script_slide_deck(folder_id, content_job_id=job_id)
         if not is_script_slide_deck_usable(slide_deck):

@@ -746,6 +746,19 @@ def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict 
 
     slides = deck["slides"]
     for slide in slides:
+        # The payload is the source of truth.  Clear bindings from a previous
+        # deck/audio version before applying the current timing set; otherwise
+        # a slide removed from the new synchronization can keep pointing at a
+        # stale MP3 even though audio_sync_json no longer contains it.
+        for key in (
+            "audio_segments",
+            "audio_filename",
+            "trigger_time",
+            "end_time",
+            "audio_start_time",
+            "audio_end_time",
+        ):
+            slide.pop(key, None)
         slide_timings = timings_by_slide.get(slide.get("slide_id"), [])
         if not slide_timings:
             continue
@@ -760,6 +773,9 @@ def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict 
 
     timeline = deck["timeline"]
     for item in timeline:
+        item.pop("start_time", None)
+        item.pop("end_time", None)
+        item.pop("audio_filename", None)
         slide_index = item.get("slide_index")
         slide = slides[slide_index] if isinstance(slide_index, int) and slide_index < len(slides) else None
         if not slide:
@@ -4687,6 +4703,7 @@ def generate_slides_from_script(
     target_words_per_slide: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     model: str | None = None,
+    repair_existing_audio_sync: bool = True,
 ) -> dict:
     folder_id = _safe_int(folder_id, 0, 1, 10**9)
     if folder_id <= 0:
@@ -4695,7 +4712,7 @@ def generate_slides_from_script(
     source = _prefer_beat_aligned_source(
         _load_script_source(folder_id, job_id=job_id, platform_id=platform_id)
     )
-    return _run_slide_generation_from_source(
+    result = _run_slide_generation_from_source(
         source,
         job_id=job_id,
         max_slides=max_slides,
@@ -4705,3 +4722,23 @@ def generate_slides_from_script(
         model=model,
         persist=True,
     )
+    if repair_existing_audio_sync:
+        try:
+            from services.content_generation_service import (
+                repair_audio_sync_from_existing_timelines,
+            )
+
+            repair = repair_audio_sync_from_existing_timelines(folder_id)
+        except ValueError as exc:
+            # A first-generation deck legitimately has no prior audio plan.
+            # In that case the audio stage will create the synchronization.
+            if "Aucun content-audio-plan exploitable" not in str(exc):
+                raise
+            repair = {
+                "success": True,
+                "status": "not_applicable",
+                "reason": "no_existing_audio_plan",
+            }
+        result.setdefault("stats", {})["audio_sync_repair"] = repair
+        result.setdefault("pipeline_debug", {})["audio_sync_repair"] = repair
+    return result

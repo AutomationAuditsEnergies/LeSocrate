@@ -65,6 +65,7 @@ class AudioTwoStageGenerationTest(unittest.TestCase):
                 mock=False,
                 basic_tts=False,
                 sync_slides=False,
+                _allow_unsynced_course_audio_for_tests=True,
                 next_folder_id=None,
                 is_last_folder=True,
             )

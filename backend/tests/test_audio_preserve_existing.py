@@ -71,8 +71,10 @@ class AudioPreserveExistingTest(unittest.TestCase):
                     123,
                     force_all=True,
                     basic_tts=True,
-                    sync_slides=True,
-                    auto_generate_slides=True,
+                    # Even a legacy/new caller asking for no synchronization
+                    # is forced through the production slide contract.
+                    sync_slides=False,
+                    auto_generate_slides=False,
                     next_folder_id=None,
                     is_last_folder=True,
                 )
@@ -287,6 +289,7 @@ class AudioPreserveExistingTest(unittest.TestCase):
                 mock=False,
                 basic_tts=True,
                 sync_slides=False,
+                _allow_unsynced_course_audio_for_tests=True,
                 next_folder_id=None,
                 is_last_folder=True,
             )
@@ -368,6 +371,7 @@ class AudioPreserveExistingTest(unittest.TestCase):
                 mock=False,
                 basic_tts=True,
                 sync_slides=False,
+                _allow_unsynced_course_audio_for_tests=True,
                 next_folder_id=None,
                 is_last_folder=True,
             )
