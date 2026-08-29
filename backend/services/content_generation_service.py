@@ -14887,14 +14887,35 @@ def generate_audio_from_script(
     azure_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
     existing_playlist_files = set()
     if preserve_existing:
-        for item_filename, _duration_sec, _file_type, _bloc_num in playlist_items:
+        from services.audio_asset_validation_service import (
+            audio_sync_timing_files,
+            validate_mp3_bytes,
+        )
+
+        existing_synced_courses = (
+            audio_sync_timing_files(folder_id) if sync_slides else set()
+        )
+        for item_filename, item_duration_sec, item_file_type, _bloc_num in playlist_items:
             blob_path = f"{azure_prefix}{item_filename}"
             try:
-                if blob_exists(CONTAINER_AUDIOS, blob_path):
-                    existing_playlist_files.add(item_filename)
+                if not blob_exists(CONTAINER_AUDIOS, blob_path):
+                    continue
+                existing_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+                validate_mp3_bytes(
+                    item_filename,
+                    existing_bytes,
+                    expected_duration_seconds=item_duration_sec,
+                )
+                if (
+                    item_file_type == "cours"
+                    and sync_slides
+                    and item_filename not in existing_synced_courses
+                ):
+                    raise ValueError("synchronisation slides absente")
+                existing_playlist_files.add(item_filename)
             except Exception as exc:
                 logger.warning(
-                    "PIPELINE_AUDIO_EXISTING_CHECK_FAILED formation_job_id=%s content_job_id=%s folder_id=%s filename=%s error=%s",
+                    "PIPELINE_AUDIO_EXISTING_INVALID_REGENERATE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s error=%s",
                     formation_job_id,
                     job_id,
                     folder_id,
@@ -15099,7 +15120,15 @@ def generate_audio_from_script(
             actual_reading = _actual_reading_from_attempts(attempts)
             final_duration = float(voice_duration)
             blob_path = f"{azure_prefix}{filename}"
-            upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
+            upload_blob(
+                CONTAINER_AUDIOS,
+                blob_path,
+                final_bytes,
+                metadata={
+                    "audio_validated": "1",
+                    "duration_seconds": f"{final_duration:.3f}",
+                },
+            )
             logger.info(
                 "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=cours bloc=%s final_duration=%.1f words=%s duration_ms=%s parallel_fish=true",
                 formation_job_id,
@@ -15190,7 +15219,15 @@ def generate_audio_from_script(
                         else len(final_bytes) / 6000
                     )
             _assert_audio_duration_within_slot(filename, final_duration, duration_sec)
-            upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
+            upload_blob(
+                CONTAINER_AUDIOS,
+                f"{azure_prefix}{filename}",
+                final_bytes,
+                metadata={
+                    "audio_validated": "1",
+                    "duration_seconds": f"{final_duration:.3f}",
+                },
+            )
             logger.info(
                 "PIPELINE_AUDIO_BREAK_PARALLEL_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=%s mode=%s final_duration=%.1f duration_ms=%s",
                 formation_job_id,
@@ -15505,7 +15542,15 @@ def generate_audio_from_script(
                     )
             _assert_audio_duration_within_slot(filename, final_duration, duration_sec)
             _progress(step, len(playlist_items), f"{filename} — upload audio ({break_mode})...")
-            upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
+            upload_blob(
+                CONTAINER_AUDIOS,
+                f"{azure_prefix}{filename}",
+                final_bytes,
+                metadata={
+                    "audio_validated": "1",
+                    "duration_seconds": f"{final_duration:.3f}",
+                },
+            )
             logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé ({break_mode})")
             _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
             logger.info(
@@ -16021,7 +16066,15 @@ def generate_audio_from_script(
                 target_sec,
             )
         blob_path = f"{azure_prefix}{filename}"
-        upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
+        upload_blob(
+            CONTAINER_AUDIOS,
+            blob_path,
+            final_bytes,
+            metadata={
+                "audio_validated": "1",
+                "duration_seconds": f"{final_duration:.3f}",
+            },
+        )
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
         logger.info(
             "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=cours bloc=%s final_duration=%.1f "

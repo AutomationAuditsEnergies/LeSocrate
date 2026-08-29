@@ -11,6 +11,7 @@ from repositories.course_schedule_repository import (
 )
 from repositories.pipeline_repository import list_due_audio_generation_sessions
 from services.audio_service import is_explicit_schedule_occurrence
+from services.day_playlist_service import is_course_audio_filename
 from services.formation_pipeline_service import get_expected_course_folders
 from utils.logger import get_logger
 
@@ -109,7 +110,7 @@ def _enqueue_scheduled_audio_file(
             "expected_files": list(expected_files),
             "destination_prefix": f"course-sessions/{session_id}",
             "voice_type": voice_type,
-            "sync_slides": clean_name.lower().startswith(("cours_", "course_")),
+            "sync_slides": is_course_audio_filename(clean_name),
             "auto_generate_slides": True,
         },
         priority=100,
@@ -142,6 +143,18 @@ def finalize_scheduled_audio_session_if_ready(
     )
     if not state["ready"]:
         return {**state, "completed": False}
+
+    from services.audio_asset_validation_service import inspect_audio_sync_readiness
+
+    sync_readiness = inspect_audio_sync_readiness(folder_id, expected_files)
+    if not sync_readiness.get("ready"):
+        return {
+            **state,
+            "ready": False,
+            "completed": False,
+            "reason": "audio_sync_incomplete",
+            "audio_sync_status": sync_readiness,
+        }
 
     playback = ensure_occurrence_playback_manifest(
         platform_id,
@@ -214,12 +227,31 @@ def reconcile_scheduled_audio_session(session: dict, *, tts_mode=None) -> dict:
                 expected_files=expected_files,
                 voice_type=voice_type,
             )
-            return {
-                **result,
-                "success": True,
-                "skipped": True,
-                "reason": "manifest_already_complete",
-                "manifest": finalized,
+            if finalized.get("completed"):
+                return {
+                    **result,
+                    "success": True,
+                    "skipped": True,
+                    "reason": "manifest_already_complete",
+                    "manifest": finalized,
+                }
+            sync_status = finalized.get("audio_sync_status") or {}
+            missing_sync_files = sync_status.get("missing_course_files") or []
+            if sync_status.get("missing_slide_ids") and not missing_sync_files:
+                missing_sync_files = sync_status.get("expected_course_files") or []
+            if not missing_sync_files:
+                return {
+                    **result,
+                    "success": False,
+                    "skipped": True,
+                    "reason": finalized.get("reason") or "manifest_not_ready",
+                    "manifest": finalized,
+                }
+            state = {
+                **state,
+                "ready": False,
+                "missing": sorted(set(missing_sync_files)),
+                "audio_sync_status": sync_status,
             }
 
         if not _folder_content_ready(folder_id):

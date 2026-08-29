@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { apiDownload, apiFetch } from '../api'
 import AudioEditor from './AudioEditor'
+import { isCourseAudioFilename } from './slides/audioSlideSync'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -65,10 +66,6 @@ const PLAYLIST_VOICE_OPTIONS = [
   { value: 'fish_audio', label: 'Fish Audio', icon: 'graphic_eq', hint: 'voix premium payante' },
 ]
 
-const isCourseAudioFilename = (filename = '') => (
-  /^(cours|course)(?:_|-).*\.mp3$/i.test(filename)
-)
-
 const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
   const byBloc = new Map()
   ;(planned || []).forEach(bloc => {
@@ -109,7 +106,9 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const [wordAnalysis, setWordAnalysis] = useState(null) // résultat analyse mots
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
+  const [invalidAudios, setInvalidAudios] = useState([]) // MP3 corrompus/stale ou sans synchro
   const [audioPlaylistItems, setAudioPlaylistItems] = useState([]) // manifeste V1/V2 attendu
+  const [cleaningInvalidAudios, setCleaningInvalidAudios] = useState(false)
   const [folderAudioStates, setFolderAudioStates] = useState({})
   const [showFillForm, setShowFillForm] = useState(false)
   const [fillFolderId, setFillFolderId] = useState('')
@@ -213,12 +212,21 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
           (Array.isArray(audioData.audios) ? audioData.audios : [])
             .map((audio) => audio.filename),
         )
+        const invalidCount = Array.isArray(audioData.invalid_audios)
+          ? audioData.invalid_audios.length
+          : 0
         const readyCount = expected.filter((item) => generated.has(item.filename)).length
         if (jobData.status === 'running') {
           return [folder.id, { status: 'preparing', label: 'Audios en préparation' }]
         }
         if (jobData.status === 'error') {
           return [folder.id, { status: 'error', label: 'Erreur de génération' }]
+        }
+        if (invalidCount > 0) {
+          return [folder.id, {
+            status: 'error',
+            label: `Audios invalides · ${invalidCount} à corriger`,
+          }]
         }
         if (expected.length > 0 && readyCount === expected.length) {
           return [folder.id, { status: 'ready', label: `Audios prêts · ${readyCount}/${expected.length}` }]
@@ -805,6 +813,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
     setTtsStatus(null)
     setWordAnalysis(null)
     setGeneratedAudios([])
+    setInvalidAudios([])
     setAudioPlaylistItems([])
     fetchGeneratedAudios(folder.id)
     fetchDirtyBlocs(folder.id)
@@ -815,6 +824,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
     setSelectedFolder(null)
     setDocuments([])
     setTtsStatus(null)
+    setInvalidAudios([])
     setAudioPlaylistItems([])
     fetchFolderAudioStates(folders)
     if (pollingRef.current) {
@@ -1070,6 +1080,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       const data = await resp.json()
       if (data.success) {
         setGeneratedAudios(Array.isArray(data.audios) ? data.audios : [])
+        setInvalidAudios(Array.isArray(data.invalid_audios) ? data.invalid_audios : [])
         setAudioPlaylistItems(
           Array.isArray(data.audio_playlist_items)
             ? data.audio_playlist_items
@@ -1078,6 +1089,62 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       }
     } catch (e) {
       console.error('Erreur chargement audios générés:', e)
+    }
+  }
+
+  const handleCleanupInvalidAudios = async () => {
+    if (!selectedFolder || cleaningInvalidAudios) return
+    const physicalInvalid = invalidAudios.filter(audio => (
+      !audio.physical_ready || audio.reason === 'unexpected_audio'
+    ))
+    if (!physicalInvalid.length) return
+    const confirmed = window.confirm(
+      `${physicalInvalid.length} audio(s) invalide(s) seront déplacés en quarantaine récupérable. Continuer ?`,
+    )
+    if (!confirmed) return
+    setCleaningInvalidAudios(true)
+    try {
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/cleanup-invalid-audios`,
+        { method: 'POST' },
+      )
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Nettoyage incomplet')
+      }
+      await fetchGeneratedAudios(selectedFolder.id)
+      await fetchFolderAudioStates(folders)
+      const quarantinedCount = Array.isArray(data.quarantined) ? data.quarantined.length : 0
+      alert(
+        `${quarantinedCount} audio(s) déplacé(s) en quarantaine récupérable. ` +
+        'Relancez maintenant la génération Edge ou Fish pour recréer les fichiers manquants.',
+      )
+    } catch (error) {
+      alert(error.message || 'Impossible de mettre les audios invalides en quarantaine.')
+    } finally {
+      setCleaningInvalidAudios(false)
+    }
+  }
+
+  const handleRepairInvalidAudioSync = async () => {
+    if (!selectedFolder || cleaningInvalidAudios) return
+    setCleaningInvalidAudios(true)
+    try {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/repair-audio-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: false }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || data.success === false) {
+        throw new Error(data.error || 'Réparation de synchronisation impossible')
+      }
+      await fetchGeneratedAudios(selectedFolder.id)
+      await fetchFolderAudioStates(folders)
+    } catch (error) {
+      alert(error.message || 'Réparation de synchronisation impossible.')
+    } finally {
+      setCleaningInvalidAudios(false)
     }
   }
 
@@ -1921,10 +1988,32 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   <div className="flex items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
                     <Icon name="music_note" style={{ color: colors.textMuted, fontSize: '17px' }} />
                     <span className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</span>
+                    {invalidAudios.some(audio => audio.reason === 'missing_audio_sync') && (
+                      <button
+                        type="button"
+                        onClick={handleRepairInvalidAudioSync}
+                        disabled={cleaningInvalidAudios}
+                        className="ml-auto rounded-lg px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                      >
+                        Réparer la synchro
+                      </button>
+                    )}
+                    {invalidAudios.some(audio => !audio.physical_ready || audio.reason === 'unexpected_audio') && (
+                      <button
+                        type="button"
+                        onClick={handleCleanupInvalidAudios}
+                        disabled={cleaningInvalidAudios}
+                        className={`${invalidAudios.some(audio => audio.reason === 'missing_audio_sync') ? '' : 'ml-auto'} rounded-lg px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50`}
+                        style={{ border: '1px solid #fecaca', color: '#b91c1c', backgroundColor: '#fef2f2' }}
+                      >
+                        {cleaningInvalidAudios ? 'Traitement…' : 'Mettre en quarantaine'}
+                      </button>
+                    )}
                     <select
                       value={audioTypeFilter}
                       onChange={(e) => setAudioTypeFilter(e.target.value)}
-                      className="ml-auto rounded-lg px-2.5 py-1.5 text-xs outline-none"
+                      className={`${invalidAudios.length ? '' : 'ml-auto'} rounded-lg px-2.5 py-1.5 text-xs outline-none`}
                       style={{
                         backgroundColor: colors.cardBg,
                         border: `1px solid ${colors.border}`,
@@ -1957,6 +2046,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         .filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
                       return visibleItems.map((item) => {
                         const audio = generatedMap[item.filename]
+                        const invalid = item.readiness === 'invalid'
                         const meta = AUDIO_TYPE_META[item.type] || AUDIO_TYPE_META.cours
                         return (
 	                          <div
@@ -1980,8 +2070,8 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 	                            }}
 	                          >
                             <Icon
-                              name={audio ? 'check_circle' : 'radio_button_unchecked'}
-                              style={{ color: audio ? colors.textSecondary : colors.textMuted, fontSize: '18px', flexShrink: 0 }}
+                              name={audio ? 'check_circle' : invalid ? 'error_outline' : 'radio_button_unchecked'}
+                              style={{ color: audio ? '#047857' : invalid ? '#b91c1c' : colors.textMuted, fontSize: '18px', flexShrink: 0 }}
                             />
                             <div className="flex-1 min-w-0">
                               <p className="flex items-center gap-2 text-xs font-medium" style={{ color: audio ? colors.textSecondary : colors.textMuted }}>
@@ -1991,6 +2081,15 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                                   · {item.filename}
                                 </span>
                               </p>
+                              {invalid && (
+                                <p className="mt-0.5 text-[11px] font-medium" style={{ color: '#b91c1c' }}>
+                                  {item.readiness_reason === 'missing_audio_sync'
+                                    ? 'Synchronisation slides absente ou incomplète'
+                                    : item.readiness_reason === 'unexpected_audio'
+                                      ? 'Fichier ancien hors manifeste'
+                                      : 'MP3 invalide ou durée incohérente'}
+                                </p>
+                              )}
                             </div>
 	                            {audio && (
 	                              <div className="flex flex-shrink-0 items-center gap-1.5">

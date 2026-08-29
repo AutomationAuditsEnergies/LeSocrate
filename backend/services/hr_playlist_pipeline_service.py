@@ -95,6 +95,8 @@ def _finalize_module_if_ready(folder_id: int, voice_type: str) -> dict | None:
         "audiostts"
     )
     manifest_issues = []
+    from services.day_playlist_service import is_course_audio_filename
+
     for candidate_folder_id in folder_ids:
         prefix = f"platform-{platform_id}/folder-{candidate_folder_id}/playlist/"
         if schedule_schema_version == 2:
@@ -121,8 +123,7 @@ def _finalize_module_if_ready(folder_id: int, voice_type: str) -> dict | None:
         course_count = sum(
             1
             for blob in container.list_blobs(name_starts_with=prefix)
-            if os.path.basename(blob.name).startswith("cours_")
-            and blob.name.endswith(".mp3")
+            if is_course_audio_filename(os.path.basename(blob.name))
         )
         if course_count < 7:
             manifest_issues.append({
@@ -445,15 +446,21 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
             # MP3 found under the folder prefix, while course-only runs publish
             # the generated subset.
             publish_filenames = None if include_breaks else result["files"]
-        result["publish"] = _publish(
-            platform_id,
-            folder_id,
-            publish_filenames,
-            archive=True,
-        )
-        module_finalize = _finalize_module_if_ready(folder_id, voice_type)
-        if module_finalize:
-            result["module_finalize"] = module_finalize
+        if voice_type == "mock":
+            result["publish"] = {
+                "skipped": True,
+                "reason": "mock_audio_is_never_learner_visible",
+            }
+        else:
+            result["publish"] = _publish(
+                platform_id,
+                folder_id,
+                publish_filenames,
+                archive=True,
+            )
+            module_finalize = _finalize_module_if_ready(folder_id, voice_type)
+            if module_finalize:
+                result["module_finalize"] = module_finalize
         file_count = len(result.get("files") or [])
         scope_label = (
             f"{file_count} audios"

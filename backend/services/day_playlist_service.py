@@ -8,8 +8,19 @@ day with the legacy 19-file playlist.
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 from typing import Any, Iterable
+
+
+_COURSE_AUDIO_FILENAME_RE = re.compile(r"^(?:cours|course)(?:_|-).+\.mp3$", re.IGNORECASE)
+
+
+def is_course_audio_filename(value: Any) -> bool:
+    """Recognize both historic V1 and canonical V2 teaching-audio names."""
+    filename = os.path.basename(str(value or "").split("?", 1)[0].split("#", 1)[0])
+    return bool(_COURSE_AUDIO_FILENAME_RE.fullmatch(filename))
 
 
 def _json_object(value: Any) -> dict[str, Any]:

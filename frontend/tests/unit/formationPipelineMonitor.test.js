@@ -53,6 +53,13 @@ test('restores document, slides and audio inspection controls', () => {
   assert.match(source, /FolderTextModal/)
 })
 
+test('audio controls enqueue the durable folder worker and never call the retired route', () => {
+  assert.match(source, /\/api\/hr\/cours-folders\/\$\{folder\.folder_id\}\/generate-playlist/)
+  assert.match(source, /voice_type: ttsMode/)
+  assert.match(source, /\/playlist-status/)
+  assert.doesNotMatch(source, /content\/\$\{folder\.folder_id\}\/generate-audio/)
+})
+
 test('keeps the selected pipeline in the URL', () => {
   assert.match(source, /setPipelineJobInUrl/)
   assert.match(source, /url\.searchParams\.set\('job'/)

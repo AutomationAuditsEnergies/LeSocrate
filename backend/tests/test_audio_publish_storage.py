@@ -68,7 +68,19 @@ class AudioPublishStorageTest(unittest.TestCase):
         ), patch.object(
             service,
             "archive_public_platform_audios",
-        ) as archive:
+        ) as archive, patch(
+            "services.audio_asset_validation_service.validate_mp3_bytes",
+            return_value={"duration_seconds": 2100.0},
+        ), patch(
+            "services.audio_asset_validation_service.audio_sync_timing_files",
+            return_value={"cours_9h00_9h45.mp3"},
+        ), patch(
+            "services.audio_asset_validation_service.inspect_audio_sync_readiness",
+            return_value={"ready": True},
+        ), patch(
+            "repositories.teacher_asset_repository.resolve_folder_asset_origin",
+            return_value={},
+        ):
             result = service.publish_playlist_audio_to_platform(
                 5,
                 55,
@@ -135,6 +147,21 @@ class AudioPublishStorageTest(unittest.TestCase):
                 ],
             },
         ), patch(
+            "services.audio_asset_validation_service.validate_mp3_bytes",
+            side_effect=[
+                {"duration_seconds": 3180.8},
+                {"duration_seconds": 900.1},
+            ],
+        ), patch(
+            "services.audio_asset_validation_service.audio_sync_timing_files",
+            return_value={"course_01.mp3"},
+        ), patch(
+            "services.audio_asset_validation_service.inspect_audio_sync_readiness",
+            return_value={"ready": True},
+        ), patch(
+            "repositories.teacher_asset_repository.resolve_folder_asset_origin",
+            return_value={},
+        ), patch(
             "services.adaptive_playback_service.upload_occurrence_playback_manifest",
             return_value="course-sessions/501/playback-manifest.json",
         ) as upload_manifest:
@@ -194,7 +221,25 @@ class AudioPublishStorageTest(unittest.TestCase):
                 "blob_path": "teacher-assets/module-4/day-1/course_01.mp3",
                 "registered": True,
             },
-        ) as resolve_asset:
+        ) as resolve_asset, patch(
+            "services.day_playlist_service.resolve_folder_playlist",
+            return_value={
+                "schema_version": 2,
+                "playlist_items": [("course_01.mp3", 3600, "cours", 1)],
+            },
+        ), patch(
+            "services.audio_asset_validation_service.validate_mp3_bytes",
+            return_value={"duration_seconds": 3200.0},
+        ), patch(
+            "services.audio_asset_validation_service.audio_sync_timing_files",
+            return_value={"course_01.mp3"},
+        ), patch(
+            "services.audio_asset_validation_service.inspect_audio_sync_readiness",
+            return_value={"ready": True},
+        ), patch(
+            "repositories.teacher_asset_repository.resolve_folder_asset_origin",
+            return_value={"source_folder_id": 55},
+        ):
             result = service.publish_playlist_audio_to_platform(
                 5,
                 55,
@@ -287,6 +332,30 @@ class AudioPublishStorageTest(unittest.TestCase):
             service,
             "archive_public_platform_audios",
             return_value={"archived": 1, "deleted": 1},
+        ), patch(
+            "services.day_playlist_service.resolve_folder_playlist",
+            return_value={
+                "schema_version": 2,
+                "playlist_items": [
+                    ("course_01.mp3", 3600, "cours", 1),
+                    ("qa_01.mp3", 900, "qa", 1),
+                ],
+            },
+        ), patch(
+            "services.audio_asset_validation_service.validate_mp3_bytes",
+            side_effect=[
+                {"duration_seconds": 3180.0},
+                {"duration_seconds": 900.0},
+            ],
+        ), patch(
+            "services.audio_asset_validation_service.audio_sync_timing_files",
+            return_value={"course_01.mp3"},
+        ), patch(
+            "services.audio_asset_validation_service.inspect_audio_sync_readiness",
+            return_value={"ready": True},
+        ), patch(
+            "repositories.teacher_asset_repository.resolve_folder_asset_origin",
+            return_value={},
         ):
             result = service.publish_playlist_audio_to_platform(
                 5,
@@ -308,6 +377,130 @@ class AudioPublishStorageTest(unittest.TestCase):
             ["course_01.mp3", "qa_01.mp3"],
         )
         self.assertNotIn("stale_legacy.mp3", published_destinations)
+
+    def test_invalid_course_is_rejected_before_archiving_current_audio(self):
+        source_blob = SimpleNamespace(
+            name="platform-5/folder-55/playlist/course_01.mp3"
+        )
+        source_client = Mock()
+        source_client.download_blob.return_value.readall.return_value = b"truncated"
+        source_container = Mock()
+        source_container.list_blobs.return_value = [source_blob]
+        source_container.get_blob_client.return_value = source_client
+        tts_service = Mock()
+        tts_service.get_container_client.return_value = source_container
+        audio_service = Mock()
+        audio_service.get_container_client.return_value = Mock()
+
+        with patch.dict(
+            service.os.environ,
+            {
+                "AZURE_TTS_STORAGE_CONNECTION_STRING": "tts",
+                "AZURE_AUDIO_STORAGE_CONNECTION_STRING": "audio",
+            },
+            clear=False,
+        ), patch.object(
+            service.BlobServiceClient,
+            "from_connection_string",
+            side_effect=[tts_service, audio_service],
+        ), patch.object(
+            service,
+            "ensure_platform_audio_storage",
+        ), patch.object(
+            service,
+            "archive_public_platform_audios",
+        ) as archive, patch(
+            "services.day_playlist_service.resolve_folder_playlist",
+            return_value={
+                "schema_version": 2,
+                "playlist_items": [("course_01.mp3", 3600, "cours", 1)],
+            },
+        ), patch(
+            "services.audio_asset_validation_service.validate_mp3_bytes",
+            side_effect=ValueError("Audio de cours trop petit"),
+        ), patch(
+            "services.audio_asset_validation_service.audio_sync_timing_files",
+            return_value={"course_01.mp3"},
+        ), patch(
+            "services.audio_asset_validation_service.inspect_audio_sync_readiness",
+            return_value={"ready": True},
+        ), patch(
+            "repositories.teacher_asset_repository.resolve_folder_asset_origin",
+            return_value={},
+        ):
+            with self.assertRaisesRegex(ValueError, "Validation audio"):
+                service.publish_playlist_audio_to_platform(
+                    5,
+                    55,
+                    filenames=["course_01.mp3"],
+                    archive_existing=True,
+                )
+
+        archive.assert_not_called()
+
+    def test_incomplete_slide_sync_is_rejected_before_archiving_current_audio(self):
+        source_blob = SimpleNamespace(
+            name="platform-5/folder-55/playlist/course_01.mp3"
+        )
+        source_client = Mock()
+        source_client.download_blob.return_value.readall.return_value = b"valid-mp3"
+        source_container = Mock()
+        source_container.list_blobs.return_value = [source_blob]
+        source_container.get_blob_client.return_value = source_client
+        tts_service = Mock()
+        tts_service.get_container_client.return_value = source_container
+        audio_service = Mock()
+        audio_service.get_container_client.return_value = Mock()
+
+        with patch.dict(
+            service.os.environ,
+            {
+                "AZURE_TTS_STORAGE_CONNECTION_STRING": "tts",
+                "AZURE_AUDIO_STORAGE_CONNECTION_STRING": "audio",
+            },
+            clear=False,
+        ), patch.object(
+            service.BlobServiceClient,
+            "from_connection_string",
+            side_effect=[tts_service, audio_service],
+        ), patch.object(
+            service,
+            "ensure_platform_audio_storage",
+        ), patch.object(
+            service,
+            "archive_public_platform_audios",
+        ) as archive, patch(
+            "services.day_playlist_service.resolve_folder_playlist",
+            return_value={
+                "schema_version": 2,
+                "playlist_items": [("course_01.mp3", 3600, "cours", 1)],
+            },
+        ), patch(
+            "services.audio_asset_validation_service.validate_mp3_bytes",
+            return_value={"duration_seconds": 3200.0},
+        ), patch(
+            "services.audio_asset_validation_service.audio_sync_timing_files",
+            return_value={"course_01.mp3"},
+        ), patch(
+            "services.audio_asset_validation_service.inspect_audio_sync_readiness",
+            return_value={
+                "ready": False,
+                "missing_course_files": [],
+                "missing_slide_ids": ["s2"],
+            },
+        ), patch(
+            "repositories.teacher_asset_repository.resolve_folder_asset_origin",
+            return_value={},
+        ):
+            with self.assertRaisesRegex(ValueError, "Synchronisation slides incomplète"):
+                service.publish_playlist_audio_to_platform(
+                    5,
+                    55,
+                    filenames=["course_01.mp3"],
+                    archive_existing=True,
+                )
+
+        archive.assert_not_called()
 
     def test_legacy_archive_never_deletes_occurrence_snapshots(self):
         source_container = Mock()

@@ -373,6 +373,8 @@ class HrFillFromFolderTest(unittest.TestCase):
                 "duration_seconds": 3600,
                 "type": "pause_midi",
                 "course_index": 1,
+                "readiness": "missing",
+                "readiness_reason": "storage_unconfigured",
             },
         )
 

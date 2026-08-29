@@ -77,18 +77,18 @@ def ensure_private_container(container_name):
     return container_name
 
 
-def upload_blob(container_name, blob_path, data):
+def upload_blob(container_name, blob_path, data, *, metadata=None):
     """Upload des bytes ou un file-like vers Azure Blob Storage"""
     client = _get_blob_service_client()
     blob_client = client.get_blob_client(container=container_name, blob=blob_path)
-    metadata = None
+    effective_metadata = dict(metadata or {})
     if isinstance(data, (bytes, bytearray, memoryview)):
-        metadata = {"sha256": hashlib.sha256(bytes(data)).hexdigest()}
+        effective_metadata["sha256"] = hashlib.sha256(bytes(data)).hexdigest()
     blob_client.upload_blob(
         data,
         overwrite=True,
         content_settings=_content_settings_for_blob(blob_path),
-        metadata=metadata,
+        metadata=effective_metadata or None,
     )
     logger.info(f"✅ Blob uploadé: {container_name}/{blob_path}")
     return blob_path

@@ -364,6 +364,76 @@ def publish_playlist_audio_to_platform(
     if archive_existing and not source_entries:
         raise ValueError("Aucun nouveau fichier MP3 généré à publier")
 
+    from repositories.teacher_asset_repository import resolve_folder_asset_origin
+    from services.audio_asset_validation_service import (
+        audio_sync_timing_files,
+        inspect_audio_sync_readiness,
+        validate_mp3_bytes,
+    )
+    from services.day_playlist_service import (
+        is_course_audio_filename,
+        resolve_folder_playlist,
+    )
+
+    playlist_contract = resolve_folder_playlist(folder_id)
+    expected_duration_by_name = {
+        filename: int(duration_seconds)
+        for filename, duration_seconds, _file_type, _course_index
+        in playlist_contract.get("playlist_items") or []
+    }
+    source_entries = [
+        entry for entry in source_entries
+        if entry["filename"] in expected_duration_by_name
+    ]
+    if not source_entries:
+        raise ValueError("Aucun MP3 du manifeste verrouillé à publier")
+    if wanted - {entry["filename"] for entry in source_entries}:
+        raise ValueError("Un fichier demandé n'appartient pas au manifeste audio verrouillé")
+
+    origin = resolve_folder_asset_origin(folder_id) or {}
+    sync_folder_id = int(origin.get("source_folder_id") or folder_id)
+    synced_course_files = audio_sync_timing_files(sync_folder_id)
+    validation_errors = []
+    media_durations = {}
+    for entry in source_entries:
+        filename = entry["filename"]
+        try:
+            audio_bytes = (
+                entry["container"]
+                .get_blob_client(entry["blob_path"])
+                .download_blob()
+                .readall()
+            )
+            proof = validate_mp3_bytes(
+                filename,
+                audio_bytes,
+                expected_duration_seconds=expected_duration_by_name.get(filename),
+            )
+            if is_course_audio_filename(filename) and filename not in synced_course_files:
+                raise ValueError(f"Synchronisation slides absente pour {filename}")
+            entry["audio_bytes"] = audio_bytes
+            media_durations[filename] = proof["duration_seconds"]
+        except Exception as exc:
+            validation_errors.append({"filename": filename, "error": str(exc)[:300]})
+    if validation_errors:
+        raise ValueError(f"Validation audio avant publication échouée: {validation_errors[:5]}")
+
+    expected_course_files = {
+        filename for filename in expected_duration_by_name
+        if is_course_audio_filename(filename)
+    }
+    publishing_files = {entry["filename"] for entry in source_entries}
+    if expected_course_files and expected_course_files.issubset(publishing_files):
+        sync_readiness = inspect_audio_sync_readiness(
+            sync_folder_id,
+            expected_duration_by_name,
+        )
+        if not sync_readiness.get("ready"):
+            raise ValueError(
+                "Synchronisation slides incomplète avant publication: "
+                f"{sync_readiness}"
+            )
+
     archive_result = None
     if archive_existing and not occurrence_prefix:
         archive_result = archive_public_platform_audios(
@@ -374,25 +444,11 @@ def publish_playlist_audio_to_platform(
 
     copied = []
     copied_blob_names = []
-    media_durations = {}
     errors = []
     for entry in source_entries:
         filename = entry["filename"]
         try:
-            audio_bytes = (
-                entry["container"]
-                .get_blob_client(entry["blob_path"])
-                .download_blob()
-                .readall()
-            )
-            if create_playback_manifest:
-                from services.content_generation_service import (
-                    _mp3_duration_seconds_no_ffprobe,
-                )
-
-                media_durations[filename] = _mp3_duration_seconds_no_ffprobe(
-                    audio_bytes
-                )
+            audio_bytes = entry["audio_bytes"]
             destination_name = (
                 f"{occurrence_prefix}/{filename}"
                 if occurrence_prefix

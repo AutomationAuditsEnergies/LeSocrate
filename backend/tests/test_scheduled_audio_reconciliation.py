@@ -73,6 +73,57 @@ class ScheduledAudioReconciliationTest(unittest.TestCase):
         resume.assert_called_once_with(8)
         enqueue.assert_not_called()
 
+    def test_complete_mp3_manifest_requeues_courses_when_slide_sync_is_incomplete(self):
+        expected = {"course_01.mp3", "qa_01.mp3"}
+        state = {
+            "ready": True,
+            "expected": sorted(expected),
+            "present": {name: {"size_bytes": 2_000_000} for name in expected},
+            "missing": [],
+            "invalid": {},
+        }
+        item = SimpleNamespace(id="work-sync", run_id="new-run", status="queued")
+        with (
+            patch.object(service, "_resolve_scheduled_folder", return_value=(8, 55)),
+            patch(
+                "services.day_playlist_service.required_audio_filenames",
+                return_value=expected,
+            ),
+            patch(
+                "services.audio_publish_service.inspect_published_audio_manifest",
+                return_value=state,
+            ),
+            patch.object(service, "_scheduled_voice_type", return_value="gtts"),
+            patch.object(
+                service,
+                "finalize_scheduled_audio_session_if_ready",
+                return_value={
+                    **state,
+                    "ready": False,
+                    "completed": False,
+                    "reason": "audio_sync_incomplete",
+                    "audio_sync_status": {
+                        "expected_course_files": ["course_01.mp3"],
+                        "missing_course_files": ["course_01.mp3"],
+                        "missing_slide_ids": ["s2"],
+                    },
+                },
+            ),
+            patch.object(service, "_folder_content_ready", return_value=True),
+            patch.object(
+                service,
+                "_enqueue_scheduled_audio_file",
+                return_value=(item, False),
+            ) as enqueue,
+            patch.object(service, "mark_audio_generation_queued", return_value=True),
+        ):
+            result = service.reconcile_scheduled_audio_session(self.session)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["missing_files"], ["course_01.mp3"])
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args.kwargs["filename"], "course_01.mp3")
+
     def test_complete_database_row_is_physically_rechecked(self):
         with patch.object(
             service,

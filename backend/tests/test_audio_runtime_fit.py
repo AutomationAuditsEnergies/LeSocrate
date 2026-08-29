@@ -1355,7 +1355,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
             "filename": "cours_9h00_9h45.mp3",
         }
 
-        def fake_upload(_container, blob_path, audio_bytes):
+        def fake_upload(_container, blob_path, audio_bytes, **_kwargs):
             uploaded.append((blob_path, audio_bytes))
 
         patches = [

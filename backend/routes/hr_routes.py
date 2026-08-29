@@ -243,6 +243,140 @@ def _bool_arg(name, default=False):
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _generated_audio_sync_readiness(folder_id, expected_filenames):
+    """Require valid timings for every course file and every persisted slide."""
+    from services.audio_asset_validation_service import inspect_audio_sync_readiness
+
+    return inspect_audio_sync_readiness(folder_id, expected_filenames)
+
+
+def _inspect_generated_audio_assets(folder_id, folder, playlist_contract):
+    """Return only physically valid, current-manifest, synchronized assets as ready."""
+    from services.audio_asset_validation_service import inspect_mp3_blob
+    from services.day_playlist_service import is_course_audio_filename
+
+    platform_id = int(folder["platform_id"])
+    expected_items = [
+        {
+            "filename": filename,
+            "duration_seconds": int(duration_seconds),
+            "type": file_type,
+            "course_index": int(course_index),
+        }
+        for filename, duration_seconds, file_type, course_index
+        in playlist_contract.get("playlist_items") or []
+    ]
+    expected_by_name = {item["filename"]: item for item in expected_items}
+    origin = resolve_folder_asset_origin(folder_id) or {}
+    source_platform_id = int(origin.get("source_platform_id") or platform_id)
+    source_folder_id = int(origin.get("source_folder_id") or folder_id)
+    prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/playlist/"
+
+    tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+    if not tts_conn:
+        return {
+            "audios": [],
+            "invalid_audios": [],
+            "audio_playlist_items": [
+                {**item, "readiness": "missing", "readiness_reason": "storage_unconfigured"}
+                for item in expected_items
+            ],
+            "audio_sync_status": _generated_audio_sync_readiness(
+                source_folder_id,
+                expected_by_name,
+            ),
+            "_storage": None,
+        }
+
+    bsc = BlobServiceClient.from_connection_string(tts_conn)
+    cc = bsc.get_container_client("audiostts")
+    sync_status = _generated_audio_sync_readiness(source_folder_id, expected_by_name)
+    timing_files = set(sync_status.get("timing_files") or [])
+    candidates = []
+    by_name = {}
+    for listed_blob in cc.list_blobs(name_starts_with=prefix):
+        name = os.path.basename(listed_blob.name)
+        if not name.lower().endswith(".mp3"):
+            continue
+        blob_client = cc.get_blob_client(listed_blob.name)
+        props = None
+        try:
+            props = blob_client.get_blob_properties()
+            expected_item = expected_by_name.get(name)
+            physical = inspect_mp3_blob(
+                blob_client,
+                name,
+                props=props,
+                expected_duration_seconds=(expected_item or {}).get("duration_seconds"),
+            )
+        except Exception as exc:
+            physical = {
+                "filename": name,
+                "ready": False,
+                "physical_ready": False,
+                "reason": "audio_inspection_failed",
+                "detail": str(exc)[:240],
+                "size_bytes": int(getattr(listed_blob, "size", 0) or 0),
+            }
+
+        expected_item = expected_by_name.get(name)
+        expected = expected_item is not None
+        is_course = is_course_audio_filename(name)
+        sync_ready = not is_course or (
+            bool(sync_status.get("ready")) and name in timing_files
+        )
+        reason = physical.get("reason")
+        if not expected:
+            reason = "unexpected_audio"
+        elif physical.get("physical_ready") and not sync_ready:
+            reason = "missing_audio_sync"
+        ready = bool(expected and physical.get("physical_ready") and sync_ready)
+        last_modified = getattr(props, "last_modified", None) if props is not None else None
+        candidate = {
+            **physical,
+            "filename": name,
+            "ready": ready,
+            "expected": expected,
+            "sync_ready": sync_ready,
+            "reason": reason,
+            "size_mb": round(float(physical.get("size_bytes") or 0) / (1024 * 1024), 1),
+            "last_modified": last_modified.strftime("%Y-%m-%d %H:%M") if last_modified else None,
+            "blob_path": listed_blob.name,
+        }
+        candidates.append(candidate)
+        by_name[name] = candidate
+
+    playlist_with_readiness = []
+    for item in expected_items:
+        candidate = by_name.get(item["filename"])
+        if not candidate:
+            playlist_with_readiness.append({
+                **item,
+                "readiness": "missing",
+                "readiness_reason": "missing_audio",
+            })
+        else:
+            playlist_with_readiness.append({
+                **item,
+                "readiness": "ready" if candidate["ready"] else "invalid",
+                "readiness_reason": candidate.get("reason"),
+                "estimated_duration_seconds": candidate.get("estimated_duration_seconds"),
+            })
+
+    return {
+        "audios": [candidate for candidate in candidates if candidate["ready"]],
+        "invalid_audios": [candidate for candidate in candidates if not candidate["ready"]],
+        "audio_playlist_items": playlist_with_readiness,
+        "audio_sync_status": sync_status,
+        "_storage": {
+            "container_client": cc,
+            "prefix": prefix,
+            "source_platform_id": source_platform_id,
+            "source_folder_id": source_folder_id,
+        },
+    }
+
+
 _FINAL_SCRIPT_DOC_WHERE = "(cd.doc_type = 'final_script' OR cd.original_name LIKE 'cours_genere_%.txt')"
 
 
@@ -5391,11 +5525,9 @@ def create_hr_blueprint():
                 }), 400
 
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio"
-            normalized_filename = filename.lower()
-            is_course_audio = (
-                normalized_filename.endswith(".mp3")
-                and normalized_filename.startswith(("cours_", "course_"))
-            )
+            from services.day_playlist_service import is_course_audio_filename
+
+            is_course_audio = is_course_audio_filename(filename)
             sync_slides = bool(req_body.get("sync_slides", is_course_audio)) and is_course_audio
             auto_generate_slides = bool(req_body.get("auto_generate_slides", sync_slides))
             slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
@@ -5565,57 +5697,115 @@ def create_hr_blueprint():
             from services.day_playlist_service import resolve_folder_playlist
 
             playlist_contract = resolve_folder_playlist(folder_id)
-            audio_playlist_items = [
-                {
-                    "filename": filename,
-                    "duration_seconds": int(duration_seconds),
-                    "type": file_type,
-                    "course_index": int(course_index),
-                }
-                for filename, duration_seconds, file_type, course_index
-                in playlist_contract.get("playlist_items") or []
-            ]
-            tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
-            if not tts_conn:
-                return jsonify({
-                    "success": True,
-                    "audios": [],
-                    "schedule_schema_version": int(
-                        playlist_contract.get("schema_version") or 1
-                    ),
-                    "audio_playlist_items": audio_playlist_items,
-                }), 200
-
-            origin = resolve_folder_asset_origin(folder_id) or {}
-            source_platform_id = int(origin.get("source_platform_id") or platform_id)
-            source_folder_id = int(origin.get("source_folder_id") or folder_id)
-            prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/playlist/"
-            from azure.storage.blob import BlobServiceClient as _BSC
-            bsc = _BSC.from_connection_string(tts_conn)
-            cc = bsc.get_container_client("audiostts")
-
-            audios = []
-            for blob in cc.list_blobs(name_starts_with=prefix):
-                name = blob.name.split("/")[-1]
-                if name.endswith(".mp3"):
-                    audios.append({
-                        "filename": name,
-                        "size_mb": round(blob.size / (1024 * 1024), 1),
-                        "last_modified": blob.last_modified.strftime("%Y-%m-%d %H:%M") if blob.last_modified else None,
-                    })
+            inspection = _inspect_generated_audio_assets(
+                folder_id,
+                folder,
+                playlist_contract,
+            )
+            inspection.pop("_storage", None)
 
             return jsonify({
                 "success": True,
-                "audios": audios,
                 "schedule_schema_version": int(
                     playlist_contract.get("schema_version") or 1
                 ),
-                "audio_playlist_items": audio_playlist_items,
+                **inspection,
             }), 200
 
         except Exception as e:
             logger.error(f"❌ Erreur get_generated_audios: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route(
+        "/api/hr/cours-folders/<int:folder_id>/cleanup-invalid-audios",
+        methods=["POST"],
+    )
+    def cleanup_invalid_audios(folder_id):
+        """Quarantine corrupt or stale MP3s; sync-only failures remain repairable."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+            from services.day_playlist_service import resolve_folder_playlist
+
+            inspection = _inspect_generated_audio_assets(
+                folder_id,
+                folder,
+                resolve_folder_playlist(folder_id),
+            )
+            storage = inspection.get("_storage")
+            if not storage:
+                return jsonify({"success": False, "error": "Stockage audio indisponible"}), 503
+            if (
+                int(storage["source_folder_id"]) != int(folder_id)
+                or int(storage["source_platform_id"]) != int(folder["platform_id"])
+            ):
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        "Les audios invalides appartiennent à un professeur partagé. "
+                        "Créez une personnalisation avant nettoyage."
+                    ),
+                    "code": "shared_asset_immutable",
+                }), 409
+
+            candidates = [
+                item for item in inspection.get("invalid_audios") or []
+                if not item.get("physical_ready") or item.get("reason") == "unexpected_audio"
+            ]
+            sync_only = [
+                item["filename"] for item in inspection.get("invalid_audios") or []
+                if item.get("physical_ready") and item.get("reason") == "missing_audio_sync"
+            ]
+            quarantine_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            cc = storage["container_client"]
+            quarantined = []
+            failures = []
+            for item in candidates:
+                source_path = item.get("blob_path")
+                if not source_path:
+                    continue
+                filename = os.path.basename(source_path)
+                target_path = (
+                    f"platform-{int(folder['platform_id'])}/folder-{int(folder_id)}/"
+                    f"quarantine/{quarantine_stamp}/playlist/{filename}"
+                )
+                try:
+                    source_client = cc.get_blob_client(source_path)
+                    props = source_client.get_blob_properties()
+                    audio_bytes = source_client.download_blob().readall()
+                    cc.get_blob_client(target_path).upload_blob(
+                        audio_bytes,
+                        overwrite=False,
+                        content_settings=props.content_settings,
+                        metadata={
+                            "quarantine_reason": str(item.get("reason") or "invalid")[:120],
+                            "original_filename": filename,
+                        },
+                    )
+                    source_client.delete_blob()
+                    quarantined.append({
+                        "filename": filename,
+                        "reason": item.get("reason"),
+                        "quarantine_path": target_path,
+                        "recoverable": True,
+                    })
+                except Exception as exc:
+                    failures.append({"filename": filename, "error": str(exc)[:240]})
+
+            return jsonify({
+                "success": not failures,
+                "quarantined": quarantined,
+                "sync_only_not_deleted": sync_only,
+                "failures": failures,
+            }), 200 if not failures else 500
+        except Exception as exc:
+            logger.exception("cleanup_invalid_audios folder_id=%s", folder_id)
+            return jsonify({"success": False, "error": str(exc)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>", methods=["DELETE"])
     def delete_generated_audio(folder_id, filename):
@@ -5721,7 +5911,38 @@ def create_hr_blueprint():
         if denied:
             return denied
         try:
-            platform_id = _get_platform_id_for_folder(folder_id)
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+            platform_id = int(folder["platform_id"])
+            from services.day_playlist_service import resolve_folder_playlist
+
+            inspection = _inspect_generated_audio_assets(
+                folder_id,
+                folder,
+                resolve_folder_playlist(folder_id),
+            )
+            ready_by_name = {
+                item["filename"]: item for item in inspection.get("audios") or []
+            }
+            if filename not in ready_by_name:
+                invalid = next(
+                    (
+                        item for item in inspection.get("invalid_audios") or []
+                        if item.get("filename") == filename
+                    ),
+                    None,
+                )
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        "Audio non prêt: le MP3 doit être lisible et sa "
+                        "synchronisation slides complète."
+                    ),
+                    "code": (invalid or {}).get("reason") or "audio_not_ready",
+                    "audio": invalid,
+                    "audio_sync_status": inspection.get("audio_sync_status") or {},
+                }), 422
             blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
             cs = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             if not cs:
@@ -5740,7 +5961,9 @@ def create_hr_blueprint():
                 raise
 
             blob_size = int(props.size or 0)
-            if filename.lower().startswith("cours_") and blob_size < 100_000:
+            from services.day_playlist_service import is_course_audio_filename
+
+            if is_course_audio_filename(filename) and blob_size < 100_000:
                 return jsonify({
                     "success": False,
                     "error": (
@@ -5788,7 +6011,33 @@ def create_hr_blueprint():
         if denied:
             return denied
         try:
-            platform_id = _get_platform_id_for_folder(folder_id)
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+            platform_id = int(folder["platform_id"])
+            from services.day_playlist_service import resolve_folder_playlist
+
+            inspection = _inspect_generated_audio_assets(
+                folder_id,
+                folder,
+                resolve_folder_playlist(folder_id),
+            )
+            ready_names = {
+                item["filename"] for item in inspection.get("audios") or []
+            }
+            if filename not in ready_names:
+                invalid = next(
+                    (
+                        item for item in inspection.get("invalid_audios") or []
+                        if item.get("filename") == filename
+                    ),
+                    None,
+                )
+                return jsonify({
+                    "success": False,
+                    "error": "Audio non prêt ou synchronisation slides incomplète.",
+                    "code": (invalid or {}).get("reason") or "audio_not_ready",
+                }), 422
             blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
             from services.azure_blob_service import CONTAINER_AUDIOS
 
@@ -5889,11 +6138,12 @@ def create_hr_blueprint():
             platform_id = _get_platform_id_for_folder(folder_id)
 
             from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
+            from services.day_playlist_service import is_course_audio_filename
 
             uploaded = []
             failed = []
             for name in sorted(os.listdir(local_folder)):
-                if not name.lower().startswith("cours_") or not name.lower().endswith(".mp3"):
+                if not is_course_audio_filename(name):
                     continue
                 full_path = os.path.join(local_folder, name)
                 try:

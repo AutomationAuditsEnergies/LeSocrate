@@ -138,6 +138,7 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 202)
         payload = enqueue_mock.call_args.kwargs["payload"]
+        self.assertEqual(enqueue_mock.call_args.kwargs["pipeline_job_id"], 13)
         self.assertEqual(payload["filename"], "course_01.mp3")
         self.assertTrue(payload["sync_slides"])
         self.assertTrue(payload["auto_generate_slides"])

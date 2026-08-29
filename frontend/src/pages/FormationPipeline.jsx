@@ -5131,6 +5131,7 @@ export default function FormationPipeline() {
 
   // Audio à la demande par journée
   const [audioError, setAudioError] = useState('')
+  const [audioNotice, setAudioNotice] = useState('')
   const [folderAudioRunning, setFolderAudioRunning] = useState({})
   const [continuingAfterTextFolders, setContinuingAfterTextFolders] = useState({})
   const [continueAfterTextError, setContinueAfterTextError] = useState('')
@@ -5769,41 +5770,130 @@ export default function FormationPipeline() {
   const handleLaunchFolderAudio = async (folder, ttsMode = 'gtts') => {
     if (!folder?.folder_id) return
     setAudioError('')
-    setFolderAudioRunning(prev => ({ ...prev, [folder.folder_id]: true }))
+    setAudioNotice('')
+    setFolderAudioRunning(prev => ({
+      ...prev,
+      [folder.folder_id]: { status: 'submitting', ttsMode },
+    }))
+    let accepted = false
     try {
       const resp = await apiFetch(
-        `/api/formation/${selectedJobId}/content/${folder.folder_id}/generate-audio`,
+        `/api/hr/cours-folders/${folder.folder_id}/generate-playlist`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            tts_mode: ttsMode,
+            voice_type: ttsMode,
             force_all: true,
             sync_slides: true,
             auto_generate_slides: true,
+            include_breaks: true,
           }),
         },
       )
-      const data = await resp.json()
+      const data = await resp.json().catch(() => ({}))
       if (!resp.ok || data.error) {
         setAudioError(data.error || `Erreur ${resp.status}`)
       } else {
-        await fetchJob(selectedJobId)
-        await fetchContentFolders(selectedJobId)
-        await fetchLinkedModule(selectedJobId)
-        await fetchPipelineDiagnostic(selectedJobId)
+        accepted = true
+        setFolderAudioRunning(prev => ({
+          ...prev,
+          [folder.folder_id]: {
+            status: data.queue_status || 'queued',
+            workItemId: data.work_item_id,
+            ttsMode,
+          },
+        }))
+        setAudioNotice(`Audio du jour ${folder.day_number || ''} mis en file durable.`.trim())
       }
     } catch {
       setAudioError('Erreur réseau audio')
     } finally {
-      setFolderAudioRunning(prev => {
-        const next = { ...prev }
-        delete next[folder.folder_id]
-        return next
-      })
+      if (!accepted) {
+        setFolderAudioRunning(prev => {
+          const next = { ...prev }
+          delete next[folder.folder_id]
+          return next
+        })
+      }
     }
   }
+
+  const audioFolderPollKey = Object.keys(folderAudioRunning).sort().join(',')
+  useEffect(() => {
+    const folderIds = audioFolderPollKey
+      .split(',')
+      .map(value => Number(value))
+      .filter(Boolean)
+    if (!folderIds.length) return undefined
+
+    let cancelled = false
+    const poll = async () => {
+      await Promise.all(folderIds.map(async folderId => {
+        try {
+          const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/playlist-status`, {
+            credentials: 'include',
+          })
+          const data = await resp.json().catch(() => ({}))
+          if (cancelled || !resp.ok || !data.success) return
+
+          if (data.status === 'completed') {
+            setFolderAudioRunning(prev => {
+              const next = { ...prev }
+              delete next[folderId]
+              return next
+            })
+            setAudioNotice(`Audio synchronisé terminé pour le dossier F${folderId}.`)
+            if (selectedJobId) {
+              await Promise.all([
+                fetchJob(selectedJobId),
+                fetchContentFolders(selectedJobId),
+                fetchLinkedModule(selectedJobId),
+                fetchPipelineDiagnostic(selectedJobId),
+              ])
+            }
+            return
+          }
+
+          if (data.status === 'error') {
+            setFolderAudioRunning(prev => {
+              const next = { ...prev }
+              delete next[folderId]
+              return next
+            })
+            setAudioError(data.message || data.error || `Échec de la génération audio F${folderId}`)
+            return
+          }
+
+          setFolderAudioRunning(prev => ({
+            ...prev,
+            [folderId]: {
+              ...(prev[folderId] || {}),
+              status: data.status || data.queue_status || 'running',
+              message: data.message,
+            },
+          }))
+        } catch {
+          // Une panne de polling ne change pas l'état durable du worker.
+        }
+      }))
+    }
+
+    poll()
+    const interval = window.setInterval(poll, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [
+    audioFolderPollKey,
+    fetchContentFolders,
+    fetchJob,
+    fetchLinkedModule,
+    fetchPipelineDiagnostic,
+    selectedJobId,
+  ])
 
   const handleJobCreated = async (jobId) => {
     setShowNew(false)
@@ -5820,6 +5910,8 @@ export default function FormationPipeline() {
     setReportFolder(null)
     setTtsResult(null)
     setAudioError('')
+    setAudioNotice('')
+    setFolderAudioRunning({})
     setContinueAfterTextError('')
     setContinueAfterTextNotice('')
     setContinuingAfterTextFolders({})
@@ -7091,6 +7183,11 @@ export default function FormationPipeline() {
                     {audioError && (
                       <div style={{ fontSize: '13px', color: '#f87171', marginTop: '4px' }}>
                         Audio journée : {audioError}
+                      </div>
+                    )}
+                    {audioNotice && (
+                      <div style={{ fontSize: '13px', color: '#34d399', marginTop: '4px' }}>
+                        Audio journée : {audioNotice}
                       </div>
                     )}
                     {contentFolders.length === 0 && (

@@ -2,7 +2,11 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
 import { apiFetch } from '../api'
-import { breakDurationLabel, buildAudioSlideTimings } from './slides/audioSlideSync'
+import {
+  breakDurationLabel,
+  buildAudioSlideTimings,
+  isCourseAudioFilename,
+} from './slides/audioSlideSync'
 import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
 
 const Icon = ({ name, style, className = '' }) => (
@@ -376,7 +380,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       setAudioSync(nextSync)
 
       const repairKey = `${folderId}:${filename}`
-      const isCourseAudio = String(filename || '').toLowerCase().startsWith('cours_')
+      const isCourseAudio = isCourseAudioFilename(filename)
       const needsRepair = isCourseAudio
         && nextSlides.length
         && !buildAudioSlideTimings(nextSlides, nextSync, filename).length
