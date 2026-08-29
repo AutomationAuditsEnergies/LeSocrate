@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 from collections import OrderedDict
@@ -172,15 +173,15 @@ def validate_mp3_bytes(
     }
 
 
-def inspect_audio_sync_readiness(
-    folder_id: int,
+def inspect_audio_sync_payload(
+    deck: dict | None,
     expected_filenames,
+    *,
+    require_all_slides: bool = True,
 ) -> dict:
-    """Require every course file and every persisted slide to have timings."""
-    from services.script_slide_generation_service import get_latest_script_slide_deck
-
+    """Validate the persisted slide/audio contract without trusting its flags."""
     expected_courses = {
-        os.path.basename(str(filename or "").split("?", 1)[0])
+        os.path.basename(str(filename or "").split("?", 1)[0]).lower()
         for filename in expected_filenames
         if is_course_audio_filename(filename)
     }
@@ -194,7 +195,6 @@ def inspect_audio_sync_readiness(
             "timing_files": [],
         }
 
-    deck = get_latest_script_slide_deck(int(folder_id))
     if not deck:
         return {
             "ready": False,
@@ -214,23 +214,34 @@ def inspect_audio_sync_readiness(
     timing_files = set()
     synced_slide_ids = set()
     for timing in (deck.get("audio_sync") or {}).get("timings") or []:
+        if not isinstance(timing, dict):
+            continue
         filename = str(timing.get("audio_filename") or timing.get("filename") or "")
-        filename = os.path.basename(filename.split("?", 1)[0])
+        filename = os.path.basename(filename.split("?", 1)[0]).lower()
         try:
             start = float(timing.get("start_time"))
             end = float(timing.get("end_time"))
         except (TypeError, ValueError):
             continue
-        if filename not in expected_courses or end <= start:
+        slide_id = str(timing.get("slide_id") or "")
+        if (
+            filename not in expected_courses
+            or not math.isfinite(start)
+            or not math.isfinite(end)
+            or end <= start
+            or slide_id not in slide_ids
+        ):
             continue
         timing_files.add(filename)
-        if timing.get("slide_id"):
-            synced_slide_ids.add(str(timing["slide_id"]))
+        synced_slide_ids.add(slide_id)
 
     missing_course_files = sorted(expected_courses - timing_files)
     missing_slide_ids = sorted(slide_ids - synced_slide_ids)
+    ready = bool(slide_ids) and not missing_course_files
+    if require_all_slides:
+        ready = ready and not missing_slide_ids
     return {
-        "ready": bool(slide_ids) and not missing_course_files and not missing_slide_ids,
+        "ready": ready,
         "deck_id": deck.get("deck_id"),
         "expected_course_files": sorted(expected_courses),
         "missing_course_files": missing_course_files,
@@ -241,6 +252,20 @@ def inspect_audio_sync_readiness(
     }
 
 
+def inspect_audio_sync_readiness(
+    folder_id: int,
+    expected_filenames,
+) -> dict:
+    """Require every course file and every persisted slide to have timings."""
+    from services.script_slide_generation_service import get_latest_script_slide_deck
+
+    return inspect_audio_sync_payload(
+        get_latest_script_slide_deck(int(folder_id)),
+        expected_filenames,
+        require_all_slides=True,
+    )
+
+
 def audio_sync_timing_files(folder_id: int) -> set[str]:
     """Return course filenames backed by at least one valid persisted timing."""
     from services.script_slide_generation_service import get_latest_script_slide_deck
@@ -248,17 +273,21 @@ def audio_sync_timing_files(folder_id: int) -> set[str]:
     deck = get_latest_script_slide_deck(int(folder_id))
     if not deck:
         return set()
-    filenames = set()
-    for timing in (deck.get("audio_sync") or {}).get("timings") or []:
-        if not isinstance(timing, dict):
-            continue
-        filename = str(timing.get("audio_filename") or timing.get("filename") or "")
-        filename = os.path.basename(filename.split("?", 1)[0])
-        try:
-            start = float(timing.get("start_time"))
-            end = float(timing.get("end_time"))
-        except (TypeError, ValueError):
-            continue
-        if is_course_audio_filename(filename) and end > start:
-            filenames.add(filename)
-    return filenames
+    filenames = {
+        os.path.basename(
+            str(timing.get("audio_filename") or timing.get("filename") or "")
+            .split("?", 1)[0]
+        ).lower()
+        for timing in (deck.get("audio_sync") or {}).get("timings") or []
+        if isinstance(timing, dict)
+        and is_course_audio_filename(
+            timing.get("audio_filename") or timing.get("filename")
+        )
+    }
+    return set(
+        inspect_audio_sync_payload(
+            deck,
+            filenames,
+            require_all_slides=False,
+        ).get("timing_files") or []
+    )

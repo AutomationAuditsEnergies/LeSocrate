@@ -1904,8 +1904,11 @@ def start_folder_audio_generation(
     basic_tts = tts_mode == "gtts"
     voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
     force_all = bool(data.get("force_all", True))
-    sync_slides = bool(data.get("sync_slides", True))
-    auto_generate_slides = bool(data.get("auto_generate_slides", True))
+    # A learner-visible course MP3 is only valid when it is linked to slides.
+    # Keep mocks cheap, but never allow a real generation caller (including an
+    # older client) to disable the synchronization contract.
+    sync_slides = not mock
+    auto_generate_slides = not mock
     preserve_existing = bool(data.get("preserve_existing", False))
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"

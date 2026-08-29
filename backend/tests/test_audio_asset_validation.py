@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from services.audio_asset_validation_service import (
+    inspect_audio_sync_payload,
     inspect_mp3_blob,
     validate_mp3_bytes,
 )
@@ -86,6 +87,53 @@ class AudioAssetValidationTest(unittest.TestCase):
                 b"not-enough",
                 expected_duration_seconds=2100,
             )
+
+    def test_sync_payload_rejects_timing_for_unknown_slide(self):
+        deck = {
+            "deck_id": 12,
+            "slides": [{"slide_id": "slide-real"}],
+            "audio_sync": {
+                "timings": [{
+                    "slide_id": "slide-deleted",
+                    "audio_filename": "course_01.mp3",
+                    "start_time": 0,
+                    "end_time": 30,
+                }],
+            },
+        }
+
+        result = inspect_audio_sync_payload(
+            deck,
+            ["course_01.mp3"],
+            require_all_slides=False,
+        )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["missing_course_files"], ["course_01.mp3"])
+        self.assertEqual(result["missing_slide_ids"], ["slide-real"])
+
+    def test_single_file_sync_can_be_validated_without_other_slide_coverage(self):
+        deck = {
+            "deck_id": 13,
+            "slides": [{"slide_id": "s1"}, {"slide_id": "s2"}],
+            "audio_sync": {
+                "timings": [{
+                    "slide_id": "s1",
+                    "audio_filename": "course_01.mp3",
+                    "start_time": 0,
+                    "end_time": 30,
+                }],
+            },
+        }
+
+        result = inspect_audio_sync_payload(
+            deck,
+            ["course_01.mp3"],
+            require_all_slides=False,
+        )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["missing_slide_ids"], ["s2"])
 
 
 if __name__ == "__main__":

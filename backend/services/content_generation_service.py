@@ -4060,6 +4060,49 @@ def _slides_for_bloc(slides: list, bloc: dict) -> list:
         })
 
     raw_relevant.sort(key=lambda item: (item["source_word_start"], item["slide_index"]))
+    if not raw_relevant:
+        # A deck can have been generated from a pre-review word layout while
+        # the final audio bloc uses the post-review layout. In that case the
+        # numeric ranges no longer overlap, but structured slide anchors still
+        # carry the canonical course number. Reproject those slides across the
+        # current bloc instead of producing an audio chunk with no slide_id.
+        try:
+            bloc_number = int(bloc.get("bloc_number") or 0)
+        except (TypeError, ValueError):
+            bloc_number = 0
+        declared = [
+            (slide_idx, slide)
+            for slide_idx, slide in enumerate(slides or [])
+            if slide.get("slide_id")
+            and bloc_number
+            and _slide_declared_course_number(slide) == bloc_number
+        ]
+
+        def declared_sort_key(pair):
+            try:
+                word_start = int(
+                    (pair[1].get("source_ref") or {}).get("word_start")
+                )
+            except (TypeError, ValueError):
+                word_start = 10**12
+            return word_start, pair[0]
+
+        declared.sort(key=declared_sort_key)
+        span = max(0, bloc_end - bloc_start)
+        for declared_idx, (slide_idx, slide) in enumerate(declared):
+            start = bloc_start + round(declared_idx * span / len(declared))
+            end = bloc_start + round((declared_idx + 1) * span / len(declared))
+            if end <= start:
+                continue
+            raw_relevant.append({
+                "slide_id": slide["slide_id"],
+                "slide_index": slide_idx,
+                "source_word_start": start,
+                "source_word_end": end,
+                "word_start": start,
+                "word_end": end,
+            })
+
     relevant = []
     idx = 0
     while idx < len(raw_relevant):
@@ -4841,6 +4884,9 @@ def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
     slides = _reproject_slides_to_audio_bloc(slides, bloc)
     relevant = _slides_for_bloc(slides, bloc)
     if not relevant:
+        # Kept as a synthesis fallback for low-level/non-persisting callers.
+        # The production pipeline validates that every course has bound slide
+        # IDs before synthesis and never uploads this unbound fallback.
         return [{
             "slide_id": None,
             "word_start": bloc_start,
@@ -14852,6 +14898,100 @@ def generate_audio_from_script(
     # courte projection temporelle, propre à cette occurrence, est ajoutée ici.
 
     blocs_by_number = {b["bloc_number"]: b for b in blocs}
+    existing_audio_sync = (
+        (slide_deck.get("audio_sync") or {})
+        if sync_slides and slide_deck
+        else {}
+    )
+    expected_sync_slide_ids_by_file = {}
+    existing_sync_slide_ids_by_file = {}
+    existing_synced_courses = set()
+    if sync_slides and slide_deck:
+        sync_course_items = [
+            item for item in playlist_items
+            if item[2] == "cours"
+            and (not target_filename or item[0] == target_filename)
+        ]
+        deck_slide_ids = {
+            str(slide.get("slide_id"))
+            for slide in (slide_deck.get("slides") or [])
+            if slide.get("slide_id")
+        }
+        for item_filename, _duration_sec, _file_type, item_bloc_num in sync_course_items:
+            sync_bloc = blocs_by_number.get(item_bloc_num)
+            if not sync_bloc:
+                raise ValueError(
+                    f"Synchronisation impossible pour {item_filename}: bloc cours introuvable"
+                )
+            expected_ids = {
+                str(chunk.get("slide_id"))
+                for chunk in _build_slide_audio_chunks(
+                    sync_bloc,
+                    slide_deck.get("slides") or [],
+                )
+                if chunk.get("slide_id")
+            }
+            if not expected_ids:
+                raise ValueError(
+                    f"Synchronisation impossible pour {item_filename}: "
+                    "aucune diapositive ne correspond à ce bloc cours"
+                )
+            expected_sync_slide_ids_by_file[item_filename] = expected_ids
+
+        if not target_filename:
+            planned_slide_ids = set().union(
+                *expected_sync_slide_ids_by_file.values()
+            ) if expected_sync_slide_ids_by_file else set()
+            uncovered_slide_ids = sorted(deck_slide_ids - planned_slide_ids)
+            if uncovered_slide_ids:
+                raise ValueError(
+                    "Synchronisation impossible: certaines diapositives ne sont "
+                    f"rattachées à aucun cours ({uncovered_slide_ids[:8]})"
+                )
+
+        for timing in existing_audio_sync.get("timings") or []:
+            if not isinstance(timing, dict):
+                continue
+            timing_filename = os.path.basename(str(
+                timing.get("audio_filename") or timing.get("filename") or ""
+            ).split("?", 1)[0])
+            slide_id = str(timing.get("slide_id") or "")
+            try:
+                start_time = float(timing.get("start_time"))
+                end_time = float(timing.get("end_time"))
+            except (TypeError, ValueError):
+                continue
+            if (
+                timing_filename
+                and slide_id in deck_slide_ids
+                and math.isfinite(start_time)
+                and math.isfinite(end_time)
+                and end_time > start_time
+            ):
+                existing_sync_slide_ids_by_file.setdefault(
+                    timing_filename,
+                    set(),
+                ).add(slide_id)
+
+        for item_filename, expected_ids in expected_sync_slide_ids_by_file.items():
+            actual_ids = existing_sync_slide_ids_by_file.get(item_filename, set())
+            if expected_ids.issubset(actual_ids):
+                existing_synced_courses.add(item_filename)
+                continue
+            sync_bloc_num = next(
+                item[3] for item in sync_course_items if item[0] == item_filename
+            )
+            blocs_by_number[sync_bloc_num]["dirty"] = True
+            logger.warning(
+                "PIPELINE_AUDIO_SYNC_MISSING_REGENERATE formation_job_id=%s "
+                "content_job_id=%s folder_id=%s filename=%s missing_slide_ids=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                item_filename,
+                sorted(expected_ids - actual_ids)[:8],
+            )
+
     dirty_count = sum(1 for b in blocs if b["dirty"])
     clean_count = course_count - dirty_count
     logger.info(
@@ -14888,12 +15028,7 @@ def generate_audio_from_script(
     existing_playlist_files = set()
     if preserve_existing:
         from services.audio_asset_validation_service import (
-            audio_sync_timing_files,
             validate_mp3_bytes,
-        )
-
-        existing_synced_courses = (
-            audio_sync_timing_files(folder_id) if sync_slides else set()
         )
         for item_filename, item_duration_sec, item_file_type, _bloc_num in playlist_items:
             blob_path = f"{azure_prefix}{item_filename}"
@@ -14937,14 +15072,20 @@ def generate_audio_from_script(
     adaptive_generation_manifest = None
     slide_audio_timings = []
     slide_sync_files = []
-    if sync_slides and slide_deck and preserve_existing:
-        existing_audio_sync = slide_deck.get("audio_sync") or {}
+    if sync_slides and slide_deck:
         for existing_file in existing_audio_sync.get("generated_files") or []:
             if existing_file and existing_file not in slide_sync_files:
                 slide_sync_files.append(existing_file)
         for existing_timing in existing_audio_sync.get("timings") or []:
             if isinstance(existing_timing, dict):
                 slide_audio_timings.append(dict(existing_timing))
+                existing_file = os.path.basename(str(
+                    existing_timing.get("audio_filename")
+                    or existing_timing.get("filename")
+                    or ""
+                ).split("?", 1)[0])
+                if existing_file and existing_file not in slide_sync_files:
+                    slide_sync_files.append(existing_file)
 
     def _replace_slide_sync_for_file(filename: str, timings: list[dict] | None) -> None:
         if not filename:
@@ -15605,6 +15746,12 @@ def generate_audio_from_script(
 
         if preserve_existing and filename not in existing_playlist_files:
             bloc["dirty"] = True
+        if (
+            sync_slides
+            and filename in expected_sync_slide_ids_by_file
+            and filename not in existing_synced_courses
+        ):
+            bloc["dirty"] = True
 
         # Le carryover intra-jour est désactivé par défaut : un cours ne doit
         # pas commencer en terminant le précédent.
@@ -15913,6 +16060,30 @@ def generate_audio_from_script(
                     len(intra_day_carryover_chunks), unconsumed_words,
                     fit_method,
                 )
+            actual_timing_slide_ids = set()
+            for timing in bloc_timings or []:
+                try:
+                    timing_start = float(timing.get("start_time"))
+                    timing_end = float(timing.get("end_time"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if (
+                    timing.get("audio_filename") == filename
+                    and timing.get("slide_id")
+                    and math.isfinite(timing_start)
+                    and math.isfinite(timing_end)
+                    and timing_end > timing_start
+                ):
+                    actual_timing_slide_ids.add(str(timing["slide_id"]))
+            missing_timing_slide_ids = (
+                expected_sync_slide_ids_by_file.get(filename, set())
+                - actual_timing_slide_ids
+            )
+            if missing_timing_slide_ids:
+                raise ValueError(
+                    f"Synchronisation incomplète pour {filename}: "
+                    f"timings absents pour {sorted(missing_timing_slide_ids)[:8]}"
+                )
             _replace_slide_sync_for_file(filename, bloc_timings)
             logger.info(
                 f"   TTS sync voix : {voice_duration:.1f}s "
@@ -16147,7 +16318,7 @@ def generate_audio_from_script(
     if sync_slides and slide_deck:
         from services.script_slide_generation_service import update_script_slide_deck_audio_sync
         audio_mode = "mock" if mock else "gtts" if basic_tts else "fish_audio"
-        update_script_slide_deck_audio_sync(
+        persisted_slide_deck = update_script_slide_deck_audio_sync(
             slide_deck["deck_id"],
             {
                 "enabled": True,
@@ -16158,6 +16329,24 @@ def generate_audio_from_script(
                 "timings": slide_audio_timings,
             },
         )
+        if not persisted_slide_deck:
+            raise RuntimeError(
+                f"Échec de persistance de la synchronisation du deck {slide_deck['deck_id']}"
+            )
+        from services.audio_asset_validation_service import inspect_audio_sync_payload
+
+        sync_expected_files = sorted(expected_sync_slide_ids_by_file)
+        sync_readiness = inspect_audio_sync_payload(
+            persisted_slide_deck,
+            sync_expected_files,
+            require_all_slides=not bool(target_filename),
+        )
+        if not sync_readiness.get("ready"):
+            raise RuntimeError(
+                "Synchronisation slides/audio incomplète après persistance: "
+                f"{sync_readiness}"
+            )
+        slide_deck = persisted_slide_deck
 
     # ── 5. Cascade finale : runtime carryover après le dernier bloc cours ──
     # Désactivée par défaut pour préserver les frontières pédagogiques entre

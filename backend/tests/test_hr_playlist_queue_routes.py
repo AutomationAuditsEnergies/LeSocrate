@@ -59,7 +59,12 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
         ) as enqueue_mock:
             response = self.client.post(
                 "/api/hr/cours-folders/118/generate-playlist",
-                json={"voice_type": "gtts", "force_all": True},
+                json={
+                    "voice_type": "gtts",
+                    "force_all": True,
+                    "sync_slides": False,
+                    "auto_generate_slides": False,
+                },
             )
 
         self.assertEqual(response.status_code, 202)
@@ -70,6 +75,8 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
         self.assertEqual(kwargs["resource_key"], "folder:118")
         self.assertEqual(kwargs["scope_key"], "hr_audio:118")
         self.assertEqual(kwargs["task_type"], "hr_playlist_generate")
+        self.assertTrue(kwargs["payload"]["sync_slides"])
+        self.assertTrue(kwargs["payload"]["auto_generate_slides"])
 
     def test_generate_playlist_returns_conflict_for_atomic_queue_duplicate(self):
         existing = SimpleNamespace(
@@ -133,6 +140,8 @@ class HrPlaylistQueueRouteTest(unittest.TestCase):
                 json={
                     "filename": "course_01.mp3",
                     "voice_type": "gtts",
+                    "sync_slides": False,
+                    "auto_generate_slides": False,
                 },
             )
 

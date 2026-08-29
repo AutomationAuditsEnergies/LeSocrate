@@ -111,6 +111,10 @@ class HrPlaylistQueueHandlerTest(unittest.TestCase):
                 return_value={"ready": False, "missing": ["course_01.mp3"]},
             ),
             patch(
+                "services.audio_asset_validation_service.audio_sync_timing_files",
+                return_value=set(),
+            ),
+            patch(
                 "services.content_generation_service.generate_audio_from_script",
                 return_value={"generated": 1, "skipped": 0},
             ) as generate,
@@ -131,6 +135,8 @@ class HrPlaylistQueueHandlerTest(unittest.TestCase):
 
         self.assertTrue(generate.call_args.kwargs["preserve_existing"])
         self.assertEqual(generate.call_args.kwargs["target_filename"], "course_01.mp3")
+        self.assertTrue(generate.call_args.kwargs["sync_slides"])
+        self.assertTrue(generate.call_args.kwargs["auto_generate_slides"])
         self.assertEqual(result.result["proof"], proof)
         self.assertFalse(result.result["session_completed"])
 
@@ -165,6 +171,8 @@ class HrPlaylistQueueHandlerTest(unittest.TestCase):
             result = handle_hr_playlist_work_item(_item(attempt=2), lease)
 
         self.assertTrue(calls[0][1]["preserve_existing"])
+        self.assertTrue(calls[0][1]["sync_slides"])
+        self.assertTrue(calls[0][1]["auto_generate_slides"])
         self.assertGreaterEqual(len(lease.progress), 2)
         self.assertEqual(lease.progress[-1]["step"], 1)
         self.assertEqual(lease.checkpoints, 1)

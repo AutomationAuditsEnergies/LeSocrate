@@ -5373,8 +5373,6 @@ def create_hr_blueprint():
             preserve_existing = bool(req_body.get("preserve_existing", False))
             include_breaks = bool(req_body.get("include_breaks", True))
             parallel_breaks = bool(req_body.get("parallel_breaks", False))
-            sync_slides = bool(req_body.get("sync_slides", False))
-            auto_generate_slides = bool(req_body.get("auto_generate_slides", False))
             slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
             slide_pace = str(req_body.get("pace") or req_body.get("slide_pace") or "normal")
             requested_voice_type_raw = str(req_body.get("voice_type") or req_body.get("tts_mode") or "").strip().lower()
@@ -5429,10 +5427,20 @@ def create_hr_blueprint():
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
             if voice_type == "fish_audio":
                 parallel_breaks = False
-            if "sync_slides" not in req_body:
-                sync_slides = bool(has_script and not playlist_mock and force_all and voice_type in {"gtts", "fish_audio"})
-            if "auto_generate_slides" not in req_body:
-                auto_generate_slides = bool(sync_slides)
+            production_audio = bool(
+                has_script
+                and not playlist_mock
+                and voice_type in {"gtts", "fish_audio"}
+            )
+            if production_audio:
+                # A real course MP3 without slide timings is an invalid asset.
+                # Do not let legacy clients opt out of the synchronization
+                # contract by sending sync_slides=false.
+                sync_slides = True
+                auto_generate_slides = True
+            else:
+                sync_slides = False
+                auto_generate_slides = False
 
             item, deduplicated = _enqueue_hr_audio_job(
                 folder,
@@ -5528,8 +5536,10 @@ def create_hr_blueprint():
             from services.day_playlist_service import is_course_audio_filename
 
             is_course_audio = is_course_audio_filename(filename)
-            sync_slides = bool(req_body.get("sync_slides", is_course_audio)) and is_course_audio
-            auto_generate_slides = bool(req_body.get("auto_generate_slides", sync_slides))
+            # Course audio is always generated with a usable slide contract;
+            # the request body can no longer disable it.
+            sync_slides = bool(is_course_audio)
+            auto_generate_slides = bool(is_course_audio)
             slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
             slide_pace = str(req_body.get("pace") or req_body.get("slide_pace") or "normal")
             item, deduplicated = _enqueue_hr_audio_job(

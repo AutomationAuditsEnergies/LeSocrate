@@ -378,6 +378,11 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
         if not filename:
             raise PermanentWorkError("filename manquant dans le job audio HR")
         from services.content_generation_service import generate_audio_from_script
+        from services.day_playlist_service import is_course_audio_filename
+
+        item_sync_slides = bool(
+            voice_type != "mock" and is_course_audio_filename(filename)
+        )
 
         generated = generate_audio_from_script(
             folder_id,
@@ -385,8 +390,8 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
             force_all=True,
             basic_tts=use_basic_tts,
             target_filename=filename,
-            sync_slides=bool(payload.get("sync_slides")),
-            auto_generate_slides=bool(payload.get("auto_generate_slides")),
+            sync_slides=item_sync_slides,
+            auto_generate_slides=item_sync_slides,
             slide_max_slides=int(payload.get("slide_max_slides") or 60),
             slide_pace=str(payload.get("slide_pace") or "normal"),
             preserve_existing=item.attempt_count > 1,
@@ -398,7 +403,7 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
             "source": "script",
             "voice_type": voice_type,
             "filename": filename,
-            "sync_slides": bool(payload.get("sync_slides")),
+            "sync_slides": item_sync_slides,
             "publish": _publish(platform_id, folder_id, [filename]),
         }
         message = f"✅ {filename} généré en {voice_label}"
@@ -408,14 +413,15 @@ def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
 
         include_breaks = bool(payload.get("include_breaks", True))
         preserve_existing = bool(payload.get("preserve_existing")) or item.attempt_count > 1
+        playlist_sync_slides = voice_type != "mock"
         generated = generate_audio_from_script(
             folder_id,
             on_progress=on_progress,
             force_all=bool(payload.get("force_all")),
             mock=bool(payload.get("script_mock")),
             basic_tts=use_basic_tts,
-            sync_slides=bool(payload.get("sync_slides")),
-            auto_generate_slides=bool(payload.get("auto_generate_slides")),
+            sync_slides=playlist_sync_slides,
+            auto_generate_slides=playlist_sync_slides,
             slide_max_slides=int(payload.get("slide_max_slides") or 60),
             slide_pace=str(payload.get("slide_pace") or "normal"),
             include_breaks=include_breaks,
@@ -561,10 +567,24 @@ def handle_scheduled_audio_work_item(item: WorkItem, lease) -> WorkResult:
         destination_prefix,
         [filename],
     )
+    from services.day_playlist_service import is_course_audio_filename
+
+    if is_course_audio_filename(filename):
+        from services.audio_asset_validation_service import audio_sync_timing_files
+
+        if filename not in audio_sync_timing_files(folder_id):
+            before = {
+                **before,
+                "ready": False,
+                "reason": "missing_audio_sync",
+            }
     generation = {"generated": 0, "skipped": 1, "reason": "already_published"}
     publish = {"published": [], "publish_errors": []}
     if not before["ready"]:
         from services.content_generation_service import generate_audio_from_script
+        scheduled_sync_slides = bool(
+            voice_type != "mock" and is_course_audio_filename(filename)
+        )
 
         generation = generate_audio_from_script(
             folder_id,
@@ -578,8 +598,8 @@ def handle_scheduled_audio_work_item(item: WorkItem, lease) -> WorkResult:
             mock=voice_type == "mock",
             basic_tts=voice_type == "gtts",
             target_filename=filename,
-            sync_slides=bool(payload.get("sync_slides")),
-            auto_generate_slides=bool(payload.get("auto_generate_slides")),
+            sync_slides=scheduled_sync_slides,
+            auto_generate_slides=scheduled_sync_slides,
             preserve_existing=True,
         )
         lease.checkpoint()

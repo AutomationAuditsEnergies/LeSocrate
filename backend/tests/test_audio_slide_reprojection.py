@@ -137,6 +137,49 @@ class AudioSlideReprojectionTest(unittest.TestCase):
         self.assertEqual(timings[1]["start_time"], 300)
         self.assertEqual(timings[1]["repair_method"], "word_ratio_no_fish_timeline")
 
+    def test_stale_word_ranges_fall_back_to_declared_course_number(self):
+        bloc = {
+            "bloc_number": 4,
+            "start_w": 0,
+            "end_w": 12,
+            "text": "un deux trois quatre cinq six sept huit neuf dix onze douze",
+        }
+        slides = [
+            _slide("course-4-a", 1000, 1100, "texte désormais différent"),
+            _slide("course-4-b", 1100, 1200, "autre texte désormais différent"),
+        ]
+
+        chunks = cgs._build_slide_audio_chunks(bloc, slides)
+
+        self.assertEqual(
+            [chunk["slide_id"] for chunk in chunks],
+            ["course-4-a", "course-4-b"],
+        )
+        self.assertEqual(chunks[0]["word_start"], 0)
+        self.assertEqual(chunks[-1]["word_end"], 12)
+
+    def test_unmappable_slides_are_detectable_as_an_unbound_audio_chunk(self):
+        bloc = {
+            "bloc_number": 1,
+            "start_w": 0,
+            "end_w": 4,
+            "text": "un deux trois quatre",
+        }
+        slides = [{
+            "slide_id": "other-course",
+            "source_text": "aucune correspondance",
+            "source_ref": {
+                "word_start": 100,
+                "word_end": 120,
+                "segments": [{"course_number": 2}],
+            },
+        }]
+
+        chunks = cgs._build_slide_audio_chunks(bloc, slides)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertIsNone(chunks[0]["slide_id"])
+
 
 if __name__ == "__main__":
     unittest.main()
