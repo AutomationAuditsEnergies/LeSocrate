@@ -69,6 +69,12 @@ class AudioPublishStorageTest(unittest.TestCase):
             service,
             "archive_public_platform_audios",
         ) as archive, patch(
+            "services.day_playlist_service.resolve_folder_playlist",
+            return_value={
+                "schema_version": 1,
+                "playlist_items": [("cours_9h00_9h45.mp3", 2700, "cours", 1)],
+            },
+        ), patch(
             "services.audio_asset_validation_service.validate_mp3_bytes",
             return_value={"duration_seconds": 2100.0},
         ), patch(
