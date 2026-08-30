@@ -506,6 +506,10 @@ class CourseScheduleServiceTest(unittest.TestCase):
         self.assertEqual(results[0]["type"], "previous_evening")
         self.assertTrue(results[0]["session_password"])
         self.assertEqual(results[0]["recipients"][0]["email"], "eleve@example.com")
+        self.assertIn("https://example.test/classe/le-socrate/classe-test?invite=", results[0]["content"])
+        self.assertIn("https://example.test/classe/le-socrate/classe-test", results[0]["content"])
+        self.assertNotIn("{class_url_connexion}", results[0]["content"])
+        self.assertNotIn("{class_url_accueil}", results[0]["content"])
 
     def test_reminder_tick_drains_multiple_bounded_batches(self):
         first = [{"delivery_id": 1}, {"delivery_id": 2}]

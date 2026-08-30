@@ -1538,6 +1538,8 @@ def _build_reminder_html(payload):
         "time": scheduled.strftime("%H:%M"),
         "session_code": str(payload.get("session_password") or ""),
         "class_url": str(payload.get("class_url") or ""),
+        "class_url_connexion": str(payload.get("class_url") or ""),
+        "class_url_accueil": str(payload.get("class_url_accueil") or ""),
     }
     content = html.escape(
         payload.get("content")
@@ -1920,6 +1922,8 @@ def _process_due_delivery_candidates(
             "time": scheduled_at.strftime("%H:%M"),
             "session_code": personal_code,
             "class_url": invitation_url,
+            "class_url_connexion": invitation_url,
+            "class_url_accueil": base_url_by_platform[platform_id],
         }
         system_key = candidate.get("system_key")
         payload = {
@@ -1931,6 +1935,7 @@ def _process_due_delivery_candidates(
             "session_index": candidate.get("session_index"),
             "scheduled_at": schedule_repo.format_schedule_datetime(scheduled_at),
             "class_url": invitation_url,
+            "class_url_accueil": base_url_by_platform[platform_id],
             "session_password": personal_code,
             "personal_code": personal_code,
             "subject": _format_reminder_template(candidate.get("subject_template"), values),

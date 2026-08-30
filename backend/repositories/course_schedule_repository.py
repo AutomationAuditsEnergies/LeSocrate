@@ -1817,8 +1817,10 @@ DEFAULT_COURSE_REMINDER_RULES = (
         "minutes_before": None,
         "subject_template": "Votre formation commence demain",
         "content_template": (
-            "Votre prochaine journée de formation aura lieu le {date} à {time}. "
-            "Utilisez le bouton ci-dessous pour rejoindre la classe."
+            "Votre cours commence le {date} à {time}.\n\n"
+            "Cliquez ici pour vous connecter directement : {class_url_connexion}\n\n"
+            "Cliquez ici pour vous connecter avec votre code {session_code} : "
+            "{class_url_accueil}"
         ),
     },
     {
@@ -1829,7 +1831,10 @@ DEFAULT_COURSE_REMINDER_RULES = (
         "minutes_before": 5,
         "subject_template": "Le cours commence dans 5 minutes !",
         "content_template": (
-            "Votre cours démarre à {time}. Connectez-vous maintenant pour ne rien manquer."
+            "Votre cours commence le {date} à {time}.\n\n"
+            "Cliquez ici pour vous connecter directement : {class_url_connexion}\n\n"
+            "Cliquez ici pour vous connecter avec votre code {session_code} : "
+            "{class_url_accueil}"
         ),
     },
 )

@@ -6674,14 +6674,29 @@ function AudioCard({ title, icon, audios }) {
 // ─── Platform Card ───────────────────────────────────────────────────────────
 // Slide-to-confirm + backup pipeline ne sont plus rendus ici : ils ont été
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
+const DEFAULT_REMINDER_SUBJECT = 'Votre cours commence le {date} à {time}'
+const DEFAULT_REMINDER_MESSAGE = `Votre cours commence le {date} à {time}.
+
+Cliquez ici pour vous connecter directement : {class_url_connexion}
+
+Cliquez ici pour vous connecter avec votre code {session_code} : {class_url_accueil}`
+
+const REMINDER_VARIABLES = [
+  { token: '{date}', label: 'Date' },
+  { token: '{time}', label: 'Heure' },
+  { token: '{class_url_connexion}', label: 'Lien personnel' },
+  { token: '{session_code}', label: 'Code personnel' },
+  { token: '{class_url_accueil}', label: 'Lien habituel' },
+]
+
 const newReminderRule = () => ({
   name: '',
   trigger_mode: 'relative_minutes',
   days_before: 1,
   minutes_before: 60,
   local_time: '18:00',
-  subject_template: '',
-  content_template: '',
+  subject_template: DEFAULT_REMINDER_SUBJECT,
+  content_template: DEFAULT_REMINDER_MESSAGE,
   recipient_scope: 'all',
   recipient_ids: [],
   is_active: true,
@@ -6694,6 +6709,7 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
   const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState(newReminderRule)
   const [error, setError] = useState('')
+  const messageRef = useRef(null)
 
   useEffect(() => {
     if (import.meta.env.DEV && Number(platformId) < 0) {
@@ -6738,6 +6754,25 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
     setEditingId(null)
     setForm(newReminderRule())
     setError('')
+  }
+
+  const restoreDefaultMessage = () => {
+    setForm((current) => ({
+      ...current,
+      content_template: DEFAULT_REMINDER_MESSAGE,
+    }))
+  }
+
+  const insertMessageVariable = (token) => {
+    const textarea = messageRef.current
+    const start = textarea?.selectionStart ?? form.content_template.length
+    const end = textarea?.selectionEnd ?? start
+    const nextMessage = `${form.content_template.slice(0, start)}${token}${form.content_template.slice(end)}`
+    setForm((current) => ({ ...current, content_template: nextMessage }))
+    window.requestAnimationFrame(() => {
+      textarea?.focus()
+      textarea?.setSelectionRange(start + token.length, start + token.length)
+    })
   }
 
   const persistRule = async (rule, ruleId = null) => {
@@ -6914,10 +6949,49 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
             Objet de l’e-mail
             <input required maxLength={200} value={form.subject_template} onChange={(e) => setForm({ ...form, subject_template: e.target.value })} placeholder="Votre formation commence bientôt" className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-black/25" style={inputStyle} />
           </label>
-          <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
-            Message
-            <textarea required maxLength={5000} rows={3} value={form.content_template} onChange={(e) => setForm({ ...form, content_template: e.target.value })} placeholder="Rendez-vous le {date} à {time}." className="mt-1 w-full resize-y rounded-lg px-2.5 py-2 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-black/25" style={inputStyle} />
-          </label>
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label htmlFor={`reminder-message-${editingId}`} className="text-xs font-medium" style={{ color: colors.textSecondary }}>
+                Message
+              </label>
+              <button
+                type="button"
+                onClick={restoreDefaultMessage}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-semibold transition-colors hover:bg-black/5 focus:outline-none focus:ring-2 focus:ring-black/25"
+                style={{ color: colors.textSecondary }}
+              >
+                <RotateCcw size={13} aria-hidden="true" />
+                Rétablir le message par défaut
+              </button>
+            </div>
+            <textarea
+              ref={messageRef}
+              id={`reminder-message-${editingId}`}
+              required
+              maxLength={5000}
+              rows={7}
+              value={form.content_template}
+              onChange={(e) => setForm({ ...form, content_template: e.target.value })}
+              placeholder="Rédigez le message envoyé aux élèves."
+              className="mt-1 w-full resize-y rounded-lg px-2.5 py-2 text-sm leading-6 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-black/25"
+              style={inputStyle}
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Variables à insérer dans le message">
+              <span className="mr-1 text-[11px]" style={{ color: colors.textMuted }}>Insérer :</span>
+              {REMINDER_VARIABLES.map((variable) => (
+                <button
+                  key={variable.token}
+                  type="button"
+                  onClick={() => insertMessageVariable(variable.token)}
+                  title={variable.token}
+                  className="rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors hover:bg-black/5 focus:outline-none focus:ring-2 focus:ring-black/25"
+                  style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                >
+                  + {variable.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Destinataires
@@ -6951,7 +7025,6 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
             </fieldset>
           )}
 
-          <p className="text-[11px]" style={{ color: colors.textMuted }}>Variables disponibles : {'{date}'}, {'{time}'}, {'{session_code}'}, {'{class_url}'}.</p>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={resetForm} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>Annuler</button>
             <button type="submit" disabled={saving} className="rounded-lg bg-[#121212] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
