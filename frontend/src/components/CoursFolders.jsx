@@ -463,7 +463,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
     setAnnotationError('')
   }
 
-  const closeContentScriptModal = () => {
+  const closeContentScriptPage = () => {
     setContentScriptModal(null)
     setEditingSegment(null)
     setEditText('')
@@ -1524,7 +1524,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       onClick={embedded ? undefined : onClose}
     >
       <div
-        className={embedded ? 'flex h-full min-h-0 w-full flex-col overflow-hidden' : 'w-full overflow-hidden rounded-xl'}
+        className={embedded ? 'relative flex h-full min-h-0 w-full flex-col overflow-hidden' : 'relative w-full overflow-hidden rounded-xl'}
         style={{
           maxWidth: embedded ? 'none' : (audioEditorFile ? '1120px' : '960px'),
           maxHeight: embedded ? 'none' : '92vh',
@@ -2157,33 +2157,31 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
         </div>
       )}
 
-      {/* Modale script TTS généré */}
+      {/* Sous-page du script TTS généré */}
       {contentScriptModal && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(15, 23, 42, 0.62)' }}
-          onClick={closeContentScriptModal}
+          className="absolute inset-0 z-30 flex min-h-0 flex-col"
+          style={{ backgroundColor: colors.cardBg }}
         >
           <div
-            className="w-full overflow-hidden rounded-2xl shadow-2xl flex flex-col"
+            className="flex h-full min-h-0 w-full flex-col overflow-hidden"
             style={{
-              maxWidth: '1280px',
-              width: 'min(1280px, calc(100vw - 32px))',
-              height: 'min(88vh, 960px)',
               backgroundColor: colors.cardBg,
-              border: `1px solid ${colors.border}`,
             }}
-            onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center justify-between gap-4 px-6 py-4 border-b flex-shrink-0" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+            <div className="flex flex-shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3 sm:px-6" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
               <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl"
-                  style={{ backgroundColor: darkMode ? '#1f2937' : '#e2e8f0', color: colors.text }}
+                <button
+                  type="button"
+                  onClick={closeContentScriptPage}
+                  className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors"
+                  style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
                 >
-                  <Icon name="article" style={{ fontSize: '22px' }} />
-                </span>
+                  <Icon name="arrow_back" style={{ fontSize: '16px' }} />
+                  Retour à la journée
+                </button>
+                <span className="hidden h-7 w-px sm:block" style={{ backgroundColor: colors.border }} />
                 <div className="min-w-0">
                   <h3 className="truncate text-base font-semibold" style={{ color: colors.text }}>
                     Script TTS généré
@@ -2252,14 +2250,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     Générer tout
                   </button>
 	              </div>
-              <button
-                onClick={closeContentScriptModal}
-                className="rounded-full p-2 transition-colors"
-                style={{ color: colors.textMuted }}
-                title="Fermer"
-              >
-                <Icon name="close" style={{ fontSize: '22px' }} />
-              </button>
             </div>
 
             {/* Corps : sidebar + contenu */}
