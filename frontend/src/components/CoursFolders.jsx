@@ -80,7 +80,7 @@ const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function CoursFoldersModal({ platformId, platformName, targetSessionId = null, onClose, onAudiosPublished, embedded = false }) {
+export default function CoursFoldersModal({ platformId, platformName, targetSessionId = null, onClose, onAudiosPublished, onScriptViewChange, embedded = false }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
   const [folders, setFolders] = useState([])
   const [documents, setDocuments] = useState([])
@@ -145,6 +145,13 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const mockAudioInputRef = useRef(null)
   const createFolderInputRef = useRef(null)
   const pollingRef = useRef(null)
+
+  const contentScriptOpen = Boolean(contentScriptModal)
+
+  useEffect(() => {
+    onScriptViewChange?.(contentScriptOpen)
+    return () => onScriptViewChange?.(false)
+  }, [contentScriptOpen, onScriptViewChange])
 
   useEffect(() => {
     if (!showFillInfo) return undefined
@@ -2181,15 +2188,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   <Icon name="arrow_back" style={{ fontSize: '16px' }} />
                   Retour à la journée
                 </button>
-                <span className="hidden h-7 w-px sm:block" style={{ backgroundColor: colors.border }} />
-                <div className="min-w-0">
-                  <h3 className="truncate text-base font-semibold" style={{ color: colors.text }}>
-                    Script TTS généré
-                  </h3>
-	                  <p className="truncate text-xs" style={{ color: colors.textMuted }}>
-	                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {mergeCourseBlocsForScriptModal(contentScriptModal.course_blocs, contentScriptModal.planned_course_blocs).length || 0} cours audio
-	                  </p>
-                </div>
               </div>
 	              <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2 lg:w-auto">
 	                <select

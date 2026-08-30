@@ -7160,6 +7160,7 @@ function PlatformCard({
 }) {
   const [activeTool, setActiveTool] = useState(null)
   const [fallbackSessionId, setFallbackSessionId] = useState(null)
+  const [courseScriptExpanded, setCourseScriptExpanded] = useState(false)
   const creationProgress = getHiddenPipelineProgress(p)
   const preparation = getTeacherPreparation(p)
   const isPreparing = preparation.status === 'preparing'
@@ -7210,10 +7211,12 @@ function PlatformCard({
 
   const closeTool = () => {
     onBeforeFlip?.()
+    setCourseScriptExpanded(false)
     setActiveTool(null)
   }
   const closeDetails = useCallback(() => {
     onBeforeFlip?.()
+    setCourseScriptExpanded(false)
     setActiveTool(null)
     onCloseDetails?.()
   }, [onBeforeFlip, onCloseDetails])
@@ -7306,7 +7309,7 @@ function PlatformCard({
       </div>}
 
       {detailsOpen && (
-        <div className="mx-auto w-full max-w-4xl px-2 sm:px-6">
+        <div className={`mx-auto w-full ${courseScriptExpanded ? 'max-w-none px-0' : 'max-w-4xl px-2 sm:px-6'}`}>
           <button type="button" onClick={activeTool ? closeTool : closeDetails} className="mb-6 inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-[#52525B] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30">
             <ChevronLeft size={18} /> {activeTool ? activeToolMeta?.label : 'Mes professeurs'}
           </button>
@@ -7427,7 +7430,7 @@ function PlatformCard({
       </div>}
 
       {activeTool && (
-        <div className="h-full min-h-[32rem] overflow-hidden bg-white">
+        <div className={`${courseScriptExpanded ? 'h-[calc(100dvh-7rem)] min-h-[44rem]' : 'h-full min-h-[32rem]'} overflow-hidden bg-white`}>
         <TeacherToolPanel
           title={activeToolMeta?.label || 'Outil'}
           subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
@@ -7486,6 +7489,7 @@ function PlatformCard({
               platformName={p.name}
               targetSessionId={fallbackSessionId}
               onAudiosPublished={onAudiosPublished}
+              onScriptViewChange={setCourseScriptExpanded}
             />
           )}
           {activeTool === 'students' && (
