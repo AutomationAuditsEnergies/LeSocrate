@@ -2306,7 +2306,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               const generatedCourseBlocs = contentScriptModal.course_blocs || []
               const plannedCourseBlocs = contentScriptModal.planned_course_blocs || []
               const visibleCourseBlocs = mergeCourseBlocsForScriptModal(generatedCourseBlocs, plannedCourseBlocs)
-              const visiblePauseBreaks = (contentScriptModal.breaks || []).filter(br => br.type === 'pause' || br.type === 'pause_midi')
+              const visiblePauseBreaks = (contentScriptModal.breaks || []).filter(br => br.type !== 'qa' && br.type !== 'jointure')
               const generatedBlocNumbers = new Set(generatedCourseBlocs.map(bloc => Number(bloc?.bloc_number || 0)).filter(Boolean))
               return (
             <div className="flex min-h-0 flex-1 flex-col md:flex-row">
