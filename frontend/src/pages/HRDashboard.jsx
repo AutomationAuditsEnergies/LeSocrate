@@ -4536,7 +4536,7 @@ function PlatformCardsView({
 
       {(selectedTeacherId || filteredPlatforms.length > 0) && (
         <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6 pr-1">
-        <div className={`mx-auto grid w-full items-start gap-3 sm:gap-4 ${selectedTeacherId ? 'max-w-5xl grid-cols-1' : 'max-w-[1204px] grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5'}`}>
+        <div className={`mx-auto grid w-full items-start gap-3 sm:gap-4 ${selectedTeacherId ? 'max-w-[90rem] grid-cols-1' : 'max-w-[1204px] grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5'}`}>
         {(selectedTeacherId ? platforms.filter((platform) => platform.id === selectedTeacherId) : visiblePlatforms).map((p) => (
           <PlatformCard
             key={p.id}

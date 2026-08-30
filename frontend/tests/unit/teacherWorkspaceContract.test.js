@@ -56,6 +56,7 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.match(coursesSource, /onScriptViewChange\?\.\(contentScriptOpen\)/)
   assert.match(dashboardSource, /courseScriptExpanded \? 'max-w-none px-0'/)
   assert.match(dashboardSource, /h-\[calc\(100dvh-7rem\)\] min-h-\[44rem\]/)
+  assert.match(dashboardSource, /selectedTeacherId \? 'max-w-\[90rem\] grid-cols-1'/)
   assert.match(coursesSource, /flex min-h-0 flex-1 flex-col md:flex-row/)
   assert.match(coursesSource, /md:w-56 md:border-b-0 md:border-r/)
   assert.match(coursesSource, /mt-3 flex flex-wrap items-center justify-end gap-2/)
