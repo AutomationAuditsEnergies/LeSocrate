@@ -15,7 +15,6 @@ import re
 import math
 import json
 import time
-import uuid
 from html import unescape
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
@@ -666,263 +665,6 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
 }}"""
 
 
-_LEARNER_ACTIVITY_PATTERNS = (
-    (
-        "exercice",
-        re.compile(
-            r"\bexercices?\s+(?:pratiques?|guid[ée]s?|"
-            r"d['’]application|d['’]entra[iî]nement|"
-            r"[àa]\s+r[ée]aliser|en\s+groupe|individuels?|interactifs?)\b|"
-            r"(?m:^\s*(?:cours|module|s[ée]ance|journ[ée]e)\b"
-            r"[^\n]{0,120}\bexercices?\b)",
-            re.IGNORECASE,
-        ),
-    ),
-    ("cas pratique", re.compile(r"\bcas\s+pratiques?\b", re.IGNORECASE)),
-    ("étude de cas", re.compile(r"\b[ée]tudes?\s+de\s+cas\b", re.IGNORECASE)),
-    ("travaux pratiques", re.compile(r"\btravaux?\s+pratiques?\b", re.IGNORECASE)),
-    ("mise en situation", re.compile(r"\bmises?\s+en\s+situation\b", re.IGNORECASE)),
-    ("jeu de rôle", re.compile(r"\bjeux?\s+de\s+r[oô]les?\b", re.IGNORECASE)),
-    ("QCM", re.compile(r"\bqcm\b", re.IGNORECASE)),
-    ("quiz", re.compile(r"\bquiz\b", re.IGNORECASE)),
-    (
-        "atelier pédagogique",
-        re.compile(
-            r"\bateliers?\s+(?:pratiques?|p[ée]dagogiques?|"
-            r"d['’]application|d['’]entra[iî]nement|participatifs?)\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "simulation pédagogique",
-        re.compile(
-            r"\bsimulations?\s+(?:pratiques?|p[ée]dagogiques?|"
-            r"d['’](?:entretien|examen|situation))\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "activité pratique",
-        re.compile(
-            r"\bactivit[ée]s?\s+(?:pratiques?|p[ée]dagogiques?|"
-            r"d['’]application)\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "séance pratique",
-        re.compile(
-            r"\bs[ée]ances?\s+(?:pratiques?|d['’]exercices?|"
-            r"d['’]application|d['’]entra[iî]nement)\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "entraînement",
-        re.compile(
-            r"\bentra[iî]nements?\s+(?:pratiques?|[àa]\s+l['’]examen|"
-            r"[àa]\s+la\s+certification|guid[ée]s?)\b|"
-            r"\bs[ée]ances?\s+d['’]entra[iî]nement\b",
-            re.IGNORECASE,
-        ),
-    ),
-)
-
-_LEGITIMATE_EXERCISE_CONTEXT_RE = re.compile(
-    r"\b(?:conditions?|modalit[ée]s?|cadres?|contextes?)\s+"
-    r"d['’]exercice\b|"
-    r"\bexercice\s+(?:du|de\s+la)\s+(?:m[ée]tier|profession)\b|"
-    r"\bexercice\s+de\s+l['’]activit[ée]\b|"
-    r"\bdans\s+l['’]exercice\s+de\s+(?:ses|leurs)\s+fonctions\b",
-    re.IGNORECASE,
-)
-
-
-def _learner_activity_violation_details(text: str) -> list[dict]:
-    """Locate forbidden learner activities and keep a readable source excerpt."""
-    source_text = str(text or "")
-    scan_text = _LEGITIMATE_EXERCISE_CONTEXT_RE.sub(
-        lambda match: " " * len(match.group(0)),
-        source_text,
-    )
-    violations = []
-    for label, pattern in _LEARNER_ACTIVITY_PATTERNS:
-        matches = []
-        for match in pattern.finditer(scan_text):
-            if (
-                _activity_match_is_negated(scan_text, match)
-                or _activity_match_is_certification_context(scan_text, match)
-            ):
-                continue
-            excerpt_start = max(0, match.start() - 120)
-            excerpt_end = min(len(source_text), match.end() + 160)
-            matches.append(
-                {
-                    "match": source_text[match.start():match.end()],
-                    "line": source_text.count("\n", 0, match.start()) + 1,
-                    "start": match.start(),
-                    "end": match.end(),
-                    "excerpt": source_text[excerpt_start:excerpt_end].strip(),
-                }
-            )
-        if matches:
-            violations.append({"label": label, "matches": matches})
-    return violations
-
-
-def _learner_activity_violations(text: str) -> list[str]:
-    """Détecte les activités apprenant, sans confondre l'exercice d'un métier."""
-    return [item["label"] for item in _learner_activity_violation_details(text)]
-
-
-_ACTIVITY_NEGATION_PREFIX_RE = re.compile(
-    r"(?:\baucun(?:e|s|es)?|\bsans|\bpas\s+de|\bni|"
-    r"\babsence\s+de|\bexclusion\s+de)\s+"
-    r"(?:[\wÀ-ÿ'’.-]+\s+){0,3}$",
-    re.IGNORECASE,
-)
-
-_ACTIVITY_NEGATION_SUFFIX_RE = re.compile(
-    r"^\s*(?:est\s+|sont\s+)?(?:strictement\s+)?"
-    r"(?:interdit(?:e|s|es)?|exclu(?:e|s|es)?|proscrit(?:e|s|es)?|"
-    r"absent(?:e|s|es)?|non\s+pr[ée]vu(?:e|s|es)?|"
-    r"n['’]est\s+pas\s+pr[ée]vu(?:e)?|ne\s+sont\s+pas\s+pr[ée]vu(?:e|s|es)?)\b",
-    re.IGNORECASE,
-)
-
-_CERTIFICATION_EVALUATION_HEADING_RE = re.compile(
-    r"\bmodalit[ée]s?\s+d['’][ée]valuation\b|"
-    r"\b[ée]preuves?\s+(?:de|du)\s+(?:la\s+)?certification\b",
-    re.IGNORECASE,
-)
-
-_CERTIFICATION_EVALUATION_ACTOR_RE = re.compile(
-    r"\b(?:candidat(?:e|s|es)?|jury|certificateur|titre\s+professionnel)\b",
-    re.IGNORECASE,
-)
-
-
-def _activity_match_is_negated(text: str, match) -> bool:
-    """Ignore seulement une négation qui qualifie directement l'activité."""
-    prefix = text[max(0, match.start() - 100):match.start()]
-    suffix = text[match.end():match.end() + 80]
-    return bool(
-        _ACTIVITY_NEGATION_PREFIX_RE.search(prefix)
-        or _ACTIVITY_NEGATION_SUFFIX_RE.search(suffix)
-    )
-
-
-def _activity_match_is_certification_context(text: str, match) -> bool:
-    """Ignore la description d'une épreuve officielle, pas une activité de cours."""
-    context = text[max(0, match.start() - 500):match.end() + 500]
-    return bool(
-        _CERTIFICATION_EVALUATION_HEADING_RE.search(context)
-        and _CERTIFICATION_EVALUATION_ACTOR_RE.search(context)
-    )
-
-
-def _assert_lecture_only_program(text: str, *, context: str) -> None:
-    violations = _learner_activity_violations(text)
-    if violations:
-        raise ValueError(
-            f"{context} contient une activité apprenant interdite : "
-            + ", ".join(violations)
-        )
-
-
-def _repair_lecture_only_output(
-    text: str,
-    *,
-    context: str,
-    model: str,
-    max_tokens: int,
-    json_output: bool = False,
-    checkpoint: Callable[[], None] | None = None,
-    http_max_attempts: int = 1,
-    on_rejected: Callable[[str, list[dict], str], None] | None = None,
-) -> str:
-    """Effectue au plus une correction sémantique avant le retry durable."""
-    violation_details = _learner_activity_violation_details(text)
-    if not violation_details:
-        return text
-    violations = [item["label"] for item in violation_details]
-    if on_rejected:
-        on_rejected(text, violation_details, "initial")
-
-    output_contract = (
-        "Réponds uniquement avec le JSON corrigé, sans balise Markdown."
-        if json_output
-        else "Réponds uniquement avec le programme corrigé, sans préambule."
-    )
-    prompt = f"""Tu corriges un programme de formation destiné à un cours audio magistral.
-
-Le contenu ci-dessous viole le contrat car il contient : {', '.join(violations)}.
-
-RÈGLES DE CORRECTION :
-- Conserve exactement la structure, les titres professionnels, les compétences, l'ordre et les volumes du programme.
-- Supprime toute consigne ou activité à réaliser par l'apprenant.
-- Transforme chaque activité détectée en explication, démonstration verbale ou exemple professionnel fictif raconté et commenté par le professeur.
-- N'utilise nulle part les expressions détectées, même pour dire qu'elles sont interdites.
-- N'ajoute aucun exercice, atelier, cas pratique, étude de cas, simulation, jeu de rôle, QCM ou quiz.
-- {output_contract}
-
-=== CONTENU À CORRIGER ===
-{text}
-"""
-    logger.warning(
-        "PIPELINE_LECTURE_ONLY_REPAIR context=%s violations=%s",
-        context,
-        ",".join(violations),
-    )
-    if checkpoint:
-        checkpoint()
-    repaired = _deepseek_post(
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        model=model,
-        http_max_attempts=http_max_attempts,
-    )
-    if checkpoint:
-        checkpoint()
-    repaired_violation_details = _learner_activity_violation_details(repaired)
-    if repaired_violation_details:
-        if on_rejected:
-            on_rejected(repaired, repaired_violation_details, "repair")
-        raise ValueError(
-            f"{context} contient une activité apprenant interdite : "
-            + ", ".join(item["label"] for item in repaired_violation_details)
-        )
-    return repaired
-
-
-def _iter_daily_teaching_text(days: list[dict]):
-    for day in days:
-        for key in ("title", "day_recap", "day_transition"):
-            yield day.get(key)
-        for module in day.get("modules_covered") or []:
-            yield module
-        for part in day.get("sub_parts") or []:
-            for key in ("name", "module_content"):
-                yield part.get(key)
-            brief = part.get("generation_brief") or {}
-            # `avoid` peut légitimement nommer une activité à ne pas produire.
-            for key in ("must_cover", "examples", "finish", "handoff"):
-                value = brief.get(key)
-                if isinstance(value, list):
-                    yield from value
-                else:
-                    yield value
-
-
-def _assert_lecture_only_days(days: list[dict]) -> None:
-    combined = "\n".join(
-        str(value).strip()
-        for value in _iter_daily_teaching_text(days)
-        if str(value or "").strip()
-    )
-    _assert_lecture_only_program(combined, context="Le programme journée")
-
-
 def _build_global_program_prompt(
     job: dict,
     sources: str,
@@ -1516,43 +1258,6 @@ def generate_global_program(
             min_value=1,
             max_value=3,
         )
-        generation_run_id = uuid.uuid4().hex
-
-        def record_rejected_program(
-            output_text: str,
-            violations: list[dict],
-            phase: str,
-        ) -> None:
-            from services.formation_observability_service import (
-                REJECTED_GLOBAL_PROGRAM_EVENT,
-                log_pipeline_event,
-            )
-
-            phase_label = (
-                "correction automatique"
-                if phase == "repair"
-                else "première génération"
-            )
-            labels = [item.get("label") for item in violations if item.get("label")]
-            log_pipeline_event(
-                job_id,
-                REJECTED_GLOBAL_PROGRAM_EVENT,
-                step="global_program",
-                status="blocked",
-                model=used_model,
-                message=(
-                    f"Programme global refusé ({phase_label}) : "
-                    + ", ".join(labels)
-                ),
-                data={
-                    "run_id": generation_run_id,
-                    "phase": phase,
-                    "violations": violations,
-                    "output_text": output_text,
-                    "character_count": len(output_text),
-                },
-            )
-
         if checkpoint:
             checkpoint()
         program = _deepseek_post(
@@ -1560,15 +1265,6 @@ def generate_global_program(
             max_tokens=16000,
             model=used_model,
             http_max_attempts=transport_attempts,
-        )
-        program = _repair_lecture_only_output(
-            program,
-            context="Le programme global",
-            model=used_model,
-            max_tokens=16000,
-            checkpoint=checkpoint,
-            http_max_attempts=transport_attempts,
-            on_rejected=record_rejected_program,
         )
         if checkpoint:
             checkpoint()
@@ -1896,7 +1592,6 @@ def daily_programs_checkpoint_state(job: dict) -> dict:
                 job.get("tp_name") or "Formation",
                 schedule_day=schedule_day,
             )
-            _assert_lecture_only_days([day])
         except Exception:
             invalid_count += 1
             continue
@@ -2002,33 +1697,13 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
             http_max_attempts=transport_attempts,
         )
         data = _clean_json(raw)
-        days = _normalize_daily_payload(
+        return _normalize_daily_payload(
             data,
             day_start,
             day_end,
             tp_name,
             schedule_days=schedule_days,
         )
-        try:
-            _assert_lecture_only_days(days)
-        except ValueError:
-            repaired_raw = _repair_lecture_only_output(
-                json.dumps({"days": days}, ensure_ascii=False),
-                context="Le programme journée",
-                model=model,
-                max_tokens=DAILY_SPLIT_MAX_TOKENS,
-                json_output=True,
-                http_max_attempts=transport_attempts,
-            )
-            days = _normalize_daily_payload(
-                _clean_json(repaired_raw),
-                day_start,
-                day_end,
-                tp_name,
-                schedule_days=schedule_days,
-            )
-            _assert_lecture_only_days(days)
-        return days
     except (LeaseLostError, DeepSeekRateLimitError, DeepSeekAPIError):
         raise
     except Exception as exc:
@@ -2134,7 +1809,6 @@ def run_daily_split(
                                 for expected_number in state["expected_numbers"]
                                 if expected_number in days_by_number
                             ]
-                            _assert_lecture_only_days(partial_days)
                             if checkpoint:
                                 checkpoint()
                             update_job(
@@ -2186,8 +1860,6 @@ def run_daily_split(
                 "Daily split incohérent : attendu jours "
                 f"{state['expected_numbers']}, reçu {actual_numbers}"
             )
-        _assert_lecture_only_days(all_days)
-
         if checkpoint:
             checkpoint()
         logger.info(f"✅ Job {job_id} : {len(all_days)} journées générées au total")

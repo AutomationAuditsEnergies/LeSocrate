@@ -373,7 +373,7 @@ class DurableFoundationStagesTest(unittest.TestCase):
         )
         self.assertFalse(hasattr(fps, "launch_global_program_generation"))
 
-    def test_global_program_repairs_invalid_activity_before_persisting(self):
+    def test_global_program_persists_activity_without_semantic_repair(self):
         job = {
             "id": 42,
             "tp_name": "TP Test",
@@ -381,8 +381,7 @@ class DurableFoundationStagesTest(unittest.TestCase):
             "reac_text": "Référentiel complet",
             "nb_days": 2,
         }
-        invalid_program = "### MODULE 1.1 : Cas pratique guidé"
-        repaired_program = "### MODULE 1.1 : Exemple professionnel commenté"
+        generated_program = "### MODULE 1.1 : Mise en situation guidée"
         with patch.object(fps, "get_job", return_value=job), patch.object(
             fps,
             "update_job",
@@ -400,19 +399,12 @@ class DurableFoundationStagesTest(unittest.TestCase):
         ), patch.object(
             fps,
             "_deepseek_post",
-            side_effect=[invalid_program, repaired_program],
-        ) as deepseek, patch(
-            "services.formation_observability_service.log_pipeline_event",
-        ) as log_event:
+            return_value=generated_program,
+        ) as deepseek:
             fps.generate_global_program(42)
 
-        self.assertEqual(deepseek.call_count, 2)
-        self.assertTrue(
-            all(
-                call_item.kwargs["http_max_attempts"] == 2
-                for call_item in deepseek.call_args_list
-            )
-        )
+        self.assertEqual(deepseek.call_count, 1)
+        self.assertEqual(deepseek.call_args.kwargs["http_max_attempts"], 2)
         self.assertEqual(
             update.call_args_list,
             [
@@ -420,68 +412,11 @@ class DurableFoundationStagesTest(unittest.TestCase):
                 call(
                     42,
                     status="global_ready",
-                    global_program=repaired_program,
+                    global_program=generated_program,
                     global_program_generated_via="api",
                 ),
             ],
         )
-        log_event.assert_called_once()
-        self.assertEqual(
-            log_event.call_args.kwargs["data"]["output_text"],
-            invalid_program,
-        )
-        self.assertEqual(log_event.call_args.kwargs["data"]["phase"], "initial")
-        self.assertEqual(
-            log_event.call_args.kwargs["data"]["violations"][0]["matches"][0]["line"],
-            1,
-        )
-
-    def test_global_program_delegates_failed_semantic_repair_to_durable_retry(self):
-        job = {
-            "id": 42,
-            "tp_name": "TP Test",
-            "rncp_code": "RNCP1",
-            "reac_text": "Référentiel complet",
-            "nb_days": 2,
-        }
-        invalid_program = "### MODULE 1.1 : Mise en situation guidée"
-        with patch.object(fps, "get_job", return_value=job), patch.object(
-            fps,
-            "update_job",
-        ) as update, patch.object(
-            fps,
-            "_v2_schedule_days",
-            return_value=[],
-        ), patch(
-            "services.knowledge_base_service.build_kb_context",
-            return_value="Base enrichie",
-        ), patch.object(
-            fps,
-            "_build_global_program_prompt",
-            return_value="Prompt",
-        ), patch.object(
-            fps,
-            "_deepseek_post",
-            return_value=invalid_program,
-        ) as deepseek, patch(
-            "services.formation_observability_service.log_pipeline_event",
-        ) as log_event:
-            with self.assertRaisesRegex(ValueError, "activité apprenant interdite"):
-                fps.generate_global_program(42)
-
-        self.assertEqual(deepseek.call_count, 2)
-        self.assertEqual(log_event.call_count, 2)
-        self.assertEqual(
-            [call_item.kwargs["data"]["phase"] for call_item in log_event.call_args_list],
-            ["initial", "repair"],
-        )
-        self.assertEqual(
-            log_event.call_args_list[0].kwargs["data"]["run_id"],
-            log_event.call_args_list[1].kwargs["data"]["run_id"],
-        )
-        self.assertEqual(update.call_args_list[0], call(42, status="global_generating"))
-        self.assertEqual(update.call_args_list[-1][0], (42,))
-        self.assertEqual(update.call_args_list[-1].kwargs["status"], "error")
 
     def test_global_program_failure_is_propagated_to_the_durable_worker(self):
         job = {

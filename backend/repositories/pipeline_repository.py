@@ -1319,40 +1319,6 @@ def list_pipeline_event_rows(job_id: int, *, limit: int = 200) -> list[dict[str,
         conn.close()
 
 
-def list_pipeline_event_rows_by_type(
-    job_id: int,
-    event_type: str,
-    *,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    """Return one diagnostic event family without loading the whole job log."""
-    ensure_pipeline_observability_tables()
-    limit = max(1, min(int(limit or 50), 200))
-    ph = _placeholder()
-    query = f"""
-        SELECT id, job_id, folder_id, step, event_type, status, message, model,
-               duration_ms, data_json, error, created_at
-        FROM formation_pipeline_events
-        WHERE job_id = {ph} AND event_type = {ph}
-        ORDER BY created_at DESC, id DESC
-        LIMIT {ph}
-    """
-    params = (job_id, event_type, limit)
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                return [dict(row) for row in cur.fetchall()]
-
-    conn = _as_sqlite_row_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
-    finally:
-        conn.close()
-
-
 def get_latest_pipeline_event_created_at(
     *,
     job_id: int,

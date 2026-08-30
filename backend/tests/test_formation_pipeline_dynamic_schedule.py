@@ -190,6 +190,7 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertNotIn("999", prompt)
         self.assertNotIn("journées de 7h", prompt)
         self.assertNotIn("{TOTAL_HOURS}", prompt)
+        self.assertIn("mise en situation", prompt)
 
     def test_global_prompt_requires_lecture_only_programming(self):
         prompt = fps._build_global_program_prompt(
@@ -203,48 +204,8 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
 
         self.assertIn("100% du volume pédagogique est du cours magistral audio", prompt)
         self.assertIn("Exemples professionnels commentés à intégrer au cours", prompt)
+        self.assertIn("mise en situation", prompt)
         self.assertNotIn("Cas pratiques suggérés", prompt)
-
-    def test_activity_detector_keeps_professional_context_but_rejects_exercises(self):
-        legitimate = (
-            "Les conditions d'exercice du métier et les modalités d’exercice "
-            "de la profession sont expliquées par le professeur. "
-            "La clôture de l'exercice comptable est ensuite détaillée. "
-            "Aucune mise en situation n'est prévue et les jeux de rôle sont exclus. "
-            "Le cours se déroule sans atelier pédagogique ni QCM."
-        )
-        self.assertEqual(fps._learner_activity_violations(legitimate), [])
-
-        certification_description = (
-            "Modalités d'évaluation : l'épreuve de certification comprend une "
-            "mise en situation professionnelle. Le candidat est évalué par un "
-            "jury de professionnels dans le cadre du titre professionnel."
-        )
-        self.assertEqual(
-            fps._learner_activity_violations(certification_description),
-            [],
-        )
-
-        learner_instruction = (
-            "Évaluation formative : les apprenants réalisent une mise en situation "
-            "en binôme pendant le cours."
-        )
-        self.assertEqual(
-            fps._learner_activity_violations(learner_instruction),
-            ["mise en situation"],
-        )
-
-        for forbidden in (
-            "Séance d'exercices",
-            "Cas pratique guidé",
-            "Étude de cas en groupe",
-            "Atelier d'application",
-            "Mise en situation",
-            "Jeu de rôle",
-            "QCM final",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertTrue(fps._learner_activity_violations(forbidden))
 
     def test_v1_global_prompt_remains_byte_for_byte_legacy(self):
         job = {
@@ -307,23 +268,19 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
         self.assertIn("50 min", captured["prompt"])
         self.assertNotIn("EXACTEMENT 7", captured["prompt"])
         self.assertIn("exclusivement un cours magistral", captured["prompt"])
+        self.assertIn("mise en situation", captured["prompt"])
 
-    def test_daily_split_repairs_invalid_activity_before_returning(self):
+    def test_daily_split_accepts_activity_even_when_prompt_discourages_it(self):
         schedule_days = fps._v2_schedule_days(
             _v2_job([self.day_four])
         )
-        invalid_day = _raw_generated_day(1, 4)
-        invalid_day["sub_parts"][0]["name"] = "Cours 1 — Cas pratique guidé"
-        repaired_day = _raw_generated_day(1, 4)
-        repaired_day["sub_parts"][0]["name"] = "Cours 1 — Exemple professionnel commenté"
+        generated_day = _raw_generated_day(1, 4)
+        generated_day["sub_parts"][0]["name"] = "Cours 1 — Mise en situation"
 
         with patch.object(
             fps,
             "_deepseek_post",
-            side_effect=[
-                json.dumps({"days": [invalid_day]}),
-                json.dumps({"days": [repaired_day]}),
-            ],
+            return_value=json.dumps({"days": [generated_day]}),
         ) as deepseek:
             days = fps._split_batch(
                 tp_name="TP dynamique",
@@ -335,43 +292,11 @@ class FormationPipelineDynamicScheduleTest(unittest.TestCase):
                 schedule_days=schedule_days,
             )
 
-        self.assertEqual(deepseek.call_count, 2)
-        self.assertTrue(
-            all(
-                call_item.kwargs["http_max_attempts"] == 2
-                for call_item in deepseek.call_args_list
-            )
-        )
+        self.assertEqual(deepseek.call_count, 1)
         self.assertEqual(
             days[0]["sub_parts"][0]["name"],
-            "Cours 1 — Exemple professionnel commenté",
+            "Cours 1 — Mise en situation",
         )
-
-    def test_daily_split_delegates_failed_semantic_repair_to_durable_retry(self):
-        schedule_days = fps._v2_schedule_days(_v2_job([self.day_four]))
-        invalid_day = _raw_generated_day(1, 4)
-        invalid_day["sub_parts"][0]["name"] = "Cours 1 — Mise en situation"
-
-        with patch.object(
-            fps,
-            "_deepseek_post",
-            return_value=json.dumps({"days": [invalid_day]}),
-        ) as deepseek:
-            with self.assertRaisesRegex(
-                fps.DailySplitGenerationError,
-                "activité apprenant interdite",
-            ):
-                fps._split_batch(
-                    tp_name="TP dynamique",
-                    nb_days=1,
-                    global_program="Programme",
-                    day_start=1,
-                    day_end=1,
-                    model="test-model",
-                    schedule_days=schedule_days,
-                )
-
-        self.assertEqual(deepseek.call_count, 2)
 
     def test_run_daily_split_never_persists_a_fallback_after_failure(self):
         job = _v2_job([self.day_five])

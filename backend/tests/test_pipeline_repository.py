@@ -1015,33 +1015,11 @@ class PipelineRepositoryTest(unittest.TestCase):
             message="ok",
             data={"segments": 3},
         )
-        rejected_id = obs.log_pipeline_event(
-            99,
-            obs.REJECTED_GLOBAL_PROGRAM_EVENT,
-            step="global_program",
-            status="blocked",
-            message="Programme refusé",
-            data={
-                "run_id": "run-1",
-                "phase": "initial",
-                "violations": [{"label": "mise en situation", "matches": []}],
-                "output_text": "Programme complet avec mise en situation",
-                "character_count": 40,
-            },
-        )
         events = obs.list_pipeline_events(99)
 
-        self.assertEqual([event["id"] for event in events], [event_id, rejected_id])
+        self.assertEqual([event["id"] for event in events], [event_id])
         self.assertEqual(events[0]["data"], {"segments": 3})
-        self.assertNotIn("output_text", events[1]["data"])
-        self.assertTrue(events[1]["data"]["output_available"])
-        rejected = obs.list_rejected_global_programs(99)
-        self.assertEqual(len(rejected), 1)
-        self.assertEqual(
-            rejected[0]["output_text"],
-            "Programme complet avec mise en situation",
-        )
-        self.assertEqual(obs.clear_pipeline_events(99), 2)
+        self.assertEqual(obs.clear_pipeline_events(99), 1)
         self.assertEqual(obs.list_pipeline_events(99), [])
 
     def test_knowledge_base_checkpoint_helpers_use_repository_storage(self):
