@@ -8,6 +8,7 @@ import {
   isCourseAudioFilename,
 } from './slides/audioSlideSync'
 import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
+import { stopMediaPlayback, stopWaveSurferPlayback } from './audioPlaybackLifecycle'
 
 const Icon = ({ name, style, className = '' }) => (
   <span className={`material-icons ${className}`} style={style}>{name}</span>
@@ -261,9 +262,13 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const activeRegionRef = useRef(null)
   const pendingSeekRef = useRef(null)
   const syncRepairAttemptRef = useRef(new Set())
+  const mountedRef = useRef(false)
+  const playbackEpochRef = useRef(0)
 
   const audioCtxRef = useRef(null)      // Web Audio API context pour écoute splicée
   const stitchedSourcesRef = useRef([]) // sources planifiées (pour pouvoir stopper)
+  const previewAudioRef = useRef(null)  // lecteur TTS temporaire
+  const previewAudioUrlRef = useRef(null)
 
   const [mode, setMode] = useState('cut')          // 'cut' | 'replace'
   const [playing, setPlaying] = useState(false)
@@ -273,7 +278,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [replaceText, setReplaceText] = useState('')
   const [previewId, setPreviewId] = useState(null)
   const [previewB64, setPreviewB64] = useState(null)   // base64 du TTS preview
-  const [, setPreviewAudio] = useState(null)
   const [stitchedPlaying, setStitchedPlaying] = useState(false)
   const [loadingStitch, setLoadingStitch] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -291,6 +295,21 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const clearAudioUrl = useCallback(() => {
     audioUrlRef.current = null
   }, [])
+
+  const stopPreviewPlayback = useCallback(() => {
+    stopMediaPlayback(previewAudioRef.current, { unload: true })
+    previewAudioRef.current = null
+    if (previewAudioUrlRef.current) {
+      URL.revokeObjectURL(previewAudioUrlRef.current)
+      previewAudioUrlRef.current = null
+    }
+  }, [])
+
+  const clearPreview = useCallback(() => {
+    stopPreviewPlayback()
+    setPreviewId(null)
+    setPreviewB64(null)
+  }, [stopPreviewPlayback])
 
   const buildAudioStreamUrl = useCallback(async () => {
     clearAudioUrl()
@@ -313,6 +332,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     let sasError = null
     try {
       const blob = await fetchAudioBlob(url, { credentials: 'omit', label: 'stockage audio' })
+      if (!mountedRef.current || wsRef.current !== ws) return undefined
       return ws.loadBlob(blob)
     } catch (e) {
       sasError = e
@@ -324,6 +344,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         buildBackendAudioStreamPath(),
         'proxy audio backend',
       )
+      if (!mountedRef.current || wsRef.current !== ws) return undefined
       return ws.loadBlob(blob)
     } catch (backendError) {
       throw new Error(`${backendError.message}${sasError ? ` (Azure direct: ${sasError.message})` : ''}`)
@@ -331,7 +352,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   }, [buildAudioStreamUrl, buildBackendAudioStreamPath])
 
   // ── Écoute splicée côté client (Web Audio API) ──
-  const stopStitchedPlayback = useCallback(() => {
+  const stopStitchedPlayback = useCallback(({ updateState = true } = {}) => {
     stitchedSourcesRef.current.forEach(src => {
       try {
         src.stop()
@@ -346,8 +367,45 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       // Contexte déjà fermé.
     }
     audioCtxRef.current = null
-    setStitchedPlaying(false)
+    if (updateState) setStitchedPlaying(false)
   }, [])
+
+  const stopAllPlayback = useCallback(({ destroyWaveSurfer = false, updateState = true } = {}) => {
+    playbackEpochRef.current += 1
+    pendingSeekRef.current = null
+    stopPreviewPlayback()
+    stopStitchedPlayback({ updateState })
+
+    const ws = wsRef.current
+    stopWaveSurferPlayback(ws)
+    if (destroyWaveSurfer && ws) {
+      try {
+        ws.destroy()
+      } catch {
+        // Destruction idempotente pendant les changements de vue rapides.
+      }
+      if (wsRef.current === ws) wsRef.current = null
+    }
+    if (updateState) setPlaying(false)
+  }, [stopPreviewPlayback, stopStitchedPlayback])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      playbackEpochRef.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
+    const stopForNavigation = () => stopAllPlayback()
+    window.addEventListener('pagehide', stopForNavigation)
+    window.addEventListener('popstate', stopForNavigation)
+    return () => {
+      window.removeEventListener('pagehide', stopForNavigation)
+      window.removeEventListener('popstate', stopForNavigation)
+    }
+  }, [stopAllPlayback])
 
   useEffect(() => {
     let cancelled = false
@@ -536,7 +594,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         if (pendingSeekRef.current === target) {
           pendingSeekRef.current = null
         }
-        if (resumePlayback) {
+        if (
+          resumePlayback
+          && !cancelled
+          && mountedRef.current
+          && wsRef.current === ws
+        ) {
           await ws.play()
         }
       } catch {
@@ -578,24 +641,21 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       }
       activeRegionRef.current = r
       setRegion({ start: r.start * 1000, end: r.end * 1000 })
-      setPreviewId(null)
-      setPreviewAudio(null)
+      clearPreview()
     })
 
     regions.on('region-updated', (r) => {
       setRegion({ start: r.start * 1000, end: r.end * 1000 })
-      setPreviewId(null)
-      setPreviewAudio(null)
+      clearPreview()
     })
 
     return () => {
       cancelled = true
       waveEl?.removeEventListener('wheel', handleWheel)
-      ws.destroy()
-      stopStitchedPlayback()
+      stopAllPlayback({ destroyWaveSurfer: true, updateState: false })
       clearAudioUrl()
     }
-  }, [clearAudioUrl, darkMode, loadAudioIntoWaveSurfer, stopStitchedPlayback])
+  }, [clearAudioUrl, clearPreview, darkMode, loadAudioIntoWaveSurfer, stopAllPlayback])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {
@@ -619,9 +679,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     // après un clic sur la waveform), on attend la fin avant de lancer la lecture.
     // Sinon media.play() est appelé pendant le seeking et produit du silence.
     const media = ws.getMediaElement?.()
+    const playbackEpoch = playbackEpochRef.current
     if (media?.seeking) {
       await waitForMediaReadyAfterSeek(media, ws.getCurrentTime?.())
     }
+
+    if (
+      !mountedRef.current
+      || playbackEpochRef.current !== playbackEpoch
+      || wsRef.current !== ws
+    ) return
 
     try {
       await ws.play()
@@ -648,8 +715,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       activeRegionRef.current = null
     }
     setRegion(null)
-    setPreviewId(null)
-    setPreviewAudio(null)
+    clearPreview()
   }
 
   const handleListenWithReplacement = async () => {
@@ -764,10 +830,9 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   // ── Prévisualiser le TTS ──
   const handlePreviewTTS = async () => {
     if (!replaceText.trim()) return
+    clearPreview()
     setGenerating(true)
     setError(null)
-    setPreviewId(null)
-    setPreviewAudio(null)
     try {
       const resp = await apiFetch(
         `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-preview`,
@@ -778,6 +843,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         }
       )
       const data = await resp.json()
+      if (!mountedRef.current) return
       if (data.success) {
         setPreviewId(data.preview_id)
         setPreviewB64(data.audio_b64)
@@ -789,8 +855,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         )
         const url = URL.createObjectURL(blob)
         const audio = new Audio(url)
-        setPreviewAudio(audio)
-        audio.play()
+        previewAudioRef.current = audio
+        previewAudioUrlRef.current = url
+        audio.addEventListener('ended', stopPreviewPlayback, { once: true })
+        audio.play().catch(() => {})
       } else {
         setError(data.error || 'Erreur lors de la génération TTS')
       }
@@ -850,6 +918,11 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const actionBg = colors.text
   const actionText = colors.cardBg
 
+  const handleClose = () => {
+    stopAllPlayback()
+    onClose?.()
+  }
+
   return (
     <div className="flex min-h-0 flex-col" style={{ backgroundColor: colors.cardBg }}>
         {/* Header */}
@@ -859,7 +932,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         >
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
             style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
           >
@@ -994,7 +1067,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
               </p>
               <textarea
                 value={replaceText}
-                onChange={e => { setReplaceText(e.target.value); setPreviewId(null) }}
+                onChange={e => { setReplaceText(e.target.value); clearPreview() }}
                 rows={4}
                 placeholder="Écrivez ici le texte qui sera lu par la voix TTS à la place de la région sélectionnée..."
                 className="w-full rounded-xl p-3 text-sm resize-y outline-none"
