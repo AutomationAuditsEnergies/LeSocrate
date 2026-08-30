@@ -197,7 +197,7 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         ), patch(
             "services.tts_service.convert_to_speech_with_timestamps",
             side_effect=[(b"VOICE1", timestamp_meta), (b"VOICE2", timestamp_meta)],
-        ), patch.object(
+        ) as timestamp_tts, patch.object(
             cgs,
             "_mp3_duration_seconds_no_ffprobe",
             side_effect=[3.4, 3.6],
@@ -212,6 +212,7 @@ class AudioMp3IntegrityTest(unittest.TestCase):
                     "cours.mp3",
                     mock=False,
                     basic_tts=False,
+                    platform_id=20,
                 )
             )
 
@@ -222,6 +223,10 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         self.assertEqual(timings[1]["end_time"], 24.0)
         self.assertEqual(attempts[0]["timeline_duration_sec"], 3.0)
         self.assertEqual(attempts[0]["media_duration_sec"], 3.4)
+        self.assertEqual(timestamp_tts.call_count, 2)
+        self.assertTrue(
+            all(call.kwargs["platform_id"] == 20 for call in timestamp_tts.call_args_list)
+        )
 
     def test_contextual_break_silence_fallback_preserves_slot_duration(self):
         with patch(

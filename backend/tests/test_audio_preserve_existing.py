@@ -215,6 +215,7 @@ class AudioPreserveExistingTest(unittest.TestCase):
         self.assertEqual(timings_by_file, {"course_01.mp3", "course_02.mp3"})
         self.assertEqual(result["generated"], 1)
         synth.assert_called_once()
+        self.assertEqual(synth.call_args.kwargs["platform_id"], 7)
 
     def test_preserve_existing_skips_existing_audio_even_when_force_all(self):
         bloc = {

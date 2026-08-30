@@ -5372,6 +5372,7 @@ def _synthesize_course_audio_synced_to_slides(
     *,
     mock: bool,
     basic_tts: bool,
+    platform_id: int | None = None,
     progress_callback=None,
     prepended_chunks: list = None,
     conclusion_margin_sec: int = None,
@@ -5649,10 +5650,15 @@ def _synthesize_course_audio_synced_to_slides(
                     text,
                     speed=api_speed,
                     format="mp3",
+                    platform_id=platform_id,
                 )
                 chunk_actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=text)
             else:
-                audio_bytes = convert_to_speech(text, speed=api_speed)
+                audio_bytes = convert_to_speech(
+                    text,
+                    speed=api_speed,
+                    platform_id=platform_id,
+                )
             timeline_duration_sec = float(
                 (chunk_actual_reading or {}).get("audio_duration_sec") or 0.0
             )
@@ -16069,6 +16075,7 @@ def generate_audio_from_script(
                 filename,
                 mock=mock,
                 basic_tts=basic_tts,
+                platform_id=platform_id,
                 progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
                 prepended_chunks=prepended_for_call,
                 runtime_fit=runtime_fit_enabled,
@@ -16182,6 +16189,7 @@ def generate_audio_from_script(
                 filename,
                 mock=False,
                 basic_tts=True,
+                platform_id=platform_id,
                 progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
                 prepended_chunks=prepended_for_call,
                 runtime_fit=runtime_fit_enabled,
