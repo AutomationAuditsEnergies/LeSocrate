@@ -150,6 +150,15 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const createFolderInputRef = useRef(null)
   const pollingRef = useRef(null)
 
+  useEffect(() => {
+    if (!showFillInfo) return undefined
+    const closeInfoPanel = (event) => {
+      if (event.key === 'Escape') setShowFillInfo(false)
+    }
+    window.addEventListener('keydown', closeInfoPanel)
+    return () => window.removeEventListener('keydown', closeInfoPanel)
+  }, [showFillInfo])
+
   const colors = darkMode ? {
     bg: '#0f172a',
     cardBg: '#1e293b',
@@ -1612,7 +1621,8 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               onClose={() => setAudioEditorFile(null)}
             />
           ) : view === 'folders' ? (
-            <>
+            <div className="relative flex min-h-full items-start gap-4">
+              <div className="min-w-0 flex-1">
               {showCreateFolderForm ? (
                 <form
                   onSubmit={handleCreateFolderSubmit}
@@ -1688,11 +1698,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                           setShowFillForm((value) => !value)
                           setFillFeedback(null)
                         }}
-                        className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-white"
+                        className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-lg px-3 py-2 text-left text-sm font-semibold text-white"
                         style={{ backgroundColor: '#121212' }}
                       >
-                        <Icon name="event_repeat" className="text-base" />
-                        {targetSessionId ? 'Choisir un cours de remplacement' : 'Choisir le cours de la prochaine séance'}
+                        {targetSessionId ? 'Choisir le cours de remplacement' : 'Choisir le prochain cours'}
                       </button>
                       <button
                         type="button"
@@ -1701,28 +1710,13 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         aria-label="Informations sur le choix du cours diffusé"
                         title="À quoi sert ce bouton ?"
                         onClick={() => setShowFillInfo((value) => !value)}
-                        className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full transition-colors"
+                        className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full transition-colors"
                         style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textMuted }}
                       >
                         <Icon name="info" className="text-[17px]" />
                       </button>
                     </div>
                   </div>
-                  {showFillInfo && (
-                    <div
-                      id={`fill-course-info-${platformId}`}
-                      role="note"
-                      className="ml-auto mt-3 max-w-2xl rounded-lg border p-3"
-                      style={{ backgroundColor: colors.innerBg, borderColor: colors.border }}
-                    >
-                      <p className="text-xs font-semibold" style={{ color: colors.text }}>
-                        Solution de dernier recours
-                      </p>
-                      <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                        Si la séance prévue n’a pas été générée correctement avec son audio et sa visio, contactez le support. En attendant la correction, choisissez ici un cours précédent déjà complet pour le diffuser à la date prévue.
-                      </p>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1784,7 +1778,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     <Icon name="drag_indicator" style={{ fontSize: '14px' }} />
                     Glissez les cours pour changer leur ordre chronologique
                   </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                  <div className={`grid gap-4 ${showFillInfo ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'}`}>
                     {folders.map((folder, idx) => {
                       const courseMaterial = materialForFolder(folder, idx)
                       const audioState = folderAudioStates[folder.id] || {
@@ -1918,7 +1912,60 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   </div>
                 </>
               )}
-            </>
+              </div>
+
+              <>
+                {showFillInfo && (
+                  <button
+                    type="button"
+                    aria-label="Fermer les informations"
+                    onClick={() => setShowFillInfo(false)}
+                    className="fixed inset-0 z-40 bg-black/25 lg:hidden"
+                  />
+                )}
+                <aside
+                  id={`fill-course-info-${platformId}`}
+                  role="complementary"
+                  aria-labelledby={`fill-course-info-title-${platformId}`}
+                  aria-hidden={!showFillInfo}
+                  className={`fixed inset-y-0 right-0 z-50 w-[min(320px,calc(100%-32px))] overflow-y-auto border-l p-5 shadow-xl transition-[transform,width,opacity,padding] duration-200 ease-out motion-reduce:transition-none lg:sticky lg:top-0 lg:z-auto lg:h-auto lg:flex-none lg:self-start lg:shadow-none ${showFillInfo ? 'translate-x-0 lg:w-72 lg:translate-x-0 lg:opacity-100 lg:p-0 lg:pl-4' : 'pointer-events-none translate-x-full lg:w-0 lg:translate-x-0 lg:border-transparent lg:p-0 lg:opacity-0'}`}
+                  style={{ backgroundColor: colors.cardBg, borderColor: showFillInfo ? colors.border : 'transparent' }}
+                >
+                  <div className="lg:w-[272px]">
+                    <div className="flex items-start justify-between gap-4 border-b pb-4" style={{ borderColor: colors.border }}>
+                      <div>
+                        <h3 id={`fill-course-info-title-${platformId}`} className="text-sm font-semibold" style={{ color: colors.text }}>
+                          Choisir le prochain cours
+                        </h3>
+                        <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
+                          Solution de dernier recours
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowFillInfo(false)}
+                        aria-label="Rétracter le panneau d’information"
+                        className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-lg transition-colors"
+                        style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                      >
+                        <Icon name="close" className="text-lg" />
+                      </button>
+                    </div>
+                    <div className="space-y-4 pt-4">
+                      <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
+                        Si la séance prévue n’a pas été générée correctement avec son audio et sa visio, contactez le support.
+                      </p>
+                      <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
+                        En attendant la correction, choisissez un cours précédent déjà complet. Il sera diffusé à la date de la prochaine séance.
+                      </p>
+                      <p className="border-t pt-4 text-xs font-semibold leading-5" style={{ color: colors.text, borderColor: colors.border }}>
+                        Utilisez cette option uniquement lorsqu’aucune séance complète n’est disponible.
+                      </p>
+                    </div>
+                  </div>
+                </aside>
+              </>
+            </div>
           ) : (
             <>
               {/* Navigation secondaire */}
