@@ -63,6 +63,7 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.match(coursesSource, />\s*Modifier\s*</)
   assert.match(coursesSource, /aria-label="Contenu affiché dans la liste"/)
   assert.match(coursesSource, />\s*Cours \+ pauses\s*</)
+  assert.match(coursesSource, /Aucune pause pour cette journée\./)
   assert.match(coursesSource, /br\.type !== 'qa' && br\.type !== 'jointure'/)
   assert.doesNotMatch(coursesSource, /Générer \{expectedCourseLabel\}/)
   assert.doesNotMatch(coursesSource, />\s*Générer tout\s*</)

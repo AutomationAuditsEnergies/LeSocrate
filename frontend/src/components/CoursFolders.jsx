@@ -2356,8 +2356,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       type="button"
                       onClick={() => setScriptSidebarMode('courses_pauses')}
                       aria-pressed={scriptSidebarMode === 'courses_pauses'}
-                      disabled={visiblePauseBreaks.length === 0}
-                      className="rounded-md px-2 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
+                      className="rounded-md px-2 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                       style={{
                         backgroundColor: scriptSidebarMode === 'courses_pauses' ? colors.cardBg : 'transparent',
                         color: scriptSidebarMode === 'courses_pauses' ? colors.text : colors.textMuted,
@@ -2454,6 +2453,11 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       )
                     })}
                   </>
+                )}
+                {scriptSidebarMode === 'courses_pauses' && visiblePauseBreaks.length === 0 && (
+                  <p className="px-4 pb-2 pt-4 text-xs leading-5" style={{ color: colors.textMuted }}>
+                    Aucune pause pour cette journée.
+                  </p>
                 )}
                 </nav>
               </aside>
