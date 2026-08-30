@@ -7092,6 +7092,9 @@ function PlatformCard({
       ? p.course_schedule.upcoming_sessions
       : nextCourseSession ? [nextCourseSession] : []
   )
+  const pastCourseSessions = Array.isArray(p.course_schedule?.past_sessions)
+    ? p.course_schedule.past_sessions
+    : []
   const rosterStage = getTeacherRosterStage(p)
   const robotTheme = getRobotTheme(p.center_platform_number || p.id, p.teacher_color)
   const rosterMeta = {
@@ -7372,6 +7375,27 @@ function PlatformCard({
               ) : (
                 <p className="mt-3 text-sm" style={{ color: colors.textSecondary }}>Aucune prochaine séance programmée.</p>
               )}
+              <details className="group mt-4 border-t pt-2" style={{ borderColor: colors.border }}>
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 [&::-webkit-details-marker]:hidden" style={{ color: colors.text }}>
+                  <span>Anciennes séances ({pastCourseSessions.length})</span>
+                  <Icon name="expand_more" className="text-xl transition-transform group-open:rotate-180" />
+                </summary>
+                {pastCourseSessions.length > 0 ? (
+                  <div className="divide-y" style={{ borderColor: colors.border }}>
+                    {pastCourseSessions.map((session) => (
+                      <div key={session.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                        <div>
+                          <p className="text-sm font-semibold" style={{ color: colors.text }}>J{session.session_index}</p>
+                          <p className="mt-0.5 text-sm" style={{ color: colors.textSecondary }}>{formatScheduleLongDateTime(session.scheduled_at)}</p>
+                        </div>
+                        <Icon name="history" className="text-xl" />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="pb-3 pt-1 text-sm" style={{ color: colors.textSecondary }}>Aucune ancienne séance.</p>
+                )}
+              </details>
             </section>
           )}
           {activeTool === 'courses' && (

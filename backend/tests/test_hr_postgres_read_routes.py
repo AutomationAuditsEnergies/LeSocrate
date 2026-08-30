@@ -148,6 +148,17 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
                 "audio_generation_completed_at": None,
                 "audio_generation_attempts": 0,
                 "audio_generation_next_retry_at": None,
+                "past_sessions": [{
+                    "id": 90,
+                    "session_index": 1,
+                    "scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 10, 9, 0)),
+                    "status": "completed",
+                    "audio_generation_status": "completed",
+                    "audio_generation_started_at": None,
+                    "audio_generation_completed_at": FRANCE_TZ.localize(datetime(2026, 7, 10, 10, 0)),
+                    "audio_generation_attempts": 1,
+                    "audio_generation_next_retry_at": None,
+                }],
             }},
         ), patch(
             "routes.hr_routes.get_db_connection",
@@ -165,6 +176,8 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         self.assertEqual(platform["center_platform_number"], 1)
         self.assertEqual(platform["teacher_preparation"]["status"], "preparing")
         self.assertEqual(platform["course_schedule"]["next_session"]["audio_status"], "scheduled")
+        self.assertEqual(platform["course_schedule"]["past_sessions"][0]["session_index"], 1)
+        self.assertEqual(platform["course_schedule"]["past_sessions"][0]["status"], "completed")
         self.assertFalse(any("suppression" in alert for alert in platform["alerts"]))
         self.assertFalse(platform["blob_stats_loaded"])
         list_platforms.assert_called_once_with(42, scope_to_center=True)

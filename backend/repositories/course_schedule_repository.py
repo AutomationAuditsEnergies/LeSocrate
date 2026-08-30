@@ -1073,7 +1073,7 @@ def mark_audio_waiting_for_content(session_id: int, *, updated_at) -> bool:
 
 
 def list_course_schedule_dashboard_states(platform_ids: list[int]) -> dict[int, dict[str, Any]]:
-    """Batch-load the next three occurrences for dashboard cards."""
+    """Batch-load upcoming occurrences and recent completed history."""
     ids = sorted({int(platform_id) for platform_id in platform_ids if platform_id})
     if not ids or not schedule_store_is_postgres():
         return {}
@@ -1090,7 +1090,8 @@ def list_course_schedule_dashboard_states(platform_ids: list[int]) -> dict[int, 
                        next_session.audio_generation_completed_at,
                        next_session.audio_generation_attempts,
                        next_session.audio_generation_next_retry_at,
-                       upcoming_sessions.items AS upcoming_sessions
+                       upcoming_sessions.items AS upcoming_sessions,
+                       past_sessions.items AS past_sessions
                 FROM course_schedule_config cfg
                 LEFT JOIN LATERAL (
                     SELECT cs.*
@@ -1126,6 +1127,32 @@ def list_course_schedule_dashboard_states(platform_ids: list[int]) -> dict[int, 
                         LIMIT 3
                     ) items
                 ) upcoming_sessions ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'id', items.id,
+                            'session_index', items.session_index,
+                            'scheduled_at', items.scheduled_at,
+                            'status', items.status,
+                            'audio_generation_status', items.audio_generation_status,
+                            'audio_generation_started_at', items.audio_generation_started_at,
+                            'audio_generation_completed_at', items.audio_generation_completed_at,
+                            'audio_generation_attempts', items.audio_generation_attempts,
+                            'audio_generation_next_retry_at', items.audio_generation_next_retry_at,
+                            'postponement_count', items.postponement_count,
+                            'postponed_from', items.postponed_from,
+                            'postponed_at', items.postponed_at
+                        ) ORDER BY items.scheduled_at DESC
+                    ) AS items
+                    FROM (
+                        SELECT cs.*
+                        FROM course_sessions cs
+                        WHERE cs.platform_id = cfg.platform_id
+                          AND cs.status = 'completed'
+                        ORDER BY cs.scheduled_at DESC
+                        LIMIT 20
+                    ) items
+                ) past_sessions ON TRUE
                 WHERE cfg.platform_id = ANY(%s)
                 """,
                 (ids,),

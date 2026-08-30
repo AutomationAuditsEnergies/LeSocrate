@@ -1930,6 +1930,10 @@ def create_hr_blueprint():
                     for session_row in schedule_row.get("upcoming_sessions") or []:
                         if isinstance(session_row, dict) and session_row.get("id"):
                             upcoming_sessions.append(build_course_session_state(session_row, now=platform_now))
+                    past_sessions = []
+                    for session_row in schedule_row.get("past_sessions") or []:
+                        if isinstance(session_row, dict) and session_row.get("id"):
+                            past_sessions.append(build_course_session_state(session_row, now=platform_now))
                     next_session = upcoming_sessions[0] if upcoming_sessions else None
                     if next_session is None and schedule_row.get("session_id"):
                         next_session = build_course_session_state({
@@ -1948,6 +1952,7 @@ def create_hr_blueprint():
                         "start_time": schedule_row.get("start_time") or "09:00",
                         "next_session": next_session,
                         "upcoming_sessions": upcoming_sessions or ([next_session] if next_session else []),
+                        "past_sessions": past_sessions,
                     }
                 # En multi-tenant, toute plateforme en BDD est active
                 active = pid == 1 or bool(pinfo.get("backend_url")) or pid >= 4
