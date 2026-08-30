@@ -14,6 +14,7 @@ import {
   getStudentAudioProxyPath,
   isBreakAudioType,
 } from '../studentCoursePlayback.js'
+import './Video.css'
 
 function formatCountdown(seconds) {
   const total = Math.max(0, Math.ceil(Number(seconds) || 0))
@@ -26,12 +27,69 @@ function slideTemplateType(slide) {
   return String(slide?.template_type || slide?.type || slide?.template || '').toLowerCase()
 }
 
-function CourseStatusScreen({ tone = 'loading', title, message }) {
+function CourseEndScreen({ title, message, onLeave }) {
+  const sessionDate = new Intl.DateTimeFormat('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date())
+
+  return (
+    <main className="course-end-screen">
+      <aside className="course-end-screen__identity" aria-label="Le Socrate">
+        <div className="course-end-brand">
+          <span className="course-end-brand__mark" aria-hidden="true">S</span>
+          <span>SOCRATE</span>
+        </div>
+
+        <div className="course-end-screen__intro">
+          <p className="course-end-screen__kicker">Fin de session</p>
+          <h1>{title}</h1>
+          <p>La séance est maintenant clôturée. Vous pouvez quitter la classe.</p>
+        </div>
+
+        <p className="course-end-screen__footnote">Formation certifiante · Session sécurisée</p>
+      </aside>
+
+      <section className="course-end-screen__content" aria-labelledby="course-end-message">
+        <div className="course-end-panel">
+          <header className="course-end-panel__header">
+            <h2 id="course-end-message">{message}</h2>
+            <p>Aucune action supplémentaire n’est requise.</p>
+          </header>
+
+          <dl className="course-end-summary" aria-label="Récapitulatif de la session">
+            <div>
+              <dt>Formation</dt>
+              <dd>{getPlatformName()}</dd>
+            </div>
+            <div>
+              <dt>Date</dt>
+              <dd>{sessionDate}</dd>
+            </div>
+          </dl>
+
+          <button className="course-end-button" type="button" onClick={onLeave}>
+            Quitter la classe
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
+              <path d="M5 12h14M14 7l5 5-5 5" />
+            </svg>
+          </button>
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function CourseStatusScreen({ tone = 'loading', title, message, onLeave }) {
   const isError = tone === 'error'
-  const isDone = tone === 'done'
 
   if (tone === 'loading') {
     return <AppLoader label={title} message={message} surface="light" />
+  }
+
+  if (tone === 'done') {
+    return <CourseEndScreen title={title} message={message} onLeave={onLeave} />
   }
 
   return (
@@ -43,8 +101,8 @@ function CourseStatusScreen({ tone = 'loading', title, message }) {
         <div
           className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full"
           style={{
-            backgroundColor: isError ? '#fee2e2' : isDone ? '#ecfdf5' : '#f3e8ff',
-            color: isError ? '#dc2626' : isDone ? '#059669' : '#7c3aed',
+            backgroundColor: isError ? '#fee2e2' : '#f3e8ff',
+            color: isError ? '#dc2626' : '#7c3aed',
           }}
         >
           <span className="material-icons text-xl">{isError ? 'warning' : 'check'}</span>
@@ -458,6 +516,7 @@ export default function Video() {
         tone="done"
         title="Le cours est terminé"
         message="Merci pour votre participation."
+        onLeave={handleHangup}
       />
     )
   }

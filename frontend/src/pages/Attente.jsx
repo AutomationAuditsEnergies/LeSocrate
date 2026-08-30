@@ -10,23 +10,6 @@ const COUNTDOWN_UNITS = [
   { key: 'secondes', label: 'Secondes' },
 ]
 
-function RefreshIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
-      <path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" />
-    </svg>
-  )
-}
-
-function HomeIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
-      <path d="m3 11 9-8 9 8" />
-      <path d="M5.5 9.5V21h13V9.5M9 21v-7h6v7" />
-    </svg>
-  )
-}
-
 export default function Attente() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -90,7 +73,7 @@ export default function Attente() {
       <aside className="waiting-screen__identity" aria-label="Le Socrate">
         <div className="waiting-brand">
           <span className="waiting-brand__mark" aria-hidden="true">S</span>
-          <span>LE SOCRATE</span>
+          <span>SOCRATE</span>
         </div>
 
         <div className="waiting-screen__intro">
@@ -105,10 +88,6 @@ export default function Attente() {
       <section className="waiting-screen__content" aria-labelledby="waiting-countdown-title">
         <div className="waiting-panel">
           <header className="waiting-panel__header">
-            <span className="waiting-panel__status" aria-hidden="true">
-              <span />
-              Session programmée
-            </span>
             <h2 id="waiting-countdown-title">
               {timeLeft === null ? 'Vérification de la séance' : 'Début de la formation dans'}
             </h2>
@@ -129,17 +108,11 @@ export default function Attente() {
             ))}
           </div>
 
-          <p className="waiting-panel__note">
-            Vous pouvez laisser cet onglet ouvert. Le statut de la séance est vérifié régulièrement.
-          </p>
-
           <div className="waiting-actions">
             <button className="waiting-button waiting-button--primary" type="button" onClick={() => window.location.reload()}>
-              <RefreshIcon />
               Actualiser
             </button>
             <button className="waiting-button waiting-button--secondary" type="button" onClick={() => navigate('/')}>
-              <HomeIcon />
               Accueil
             </button>
           </div>
