@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import base64
 import hashlib
 import hmac
 from datetime import datetime
@@ -61,6 +62,18 @@ def course_invitation_recipient_hash(email: str) -> str:
         b"course-invitation-recipient:v1:" + normalized,
         hashlib.sha256,
     ).hexdigest()
+
+
+def course_personal_access_code(*, platform_id: int, session_id: int, recipient_email: str) -> str:
+    """Return a short credential bound to one student and one course occurrence."""
+    recipient = course_invitation_recipient_hash(recipient_email)
+    digest = hmac.new(
+        str(SECRET_KEY).encode("utf-8"),
+        f"course-personal-code:v1:{int(platform_id)}:{int(session_id)}:{recipient}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    compact = base64.b32encode(digest).decode("ascii").rstrip("=")[:10]
+    return f"{compact[:5]}-{compact[5:]}"
 
 
 def issue_course_invitation_token(

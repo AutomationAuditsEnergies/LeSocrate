@@ -20,6 +20,7 @@ from database.db import get_db_connection
 from repositories import course_schedule_repository as schedule_repo
 from utils.auth_tokens import (
     course_invitation_recipient_hash,
+    course_personal_access_code,
     issue_course_invitation_token,
 )
 from utils.logger import get_logger
@@ -158,11 +159,20 @@ def ensure_course_schedule_tables(cursor):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform_id INTEGER NOT NULL,
             email TEXT NOT NULL,
+            nom TEXT NOT NULL DEFAULT '',
+            prenom TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             UNIQUE(platform_id, email)
         )
         """
     )
+    recipient_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(course_reminder_recipients)").fetchall()
+    }
+    if "nom" not in recipient_columns:
+        cursor.execute("ALTER TABLE course_reminder_recipients ADD COLUMN nom TEXT NOT NULL DEFAULT ''")
+    if "prenom" not in recipient_columns:
+        cursor.execute("ALTER TABLE course_reminder_recipients ADD COLUMN prenom TEXT NOT NULL DEFAULT ''")
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS course_reminder_rules (
@@ -1536,7 +1546,7 @@ def _build_reminder_html(payload):
     class_url = html.escape(values["class_url"], quote=True)
     session_code = html.escape(values["session_code"])
     code_block = (
-        f'<div class="meta">Code secret (si vous saisissez l’adresse manuellement) : '
+        f'<div class="meta">Code personnel (si vous ouvrez la page de connexion habituelle) : '
         f"<strong>{session_code}</strong></div>"
         if session_code
         else ""
@@ -1829,6 +1839,8 @@ def _process_due_delivery_candidates(
         recipient = {
             "id": int(candidate["recipient_id"]),
             "email": str(candidate.get("email") or "").strip().lower(),
+            "nom": str(candidate.get("nom") or "").strip(),
+            "prenom": str(candidate.get("prenom") or "").strip(),
         }
         if not recipient["email"]:
             continue
@@ -1898,10 +1910,15 @@ def _process_due_delivery_candidates(
         invitation_url = _class_invitation_url(
             base_url_by_platform[platform_id], invitation_token
         )
+        personal_code = course_personal_access_code(
+            platform_id=platform_id,
+            session_id=session_id,
+            recipient_email=recipient["email"],
+        )
         values = {
             "date": scheduled_at.strftime("%d/%m/%Y"),
             "time": scheduled_at.strftime("%H:%M"),
-            "session_code": str(session_password or ""),
+            "session_code": personal_code,
             "class_url": invitation_url,
         }
         system_key = candidate.get("system_key")
@@ -1914,7 +1931,8 @@ def _process_due_delivery_candidates(
             "session_index": candidate.get("session_index"),
             "scheduled_at": schedule_repo.format_schedule_datetime(scheduled_at),
             "class_url": invitation_url,
-            "session_password": session_password,
+            "session_password": personal_code,
+            "personal_code": personal_code,
             "subject": _format_reminder_template(candidate.get("subject_template"), values),
             "content_template": candidate.get("content_template"),
             "content": _format_reminder_template(candidate.get("content_template"), values),

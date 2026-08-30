@@ -314,11 +314,20 @@ def init_database(_recovered_from_corruption: bool = False):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 platform_id INTEGER NOT NULL,
                 email TEXT NOT NULL,
+                nom TEXT NOT NULL DEFAULT '',
+                prenom TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 UNIQUE(platform_id, email)
             )
             """
         )
+        recipient_columns = {
+            row[1] for row in cursor.execute("PRAGMA table_info(course_reminder_recipients)").fetchall()
+        }
+        if "nom" not in recipient_columns:
+            cursor.execute("ALTER TABLE course_reminder_recipients ADD COLUMN nom TEXT NOT NULL DEFAULT ''")
+        if "prenom" not in recipient_columns:
+            cursor.execute("ALTER TABLE course_reminder_recipients ADD COLUMN prenom TEXT NOT NULL DEFAULT ''")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id)"
         )

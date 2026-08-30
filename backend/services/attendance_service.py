@@ -18,7 +18,11 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from repositories import attendance_repository as attendance_repo
-from repositories.course_schedule_repository import schedule_store_is_postgres
+from repositories.course_schedule_repository import (
+    list_explicit_course_reminder_recipients,
+    schedule_store_is_postgres,
+)
+from utils.auth_tokens import course_invitation_recipient_hash
 from utils.logger import get_logger
 from utils.slug import slugify
 
@@ -552,17 +556,26 @@ def get_attendance_dashboard(platform_id: int, course_date: str, *, center_accou
             scheduled_at=course_session["scheduled_at"],
             timezone_name=course_session.get("timezone") or "Europe/Paris",
         )
+    roster = list_explicit_course_reminder_recipients(platform_id) if course_session else []
+    roster_by_hash = {
+        course_invitation_recipient_hash(item.get("email")): item for item in roster
+    }
+    present_hashes = set()
     students = []
     for participant in participants:
+        participant_hash = participant["key"].removeprefix("invite:") if participant["key"].startswith("invite:") else ""
+        enrolled = roster_by_hash.get(participant_hash)
+        if enrolled:
+            present_hashes.add(participant_hash)
         slots = [
             {"start": start.strftime("%H:%M:%S"), "end": end.strftime("%H:%M:%S")}
             for start, end in participant["intervals"]
         ]
         students.append({
-            "id": participant["key"],
-            "email": participant["email"],
-            "nom": participant["nom"],
-            "prenom": participant["prenom"],
+            "id": f"recipient:{enrolled['id']}" if enrolled else participant["key"],
+            "email": enrolled.get("email") if enrolled else participant["email"],
+            "nom": enrolled.get("nom") if enrolled else participant["nom"],
+            "prenom": enrolled.get("prenom") if enrolled else participant["prenom"],
             "attendance": {
                 "course_date": course_date,
                 "slots": slots,
@@ -572,6 +585,24 @@ def get_attendance_dashboard(platform_id: int, course_date: str, *, center_accou
                 "source": "automatic",
             },
         })
+    for recipient_hash, enrolled in roster_by_hash.items():
+        if recipient_hash in present_hashes:
+            continue
+        students.append({
+            "id": f"recipient:{enrolled['id']}",
+            "email": enrolled.get("email") or "",
+            "nom": enrolled.get("nom") or "",
+            "prenom": enrolled.get("prenom") or "",
+            "attendance": {
+                "course_date": course_date,
+                "slots": [],
+                "total_minutes": 0,
+                "total_seconds": 0,
+                "status": "absent",
+                "source": "automatic",
+            },
+        })
+    students.sort(key=lambda item: (str(item.get("nom") or "").casefold(), str(item.get("prenom") or "").casefold()))
     exports = []
     for item in attendance_repo.list_daily_exports(
         platform_id,

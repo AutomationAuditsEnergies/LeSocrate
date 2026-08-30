@@ -465,6 +465,8 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         self.assertEqual(rows, [{
             "id": 4,
             "email": "eleve@example.com",
+            "nom": "",
+            "prenom": "",
             "created_at": created_at.strftime("%Y-%m-%d %H:%M:%S"),
         }])
 

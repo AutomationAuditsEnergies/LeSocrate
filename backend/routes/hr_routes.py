@@ -3884,6 +3884,39 @@ def create_hr_blueprint():
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return jsonify({"success": False, "error": "Corps JSON invalide"}), 400
+        raw_students = data.get("students")
+        if raw_students is not None:
+            if not isinstance(raw_students, list):
+                return jsonify({"success": False, "error": "students doit être une liste"}), 400
+            if len(raw_students) > _MAX_STUDENT_EMAILS_PER_REQUEST:
+                return jsonify({"success": False, "error": "1000 élèves maximum par lot"}), 413
+            students = []
+            seen = set()
+            for item in raw_students:
+                if not isinstance(item, dict):
+                    return jsonify({"success": False, "error": "Chaque élève doit contenir prénom, nom et e-mail"}), 400
+                try:
+                    email = _normalize_student_email(item.get("email"))
+                except ValueError as exc:
+                    return jsonify({"success": False, "error": str(exc)}), 400
+                nom = str(item.get("nom") or "").strip()
+                prenom = str(item.get("prenom") or "").strip()
+                if not nom or not prenom:
+                    return jsonify({"success": False, "error": "Prénom et nom requis pour chaque élève"}), 400
+                if email not in seen:
+                    seen.add(email)
+                    students.append({"email": email, "nom": nom, "prenom": prenom})
+            if not students:
+                return jsonify({"success": False, "error": "Ajoutez au moins un élève"}), 400
+            try:
+                recipients = add_explicit_course_reminder_recipients(
+                    platform_id, students, created_at=datetime.now(FRANCE_TZ)
+                )
+                return jsonify({"success": True, "recipients": recipients}), 201
+            except Exception as e:
+                logger.error(f"❌ Erreur add students P{platform_id}: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
         raw_emails = data.get("emails")
         if raw_emails is None:
             raw_emails = data.get("email", "")

@@ -16,3 +16,9 @@ test('uses the study image as the full learner visual panel', () => {
   assert.match(authStyles, /\.auth-visual--learner-login\s*\{[\s\S]*padding: 0;/)
   assert.match(authStyles, /\.auth-study-image\s*\{[\s\S]*position: absolute;[\s\S]*object-fit: cover;/)
 })
+
+test('identifies learners from a personal link or personal code without declared names', () => {
+  assert.match(entrySource, /openStudentSession\(\{ invitation_token: invitationToken \}\)/)
+  assert.match(entrySource, /name="personal_code"/)
+  assert.doesNotMatch(entrySource, /name="nom"|name="prenom"/)
+})

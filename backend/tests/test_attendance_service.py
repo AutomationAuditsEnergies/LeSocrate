@@ -9,6 +9,33 @@ from services import attendance_service
 
 
 class AttendanceConsolidationTest(unittest.TestCase):
+    def test_dashboard_keeps_enrolled_student_absent_without_heartbeat(self):
+        course_session = {
+            "id": 42,
+            "scheduled_at": datetime(2026, 7, 17, 9, 0, tzinfo=timezone.utc),
+            "timezone": "Europe/Paris",
+        }
+        platform = {
+            "id": 3,
+            "center_platform_number": 1,
+            "name": "TP EC",
+            "center_account_id": 9,
+            "source_module_id": 77,
+        }
+        with patch.object(attendance_service.attendance_repo, "get_accessible_platform", return_value=platform), patch.object(
+            attendance_service.attendance_repo, "get_course_session_for_date", return_value=course_session
+        ), patch.object(
+            attendance_service.attendance_repo, "list_presence_logs_for_session", return_value=[]
+        ), patch.object(
+            attendance_service, "list_explicit_course_reminder_recipients",
+            return_value=[{"id": 8, "email": "lina@example.test", "nom": "Martin", "prenom": "Lina"}],
+        ), patch.object(attendance_service.attendance_repo, "list_daily_exports", return_value=[]):
+            payload = attendance_service.get_attendance_dashboard(3, "2026-07-17")
+
+        self.assertEqual(len(payload["students"]), 1)
+        self.assertEqual(payload["students"][0]["id"], "recipient:8")
+        self.assertEqual(payload["students"][0]["attendance"]["status"], "absent")
+
     def test_reconnects_are_kept_and_overlapping_tabs_are_not_double_counted(self):
         paris = timezone(timedelta(hours=2))
         scheduled_at = datetime(2026, 7, 17, 9, 0, tzinfo=paris)

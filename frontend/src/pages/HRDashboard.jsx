@@ -355,24 +355,27 @@ export default function HRDashboard() {
     }
   }
 
-  const handleStudentEmailDraftChange = (platformId, value) => {
-    setStudentEmailDrafts(prev => ({ ...prev, [platformId]: value }))
+  const handleStudentEmailDraftChange = (platformId, field, value) => {
+    setStudentEmailDrafts(prev => ({
+      ...prev,
+      [platformId]: { prenom: '', nom: '', email: '', ...(prev[platformId] || {}), [field]: value },
+    }))
   }
 
   const handleAddStudentEmails = async (platformId) => {
-    const draft = studentEmailDrafts[platformId] || ''
-    if (!draft.trim()) return
+    const draft = { prenom: '', nom: '', email: '', ...(studentEmailDrafts[platformId] || {}) }
+    if (!draft.prenom.trim() || !draft.nom.trim() || !draft.email.trim()) return
     setStudentEmailsSaving(platformId)
     try {
       const resp = await apiFetch(`/api/hr/platforms/${platformId}/student-emails`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emails: draft }),
+        body: JSON.stringify({ students: [{ prenom: draft.prenom, nom: draft.nom, email: draft.email }] }),
       })
       const data = await resp.json()
       if (data.success) {
         setStudentEmailsByPlatform(prev => ({ ...prev, [platformId]: data.recipients || [] }))
-        setStudentEmailDrafts(prev => ({ ...prev, [platformId]: '' }))
+        setStudentEmailDrafts(prev => ({ ...prev, [platformId]: { prenom: '', nom: '', email: '' } }))
       } else {
         alert(data.error || 'Impossible d’ajouter les emails')
       }
@@ -4552,12 +4555,12 @@ function PlatformCardsView({
             attendanceError={expandedAttendancePlatform === p.id ? attendanceError : ''}
             studentEmailsLoading={studentEmailsLoading === p.id}
             studentEmailsSaving={studentEmailsSaving === p.id}
-            studentEmailDraft={studentEmailDrafts[p.id] || ''}
+            studentEmailDraft={studentEmailDrafts[p.id] || { prenom: '', nom: '', email: '' }}
             onExpand={() => onExpand(p.id)}
             onRefreshAudios={() => onRefreshAudios(p.id)}
             onToggleStudentEmails={() => onToggleStudentEmails(p.id)}
             onToggleAttendance={() => onToggleAttendance(p.id)}
-            onStudentEmailDraftChange={(value) => onStudentEmailDraftChange(p.id, value)}
+            onStudentEmailDraftChange={(field, value) => onStudentEmailDraftChange(p.id, field, value)}
             onAddStudentEmails={() => onAddStudentEmails(p.id)}
             onDeleteStudentEmail={(recipientId) => onDeleteStudentEmail(p.id, recipientId)}
             onAttendanceDateChange={onAttendanceDateChange}
@@ -6985,29 +6988,34 @@ function StudentsToolContent({
         <span className="text-xs font-semibold tabular-nums" style={{ color: colors.textMuted }}>{studentEmails.length} élève{studentEmails.length > 1 ? 's' : ''}</span>
       </div>
 
-      <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
-        Adresses e-mail
-        <textarea
-          value={studentEmailDraft}
-          onChange={(event) => onStudentEmailDraftChange(event.target.value)}
-          rows={2}
-          placeholder="prenom@exemple.com, autre@exemple.com"
-          className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-black/25"
-          style={{
-            backgroundColor: colors.cardBg,
-            border: `1px solid ${colors.border}`,
-            color: colors.text,
-          }}
-        />
-      </label>
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.5fr]">
+        {[
+          ['prenom', 'Prénom', 'Nassim'],
+          ['nom', 'Nom', 'Issad'],
+          ['email', 'Adresse e-mail', 'nassim@exemple.com'],
+        ].map(([field, label, placeholder]) => (
+          <label key={field} className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
+            {label}
+            <input
+              value={studentEmailDraft[field] || ''}
+              onChange={(event) => onStudentEmailDraftChange(field, event.target.value)}
+              type={field === 'email' ? 'email' : 'text'}
+              autoComplete={field === 'email' ? 'email' : field === 'prenom' ? 'given-name' : 'family-name'}
+              placeholder={placeholder}
+              className="mt-2 h-10 w-full rounded-lg px-3 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-black/25"
+              style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.text }}
+            />
+          </label>
+        ))}
+      </div>
       <div className="mb-5 mt-2 flex flex-wrap items-center justify-between gap-3">
         <p className="text-[11px] leading-4" style={{ color: colors.textMuted }}>
-          1 000 adresses maximum par ajout.
+          Le lien et le code personnels utiliseront cette identité.
         </p>
         <button
           type="button"
           onClick={onAddStudentEmails}
-          disabled={!studentEmailDraft.trim() || studentEmailsSaving}
+          disabled={!studentEmailDraft.prenom?.trim() || !studentEmailDraft.nom?.trim() || !studentEmailDraft.email?.trim() || studentEmailsSaving}
           className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 disabled:cursor-not-allowed disabled:opacity-50"
           style={{ backgroundColor: '#121212', color: 'white' }}
         >
@@ -7016,7 +7024,7 @@ function StudentsToolContent({
           ) : (
             <Icon name="person_add" className="text-sm" />
           )}
-          Ajouter les adresses
+          Ajouter l’élève
         </button>
       </div>
 
@@ -7038,7 +7046,7 @@ function StudentsToolContent({
             >
               <Icon name="mail" className="text-sm" style={{ color: colors.textMuted }} />
               <span className="min-w-0 flex-1 truncate text-xs" style={{ color: colors.textSecondary }} title={recipient.email}>
-                {recipient.email}
+                <strong>{recipient.prenom} {recipient.nom}</strong><span style={{ color: colors.textMuted }}> · {recipient.email}</span>
               </span>
               <button
                 type="button"

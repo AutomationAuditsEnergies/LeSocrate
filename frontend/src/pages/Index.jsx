@@ -1,5 +1,5 @@
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import './Auth.css'
 
@@ -11,6 +11,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   const [submitting, setSubmitting] = useState(false)
   const [formMessage, setFormMessage] = useState(null)
   const [showPassword, setShowPassword] = useState(false)
+  const invitationStartedRef = useRef(false)
 
   useEffect(() => {
     const pParam = searchParams.get('p')
@@ -43,37 +44,18 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     return () => window.clearTimeout(timeoutId)
   }, [preloadCourseRoutes])
 
-  const handleFormSubmit = async (event) => {
-    event.preventDefault()
+  const openStudentSession = async (credentials) => {
     if (submitting) return
     setSubmitting(true)
     setFormMessage(null)
 
-    const formData = new FormData(event.target)
-    const password = String(formData.get('password') || '')
-    const nom = String(formData.get('nom') || '').trim()
-    const prenom = String(formData.get('prenom') || '').trim()
-
     try {
-      if (!nom || !prenom || (!invitationToken && !password)) {
-        setFormMessage({
-          type: 'error',
-          text: invitationToken
-            ? 'Votre nom et votre prénom sont requis.'
-            : 'Nom, prénom et code secret sont requis.',
-        })
-        return
-      }
-
       const response = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          nom,
-          prenom,
-          password,
-          ...(invitationToken ? { invitation_token: invitationToken } : {}),
+          ...credentials,
           platform_id: parseInt(localStorage.getItem('platform_id') || '1'),
         }),
       })
@@ -118,6 +100,23 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     }
   }
 
+  const handleFormSubmit = async (event) => {
+    event.preventDefault()
+    const formData = new FormData(event.target)
+    const personalCode = String(formData.get('personal_code') || '').trim()
+    if (!personalCode) {
+      setFormMessage({ type: 'error', text: 'Votre code personnel est requis.' })
+      return
+    }
+    await openStudentSession({ personal_code: personalCode })
+  }
+
+  useEffect(() => {
+    if (!invitationToken || invitationStartedRef.current) return
+    invitationStartedRef.current = true
+    openStudentSession({ invitation_token: invitationToken })
+  }, [invitationToken])
+
   return (
     <main className="cadrenza-auth">
       <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
@@ -147,64 +146,43 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
               </div>
             )}
 
-            <form className="auth-form" onSubmit={handleFormSubmit}>
-              <div className="auth-form__row">
-                <div className="auth-field">
-                  <label htmlFor="nom">Nom</label>
-                  <input
-                    id="nom"
-                    name="nom"
-                    type="text"
-                    autoComplete="family-name"
-                    placeholder="Votre nom"
-                    required
-                  />
-                </div>
-                <div className="auth-field">
-                  <label htmlFor="prenom">Prénom</label>
-                  <input
-                    id="prenom"
-                    name="prenom"
-                    type="text"
-                    autoComplete="given-name"
-                    placeholder="Votre prénom"
-                    required
-                  />
-                </div>
+            {invitationToken ? (
+              <div className="auth-assurance" role="status" aria-live="polite">
+                {submitting ? 'Identification automatique en cours…' : 'Invitation personnelle vérifiée'}
               </div>
-
-              {!invitationToken && (
+            ) : (
+              <form className="auth-form" onSubmit={handleFormSubmit}>
                 <div className="auth-field">
-                  <label htmlFor="password">Code secret de la séance</label>
+                  <label htmlFor="personal_code">Code personnel</label>
                   <div className="auth-password-wrap">
                     <input
-                      id="password"
-                      name="password"
+                      id="personal_code"
+                      name="personal_code"
                       type={showPassword ? 'text' : 'password'}
-                      autoComplete="current-password"
-                      placeholder="Code reçu par e-mail"
+                      autoComplete="one-time-code"
+                      placeholder="Code personnel reçu par e-mail"
                       required
                     />
                     <button
                       type="button"
                       className="auth-password-toggle"
                       onClick={() => setShowPassword((visible) => !visible)}
-                      aria-label={showPassword ? 'Masquer le code secret' : 'Afficher le code secret'}
+                      aria-label={showPassword ? 'Masquer le code personnel' : 'Afficher le code personnel'}
                       aria-pressed={showPassword}
                     >
                       {showPassword ? 'Masquer' : 'Afficher'}
                     </button>
                   </div>
                 </div>
-              )}
 
-              <button type="submit" disabled={submitting} className="auth-submit">
-                {submitting ? 'Connexion…' : 'Rejoindre le cours'}
-              </button>
-            </form>
+                <button type="submit" disabled={submitting} className="auth-submit">
+                  {submitting ? 'Identification…' : 'Rejoindre le cours'}
+                </button>
+              </form>
+            )}
 
             <p className="auth-assurance">
-              {invitationToken ? 'Invitation vérifiée' : 'Accès réservé aux apprenants inscrits'}
+              {invitationToken ? 'Aucune information personnelle à saisir' : 'Utilisez le code personnel contenu dans votre e-mail'}
             </p>
           </div>
         </section>

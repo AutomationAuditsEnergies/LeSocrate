@@ -422,9 +422,14 @@ CREATE TABLE IF NOT EXISTS course_reminder_recipients (
     id BIGSERIAL PRIMARY KEY,
     platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
+    nom TEXT NOT NULL DEFAULT '',
+    prenom TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(platform_id, email)
 );
+
+ALTER TABLE course_reminder_recipients ADD COLUMN IF NOT EXISTS nom TEXT NOT NULL DEFAULT '';
+ALTER TABLE course_reminder_recipients ADD COLUMN IF NOT EXISTS prenom TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS course_reminder_rules (
     id BIGSERIAL PRIMARY KEY,

@@ -427,6 +427,25 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
             created_at=ANY,
         )
 
+    def test_student_roster_saves_canonical_name_with_email(self):
+        saved = [{"id": 4, "email": "lina@example.test", "nom": "Martin", "prenom": "Lina"}]
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.add_explicit_course_reminder_recipients", return_value=saved
+        ) as add_recipients:
+            response = self.client.post(
+                "/api/hr/platforms/12/student-emails",
+                json={"students": [{"email": " Lina@Example.Test ", "nom": "Martin", "prenom": "Lina"}]},
+            )
+
+        self.assertEqual(response.status_code, 201, response.get_json())
+        add_recipients.assert_called_once_with(
+            12,
+            [{"email": "lina@example.test", "nom": "Martin", "prenom": "Lina"}],
+            created_at=ANY,
+        )
+
     def test_student_email_write_rejects_another_centers_platform(self):
         with patch("routes.hr_routes.HR_ENABLED", True), patch(
             "routes.hr_routes.hr_resource_belongs_to_center", return_value=False

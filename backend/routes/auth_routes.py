@@ -28,10 +28,13 @@ from repositories.core_repository import (
 )
 from repositories.course_schedule_repository import (
     get_audio_generation_session,
+    list_explicit_course_reminder_recipients,
     list_course_session_credentials_for_window,
 )
 from utils.logger import get_logger
 from utils.auth_tokens import (
+    course_invitation_recipient_hash,
+    course_personal_access_code,
     issue_auth_token,
     verify_course_invitation_token,
 )
@@ -247,6 +250,43 @@ def _course_invitation_valid(platform_id, token):
     return _resolve_course_invitation(platform_id, token) is not None
 
 
+def _canonical_recipient_for_hash(platform_id, recipient_hash):
+    supplied = str(recipient_hash or "").strip()
+    if not supplied:
+        return None
+    for recipient in list_explicit_course_reminder_recipients(int(platform_id)):
+        candidate = course_invitation_recipient_hash(recipient.get("email"))
+        if hmac.compare_digest(supplied, candidate):
+            return recipient
+    return None
+
+
+def _resolve_personal_course_code(platform_id, raw_code):
+    supplied = str(raw_code or "").strip().upper()
+    if not supplied:
+        return None, None
+    compact = supplied.replace("-", "").replace(" ", "")
+    now, lower_bound, upper_bound = _course_session_access_window()
+    credentials = list_course_session_credentials_for_window(
+        int(platform_id), lower_bound=lower_bound, upper_bound=upper_bound
+    )
+    recipients = list_explicit_course_reminder_recipients(int(platform_id))
+    matches = []
+    for occurrence in credentials:
+        session_id = int(occurrence["id"])
+        for recipient in recipients:
+            expected = course_personal_access_code(
+                platform_id=int(platform_id),
+                session_id=session_id,
+                recipient_email=recipient.get("email"),
+            ).replace("-", "")
+            if hmac.compare_digest(compact, expected):
+                matches.append((occurrence, recipient))
+    if len(matches) != 1:
+        return None, None
+    return matches[0]
+
+
 def _resolve_requested_course_session(platform_id, raw_session_id):
     """Bind an already authenticated platform account to an explicit occurrence."""
     if raw_session_id in (None, "") or isinstance(raw_session_id, bool):
@@ -333,6 +373,7 @@ def create_auth_blueprint():
             data = request.get_json(silent=True) or {}
             username = str(data.get("username") or "").strip().lower()
             password = str(data.get("password") or "")
+            personal_code = str(data.get("personal_code") or password).strip()
             invitation_token = str(data.get("invitation_token") or "").strip()
             requested_course_session_id = data.get("course_session_id")
             nom = str(data.get("nom") or "").strip()
@@ -346,9 +387,8 @@ def create_auth_blueprint():
 
             invitation_access = False
             authenticated_course_session = None
+            canonical_recipient = None
             if invitation_token:
-                if not nom or not prenom:
-                    return jsonify({"success": False, "error": "Nom et prénom requis"}), 400
                 authenticated_course_session = _resolve_course_invitation(
                     platform_id,
                     invitation_token,
@@ -356,7 +396,32 @@ def create_auth_blueprint():
                 if not authenticated_course_session:
                     logger.warning("❌ Invitation de cours invalide ou expirée sur P%s", platform_id)
                     return jsonify({"success": False, "error": "Lien d'invitation invalide ou expiré"}), 401
+                canonical_recipient = _canonical_recipient_for_hash(
+                    platform_id, authenticated_course_session.get("invitation_recipient_hash")
+                )
+                if not canonical_recipient:
+                    return jsonify({"success": False, "error": "Élève introuvable pour cette invitation"}), 403
+                nom = str(canonical_recipient.get("nom") or "").strip()
+                prenom = str(canonical_recipient.get("prenom") or "").strip()
+                if not nom or not prenom:
+                    return jsonify({"success": False, "error": "Fiche élève incomplète. Contactez votre centre de formation."}), 403
                 invitation_access = True
+            elif personal_code and not username and not (nom and prenom):
+                authenticated_course_session, canonical_recipient = _resolve_personal_course_code(
+                    platform_id, personal_code
+                )
+                if authenticated_course_session and canonical_recipient:
+                    nom = str(canonical_recipient.get("nom") or "").strip()
+                    prenom = str(canonical_recipient.get("prenom") or "").strip()
+                    if not nom or not prenom:
+                        return jsonify({"success": False, "error": "Fiche élève incomplète. Contactez votre centre de formation."}), 403
+                    authenticated_course_session = {
+                        **authenticated_course_session,
+                        "invitation_recipient_hash": course_invitation_recipient_hash(
+                            canonical_recipient.get("email")
+                        ),
+                    }
+                    invitation_access = True
 
             postgres_only = _postgres_only_runtime()
             cursor = None
@@ -384,7 +449,7 @@ def create_auth_blueprint():
                         logger.warning("⚠️ Lecture compte élève Postgres impossible", exc_info=True)
 
             if invitation_access:
-                logger.info("✅ Invitation signée acceptée sur P%s", platform_id)
+                logger.info("✅ Accès personnel accepté sur P%s", platform_id)
             elif pg_account:
                 if not pg_account["is_active"]:
                     logger.warning("⚠️ Compte élève Postgres désactivé: %s P%s", username, platform_id)
@@ -480,7 +545,7 @@ def create_auth_blueprint():
                 jsonify(
                     {
                         "success": True,
-                        "user": {"nom": nom, "prenom": prenom},
+                        "user": {"nom": nom, "prenom": prenom, "email": (canonical_recipient or {}).get("email")},
                         "log_id": log_id,
                         "course_session_id": course_session_id,
                         "token": token,

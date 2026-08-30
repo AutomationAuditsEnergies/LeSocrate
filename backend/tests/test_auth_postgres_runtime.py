@@ -9,6 +9,8 @@ from werkzeug.security import generate_password_hash
 from routes import auth_routes
 from config import FRANCE_TZ
 from utils.auth_tokens import (
+    course_invitation_recipient_hash,
+    course_personal_access_code,
     issue_course_invitation_token,
     verify_auth_token,
     verify_course_invitation_token,
@@ -186,7 +188,7 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
             timedelta(hours=71),
         )
 
-    def test_signed_invitation_allows_name_only_and_is_bound_to_occurrence(self):
+    def test_signed_invitation_uses_canonical_recipient_and_is_bound_to_occurrence(self):
         scheduled_at = datetime.now(FRANCE_TZ) + timedelta(days=2)
         invitation = issue_course_invitation_token(
             platform_id=5,
@@ -207,6 +209,10 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
         ), patch.object(
             auth_routes, "get_audio_generation_session", return_value=course_session
         ), patch.object(
+            auth_routes,
+            "list_explicit_course_reminder_recipients",
+            return_value=[{"id": 7, "email": "lina@example.test", "nom": "Martin", "prenom": "Lina"}],
+        ), patch.object(
             auth_routes, "count_student_accounts", side_effect=AssertionError("not required")
         ), patch.object(
             auth_routes, "create_log", return_value=98
@@ -215,8 +221,6 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
                 "/api/auth/login",
                 json={
                     "platform_id": 5,
-                    "nom": "Martin",
-                    "prenom": "Lina",
                     "invitation_token": invitation,
                 },
             )
@@ -224,12 +228,17 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(response.get_json()["log_id"], 98)
         self.assertEqual(response.get_json()["course_session_id"], 42)
+        self.assertEqual(response.get_json()["user"]["email"], "lina@example.test")
         token_payload = verify_auth_token("student", response.get_json()["token"])
         self.assertEqual(token_payload["course_session_id"], 42)
 
         course_session["scheduled_at"] = scheduled_at + timedelta(days=1)
         with self._postgres_only(), patch.object(
             auth_routes, "get_audio_generation_session", return_value=course_session
+        ), patch.object(
+            auth_routes,
+            "list_explicit_course_reminder_recipients",
+            return_value=[{"id": 7, "email": "lina@example.test", "nom": "Martin", "prenom": "Lina"}],
         ), patch.object(auth_routes, "create_log") as create_log:
             response = self.client.post(
                 "/api/auth/login",
@@ -243,6 +252,28 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401, response.get_json())
         create_log.assert_not_called()
+
+    def test_personal_code_identifies_both_student_and_occurrence(self):
+        scheduled_at = datetime.now(FRANCE_TZ) + timedelta(days=1)
+        recipient = {"id": 7, "email": "lina@example.test", "nom": "Martin", "prenom": "Lina"}
+        occurrence = {"id": 42, "platform_id": 5, "status": "planned", "scheduled_at": scheduled_at}
+        personal_code = course_personal_access_code(
+            platform_id=5, session_id=42, recipient_email=recipient["email"]
+        )
+        with self._postgres_only(), patch.object(
+            auth_routes, "list_course_session_credentials_for_window", return_value=[occurrence]
+        ), patch.object(
+            auth_routes, "list_explicit_course_reminder_recipients", return_value=[recipient]
+        ), patch.object(auth_routes, "create_log", return_value=101) as create_log:
+            response = self.client.post(
+                "/api/auth/login",
+                json={"platform_id": 5, "personal_code": personal_code.lower().replace("-", " ")},
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["user"], {"nom": "Martin", "prenom": "Lina", "email": "lina@example.test"})
+        self.assertEqual(response.get_json()["course_session_id"], 42)
+        self.assertEqual(create_log.call_args.args[0]["recipient_hash"], course_invitation_recipient_hash("lina@example.test"))
 
     def test_supabase_session_uses_postgres_profile_and_log(self):
         supabase_user = {

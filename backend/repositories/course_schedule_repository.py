@@ -1490,13 +1490,13 @@ def list_course_reminder_recipients(platform_id: int) -> list[dict[str, str]]:
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT email FROM course_reminder_recipients WHERE platform_id = %s ORDER BY LOWER(email)",
+                    "SELECT email, nom, prenom FROM course_reminder_recipients WHERE platform_id = %s ORDER BY LOWER(email)",
                     (platform_id,),
                 )
                 for row in cur.fetchall():
                     email = str(row["email"] or "").strip().lower()
                     if email:
-                        recipients[email] = {"email": email, "nom": "", "prenom": ""}
+                        recipients[email] = {"email": email, "nom": row.get("nom") or "", "prenom": row.get("prenom") or ""}
                 cur.execute(
                     """
                     SELECT email, nom, prenom FROM student_profiles
@@ -1533,13 +1533,13 @@ def list_course_reminder_recipients(platform_id: int) -> list[dict[str, str]]:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT email FROM course_reminder_recipients WHERE platform_id = ? ORDER BY email COLLATE NOCASE",
+            "SELECT email, nom, prenom FROM course_reminder_recipients WHERE platform_id = ? ORDER BY email COLLATE NOCASE",
             (platform_id,),
         )
-        for (email,) in cursor.fetchall():
+        for email, nom, prenom in cursor.fetchall():
             email = str(email or "").strip().lower()
             if email:
-                recipients[email] = {"email": email, "nom": "", "prenom": ""}
+                recipients[email] = {"email": email, "nom": nom or "", "prenom": prenom or ""}
         cursor.execute(
             """
             SELECT email, nom, prenom FROM student_profiles
@@ -1574,11 +1574,18 @@ def _ensure_sqlite_reminder_recipient_table(cursor) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform_id INTEGER NOT NULL,
             email TEXT NOT NULL,
+            nom TEXT NOT NULL DEFAULT '',
+            prenom TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             UNIQUE(platform_id, email)
         )
         """
     )
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(course_reminder_recipients)").fetchall()}
+    if "nom" not in columns:
+        cursor.execute("ALTER TABLE course_reminder_recipients ADD COLUMN nom TEXT NOT NULL DEFAULT ''")
+    if "prenom" not in columns:
+        cursor.execute("ALTER TABLE course_reminder_recipients ADD COLUMN prenom TEXT NOT NULL DEFAULT ''")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform "
         "ON course_reminder_recipients(platform_id)"
@@ -1666,7 +1673,7 @@ def list_explicit_course_reminder_recipients(platform_id: int) -> list[dict[str,
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, email, created_at
+                    SELECT id, email, nom, prenom, created_at
                     FROM course_reminder_recipients
                     WHERE platform_id = %s
                     ORDER BY LOWER(email)
@@ -1677,6 +1684,8 @@ def list_explicit_course_reminder_recipients(platform_id: int) -> list[dict[str,
                     {
                         "id": int(row["id"]),
                         "email": row["email"],
+                        "nom": row.get("nom") or "",
+                        "prenom": row.get("prenom") or "",
                         "created_at": format_schedule_datetime(row["created_at"]),
                     }
                     for row in cur.fetchall()
@@ -1688,7 +1697,7 @@ def list_explicit_course_reminder_recipients(platform_id: int) -> list[dict[str,
         _ensure_sqlite_reminder_recipient_table(cursor)
         cursor.execute(
             """
-            SELECT id, email, created_at
+            SELECT id, email, nom, prenom, created_at
             FROM course_reminder_recipients
             WHERE platform_id = ?
             ORDER BY email COLLATE NOCASE
@@ -1696,7 +1705,7 @@ def list_explicit_course_reminder_recipients(platform_id: int) -> list[dict[str,
             (int(platform_id),),
         )
         return [
-            {"id": int(row[0]), "email": row[1], "created_at": row[2]}
+            {"id": int(row[0]), "email": row[1], "nom": row[2] or "", "prenom": row[3] or "", "created_at": row[4]}
             for row in cursor.fetchall()
         ]
     finally:
@@ -1705,23 +1714,37 @@ def list_explicit_course_reminder_recipients(platform_id: int) -> list[dict[str,
 
 def add_explicit_course_reminder_recipients(
     platform_id: int,
-    emails: list[str],
+    emails: list[Any],
     *,
     created_at,
 ) -> list[dict[str, Any]]:
     if len(emails or []) > 1000:
         raise ValueError("1000 emails maximum par lot")
-    normalized = sorted({str(email or "").strip().lower() for email in emails if email})
+    normalized_by_email: dict[str, dict[str, str]] = {}
+    for item in emails or []:
+        if isinstance(item, dict):
+            email = str(item.get("email") or "").strip().lower()
+            nom = str(item.get("nom") or "").strip()
+            prenom = str(item.get("prenom") or "").strip()
+        else:
+            email = str(item or "").strip().lower()
+            nom = ""
+            prenom = ""
+        if email:
+            normalized_by_email[email] = {"email": email, "nom": nom, "prenom": prenom}
+    normalized = [normalized_by_email[email] for email in sorted(normalized_by_email)]
     if schedule_store_is_postgres():
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 cur.executemany(
                     """
-                    INSERT INTO course_reminder_recipients (platform_id, email, created_at)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (platform_id, email) DO NOTHING
+                    INSERT INTO course_reminder_recipients (platform_id, email, nom, prenom, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (platform_id, email) DO UPDATE SET
+                        nom = CASE WHEN EXCLUDED.nom <> '' THEN EXCLUDED.nom ELSE course_reminder_recipients.nom END,
+                        prenom = CASE WHEN EXCLUDED.prenom <> '' THEN EXCLUDED.prenom ELSE course_reminder_recipients.prenom END
                     """,
-                    [(int(platform_id), email, created_at) for email in normalized],
+                    [(int(platform_id), item["email"], item["nom"], item["prenom"], created_at) for item in normalized],
                 )
         return list_explicit_course_reminder_recipients(platform_id)
 
@@ -1731,12 +1754,15 @@ def add_explicit_course_reminder_recipients(
         _ensure_sqlite_reminder_recipient_table(cursor)
         cursor.executemany(
             """
-            INSERT OR IGNORE INTO course_reminder_recipients (platform_id, email, created_at)
-            VALUES (?, ?, ?)
+            INSERT INTO course_reminder_recipients (platform_id, email, nom, prenom, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(platform_id, email) DO UPDATE SET
+                nom = CASE WHEN excluded.nom <> '' THEN excluded.nom ELSE course_reminder_recipients.nom END,
+                prenom = CASE WHEN excluded.prenom <> '' THEN excluded.prenom ELSE course_reminder_recipients.prenom END
             """,
             [
-                (int(platform_id), email, _sqlite_datetime(created_at))
-                for email in normalized
+                (int(platform_id), item["email"], item["nom"], item["prenom"], _sqlite_datetime(created_at))
+                for item in normalized
             ],
         )
         conn.commit()
@@ -2274,6 +2300,8 @@ def list_due_reminder_delivery_candidates(
                             occurrence.*,
                             rec.id AS recipient_id,
                             rec.email,
+                            rec.nom,
+                            rec.prenom,
                             d.id AS existing_delivery_id,
                             d.status AS delivery_status,
                             d.attempts AS delivery_attempts,
@@ -2388,6 +2416,8 @@ def list_due_reminder_delivery_candidates(
                     occurrence.*,
                     rec.id AS recipient_id,
                     rec.email,
+                    rec.nom,
+                    rec.prenom,
                     d.id AS existing_delivery_id,
                     d.status AS delivery_status,
                     d.attempts AS delivery_attempts,
