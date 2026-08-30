@@ -2191,7 +2191,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 	                  </p>
                 </div>
               </div>
-	              <div className="ml-auto flex items-center gap-2">
+	              <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2 lg:w-auto">
 	                <select
 	                  value={playlistVoiceType}
 	                  onChange={(e) => setPlaylistVoiceType(e.target.value)}
@@ -2254,12 +2254,12 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 
             {/* Corps : sidebar + contenu */}
             {contentScriptView === 'source' ? (
-            <div className="flex flex-1 min-h-0">
+            <div className="flex min-h-0 flex-1 flex-col md:flex-row">
 
               {/* Sidebar sommaire */}
               <div
-                className="flex-shrink-0 overflow-y-auto border-r py-3"
-                style={{ width: '260px', borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
+                className="max-h-48 w-full flex-none overflow-y-auto border-b py-3 md:max-h-none md:w-56 md:border-b-0 md:border-r"
+                style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
               >
                 <p className="px-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: colors.textMuted }}>
                   Sommaire
@@ -2392,10 +2392,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               const visibleCourseBlocs = mergeCourseBlocsForScriptModal(generatedCourseBlocs, plannedCourseBlocs)
               const generatedBlocNumbers = new Set(generatedCourseBlocs.map(bloc => Number(bloc?.bloc_number || 0)).filter(Boolean))
               return (
-            <div className="flex flex-1 min-h-0">
+            <div className="flex min-h-0 flex-1 flex-col md:flex-row">
               <div
-                className="flex-shrink-0 overflow-y-auto border-r py-3"
-                style={{ width: '280px', borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
+	                className="max-h-48 w-full flex-none overflow-y-auto border-b py-3 md:max-h-none md:w-56 md:border-b-0 md:border-r"
+	                style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
 	              >
 	                <p className="px-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: colors.textMuted }}>
 	                  Cours audio
@@ -2665,24 +2665,26 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   })
                   return (
                     <>
-                      <div className="flex flex-wrap items-start gap-3 pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
-                        <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0', color: colors.textSecondary }}>
-                          Cours {active.bloc_number}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold" style={{ color: colors.text }}>
-                            {active.filename}
-                          </p>
-                          <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
-                            {sourceLabel} · {statusLabel} · {(active.word_count || 0).toLocaleString('fr-FR')} mots · {Math.round((active.duration_sec || 0) / 60)} min
-                          </p>
-                        </div>
-                        {active.final_duration_sec && (
-                          <span className="text-xs rounded-full px-2 py-1" style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: colors.textSecondary }}>
-                            audio {Math.round(active.final_duration_sec / 60)} min
+                      <div className="pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
+                        <div className="flex flex-wrap items-start gap-3">
+                          <span className="rounded-full px-2.5 py-0.5 text-sm font-bold" style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0', color: colors.textSecondary }}>
+                            Cours {active.bloc_number}
                           </span>
-                        )}
-                        <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="min-w-[220px] flex-1">
+                            <p className="break-all text-sm font-semibold sm:break-normal" style={{ color: colors.text }}>
+                              {active.filename}
+                            </p>
+                            <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                              {sourceLabel} · {statusLabel} · {(active.word_count || 0).toLocaleString('fr-FR')} mots · {Math.round((active.duration_sec || 0) / 60)} min
+                            </p>
+                          </div>
+                          {active.final_duration_sec && (
+                            <span className="shrink-0 rounded-full px-2 py-1 text-xs" style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: colors.textSecondary }}>
+                              audio {Math.round(active.final_duration_sec / 60)} min
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
                           {isEditingCourse ? (
                             <>
                               <button
