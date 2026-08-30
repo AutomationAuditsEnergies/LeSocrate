@@ -111,6 +111,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const [cleaningInvalidAudios, setCleaningInvalidAudios] = useState(false)
   const [folderAudioStates, setFolderAudioStates] = useState({})
   const [showFillForm, setShowFillForm] = useState(false)
+  const [showFillInfo, setShowFillInfo] = useState(false)
   const [fillFolderId, setFillFolderId] = useState('')
   const [fillingPlatform, setFillingPlatform] = useState(false)
   const [fillFeedback, setFillFeedback] = useState(null)
@@ -1168,7 +1169,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       }
       setFillFeedback({
         tone: 'success',
-        text: `${data.folder_name || 'Le cours'} est prêt pour ${targetSessionId ? 'la séance concernée' : 'la prochaine diffusion'}.`,
+        text: `${data.folder_name || 'Le cours'} sera diffusé lors de ${targetSessionId ? 'la séance concernée' : 'la prochaine séance'}.`,
       })
       onAudiosPublished?.(platformId)
     } catch (error) {
@@ -1670,27 +1671,58 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   </div>
                 </form>
               ) : (
-                <div className="mb-5 flex flex-wrap items-center justify-end gap-2 border-b pb-4" style={{ borderColor: colors.border }}>
-                  <button
-                    onClick={handleCreateFolder}
-                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
-                    style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                  >
-                    <Icon name="add" className="text-base" />
-                    Créer un cours
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowFillForm((value) => !value)
-                      setFillFeedback(null)
-                    }}
-                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white"
-                    style={{ backgroundColor: '#121212' }}
-                  >
-                    <Icon name="content_copy" className="text-base" />
-                    Réutiliser un cours
-                  </button>
+                <div className="mb-5 border-b pb-4" style={{ borderColor: colors.border }}>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      onClick={handleCreateFolder}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+                      style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                    >
+                      <Icon name="add" className="text-base" />
+                      Créer un cours
+                    </button>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFillForm((value) => !value)
+                          setFillFeedback(null)
+                        }}
+                        className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-white"
+                        style={{ backgroundColor: '#121212' }}
+                      >
+                        <Icon name="event_repeat" className="text-base" />
+                        {targetSessionId ? 'Choisir un cours de remplacement' : 'Choisir le cours de la prochaine séance'}
+                      </button>
+                      <button
+                        type="button"
+                        aria-expanded={showFillInfo}
+                        aria-controls={`fill-course-info-${platformId}`}
+                        aria-label="Informations sur le choix du cours diffusé"
+                        title="À quoi sert ce bouton ?"
+                        onClick={() => setShowFillInfo((value) => !value)}
+                        className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full transition-colors"
+                        style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textMuted }}
+                      >
+                        <Icon name="info" className="text-[17px]" />
+                      </button>
+                    </div>
+                  </div>
+                  {showFillInfo && (
+                    <div
+                      id={`fill-course-info-${platformId}`}
+                      role="note"
+                      className="ml-auto mt-3 max-w-2xl rounded-lg border p-3"
+                      style={{ backgroundColor: colors.innerBg, borderColor: colors.border }}
+                    >
+                      <p className="text-xs font-semibold" style={{ color: colors.text }}>
+                        Solution de dernier recours
+                      </p>
+                      <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                        Si la séance prévue n’a pas été générée correctement avec son audio et sa visio, contactez le support. En attendant la correction, choisissez ici un cours précédent déjà complet pour le diffuser à la date prévue.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1701,10 +1733,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   style={{ backgroundColor: colors.innerBg, borderColor: colors.border }}
                 >
                   <label htmlFor={`fill-folder-${platformId}`} className="block text-xs font-semibold" style={{ color: colors.text }}>
-                    {targetSessionId ? 'Cours de remplacement pour la séance en erreur' : 'Cours pour la prochaine journée'}
+                    {targetSessionId ? 'Cours de remplacement pour la séance en erreur' : 'Cours diffusé lors de la prochaine séance'}
                   </label>
                   <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
-                    Choisissez la journée déjà générée à utiliser {targetSessionId ? 'pour cette séance' : 'pour la prochaine diffusion'}.
+                    Choisissez une journée dont l’audio et la visio sont déjà disponibles {targetSessionId ? 'pour cette séance' : 'pour la prochaine diffusion'}.
                   </p>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <select
