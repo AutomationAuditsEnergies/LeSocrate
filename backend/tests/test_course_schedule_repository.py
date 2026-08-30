@@ -1233,6 +1233,10 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         )
         release_delivery.assert_called_once()
         self.assertEqual(release_delivery.call_args.args[0], 102)
+        self.assertEqual(
+            release_delivery.call_args.kwargs["retry_clock"],
+            release_delivery.call_args.kwargs["claimed_at"],
+        )
 
     def test_reminder_claim_is_a_lease_and_sent_timestamp_is_written_after_success(self):
         db_path = _make_schedule_db()

@@ -2566,9 +2566,20 @@ def complete_course_reminder_delivery(delivery_id: int, *, claimed_at, sent_at) 
         conn.close()
 
 
-def release_course_reminder_delivery(delivery_id: int, *, claimed_at, error: str | None) -> bool:
+def release_course_reminder_delivery(
+    delivery_id: int,
+    *,
+    claimed_at,
+    error: str | None,
+    retry_clock=None,
+) -> bool:
     clean_error = str(error or "Erreur d'envoi")[:1000]
-    now = datetime.now(FRANCE_TZ)
+    # Keep the retry timestamp in the same clock domain as the scheduler that
+    # claimed the delivery. In production ``retry_clock`` is the real clock;
+    # for the centre-scoped test clock it is the simulated clock. Mixing the
+    # two makes a retry scheduled at (for example) 15:48 permanently invisible
+    # to a simulated 08:10 scheduler before the course starts.
+    now = retry_clock or datetime.now(FRANCE_TZ)
     try:
         retry_base = max(10, int(os.getenv("COURSE_REMINDER_RETRY_BASE_SECONDS", "60")))
     except (TypeError, ValueError):

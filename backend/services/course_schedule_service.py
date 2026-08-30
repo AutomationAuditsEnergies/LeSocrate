@@ -1952,6 +1952,7 @@ def _process_due_delivery_candidates(
                     delivery_id,
                     claimed_at=now,
                     error=error,
+                    retry_clock=now,
                 )
         else:
             completed = _sqlite_finish_reminder_delivery(
