@@ -888,7 +888,10 @@ def get_course_schedule_details(cursor, platform_id):
     if not summary:
         return None
     sessions = schedule_repo.list_course_sessions(int(platform_id), limit=1000)
-    public_sessions = [build_course_session_state(row) for row in sessions]
+    from services.time_service import get_current_simulated_time
+
+    now = get_current_simulated_time(int(platform_id))
+    public_sessions = [build_course_session_state(row, now=now) for row in sessions]
     next_session = next(
         (item for item in public_sessions if item["status"] in {"planned", "active"}),
         None,
@@ -1403,25 +1406,41 @@ def advance_platform_schedule(cursor, platform_id, now=None):
 
 
 def run_scheduler_tick(platform_ids=None):
+    from services.time_service import get_current_simulated_time
+
     if schedule_repo.schedule_store_is_postgres():
         ids = (
             [int(pid) for pid in platform_ids]
-            if platform_ids
+            if platform_ids is not None
             else schedule_repo.list_schedule_platform_ids()
         )
-        return [advance_platform_schedule(None, pid) for pid in ids]
+        return [
+            advance_platform_schedule(
+                None,
+                pid,
+                now=get_current_simulated_time(pid),
+            )
+            for pid in ids
+        ]
 
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         ensure_course_schedule_tables(cursor)
-        if platform_ids:
+        if platform_ids is not None:
             ids = [int(pid) for pid in platform_ids]
         else:
             cursor.execute("SELECT platform_id FROM course_schedule_config ORDER BY platform_id")
             ids = [row[0] for row in cursor.fetchall()]
 
-        results = [advance_platform_schedule(cursor, pid) for pid in ids]
+        results = [
+            advance_platform_schedule(
+                cursor,
+                pid,
+                now=get_current_simulated_time(pid),
+            )
+            for pid in ids
+        ]
         conn.commit()
         return results
     finally:
@@ -1778,6 +1797,7 @@ def _process_due_delivery_candidates(
     batch_size,
     lease_seconds,
     max_attempts,
+    platform_ids=None,
 ):
     """Process the DB-ranked due queue without scanning unrelated sessions."""
     schedule_repo.ensure_default_course_reminder_rules_for_schedules(
@@ -1793,6 +1813,7 @@ def _process_due_delivery_candidates(
         active_hours=active_hours,
         limit=min(1000, max(batch_size, batch_size * 2)),
         sqlite_cursor=cursor,
+        platform_ids=platform_ids,
     )
     claimed_payloads = []
     results = []
@@ -1953,7 +1974,7 @@ def _process_due_delivery_candidates(
     return results
 
 
-def process_due_reminders(base_url=None, dry_run=False):
+def process_due_reminders(base_url=None, dry_run=False, *, now=None, platform_ids=None):
     """Materialize, claim and drain bounded reminder delivery batches.
 
     One scheduler tick may need to notify thousands of recipients at the same
@@ -1961,6 +1982,8 @@ def process_due_reminders(base_url=None, dry_run=False):
     five-minute delay per hundred students while preserving a hard per-tick
     cap for provider and database backpressure.
     """
+    if platform_ids is not None and not list(platform_ids):
+        return []
     base_url = (
         base_url
         or os.environ.get("FRONTEND_PUBLIC_URL")
@@ -1979,7 +2002,7 @@ def process_due_reminders(base_url=None, dry_run=False):
     try:
         if cursor is not None:
             ensure_course_schedule_tables(cursor)
-        now = datetime.now(FRANCE_TZ)
+        now = now or datetime.now(FRANCE_TZ)
         try:
             previous_evening_hour = max(0, min(23, int(os.environ.get("REMINDER_PREVIOUS_EVENING_HOUR", "18"))))
         except (TypeError, ValueError):
@@ -2045,6 +2068,7 @@ def process_due_reminders(base_url=None, dry_run=False):
                 batch_size=batch_size,
                 lease_seconds=lease_seconds,
                 max_attempts=max_attempts,
+                platform_ids=platform_ids,
             )
             results.extend(batch_results)
             if len(batch_results) < batch_size:
@@ -2053,6 +2077,31 @@ def process_due_reminders(base_url=None, dry_run=False):
     finally:
         if conn is not None:
             conn.close()
+
+
+def process_due_test_clock_reminders(base_url=None):
+    """Drain reminders using each authorized centre's advancing test time."""
+    from repositories.test_clock_repository import (
+        list_authorized_active_test_clocks,
+        list_center_platform_ids,
+    )
+    from services.time_service import _as_france_time
+
+    results = []
+    real_now = datetime.now(FRANCE_TZ)
+    for clock in list_authorized_active_test_clocks():
+        center_account_id = int(clock["center_account_id"])
+        simulated_now = _as_france_time(clock["simulated_anchor"]) + (
+            real_now - _as_france_time(clock["real_anchor"])
+        )
+        platform_ids = list_center_platform_ids(center_account_id)
+        if platform_ids:
+            results.extend(process_due_reminders(
+                base_url=base_url,
+                now=simulated_now,
+                platform_ids=platform_ids,
+            ))
+    return results
 
 
 def _validated_reminder_rule(data):

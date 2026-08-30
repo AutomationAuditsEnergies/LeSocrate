@@ -33,6 +33,12 @@ PIPELINE_REQUIRED_SCHEMA = {
         "onboarding_completed_at",
         "pipeline_access_enabled",
     },
+    "center_test_clocks": {
+        "center_account_id",
+        "simulated_anchor",
+        "real_anchor",
+        "updated_at",
+    },
     "ai_voices": {
         "id",
         "center_account_id",

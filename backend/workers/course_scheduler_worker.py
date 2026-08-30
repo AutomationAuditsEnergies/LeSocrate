@@ -24,6 +24,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from services.course_schedule_service import (  # noqa: E402
     process_due_reminders,
+    process_due_test_clock_reminders,
     run_scheduler_tick as advance_course_schedules,
 )
 from services.scheduled_audio_service import process_due_audio_generations  # noqa: E402
@@ -67,7 +68,13 @@ def run_scheduler_tick_once(*, wait_for_audio: bool = False) -> dict[str, Any]:
                 wait_for_completion=wait_for_audio,
             ),
         ),
-        ("reminders", process_due_reminders),
+        (
+            "reminders",
+            lambda: [
+                *process_due_reminders(),
+                *process_due_test_clock_reminders(),
+            ],
+        ),
         ("attendance_exports", process_due_attendance_exports),
     )
 

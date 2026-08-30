@@ -497,7 +497,11 @@ if _EMBEDDED_PIPELINE_WORKER_ENABLED:
 
 def _embedded_course_scheduler_loop():
     """Run the durable occurrence/audio scheduler on every instance safely."""
-    from services.course_schedule_service import process_due_reminders, run_scheduler_tick
+    from services.course_schedule_service import (
+        process_due_reminders,
+        process_due_test_clock_reminders,
+        run_scheduler_tick,
+    )
     from services.scheduled_audio_service import process_due_audio_generations
     from services.attendance_service import process_due_attendance_exports
 
@@ -513,6 +517,12 @@ def _embedded_course_scheduler_loop():
                     or os.getenv("PLATFORM_1_FRONTEND_URL")
                 )
             )
+            reminder_results.extend(process_due_test_clock_reminders(
+                base_url=(
+                    os.getenv("FRONTEND_PUBLIC_URL")
+                    or os.getenv("PLATFORM_1_FRONTEND_URL")
+                )
+            ))
             attendance_results = process_due_attendance_exports()
             _COURSE_SCHEDULER_STATE["last_success_monotonic"] = time.monotonic()
             _COURSE_SCHEDULER_STATE["last_error"] = None

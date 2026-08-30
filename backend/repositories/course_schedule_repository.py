@@ -2171,6 +2171,7 @@ def list_due_reminder_delivery_candidates(
     active_hours: float = 12.0,
     limit: int = 100,
     sqlite_cursor=None,
+    platform_ids=None,
 ) -> list[dict[str, Any]]:
     """Return only claimable recipient deliveries ordered by their real due_at.
 
@@ -2179,11 +2180,19 @@ def list_due_reminder_delivery_candidates(
     Sent, dead-lettered, backoff and live-lease rows never consume the batch.
     """
     safe_limit = max(1, min(int(limit or 100), 1000))
+    scoped_platform_ids = [int(value) for value in (platform_ids or [])]
+    if platform_ids is not None and not scoped_platform_ids:
+        return []
     if schedule_store_is_postgres():
+        platform_scope_sql = (
+            "AND cs.platform_id = ANY(%(platform_ids)s)"
+            if scoped_platform_ids
+            else ""
+        )
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     WITH occurrences AS (
                         SELECT
                             cs.id AS session_id,
@@ -2217,6 +2226,7 @@ def list_due_reminder_delivery_candidates(
                           ON r.platform_id = cs.platform_id AND r.is_active = TRUE
                         WHERE cs.status IN ('planned', 'active')
                           AND cs.scheduled_at + (%(active_hours)s * INTERVAL '1 hour') >= %(now)s
+                          {platform_scope_sql}
                           AND (
                             COALESCE(r.system_key, '') != 'previous_evening'
                             OR cs.reminder_previous_evening_sent_at IS NULL
@@ -2280,6 +2290,7 @@ def list_due_reminder_delivery_candidates(
                         "now": now,
                         "active_hours": float(active_hours),
                         "limit": safe_limit,
+                        "platform_ids": scoped_platform_ids,
                     },
                 )
                 return [dict(row) for row in cur.fetchall()]
@@ -2291,8 +2302,13 @@ def list_due_reminder_delivery_candidates(
         if own_connection:
             _ensure_sqlite_reminder_tables(cursor)
         now_value = _sqlite_datetime(now)
+        platform_scope_sql = (
+            f"AND cs.platform_id IN ({','.join('?' for _ in scoped_platform_ids)})"
+            if scoped_platform_ids
+            else ""
+        )
         cursor.execute(
-            """
+            f"""
             WITH occurrences AS (
                 SELECT
                     cs.id AS session_id,
@@ -2324,6 +2340,7 @@ def list_due_reminder_delivery_candidates(
                   ON r.platform_id = cs.platform_id AND r.is_active = 1
                 WHERE cs.status IN ('planned', 'active')
                   AND datetime(cs.scheduled_at, printf('+%f hours', ?)) >= ?
+                  {platform_scope_sql}
                   AND (
                     COALESCE(r.system_key, '') != 'previous_evening'
                     OR cs.reminder_previous_evening_sent_at IS NULL
@@ -2384,7 +2401,7 @@ def list_due_reminder_delivery_candidates(
             LIMIT ?
             """,
             (
-                float(active_hours), now_value, now_value, now_value,
+                float(active_hours), now_value, *scoped_platform_ids, now_value, now_value,
                 now_value, now_value, safe_limit,
             ),
         )

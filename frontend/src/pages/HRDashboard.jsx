@@ -1719,6 +1719,7 @@ export default function HRDashboard() {
               newlyCreatedPlatformId={newlyCreatedPlatformId}
               retryingPlatformId={retryingPlatformId}
               onRetryPreparation={handleRetryTeacherPreparation}
+              onTestClockChanged={fetchPlatforms}
             />
           )}
           </div>
@@ -4195,11 +4196,95 @@ function PlatformCardsView({
   newlyCreatedPlatformId,
   retryingPlatformId,
   onRetryPreparation,
+  onTestClockChanged,
 }) {
   const [rosterSearch, setRosterSearch] = useState('')
   const [rosterSearchOpen, setRosterSearchOpen] = useState(false)
   const [selectedTeacherId, setSelectedTeacherId] = useState(null)
   const teacherArrivalTargetRef = useRef(null)
+  const [testClockOpen, setTestClockOpen] = useState(false)
+  const [testClock, setTestClock] = useState(null)
+  const [testClockValue, setTestClockValue] = useState('')
+  const [testClockLoading, setTestClockLoading] = useState(false)
+  const [testClockError, setTestClockError] = useState('')
+  const [testClockNotice, setTestClockNotice] = useState('')
+  const testClockAvailable = isOrderReviewCenter()
+
+  const toLocalDateTimeInput = (value) => {
+    const date = value ? new Date(value) : new Date()
+    const pad = (part) => String(part).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  }
+
+  const loadTestClock = useCallback(async () => {
+    if (!testClockAvailable) return
+    setTestClockLoading(true)
+    setTestClockError('')
+    try {
+      const response = await apiFetch('/api/hr/test-clock')
+      const data = await response.json()
+      if (!response.ok || !data.success) throw new Error(data.error || 'Impossible de lire l’heure de test')
+      setTestClock(data)
+      setTestClockValue(toLocalDateTimeInput(data.current_time))
+    } catch (error) {
+      setTestClockError(error.message || 'Impossible de lire l’heure de test')
+    } finally {
+      setTestClockLoading(false)
+    }
+  }, [testClockAvailable])
+
+  const openTestClock = () => {
+    setTestClockOpen(true)
+    setTestClockNotice('')
+    loadTestClock()
+  }
+
+  const saveTestClock = async (event) => {
+    event.preventDefault()
+    if (!testClockValue) return
+    setTestClockLoading(true)
+    setTestClockError('')
+    setTestClockNotice('')
+    try {
+      const response = await apiFetch('/api/hr/test-clock', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ datetime: new Date(testClockValue).toISOString() }),
+        timeoutMs: 60000,
+      })
+      const data = await response.json()
+      if (!response.ok || !data.success) throw new Error(data.error || 'Impossible de modifier l’heure')
+      setTestClock(data)
+      setTestClockValue(toLocalDateTimeInput(data.current_time))
+      setTestClockNotice(data.scheduler?.reminder_count
+        ? `${data.scheduler.reminder_count} rappel(s) traité(s).`
+        : 'Heure appliquée. Les séances et rappels utilisent maintenant cette horloge.')
+      onTestClockChanged?.()
+    } catch (error) {
+      setTestClockError(error.message || 'Impossible de modifier l’heure')
+    } finally {
+      setTestClockLoading(false)
+    }
+  }
+
+  const resetTestClock = async () => {
+    setTestClockLoading(true)
+    setTestClockError('')
+    setTestClockNotice('')
+    try {
+      const response = await apiFetch('/api/hr/test-clock', { method: 'DELETE' })
+      const data = await response.json()
+      if (!response.ok || !data.success) throw new Error(data.error || 'Impossible de rétablir l’heure réelle')
+      setTestClock(data)
+      setTestClockValue(toLocalDateTimeInput(data.current_time))
+      setTestClockNotice('Heure réelle rétablie.')
+      onTestClockChanged?.()
+    } catch (error) {
+      setTestClockError(error.message || 'Impossible de rétablir l’heure réelle')
+    } finally {
+      setTestClockLoading(false)
+    }
+  }
   const normalizedRosterSearch = rosterSearch.trim().toLocaleLowerCase('fr-FR')
   const searchedPlatforms = normalizedRosterSearch
     ? platforms.filter((platform) => [
@@ -4246,7 +4331,19 @@ function PlatformCardsView({
         </h1>
         <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>Retrouvez vos professeurs, leurs formations et leur prochaine séance.</p>
 
-        <div className="absolute right-0 top-0 flex h-11 items-center justify-end">
+        <div className="absolute right-0 top-0 flex h-11 items-center justify-end gap-1">
+          {testClockAvailable && !rosterSearchOpen && (
+            <button
+              type="button"
+              onClick={openTestClock}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border bg-white px-2.5 text-xs font-semibold shadow-sm transition-colors hover:bg-[#F5F5F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/25"
+              style={{ borderColor: testClock?.active ? '#8B5CF6' : colors.borderLight, color: testClock?.active ? '#6D28D9' : colors.textSecondary }}
+              aria-label="Modifier l’heure de test"
+            >
+              <Icon name="schedule" className="text-base" />
+              <span className="hidden lg:inline">{testClock?.active ? 'Heure test active' : 'Heure de test'}</span>
+            </button>
+          )}
           {rosterSearchOpen ? (
             <div className="flex h-9 w-[min(12.5rem,calc(100vw-7rem))] items-center gap-1.5 rounded-md border bg-white px-2.5 shadow-sm" style={{ borderColor: colors.borderLight }} role="search">
               <Icon name="search" className="text-base" style={{ color: colors.textMuted }} />
@@ -4299,6 +4396,65 @@ function PlatformCardsView({
           )}
         </div>
       </header>
+
+      {testClockOpen && createPortal(
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !testClockLoading) setTestClockOpen(false)
+          }}
+        >
+          <div className="w-full max-w-md rounded-xl border bg-white p-5 text-left shadow-2xl" style={{ borderColor: colors.borderLight }} role="dialog" aria-modal="true" aria-labelledby="test-clock-title">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="test-clock-title" className="text-lg font-semibold" style={{ color: colors.text }}>Horloge de test</h2>
+                <p className="mt-1 text-sm leading-5" style={{ color: colors.textMuted }}>
+                  Simulez la date et l’heure de ce centre pour vérifier le lancement des séances et l’envoi des rappels.
+                </p>
+              </div>
+              <button type="button" onClick={() => setTestClockOpen(false)} disabled={testClockLoading} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md hover:bg-[#F3F3F1] disabled:opacity-50" aria-label="Fermer">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form className="mt-5" onSubmit={saveTestClock}>
+              <label htmlFor="test-clock-value" className="block text-xs font-semibold uppercase tracking-[0.12em]" style={{ color: colors.textMuted }}>Date et heure simulées</label>
+              <input
+                id="test-clock-value"
+                type="datetime-local"
+                value={testClockValue}
+                onChange={(event) => setTestClockValue(event.target.value)}
+                disabled={testClockLoading}
+                className="mt-2 h-11 w-full rounded-md border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-violet-500/30 disabled:opacity-60"
+                style={{ borderColor: colors.border }}
+                required
+              />
+              <p className="mt-2 text-xs leading-5" style={{ color: colors.textMuted }}>
+                L’horloge continuera d’avancer normalement à partir de cette heure. Seules les plateformes de ce centre sont concernées.
+              </p>
+
+              {testClockError && <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{testClockError}</p>}
+              {testClockNotice && <p className="mt-3 rounded-md bg-violet-50 px-3 py-2 text-sm text-violet-800" role="status">{testClockNotice}</p>}
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={resetTestClock}
+                  disabled={testClockLoading || !testClock?.active}
+                  className="inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium hover:bg-[#F3F3F1] disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ color: colors.textSecondary }}
+                >
+                  <RotateCcw size={15} /> Revenir à l’heure réelle
+                </button>
+                <button type="submit" disabled={testClockLoading || !testClockValue} className="h-10 rounded-md bg-[#18181B] px-4 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50">
+                  {testClockLoading ? 'Application…' : 'Appliquer l’heure'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       <div className="mx-auto mt-5 flex w-full max-w-[980px] items-center gap-5" aria-hidden="true">
         <span className="h-px flex-1" style={{ backgroundColor: colors.borderLight }} />

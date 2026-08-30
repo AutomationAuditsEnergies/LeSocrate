@@ -31,7 +31,7 @@ def _ensure_cours_config(cursor):
 def get_current_simulated_time(platform_id=None):
     """Retourne l'heure actuelle ou l'heure simulée EN HEURE FRANÇAISE"""
     try:
-        # Chercher un offset spécifique à la plateforme d'abord
+        # Compatibilité avec les anciens outils de debug en mémoire.
         offset = None
         if platform_id is not None:
             offset = state.simulated_time_offsets.get(platform_id)
@@ -45,10 +45,44 @@ def get_current_simulated_time(platform_id=None):
                 return FRANCE_TZ.localize(offset)
             return offset.astimezone(FRANCE_TZ)
 
+        if platform_id is not None:
+            from repositories.test_clock_repository import (
+                get_center_test_clock,
+                get_platform_center_account_id,
+            )
+
+            center_account_id = get_platform_center_account_id(int(platform_id))
+            clock = get_center_test_clock(center_account_id) if center_account_id else None
+            if clock:
+                simulated_anchor = _as_france_time(clock["simulated_anchor"])
+                real_anchor = _as_france_time(clock["real_anchor"])
+                return simulated_anchor + (datetime.now(FRANCE_TZ) - real_anchor)
+
         return datetime.now(FRANCE_TZ)
     except Exception as e:
         logger.error(f"❌ Erreur get_current_simulated_time: {e}")
         return datetime.now(FRANCE_TZ)
+
+
+def _as_france_time(value):
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return FRANCE_TZ.localize(parsed)
+    return parsed.astimezone(FRANCE_TZ)
+
+
+def get_center_test_time(center_account_id):
+    from repositories.test_clock_repository import get_center_test_clock
+
+    clock = get_center_test_clock(int(center_account_id))
+    if not clock:
+        return None
+    simulated_anchor = _as_france_time(clock["simulated_anchor"])
+    real_anchor = _as_france_time(clock["real_anchor"])
+    return simulated_anchor + (datetime.now(FRANCE_TZ) - real_anchor)
 
 
 def set_heure_debut_cours(nouvelle_heure, platform_id=1):

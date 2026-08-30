@@ -7,7 +7,7 @@ import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
-from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file
+from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file, g
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ, PIPELINE_DATABASE_BACKEND
@@ -979,6 +979,104 @@ def create_hr_blueprint():
         # centre afin de ne pas révéler son existence.
         return jsonify({"success": False, "error": "Ressource introuvable"}), 404
 
+    def _test_clock_center_id():
+        denied = _require_admin()
+        if denied:
+            return None, denied
+        center_account_id = _training_center_account_id()
+        if _admin_account_type() != "training_center" or center_account_id is None:
+            return None, (jsonify({"success": False, "error": "Compte centre requis"}), 403)
+
+        account = get_training_center_by_id(center_account_id) or {}
+        verified_email = str(
+            getattr(g, "supabase_auth_claims", {}).get("email")
+            or account.get("username")
+            or ""
+        ).strip().lower()
+        if verified_email != "newpiprod@gmail.com":
+            return None, (jsonify({
+                "success": False,
+                "error": "Horloge de test non autorisée pour ce compte",
+                "code": "TEST_CLOCK_FORBIDDEN",
+            }), 403)
+        return center_account_id, None
+
+    def _test_clock_payload(center_account_id):
+        from services.time_service import get_center_test_time
+
+        simulated_now = get_center_test_time(center_account_id)
+        real_now = datetime.now(FRANCE_TZ)
+        return {
+            "success": True,
+            "active": simulated_now is not None,
+            "current_time": (simulated_now or real_now).isoformat(),
+            "real_time": real_now.isoformat(),
+            "timezone": "Europe/Paris",
+        }
+
+    @hr_bp.route("/api/hr/test-clock", methods=["GET"])
+    def get_test_clock():
+        center_account_id, denied = _test_clock_center_id()
+        if denied:
+            return denied
+        return jsonify(_test_clock_payload(center_account_id)), 200
+
+    @hr_bp.route("/api/hr/test-clock", methods=["PUT"])
+    def update_test_clock():
+        center_account_id, denied = _test_clock_center_id()
+        if denied:
+            return denied
+        raw_value = str((request.get_json(silent=True) or {}).get("datetime") or "").strip()
+        try:
+            requested_time = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+            if requested_time.tzinfo is None:
+                requested_time = FRANCE_TZ.localize(requested_time)
+            requested_time = requested_time.astimezone(FRANCE_TZ)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Date ou heure invalide"}), 400
+
+        real_now = datetime.now(FRANCE_TZ)
+        if abs((requested_time - real_now).total_seconds()) > 366 * 2 * 24 * 3600:
+            return jsonify({
+                "success": False,
+                "error": "L’heure de test doit rester à moins de deux ans de l’heure réelle",
+            }), 400
+
+        from repositories.test_clock_repository import (
+            list_center_platform_ids,
+            set_center_test_clock,
+        )
+
+        set_center_test_clock(center_account_id, requested_time, real_now)
+        platform_ids = list_center_platform_ids(center_account_id)
+        # Le réglage est immédiatement observable : nul besoin d'attendre le
+        # prochain passage du planificateur périodique.
+        run_scheduler_tick(platform_ids=platform_ids)
+        reminder_results = process_due_reminders(
+            base_url=(
+                os.environ.get("FRONTEND_PUBLIC_URL")
+                or os.environ.get("PLATFORM_1_FRONTEND_URL")
+            ),
+            now=requested_time,
+            platform_ids=platform_ids,
+        )
+        payload = _test_clock_payload(center_account_id)
+        payload["scheduler"] = {
+            "platform_count": len(platform_ids),
+            "reminder_count": len(reminder_results or []),
+        }
+        return jsonify(payload), 200
+
+    @hr_bp.route("/api/hr/test-clock", methods=["DELETE"])
+    def reset_test_clock():
+        center_account_id, denied = _test_clock_center_id()
+        if denied:
+            return denied
+        from repositories.test_clock_repository import delete_center_test_clock
+
+        delete_center_test_clock(center_account_id)
+        return jsonify(_test_clock_payload(center_account_id)), 200
+
     def _require_hr_resource_access(resource_type, resource_id):
         """Fail-closed tenant check, reusable for URL and request-body ids."""
         account_type = _admin_account_type()
@@ -1826,10 +1924,12 @@ def create_hr_blueprint():
                 schedule_row = schedule_dashboard_states.get(int(pid))
                 course_schedule = None
                 if schedule_row:
+                    from services.time_service import get_current_simulated_time
+                    platform_now = get_current_simulated_time(pid)
                     upcoming_sessions = []
                     for session_row in schedule_row.get("upcoming_sessions") or []:
                         if isinstance(session_row, dict) and session_row.get("id"):
-                            upcoming_sessions.append(build_course_session_state(session_row))
+                            upcoming_sessions.append(build_course_session_state(session_row, now=platform_now))
                     next_session = upcoming_sessions[0] if upcoming_sessions else None
                     if next_session is None and schedule_row.get("session_id"):
                         next_session = build_course_session_state({
@@ -1842,7 +1942,7 @@ def create_hr_blueprint():
                             "audio_generation_completed_at": schedule_row.get("audio_generation_completed_at"),
                             "audio_generation_attempts": schedule_row.get("audio_generation_attempts"),
                             "audio_generation_next_retry_at": schedule_row.get("audio_generation_next_retry_at"),
-                        })
+                        }, now=platform_now)
                     course_schedule = {
                         "timezone": schedule_row.get("timezone") or "Europe/Paris",
                         "start_time": schedule_row.get("start_time") or "09:00",

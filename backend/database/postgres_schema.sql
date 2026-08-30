@@ -68,6 +68,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_training_center_accounts_auth_user_id
     ON training_center_accounts(auth_user_id)
     WHERE auth_user_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS center_test_clocks (
+    center_account_id BIGINT PRIMARY KEY
+        REFERENCES training_center_accounts(id) ON DELETE CASCADE,
+    simulated_anchor TIMESTAMPTZ NOT NULL,
+    real_anchor TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Voix Fish Audio privées, isolées par centre. Les enregistrements ne sont pas
 -- conservés ici : seuls leurs empreintes et les métadonnées de consentement le
 -- sont afin de limiter l'exposition de données biométriques.
@@ -1477,6 +1485,7 @@ CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_auto_pilot_resume
 -- With no anon/authenticated policies, RLS denies direct Data API access while
 -- the Postgres owner and Supabase service role used by the backend keep access.
 ALTER TABLE training_center_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE center_test_clocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_voices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_schema_migrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE platform_config ENABLE ROW LEVEL SECURITY;
