@@ -1,6 +1,31 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch, getPlatformId, getStudentLoginPath, setPlatformId } from '../api'
+import './Attente.css'
+
+const COUNTDOWN_UNITS = [
+  { key: 'jours', label: 'Jours' },
+  { key: 'heures', label: 'Heures' },
+  { key: 'minutes', label: 'Minutes' },
+  { key: 'secondes', label: 'Secondes' },
+]
+
+function RefreshIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
+      <path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" />
+    </svg>
+  )
+}
+
+function HomeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
+      <path d="m3 11 9-8 9 8" />
+      <path d="M5.5 9.5V21h13V9.5M9 21v-7h6v7" />
+    </svg>
+  )
+}
 
 export default function Attente() {
   const navigate = useNavigate()
@@ -23,7 +48,6 @@ export default function Attente() {
     }
   }, [timeLeft])
 
-  // Récupérer le temps restant réel depuis le backend
   useEffect(() => {
     if (pParam) setPlatformId(pParam)
 
@@ -37,30 +61,24 @@ export default function Attente() {
         }
         if (data.status === 'waiting' && data.temps_restant > 0) {
           setTimeLeft(Math.ceil(data.temps_restant))
-        } else if (data.status === 'playing') {
-          const platformId = pParam || getPlatformId()
-          navigate(platformId && platformId !== '1' ? `/video?p=${platformId}` : '/video', { replace: true })
-          return
-        } else if (data.status === 'finished') {
+        } else if (data.status === 'playing' || data.status === 'finished') {
           const platformId = pParam || getPlatformId()
           navigate(platformId && platformId !== '1' ? `/video?p=${platformId}` : '/video', { replace: true })
         } else {
           setTimeLeft(0)
         }
       } catch {
-        // En cas d'erreur réseau, on garde la valeur actuelle
+        // En cas d'erreur réseau, on garde la valeur actuelle.
       }
     }
 
     fetchStatus()
-    // Re-sync avec le backend toutes les 30s pour éviter la dérive
     const syncInterval = setInterval(fetchStatus, 30000)
     return () => clearInterval(syncInterval)
   }, [navigate, pParam])
 
-  // Décrémenter localement chaque seconde
   useEffect(() => {
-    if (!hasCountdownStarted) return
+    if (!hasCountdownStarted) return undefined
     const interval = setInterval(() => {
       setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0))
     }, 1000)
@@ -68,108 +86,65 @@ export default function Attente() {
   }, [hasCountdownStarted])
 
   return (
-    <div
-      className="flex flex-col h-full w-full bg-cover bg-center relative overflow-hidden min-h-screen"
-      style={{ backgroundImage: 'url("/static/images/prof-avatar.jpg")' }}
-    >
-      <div className="absolute inset-0 bg-black/60 z-0" />
+    <main className="waiting-screen">
+      <aside className="waiting-screen__identity" aria-label="Le Socrate">
+        <div className="waiting-brand">
+          <span className="waiting-brand__mark" aria-hidden="true">S</span>
+          <span>LE SOCRATE</span>
+        </div>
 
-      <div className="absolute inset-0 z-1">
-        <div className="floating-particle absolute top-20 left-20 w-4 h-4 bg-blue-400/30 rounded-full" />
-        <div
-          className="floating-particle absolute top-40 right-32 w-6 h-6 bg-purple-400/30 rounded-full"
-          style={{ animationDelay: '-2s' }}
-        />
-        <div
-          className="floating-particle absolute bottom-32 left-40 w-3 h-3 bg-pink-400/30 rounded-full"
-          style={{ animationDelay: '-4s' }}
-        />
-        <div
-          className="floating-particle absolute bottom-20 right-20 w-5 h-5 bg-yellow-400/30 rounded-full"
-          style={{ animationDelay: '-1s' }}
-        />
-        <div
-          className="floating-particle absolute top-1/2 left-10 w-4 h-4 bg-green-400/30 rounded-full"
-          style={{ animationDelay: '-3s' }}
-        />
-        <div
-          className="floating-particle absolute top-1/3 right-10 w-3 h-3 bg-red-400/30 rounded-full"
-          style={{ animationDelay: '-5s' }}
-        />
-      </div>
+        <div className="waiting-screen__intro">
+          <p className="waiting-screen__kicker">Classe virtuelle</p>
+          <h1>Votre cours commence bientôt.</h1>
+          <p>Cette page s’ouvrira automatiquement dès que la séance sera disponible.</p>
+        </div>
 
-      <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-4 py-[max(1rem,env(safe-area-inset-top))] sm:px-8 sm:py-8">
-        <div className="countdown-glow mb-6 w-full max-w-3xl rounded-3xl border border-white/30 bg-gradient-to-r from-blue-600/20 to-purple-600/20 p-4 backdrop-blur-lg sm:mb-8 sm:w-auto sm:max-w-none sm:p-8">
-          <h2 className="mb-5 text-center text-xl font-semibold text-white sm:mb-6 sm:text-2xl">
-            {timeLeft === null ? 'Chargement...' : 'Début de la formation dans :'}
-          </h2>
+        <p className="waiting-screen__footnote">Formation certifiante · Session sécurisée</p>
+      </aside>
 
-          <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-4 sm:gap-4">
-            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
-              <div id="jours" className="text-2xl font-bold text-blue-400 sm:text-3xl">
-                {countdown.jours}
+      <section className="waiting-screen__content" aria-labelledby="waiting-countdown-title">
+        <div className="waiting-panel">
+          <header className="waiting-panel__header">
+            <span className="waiting-panel__status" aria-hidden="true">
+              <span />
+              Session programmée
+            </span>
+            <h2 id="waiting-countdown-title">
+              {timeLeft === null ? 'Vérification de la séance' : 'Début de la formation dans'}
+            </h2>
+          </header>
+
+          <div
+            className={`waiting-countdown${timeLeft === null ? ' waiting-countdown--loading' : ''}`}
+            role="timer"
+            aria-live="polite"
+            aria-atomic="true"
+            aria-label={timeLeft === null ? 'Chargement du temps restant' : `${countdown.jours} jours, ${countdown.heures} heures, ${countdown.minutes} minutes et ${countdown.secondes} secondes`}
+          >
+            {COUNTDOWN_UNITS.map(({ key, label }) => (
+              <div className="waiting-countdown__unit" key={key}>
+                <span id={key} className="waiting-countdown__value">{countdown[key]}</span>
+                <span className="waiting-countdown__label">{label}</span>
               </div>
-              <div className="text-sm text-gray-300">Jours</div>
-            </div>
-            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
-              <div id="heures" className="text-2xl font-bold text-purple-400 sm:text-3xl">
-                {countdown.heures}
-              </div>
-              <div className="text-sm text-gray-300">Heures</div>
-            </div>
-            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
-              <div id="minutes" className="text-2xl font-bold text-pink-400 sm:text-3xl">
-                {countdown.minutes}
-              </div>
-              <div className="text-sm text-gray-300">Minutes</div>
-            </div>
-            <div className="rounded-xl bg-white/10 p-3 sm:p-4">
-              <div id="secondes" className="text-2xl font-bold text-yellow-400 sm:text-3xl">
-                {countdown.secondes}
-              </div>
-              <div className="text-sm text-gray-300">Secondes</div>
-            </div>
+            ))}
+          </div>
+
+          <p className="waiting-panel__note">
+            Vous pouvez laisser cet onglet ouvert. Le statut de la séance est vérifié régulièrement.
+          </p>
+
+          <div className="waiting-actions">
+            <button className="waiting-button waiting-button--primary" type="button" onClick={() => window.location.reload()}>
+              <RefreshIcon />
+              Actualiser
+            </button>
+            <button className="waiting-button waiting-button--secondary" type="button" onClick={() => navigate('/')}>
+              <HomeIcon />
+              Accueil
+            </button>
           </div>
         </div>
-
-        <div className="flex w-full max-w-md flex-col gap-3 px-2 min-[420px]:flex-row min-[420px]:justify-center sm:w-auto sm:max-w-none sm:gap-4 sm:px-0">
-          <button
-            onClick={() => window.location.reload()}
-            className="group relative min-h-12 flex-1 overflow-hidden rounded-xl px-7 py-3 font-semibold text-white/90 transition-all duration-300 hover:scale-105 hover:text-white hover:shadow-[0_0_25px_rgba(255,255,255,0.15)] sm:flex-none"
-            style={{
-              background: 'rgba(255,255,255,0.08)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid rgba(255,255,255,0.2)',
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)',
-            }}
-          >
-            <span className="relative z-10 flex items-center gap-2">
-              <svg className="w-4 h-4 transition-transform duration-300 group-hover:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Actualiser
-            </span>
-          </button>
-
-          <button
-            onClick={() => navigate('/')}
-            className="group relative min-h-12 flex-1 overflow-hidden rounded-xl px-7 py-3 font-semibold text-white/90 transition-all duration-300 hover:scale-105 hover:text-white hover:shadow-[0_0_25px_rgba(255,255,255,0.15)] sm:flex-none"
-            style={{
-              background: 'rgba(255,255,255,0.08)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid rgba(255,255,255,0.2)',
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)',
-            }}
-          >
-            <span className="relative z-10 flex items-center gap-2">
-              <svg className="w-4 h-4 transition-transform duration-300 group-hover:-translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1" />
-              </svg>
-              Accueil
-            </span>
-          </button>
-        </div>
-      </div>
-    </div>
+      </section>
+    </main>
   )
 }
