@@ -119,8 +119,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
   const [courseMaterialsError, setCourseMaterialsError] = useState('')
   const [deletingAudioFile, setDeletingAudioFile] = useState('')
-  const [dragFolderIdx, setDragFolderIdx] = useState(null)
-  const [dragOverFolderIdx, setDragOverFolderIdx] = useState(null)
   // ── Consultation et correction du contenu généré ──
   const [showPromptPreview, setShowPromptPreview] = useState(false)
   const [promptPreview, setPromptPreview] = useState(null)
@@ -765,55 +763,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       const data = await resp.json()
       if (data.success) setDirtyBlocs(data)
     } catch (e) { /* silencieux */ }
-  }
-
-  // ─── Drag & drop réordonnancement des dossiers ────────────────────────
-  const handleFolderDragStart = (e, idx) => {
-    setDragFolderIdx(idx)
-    e.dataTransfer.effectAllowed = 'move'
-  }
-
-  const handleFolderDragOver = (e, idx) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (idx !== dragFolderIdx) setDragOverFolderIdx(idx)
-  }
-
-  const handleFolderDragLeave = () => {
-    setDragOverFolderIdx(null)
-  }
-
-  const handleFolderDrop = async (e, dropIdx) => {
-    e.preventDefault()
-    setDragOverFolderIdx(null)
-    if (dragFolderIdx === null || dragFolderIdx === dropIdx) {
-      setDragFolderIdx(null)
-      return
-    }
-    // Recalcule l'ordre local
-    const reordered = [...folders]
-    const [moved] = reordered.splice(dragFolderIdx, 1)
-    reordered.splice(dropIdx, 0, moved)
-    // Mise à jour optimiste
-    setFolders(reordered)
-    setDragFolderIdx(null)
-    // Persistance côté serveur
-    const order = reordered.map((f, i) => ({ id: f.id, position: i }))
-    try {
-      await apiFetch(`/api/hr/platforms/${platformId}/cours-folders/reorder`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order }),
-      })
-    } catch (e) {
-      console.error('Erreur réordonnancement:', e)
-      fetchFolders() // rollback en cas d'erreur
-    }
-  }
-
-  const handleFolderDragEnd = () => {
-    setDragFolderIdx(null)
-    setDragOverFolderIdx(null)
   }
 
   const handleOpenFolder = (folder) => {
@@ -1774,10 +1723,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                 </div>
               ) : (
                 <>
-                  <p className="text-xs mb-3 flex items-center gap-1.5" style={{ color: colors.textMuted }}>
-                    <Icon name="drag_indicator" style={{ fontSize: '14px' }} />
-                    Glissez les cours pour changer leur ordre chronologique
-                  </p>
                   <div className={`grid gap-4 ${showFillInfo ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'}`}>
                     {folders.map((folder, idx) => {
                       const courseMaterial = materialForFolder(folder, idx)
@@ -1795,31 +1740,20 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       return (
                         <div
                         key={folder.id}
-                        draggable
-                        onDragStart={(e) => handleFolderDragStart(e, idx)}
-                        onDragOver={(e) => handleFolderDragOver(e, idx)}
-                        onDragLeave={handleFolderDragLeave}
-                        onDrop={(e) => handleFolderDrop(e, idx)}
-                        onDragEnd={handleFolderDragEnd}
                         onClick={() => handleOpenFolder(folder)}
                         className="group relative rounded-2xl p-5 transition-all cursor-pointer select-none"
                         style={{
                           backgroundColor: colors.innerBg,
-                          border: `2px solid ${dragOverFolderIdx === idx ? colors.textSecondary : colors.border}`,
-                          opacity: dragFolderIdx === idx ? 0.4 : 1,
-                          transform: dragOverFolderIdx === idx ? 'scale(1.02)' : 'none',
+                          border: `2px solid ${colors.border}`,
+                          transform: 'none',
                         }}
                         onMouseEnter={(e) => {
-                          if (dragFolderIdx === null) {
-                            e.currentTarget.style.borderColor = colors.textSecondary
-                            e.currentTarget.style.transform = 'translateY(-2px)'
-                          }
+                          e.currentTarget.style.borderColor = colors.textSecondary
+                          e.currentTarget.style.transform = 'translateY(-2px)'
                         }}
                         onMouseLeave={(e) => {
-                          if (dragFolderIdx === null) {
-                            e.currentTarget.style.borderColor = colors.border
-                            e.currentTarget.style.transform = 'translateY(0)'
-                          }
+                          e.currentTarget.style.borderColor = colors.border
+                          e.currentTarget.style.transform = 'translateY(0)'
                         }}
                       >
                         {hasCrCdTitle(folder.name) && (
@@ -1846,15 +1780,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                           style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
                         >
                           Jour {idx + 1}
-                        </div>
-
-                        {/* Handle drag */}
-                        <div
-                          className="absolute top-2 left-2 opacity-0 group-hover:opacity-50 transition-opacity cursor-grab"
-                          style={{ color: colors.textMuted }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Icon name="drag_indicator" style={{ fontSize: '16px' }} />
                         </div>
 
                         <div className="flex items-start justify-between mt-2">
