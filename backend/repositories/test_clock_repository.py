@@ -194,6 +194,13 @@ def list_authorized_active_test_clocks() -> list[dict]:
         cursor = conn.cursor()
         _ensure_sqlite_table(cursor)
         cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'training_center_accounts'"
+        )
+        if cursor.fetchone() is None:
+            # Some isolated scheduler tests intentionally use a minimal DB.
+            # With no centre registry, no centre-scoped clock can be active.
+            return []
+        cursor.execute(
             query.format(placeholder="?", active_value="1"),
             ("newpiprod@gmail.com",),
         )
