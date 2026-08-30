@@ -37,6 +37,8 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.doesNotMatch(dashboardSource, /activeTool \? 'hidden sm:flex'/)
   assert.doesNotMatch(dashboardSource, /absolute left-5 top-5[\s\S]*?rosterMeta\.label/)
   assert.match(coursesSource, /Support PDF de la journée/)
+  assert.doesNotMatch(coursesSource, /Créé à la fin de la pipeline, sans balises techniques/)
+  assert.doesNotMatch(coursesSource, /Support de la journée \{selectedCourseMaterial\.session_index\}/)
   assert.match(coursesSource, /Support PDF prêt/)
   assert.match(coursesSource, /fin de la pipeline/)
   assert.doesNotMatch(coursesSource, /avec les audios à H-48/)

@@ -1889,69 +1889,33 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 
               <div className="mb-4 space-y-3">
                 {/* ── Support PDF généré pour cette journée ── */}
-                <div className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}>
-                  <div className="flex items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
-                    <Icon name="picture_as_pdf" style={{ color: colors.textMuted, fontSize: '17px' }} />
-                    <span className="text-sm font-semibold" style={{ color: colors.text }}>Support PDF de la journée</span>
-                  </div>
-                  <div className="flex min-h-[58px] flex-wrap items-center gap-3 px-4 py-3">
-                    {courseMaterialsLoading ? (
-                      <p className="text-xs" style={{ color: colors.textMuted }}>Vérification du support…</p>
-                    ) : courseMaterialsError ? (
-                      <>
-                        <Icon name="error_outline" style={{ color: '#b91c1c', fontSize: '18px' }} />
-                        <p className="min-w-0 flex-1 text-xs" style={{ color: '#b91c1c' }}>{courseMaterialsError}</p>
-                        <button
-                          type="button"
-                          onClick={fetchCourseMaterials}
-                          className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold"
-                          style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                        >
-                          Réessayer
-                        </button>
-                      </>
-                    ) : selectedCourseMaterial ? (
-                      <>
-                        <Icon name="check_circle" style={{ color: '#047857', fontSize: '18px' }} />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-semibold" style={{ color: colors.textSecondary }}>
-                            Support de la journée {selectedCourseMaterial.session_index}
-                          </p>
-                          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>
-                            Créé à la fin de la pipeline, sans balises techniques
-                          </p>
-                        </div>
-                        <a
-                          href={selectedCourseMaterial.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold no-underline"
-                          style={{ backgroundColor: colors.text, color: colors.cardBg }}
-                        >
-                          Ouvrir le PDF
-                          <Icon name="open_in_new" style={{ fontSize: '15px' }} />
-                        </a>
-                      </>
-                    ) : (
-                      <>
-                        <Icon name="schedule" style={{ color: colors.textMuted, fontSize: '18px' }} />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Support indisponible</p>
-                          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>
-                            Il est normalement créé dès la fin de la pipeline. Actualisez pour vérifier.
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={fetchCourseMaterials}
-                          className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold"
-                          style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                        >
-                          Actualiser
-                        </button>
-                      </>
-                    )}
-                  </div>
+                <div
+                  className="flex min-h-14 items-center justify-between gap-4 rounded-xl px-4 py-3"
+                  style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}
+                >
+                  <span className="text-sm font-semibold" style={{ color: colors.text }}>Support PDF de la journée</span>
+                  {courseMaterialsLoading ? (
+                    <span className="text-xs" style={{ color: colors.textMuted }}>Vérification…</span>
+                  ) : selectedCourseMaterial ? (
+                    <a
+                      href={selectedCourseMaterial.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex min-h-9 shrink-0 items-center rounded-lg px-3 py-1.5 text-xs font-semibold no-underline"
+                      style={{ backgroundColor: colors.text, color: colors.cardBg }}
+                    >
+                      Ouvrir le PDF
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={fetchCourseMaterials}
+                      className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold"
+                      style={{ border: `1px solid ${courseMaterialsError ? '#fecaca' : colors.border}`, color: courseMaterialsError ? '#b91c1c' : colors.textSecondary }}
+                    >
+                      {courseMaterialsError ? 'Réessayer' : 'Actualiser'}
+                    </button>
+                  )}
                 </div>
 
                 {/* ── Panneau : Audios générés ── */}
