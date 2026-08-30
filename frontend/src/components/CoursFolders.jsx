@@ -8,8 +8,6 @@ const Icon = ({ name, className = '' }) => (
   <span className={`material-icons ${className}`}>{name}</span>
 )
 
-const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
-
 const AUDIO_FILTERS = [
   { value: 'cours', label: 'Cours' },
   { value: 'qa', label: 'Q&A' },
@@ -1741,7 +1739,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         <div
                         key={folder.id}
                         onClick={() => handleOpenFolder(folder)}
-                        className="group relative rounded-2xl p-5 transition-all cursor-pointer select-none"
+                        className="group relative cursor-pointer select-none rounded-xl p-4 transition-all"
                         style={{
                           backgroundColor: colors.innerBg,
                           border: `2px solid ${colors.border}`,
@@ -1756,44 +1754,12 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                           e.currentTarget.style.transform = 'translateY(0)'
                         }}
                       >
-                        {hasCrCdTitle(folder.name) && (
-                          <div
-                            className="mb-4 overflow-hidden rounded-xl"
-                            style={{
-                              aspectRatio: '16 / 7.2',
-                              border: `1px solid ${darkMode ? '#334155' : '#E4E4E4'}`,
-                              backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
-                            }}
-                          >
-                            <img
-                              src="/tp-crcd-thumbnail.svg"
-                              alt="TP CRCD"
-                              className="h-full w-full object-cover"
-                              draggable={false}
-                            />
-                          </div>
-                        )}
-
-                        {/* Badge Jour X */}
-                        <div
-                          className="absolute top-2 right-2 text-xs font-bold px-2 py-0.5 rounded-full"
-                          style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                        >
-                          Jour {idx + 1}
-                        </div>
-
-                        <div className="flex items-start justify-between mt-2">
+                        <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Icon name="folder" style={{ color: colors.textMuted }} />
-                              <h4 className="font-semibold truncate" style={{ color: colors.text }}>
-                                {folder.name}
-                              </h4>
-                            </div>
-                            <p className="text-sm" style={{ color: colors.textMuted }}>
-                              {folder.document_count || 0} document{folder.document_count !== 1 ? 's' : ''}
-                            </p>
-                            <p className="mt-1.5 flex items-center gap-1.5 text-xs" style={{ color: audioColor }}>
+                            <h4 className="text-sm font-semibold" style={{ color: colors.text }}>
+                              Jour {idx + 1}
+                            </h4>
+                            <p className="mt-3 flex items-center gap-1.5 text-xs" style={{ color: audioColor }}>
                               <Icon
                                 name={audioState.status === 'ready'
                                   ? 'check_circle'
@@ -1804,7 +1770,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                                       : 'radio_button_unchecked'}
                                 style={{ fontSize: '15px' }}
                               />
-                              {audioState.label}
+                              {audioState.status === 'ready' ? 'Audio prêt' : audioState.label}
                             </p>
                             <p className="mt-1.5 flex items-center gap-1.5 text-xs" style={{ color: courseMaterial ? '#047857' : colors.textMuted }}>
                               <Icon
@@ -1825,7 +1791,8 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                               e.stopPropagation()
                               handleDeleteFolder(folder.id, folder.name)
                             }}
-                            className="opacity-0 group-hover:opacity-100 transition-all p-2 rounded-full hover:bg-red-100 mt-4"
+                            aria-label={`Supprimer le cours du jour ${idx + 1}`}
+                            className="-mr-1 -mt-1 rounded-full p-2 opacity-0 transition-all hover:bg-red-100 focus:opacity-100 group-hover:opacity-100"
                             style={{ color: '#ef4444' }}
                           >
                             <Icon name="delete" className="text-sm" />
