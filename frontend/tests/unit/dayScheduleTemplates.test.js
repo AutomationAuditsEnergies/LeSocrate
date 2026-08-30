@@ -11,9 +11,9 @@ import {
   getAllowedNextScheduleBlocks,
   getScheduleBlockDurationBounds,
   getScheduleSequenceDropMinute,
-  getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
+  removeLastScheduleSequence,
   serializeScheduleTemplate,
   setSchedulePauseKind,
   tryRemoveScheduleBlock,
@@ -87,14 +87,58 @@ test('allows a final Q&R but rejects a final pause', () => {
   assert.ok(result.errors.some((message) => message.includes('jamais par une pause')))
 })
 
-test('refuses a course deletion that would orphan its attached optional blocks', () => {
+test('allows one-by-one deletion through a temporarily invalid draft without cascading', () => {
   let blocks = append([], 'course')
   blocks = append(blocks, 'qa')
   const result = tryRemoveScheduleBlock(blocks, 0)
 
-  assert.equal(result.removed, false)
-  assert.match(result.error, /Suppression refusée/)
-  assert.equal(result.blocks.length, 2)
+  assert.equal(result.removed, true)
+  assert.equal(result.error, '')
+  assert.deepEqual(result.blocks.map((block) => block.block_type), ['qa'])
+  assert.equal(
+    validateScheduleTemplate({ name: 'Brouillon intermédiaire', blocks: result.blocks }).valid,
+    false,
+  )
+})
+
+test('deletes a final Q&R and the revealed pause in the natural bottom-up order', () => {
+  let blocks = append([], 'course')
+  blocks = append(blocks, 'pause', 'short')
+  blocks = append(blocks, 'qa')
+
+  const withoutQa = tryRemoveScheduleBlock(blocks, 2)
+  assert.equal(withoutQa.removed, true)
+  assert.deepEqual(
+    withoutQa.blocks.map((block) => block.block_type),
+    ['course', 'pause'],
+  )
+
+  const withoutPause = tryRemoveScheduleBlock(withoutQa.blocks, 1)
+  assert.equal(withoutPause.removed, true)
+  assert.deepEqual(withoutPause.blocks.map((block) => block.block_type), ['course'])
+  assert.equal(
+    validateScheduleTemplate({ name: 'Suppression terminée', blocks: withoutPause.blocks }).valid,
+    true,
+  )
+})
+
+test('removes the last complete sequence with all of its optional blocks', () => {
+  let blocks = append([], 'course')
+  blocks = append(blocks, 'qa')
+  blocks = append(blocks, 'course')
+  blocks = append(blocks, 'pause', 'short')
+  blocks = append(blocks, 'qa')
+
+  const result = removeLastScheduleSequence(blocks)
+
+  assert.deepEqual(result.map((block) => block.block_type), ['course', 'qa'])
+  assert.equal(result[0].start_minute, blocks[0].start_minute)
+  assert.equal(result[1].start_minute, result[0].end_minute)
+})
+
+test('removes a one-course day as one complete sequence', () => {
+  const blocks = append([], 'course')
+  assert.deepEqual(removeLastScheduleSequence(blocks), [])
 })
 
 test('keeps at most one lunch and allows it up to three hours', () => {

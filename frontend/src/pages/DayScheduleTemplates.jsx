@@ -29,6 +29,7 @@ import {
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
+  removeLastScheduleSequence,
   tryRemoveScheduleBlock,
   updateScheduleBlockDuration,
   updateScheduleBlockStart,
@@ -382,7 +383,7 @@ function ScheduleTimeline({
 function SequencePalette({
   blocks,
   onAddBlock,
-  onRemoveLastCourse,
+  onRemoveLastSequence,
 }) {
   const courseCount = blocks.filter((block) => block.block_type === 'course').length
   const isEmpty = courseCount === 0
@@ -425,10 +426,10 @@ function SequencePalette({
           type="button"
           className="day-schedule-remove-task day-schedule-focusable"
           disabled={isEmpty}
-          onClick={onRemoveLastCourse}
+          onClick={onRemoveLastSequence}
         >
           <Trash2 size={16} aria-hidden="true" />
-          <span>Retirer le dernier cours</span>
+          <span>Retirer la dernière séquence</span>
         </button>
       </div>
     </aside>
@@ -739,9 +740,10 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
     setFeedback(null)
   }
 
-  const removeLastDraftCourse = () => {
-    const index = draft?.blocks.findLastIndex((block) => block.block_type === 'course') ?? -1
-    if (index >= 0) removeDraftBlock(index)
+  const removeLastDraftSequence = () => {
+    if (!draft) return
+    updateDraftBlocks(removeLastScheduleSequence(draft.blocks))
+    setFeedback(null)
   }
 
   const showTemplateOverview = mode === 'preview' && templates.length > 0
@@ -855,7 +857,7 @@ export default function DayScheduleTemplates({ onUseTemplate, createOnMount = fa
           <SequencePalette
             blocks={visibleTemplate.blocks}
             onAddBlock={appendDraftBlock}
-            onRemoveLastCourse={removeLastDraftCourse}
+            onRemoveLastSequence={removeLastDraftSequence}
           />
         )}
 

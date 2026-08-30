@@ -329,18 +329,12 @@ export function appendScheduleBlock(blocks, blockType, pauseKind = null, startMi
 export function tryRemoveScheduleBlock(blocks, blockIndex) {
   const source = reflowScheduleBlocks(blocks)
   if (!source[blockIndex]) return { blocks: source, removed: false, error: 'Bloc introuvable.' }
+  // A deletion may briefly reveal an invalid suffix (for example course → pause)
+  // while the user removes blocks from the end. Saving still validates the whole draft.
   const candidate = reflowScheduleBlocks(
     source.filter((_, index) => index !== blockIndex),
     source[0]?.start_minute ?? DEFAULT_START_MINUTE,
   )
-  if (!candidate.length) return { blocks: candidate, removed: true, error: '' }
-  const validation = validateScheduleTemplate({ name: 'Vérification', blocks: candidate })
-  if (!validation.valid) {
-    const reason = validation.errors[0]
-      || Object.values(validation.blockErrors).flat()[0]
-      || 'Retirez d’abord les blocs associés.'
-    return { blocks: source, removed: false, error: `Suppression refusée : ${reason}` }
-  }
   return { blocks: candidate, removed: true, error: '' }
 }
 
@@ -396,8 +390,8 @@ export function setSchedulePauseKind(blocks, blockIndex, pauseKind) {
   return flowed.at(-1)?.end_minute <= 24 * 60 ? flowed : source
 }
 
-// Compatibility helpers: a "sequence" is now one independently configurable
-// course rather than a forced course/Q&A/pause trio.
+// A sequence starts with a course and includes every optional block that follows
+// it, up to (but not including) the next course.
 export function addScheduleSequence(blocks) {
   return appendScheduleBlock(blocks, 'course')
 }
@@ -413,7 +407,10 @@ export function removeLastScheduleSequence(blocks) {
   const source = reflowScheduleBlocks(blocks)
   const lastCourseIndex = source.findLastIndex((block) => block.block_type === 'course')
   if (lastCourseIndex < 0) return source
-  return tryRemoveScheduleBlock(source, lastCourseIndex).blocks
+  return reflowScheduleBlocks(
+    source.slice(0, lastCourseIndex),
+    source[0]?.start_minute ?? DEFAULT_START_MINUTE,
+  )
 }
 
 // Final pauses are invalid now. The compatibility export only removes one.

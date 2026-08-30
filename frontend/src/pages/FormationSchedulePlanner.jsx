@@ -25,6 +25,7 @@ import {
   getScheduleStats,
   normalizeScheduleTemplate,
   reflowScheduleBlocks,
+  removeLastScheduleSequence,
   tryRemoveScheduleBlock,
   updateScheduleBlockDuration,
   validateScheduleTemplate,
@@ -665,10 +666,12 @@ export default function FormationSchedulePlanner({
     setScheduleActionMessage('')
   }
 
-  const removeLastCourseFromDay = (date) => {
+  const removeLastSequenceFromDay = (date) => {
     const blocks = scheduleDayByDate.get(date)?.blocks || []
-    const blockIndex = blocks.findLastIndex((block) => block.block_type === 'course')
-    if (blockIndex >= 0) removeBlockFromDay(date, blocks, blockIndex)
+    const nextBlocks = removeLastScheduleSequence(blocks)
+    if (nextBlocks.length === blocks.length) return
+    updateCustomDay(date, () => nextBlocks)
+    setScheduleActionMessage('')
   }
 
   const openTemplateQuickSave = (date) => {
@@ -967,10 +970,10 @@ export default function FormationSchedulePlanner({
             type="button"
             className="formation-schedule__remove-course"
             disabled={reuse || activeSequenceCount === 0}
-            onClick={() => removeLastCourseFromDay(activeDate)}
+            onClick={() => removeLastSequenceFromDay(activeDate)}
           >
             <Trash2 size={13} aria-hidden="true" />
-            Retirer le dernier cours
+            Retirer la dernière séquence
           </button>
           {scheduleActionMessage && (
             <p className="formation-schedule__action-message" role="status" aria-live="polite">
