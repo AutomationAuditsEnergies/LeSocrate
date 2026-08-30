@@ -1497,23 +1497,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   }
 
   const playlistRunning = playlistJob?.status === 'running'
-  const selectedPlaylistVoice = PLAYLIST_VOICE_OPTIONS.find(option => option.value === playlistVoiceType) || PLAYLIST_VOICE_OPTIONS[0]
-  const canGeneratePlaylistAudio = Boolean(dirtyBlocs?.has_script)
-  const expectedCourseCount = Math.max(
-    0,
-    Number(dirtyBlocs?.total_blocs)
-      || audioPlaylistItems.filter(item => normalizeAudioType(item.type, item.filename) === 'cours').length
-      || Number(scriptModal?.blocs?.length)
-      || 0,
-  )
-  const expectedCourseLabel = expectedCourseCount
-    ? `${expectedCourseCount} cours`
-    : 'les cours'
-  const playlistActionLabel = playlistRunning
-    ? 'Pipeline audio en cours...'
-    : canGeneratePlaylistAudio
-      ? `Générer ${expectedCourseLabel} du dossier`
-      : 'Script texte requis'
   const materialForFolder = (folder, folderIndex) => (
     courseMaterials.find(material => Number(material.folder_id) === Number(folder?.id))
     || courseMaterials.find(material => Number(material.session_index) === Number(folderIndex) + 1)
@@ -2177,7 +2160,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
             }}
           >
             {/* Header */}
-            <div className="flex flex-shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3 sm:px-6" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+            <div className="flex flex-shrink-0 items-center border-b px-4 py-3 sm:px-6" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
               <div className="flex min-w-0 items-center gap-3">
                 <button
                   type="button"
@@ -2189,65 +2172,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   Retour à la journée
                 </button>
               </div>
-	              <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2 lg:w-auto">
-	                <select
-	                  value={playlistVoiceType}
-	                  onChange={(e) => setPlaylistVoiceType(e.target.value)}
-	                  disabled={playlistRunning}
-	                  className="rounded-lg px-2.5 py-1.5 text-xs font-medium outline-none disabled:opacity-60"
-	                  style={{
-	                    backgroundColor: colors.cardBg,
-	                    border: `1px solid ${colors.border}`,
-	                    color: colors.textSecondary,
-	                  }}
-	                  title="Choisir la voix TTS"
-	                >
-	                  {PLAYLIST_VOICE_OPTIONS.map(option => (
-	                    <option key={option.value} value={option.value}>{option.label}</option>
-	                  ))}
-	                </select>
-                  <button
-                    type="button"
-                    onClick={() => handleGeneratePlaylist({
-                      voiceType: playlistVoiceType,
-                      forceAll: false,
-                      preserveExisting: true,
-                      includeBreaks: false,
-                      parallelBreaks: false,
-                    })}
-                    disabled={playlistRunning || !canGeneratePlaylistAudio}
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                    style={{
-                      border: `1px solid ${colors.border}`,
-                      backgroundColor: colors.cardBg,
-                      color: canGeneratePlaylistAudio ? colors.textSecondary : colors.textMuted,
-                    }}
-                    title="Compléter les cours audio manquants sans écraser les MP3 déjà présents"
-                  >
-                    <Icon name={selectedPlaylistVoice.icon} style={{ fontSize: '14px' }} />
-                    Générer {expectedCourseLabel}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleGeneratePlaylist({
-                      voiceType: playlistVoiceType,
-                      forceAll: false,
-                      preserveExisting: true,
-                      includeBreaks: true,
-                      parallelBreaks: playlistVoiceType !== 'fish_audio',
-                    })}
-                    disabled={playlistRunning || !canGeneratePlaylistAudio}
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                    style={{
-                      backgroundColor: canGeneratePlaylistAudio ? colors.text : colors.textMuted,
-                      color: colors.cardBg,
-                    }}
-                    title={`${playlistActionLabel} + Q&A et pauses, sans écraser les MP3 déjà présents`}
-                  >
-                    <Icon name="bolt" style={{ fontSize: '14px' }} />
-                    Générer tout
-                  </button>
-	              </div>
             </div>
 
             {/* Corps : sidebar + contenu */}
@@ -2638,8 +2562,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     const activeHasGeneratedText = generatedBlocNumbers.has(Number(active.bloc_number || 0))
 	                  const sourceKey = activeHasGeneratedText ? contentScriptModal.course_blocs_source : contentScriptModal.planned_course_blocs_source
 	                  const sourceLabel = sourceKey === 'last_audio_generation' ? 'Dernière génération TTS' : 'Prévisualisation'
-	                  const coursePlanNote = activeHasGeneratedText ? contentScriptModal.course_blocs_note : contentScriptModal.planned_course_blocs_note
-	                  const coursePlanStale = activeHasGeneratedText ? contentScriptModal.course_blocs_stale : contentScriptModal.planned_course_blocs_stale
                   const statusLabel = {
                     generated: 'Généré',
                     preserved: 'Conservé',
@@ -2647,11 +2569,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     planned: 'Prévu',
                     skipped: 'Ignoré',
                   }[active.status] || active.status
-                  const actualReading = active.actual_reading || null
-                  const actualReadText = actualReading?.text_read || ''
-                  const actualReadPreview = actualReadText.length > 1200
-                    ? `${actualReadText.slice(0, 1200).trimEnd()}...`
-                    : actualReadText
                   const isEditingCourse = editingSegment?.type === 'course' && editingSegment.bloc_number === active.bloc_number
                   const isGeneratingCourse = playlistJob?.status === 'running' && playlistJob.filename === active.filename
                   const conclusionBlocks = []
@@ -2715,46 +2632,11 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                               Modifier
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => handleGeneratePlaylistItem(active.filename, 'gtts')}
-                            disabled={playlistJob?.status === 'running'}
-                            className="rounded-lg px-3 py-1.5 text-xs font-semibold"
-                            style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg, opacity: playlistJob?.status === 'running' ? 0.55 : 1 }}
-                          >
-                            gTTS
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleGeneratePlaylistItem(active.filename, 'fish_audio')}
-                            disabled={playlistJob?.status === 'running'}
-                            className="rounded-lg px-3 py-1.5 text-xs font-semibold"
-                            style={{ backgroundColor: colors.text, color: colors.cardBg, opacity: playlistJob?.status === 'running' ? 0.55 : 1 }}
-                          >
-                            Fish Audio
-                          </button>
                         </div>
                       </div>
                       {isGeneratingCourse && (
                         <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
                           {playlistJob.message || 'Génération en cours...'}
-                        </div>
-                      )}
-
-                      {coursePlanNote && (
-                        <div
-                          className="rounded-xl px-4 py-3 text-xs leading-relaxed"
-                          style={coursePlanStale ? {
-                            backgroundColor: darkMode ? '#431407' : '#fff7ed',
-                            border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}`,
-                            color: darkMode ? '#fdba74' : '#c2410c',
-                          } : {
-                            backgroundColor: colors.innerBg,
-                            border: `1px solid ${colors.border}`,
-                            color: colors.textSecondary,
-                          }}
-                        >
-                          {coursePlanNote}
                         </div>
                       )}
 
@@ -2800,45 +2682,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                           )}
                         </div>
                       </div>
-
-                      {actualReading && (
-                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${darkMode ? '#166534' : '#bbf7d0'}` }}>
-                          <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#064e3b' : '#ecfdf5' }}>
-                            <Icon name="graphic_eq" style={{ color: '#059669', fontSize: '16px' }} />
-                            <span className="text-xs font-bold" style={{ color: '#059669' }}>Résumé du dernier audio lu</span>
-                          </div>
-                          <div className="p-4 space-y-3" style={{ backgroundColor: colors.cardBg }}>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                              {[
-                                { label: 'Mots input', value: actualReading.input_spoken_word_count },
-                                { label: 'Mots Fish', value: actualReading.fish_segment_word_count },
-                                { label: 'Mots/min', value: actualReading.words_per_minute ? Math.round(actualReading.words_per_minute) : null },
-                                { label: 'Mots/heure', value: actualReading.words_per_hour ? Math.round(actualReading.words_per_hour) : null },
-                              ].map((metric) => (
-                                <div key={metric.label} className="rounded-lg px-3 py-2" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
-                                  <p className="text-[10px] uppercase tracking-wide" style={{ color: colors.textMuted }}>{metric.label}</p>
-                                  <p className="text-sm font-bold" style={{ color: colors.text }}>
-                                    {metric.value != null ? Number(metric.value).toLocaleString('fr-FR') : '—'}
-                                  </p>
-                                </div>
-                              ))}
-                            </div>
-                            {actualReadText && (
-                              <p
-                                className="max-h-40 overflow-y-auto rounded-lg p-3 text-xs leading-relaxed whitespace-pre-wrap"
-                                style={{
-                                  backgroundColor: colors.innerBg,
-                                  border: `1px solid ${colors.border}`,
-                                  color: colors.textSecondary,
-                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                }}
-                              >
-                                {actualReadPreview}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      )}
 
                       {conclusionBlocks.length > 0 && (
                         <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
