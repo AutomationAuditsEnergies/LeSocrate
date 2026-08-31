@@ -2200,7 +2200,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       {contentScriptModal && (
         <div
           className="absolute inset-0 z-30 flex min-h-0 flex-col"
-          style={{ backgroundColor: colors.cardBg }}
+          style={{ backgroundColor: darkMode ? colors.bg : '#f8fafc' }}
         >
           <div
             className="flex h-full min-h-0 w-full flex-col overflow-hidden"
@@ -2208,6 +2208,25 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               backgroundColor: colors.cardBg,
             }}
           >
+            <header
+              className="flex flex-none items-center gap-3 border-b px-4 py-3 sm:px-6"
+              style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}
+            >
+              <button
+                type="button"
+                onClick={closeContentScriptPage}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 dark:hover:bg-white/5"
+                style={{ color: colors.textSecondary }}
+                aria-label="Retour à la journée"
+                title="Retour à la journée"
+              >
+                <Icon name="arrow_back" style={{ fontSize: '20px' }} />
+              </button>
+              <h1 className="min-w-0 truncate text-sm font-semibold sm:text-base" style={{ color: colors.text }}>
+                {selectedFolder?.name || 'Journée sélectionnée'}
+              </h1>
+            </header>
+
             {/* Corps : sidebar + contenu */}
             {contentScriptView === 'source' ? (
             <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -2351,27 +2370,17 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               return (
             <div className="flex min-h-0 flex-1 flex-col md:flex-row">
               <aside
-                className="flex max-h-[42dvh] w-full flex-none flex-col border-b md:max-h-none md:w-72 md:border-b-0 md:border-r"
+                className="flex max-h-[44dvh] w-full flex-none flex-col border-b md:max-h-none md:w-80 md:border-b-0 md:border-r"
                 style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
               >
-                <div className="flex items-center gap-2 border-b p-3" style={{ borderColor: colors.border }}>
-                  <button
-                    type="button"
-                    onClick={closeContentScriptPage}
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-                    style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
-                    aria-label="Retour à la journée"
-                    title="Retour à la journée"
-                  >
-                    <Icon name="arrow_back" style={{ fontSize: '18px' }} />
-                  </button>
-                  <p className="text-sm font-semibold" style={{ color: colors.text }}>Audios</p>
+                <div className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
+                  <p className="text-sm font-semibold" style={{ color: colors.text }}>Script audio</p>
                 </div>
 
-                <div className="p-3">
+                <div className="px-4 py-3">
                   <div
                     className="grid grid-cols-2 gap-1 rounded-lg p-1"
-                    style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+                    style={{ backgroundColor: darkMode ? colors.bg : '#e9eef5' }}
                     role="group"
                     aria-label="Contenu affiché dans la liste"
                   >
@@ -2384,10 +2393,11 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         resetScriptAnnotationDraft()
                       }}
                       aria-pressed={scriptSidebarMode === 'courses'}
-                      className="rounded-md px-2 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                      className="rounded-md px-2 py-2.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                       style={{
                         backgroundColor: scriptSidebarMode === 'courses' ? colors.cardBg : 'transparent',
                         color: scriptSidebarMode === 'courses' ? colors.text : colors.textMuted,
+                        boxShadow: scriptSidebarMode === 'courses' && !darkMode ? '0 1px 2px rgba(15, 23, 42, 0.08)' : 'none',
                       }}
                     >
                       Cours
@@ -2396,10 +2406,11 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       type="button"
                       onClick={() => setScriptSidebarMode('courses_pauses')}
                       aria-pressed={scriptSidebarMode === 'courses_pauses'}
-                      className="rounded-md px-2 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                      className="rounded-md px-2 py-2.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                       style={{
                         backgroundColor: scriptSidebarMode === 'courses_pauses' ? colors.cardBg : 'transparent',
                         color: scriptSidebarMode === 'courses_pauses' ? colors.text : colors.textMuted,
+                        boxShadow: scriptSidebarMode === 'courses_pauses' && !darkMode ? '0 1px 2px rgba(15, 23, 42, 0.08)' : 'none',
                       }}
                     >
                       Cours + pauses
@@ -2407,54 +2418,38 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   </div>
                 </div>
 
-                <nav className="min-h-0 flex-1 overflow-y-auto pb-3" aria-label="Cours audio disponibles">
+                <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-4" aria-label="Cours audio disponibles">
                 {visibleCourseBlocs.map((bloc) => {
                   const isActive = !scriptActiveBreak && scriptActiveCourse === bloc.bloc_number
-                  const statusLabel = {
-                    generated: 'Généré',
-                    preserved: 'Conservé',
-                    preview: 'Prévu',
-                    planned: 'Prévu',
-                    skipped: 'Ignoré',
-                  }[bloc.status] || bloc.status
                   return (
                     <button
                       key={bloc.bloc_number}
                       type="button"
                       onClick={() => { setScriptActiveCourse(bloc.bloc_number); setScriptActiveBreak(null); setEditingSegment(null); resetScriptAnnotationDraft() }}
-                      className="mx-3 mb-1 block w-[calc(100%-1.5rem)] rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                      className="mb-1.5 block w-full rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                       style={{
                         backgroundColor: isActive ? colors.text : 'transparent',
                         color: isActive ? colors.cardBg : colors.text,
                       }}
                     >
-                      <div className="flex items-start gap-2">
-                        <span
-                          className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center mt-0.5"
-                          style={{ backgroundColor: isActive ? colors.cardBg : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? colors.text : colors.textSecondary }}
-                        >
-                          {bloc.bloc_number}
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-semibold" style={{ color: isActive ? colors.cardBg : colors.text }}>
+                          Cours {String(bloc.bloc_number).padStart(2, '0')}
+                        </p>
+                        <span className="shrink-0 text-[11px] font-medium tabular-nums" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
+                          {Math.round((bloc.duration_sec || 0) / 60)} min
                         </span>
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? colors.cardBg : colors.text }}>
-                            Cours {bloc.bloc_number} · {Math.round((bloc.duration_sec || 0) / 60)} min
-                          </p>
-                          <p className="mt-0.5 truncate text-xs" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
-                            {statusLabel} · {(bloc.word_count || 0).toLocaleString('fr-FR')} mots
-                          </p>
-                          {(bloc.closing_added || bloc.runtime_conclusions?.length > 0) && (
-                            <p className="mt-0.5 text-xs" style={{ color: isActive ? colors.cardBg : colors.textSecondary, opacity: isActive ? 0.72 : 1 }}>
-                              conclusion ajoutée
-                            </p>
-                          )}
-                        </div>
                       </div>
+                      <p className="mt-1 truncate text-xs" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
+                        {(bloc.word_count || 0).toLocaleString('fr-FR')} mots
+                        {(bloc.closing_added || bloc.runtime_conclusions?.length > 0) ? ' · conclusion ajoutée' : ''}
+                      </p>
                     </button>
                   )
                 })}
                 {scriptSidebarMode === 'courses_pauses' && visiblePauseBreaks.length > 0 && (
                   <>
-                    <p className="px-4 pb-2 pt-4 text-xs font-semibold" style={{ color: colors.textMuted }}>
+                    <p className="px-1 pb-2 pt-4 text-xs font-semibold" style={{ color: colors.textMuted }}>
                       Pauses
                     </p>
                     {visiblePauseBreaks.map((br) => {
@@ -2467,7 +2462,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                           key={br.filename}
                           type="button"
                           onClick={() => { setScriptActiveBreak(br.filename); setEditingSegment(null); resetScriptAnnotationDraft() }}
-                          className="mx-3 mb-1 block w-[calc(100%-1.5rem)] rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                          className="mb-1.5 block w-full rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                           style={{
                             backgroundColor: isActive ? colors.text : 'transparent',
                             color: isActive ? colors.cardBg : colors.text,
@@ -2495,15 +2490,15 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   </>
                 )}
                 {scriptSidebarMode === 'courses_pauses' && visiblePauseBreaks.length === 0 && (
-                  <p className="px-4 pb-2 pt-4 text-xs leading-5" style={{ color: colors.textMuted }}>
+                  <p className="px-1 pb-2 pt-4 text-xs leading-5" style={{ color: colors.textMuted }}>
                     Aucune pause pour cette journée.
                   </p>
                 )}
                 </nav>
               </aside>
 
-              <main className="min-w-0 flex-1 overflow-y-auto">
-                <div className="mx-auto w-full max-w-[92rem] space-y-5 p-4 sm:p-6 lg:p-8">
+              <main className="min-w-0 flex-1 overflow-y-auto" style={{ backgroundColor: colors.cardBg }}>
+                <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-5 sm:px-8 sm:py-7 lg:px-12 lg:py-9">
                 {(() => {
                   if (scriptActiveBreak) {
                     const br = (contentScriptModal.breaks || []).find(b => b.filename === scriptActiveBreak)
@@ -2627,13 +2622,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     const activeHasGeneratedText = generatedBlocNumbers.has(Number(active.bloc_number || 0))
 	                  const sourceKey = activeHasGeneratedText ? contentScriptModal.course_blocs_source : contentScriptModal.planned_course_blocs_source
 	                  const sourceLabel = sourceKey === 'last_audio_generation' ? 'Dernière génération TTS' : 'Prévisualisation'
-                  const statusLabel = {
-                    generated: 'Généré',
-                    preserved: 'Conservé',
-                    preview: 'Prévu',
-                    planned: 'Prévu',
-                    skipped: 'Ignoré',
-                  }[active.status] || active.status
                   const isEditingCourse = editingSegment?.type === 'course' && editingSegment.bloc_number === active.bloc_number
                   const isGeneratingCourse = playlistJob?.status === 'running' && playlistJob.filename === active.filename
                   const conclusionBlocks = []
@@ -2645,23 +2633,30 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   })
                   return (
                     <>
-                      <div className="flex flex-wrap items-start gap-3 pb-4" style={{ borderBottom: `1px solid ${colors.border}` }}>
-                          <span className="rounded-full px-2.5 py-0.5 text-sm font-bold" style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0', color: colors.textSecondary }}>
-                            Cours {active.bloc_number}
-                          </span>
-                          <div className="min-w-[220px] flex-1">
-                            <p className="break-all text-sm font-semibold sm:break-normal" style={{ color: colors.text }}>
-                              {active.filename}
-                            </p>
-                            <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
-                              {sourceLabel} · {statusLabel} · {(active.word_count || 0).toLocaleString('fr-FR')} mots · {Math.round((active.duration_sec || 0) / 60)} min
-                            </p>
-                          </div>
-                          {active.final_duration_sec && (
-                            <span className="shrink-0 rounded-full px-2 py-1 text-xs" style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: colors.textSecondary }}>
-                              audio {Math.round(active.final_duration_sec / 60)} min
+                      <header className="flex flex-wrap items-start gap-x-5 gap-y-4 border-b pb-6" style={{ borderColor: colors.border }}>
+                        <div className="min-w-[240px] flex-1">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="rounded-md px-2 py-1 text-xs font-semibold" style={{ backgroundColor: darkMode ? '#334155' : '#e9eef5', color: colors.textSecondary }}>
+                              Cours {String(active.bloc_number).padStart(2, '0')}
                             </span>
-                          )}
+                          </div>
+                          <h2 className="break-all text-lg font-semibold tracking-[-0.015em] sm:break-normal" style={{ color: colors.text }}>
+                            {active.filename}
+                          </h2>
+                          <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                            <span>{sourceLabel}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>{(active.word_count || 0).toLocaleString('fr-FR')} mots</span>
+                            <span aria-hidden="true">·</span>
+                            <span>Durée prévue : {Math.round((active.duration_sec || 0) / 60)} min de texte</span>
+                            {active.final_duration_sec && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>{Math.round(active.final_duration_sec / 60)} min d’audio</span>
+                              </>
+                            )}
+                          </p>
+                        </div>
                         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                           {isEditingCourse ? (
                             <>
@@ -2669,7 +2664,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                                 type="button"
                                 onClick={handleCancelEdit}
                                 disabled={savingEdit}
-                                className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                                className="min-h-10 rounded-lg px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
                                 style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
                               >
                                 Annuler
@@ -2678,7 +2673,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                                 type="button"
                                 onClick={handleSaveCourseBlocEdit}
                                 disabled={savingEdit}
-                                className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                                className="min-h-10 rounded-lg px-4 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 disabled:opacity-60"
                                 style={{ backgroundColor: colors.text, color: colors.cardBg }}
                               >
                                 {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
@@ -2688,15 +2683,15 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                             <button
                               type="button"
                               onClick={() => handleStartCourseBlocEdit(active)}
-                              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold"
-                              style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
+                              className="flex min-h-10 items-center gap-2 rounded-lg px-4 text-xs font-semibold transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
+                              style={{ color: colors.cardBg, backgroundColor: colors.text }}
                             >
                               <Icon name="edit" style={{ fontSize: '15px' }} />
-                              Modifier
+                              Modifier le texte
                             </button>
                           )}
                         </div>
-                      </div>
+                      </header>
                       {isGeneratingCourse && (
                         <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
                           {playlistJob.message || 'Génération en cours...'}
@@ -2715,36 +2710,32 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         </div>
                       )}
 
-                      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                        <div className="px-4 py-2 flex items-center justify-between gap-3" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-                          <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>
-                            Texte complet du cours audio
+                      <section>
+                        <div className="mb-5 flex items-center justify-between gap-3">
+                          <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Texte du cours</h3>
+                          <span className="text-xs tabular-nums" style={{ color: colors.textMuted }}>
+                            {(active.word_count || 0).toLocaleString('fr-FR')} / {(active.word_budget || 0).toLocaleString('fr-FR')} mots
                           </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs" style={{ color: colors.textMuted }}>
-                              budget {(active.word_budget || 0).toLocaleString('fr-FR')} mots
-                            </span>
-                          </div>
                         </div>
-                        <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                        <div>
                           {isEditingCourse ? (
                             <textarea
                               value={editText}
                               onChange={e => setEditText(e.target.value)}
                               rows={24}
-                              className="mx-auto block w-full max-w-[80ch] resize-y rounded-lg p-4 text-sm leading-7 outline-none"
-                              style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', border: `1px solid ${colors.border}` }}
+                              className="block w-full resize-y rounded-xl p-5 text-[15px] leading-8 outline-none focus:ring-2 focus:ring-violet-500/30"
+                              style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'Inter, system-ui, -apple-system, sans-serif', border: `1px solid ${colors.border}` }}
                             />
                           ) : (
                             <p
-                              className="mx-auto max-w-[80ch] whitespace-pre-wrap text-sm leading-7"
-                              style={{ color: colors.text, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}
+                              className="max-w-[72ch] whitespace-pre-wrap text-[15px] leading-8"
+                              style={{ color: colors.text, fontFamily: 'Inter, system-ui, -apple-system, sans-serif', textWrap: 'pretty' }}
                             >
                               {active.text || 'Aucun texte pour ce cours.'}
                             </p>
                           )}
                         </div>
-                      </div>
+                      </section>
 
                       {conclusionBlocks.length > 0 && (
                         <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
