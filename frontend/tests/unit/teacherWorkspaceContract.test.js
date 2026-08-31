@@ -25,6 +25,7 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.match(dashboardSource, /activeTool === 'planning'/)
   assert.match(dashboardSource, /Prochaines séances/)
   assert.match(dashboardSource, /Anciennes séances \(\{pastCourseSessions\.length\}\)/)
+  assert.doesNotMatch(dashboardSource, /<Icon name="history" className="text-xl" \/>/)
   assert.match(dashboardSource, /<details className="group mt-4 border-t pt-2"/)
   assert.doesNotMatch(dashboardSource, /<details[^>]*\sopen(?:=|\s|>)/)
   assert.match(dashboardSource, /<CoursFoldersModal[\s\S]*?embedded/)

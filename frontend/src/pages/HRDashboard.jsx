@@ -7472,7 +7472,6 @@ function PlatformCard({
                           <p className="text-sm font-semibold" style={{ color: colors.text }}>J{session.session_index}</p>
                           <p className="mt-0.5 text-sm" style={{ color: colors.textSecondary }}>{formatScheduleLongDateTime(session.scheduled_at)}</p>
                         </div>
-                        <Icon name="history" className="text-xl" />
                       </div>
                     ))}
                   </div>
