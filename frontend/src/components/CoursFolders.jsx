@@ -1757,7 +1757,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   </div>
                 </form>
               ) : (
-                <div className="mb-5 border-b pb-4" style={{ borderColor: colors.border }}>
+                <div className="mb-5 pb-4">
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     <div className="flex min-w-0 items-center gap-1.5">
                       <button
