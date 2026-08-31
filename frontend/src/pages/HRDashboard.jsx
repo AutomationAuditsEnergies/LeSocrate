@@ -2959,6 +2959,9 @@ function ManualRecruitmentForm({ colors, onBack, onComplete }) {
     message: '',
   })
   const [inactiveInfoOpen, setInactiveInfoOpen] = useState(false)
+  const [startDateInfoOpen, setStartDateInfoOpen] = useState(false)
+  const startDateInfoRef = useRef(null)
+  const startDateInfoButtonRef = useRef(null)
   const lookupVersionRef = useRef(0)
 
   useEffect(() => {
@@ -3032,6 +3035,28 @@ function ManualRecruitmentForm({ colors, onBack, onComplete }) {
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [inactiveInfoOpen])
+
+  useEffect(() => {
+    if (!startDateInfoOpen) return undefined
+
+    const closeStartDateInfo = (event) => {
+      if (event.type === 'keydown' && event.key === 'Escape') {
+        setStartDateInfoOpen(false)
+        startDateInfoButtonRef.current?.focus()
+        return
+      }
+      if (event.type === 'pointerdown' && !startDateInfoRef.current?.contains(event.target)) {
+        setStartDateInfoOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', closeStartDateInfo)
+    document.addEventListener('pointerdown', closeStartDateInfo)
+    return () => {
+      window.removeEventListener('keydown', closeStartDateInfo)
+      document.removeEventListener('pointerdown', closeStartDateInfo)
+    }
+  }, [startDateInfoOpen])
 
   const updateWeeklyCourseCount = (value) => {
     const weeklyCourseCount = Number(value)
@@ -3180,21 +3205,38 @@ function ManualRecruitmentForm({ colors, onBack, onComplete }) {
             </div>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <label className="text-sm font-medium text-[#2C2C2A]" htmlFor="manual-start-date">
-                <span className="flex items-center gap-1.5">
-                  Date de début
-                  <span
-                    className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border border-[#B9BDC5] text-[#626773] outline-none transition-colors hover:border-[#191918] hover:text-[#191918] focus-visible:border-[#191918] focus-visible:text-[#191918]"
-                    role="img"
-                    aria-label="Vous pouvez choisir dès demain. Les 24 heures exactes seront contrôlées selon l’heure du premier cours dans le planning."
-                    title="Vous pouvez choisir dès demain. Les 24 heures exactes seront contrôlées selon l’heure du premier cours dans le planning."
-                    tabIndex="0"
+              <div className="text-sm font-medium text-[#2C2C2A]">
+                <div
+                  ref={startDateInfoRef}
+                  className="relative flex items-center gap-1.5"
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) setStartDateInfoOpen(false)
+                  }}
+                >
+                  <label htmlFor="manual-start-date">Date de début</label>
+                  <button
+                    ref={startDateInfoButtonRef}
+                    type="button"
+                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#B9BDC5] text-[#626773] outline-none transition-colors hover:border-[#191918] hover:text-[#191918] focus-visible:border-[#191918] focus-visible:text-[#191918] focus-visible:ring-2 focus-visible:ring-[#191918]/20"
+                    onClick={() => setStartDateInfoOpen((open) => !open)}
+                    aria-label="Informations sur la date de début"
+                    aria-expanded={startDateInfoOpen}
+                    aria-controls="manual-start-date-help"
                   >
-                    <Info size={12} aria-hidden="true" />
-                  </span>
-                </span>
+                    <Info size={13} aria-hidden="true" />
+                  </button>
+                  {startDateInfoOpen && (
+                    <div
+                      id="manual-start-date-help"
+                      role="tooltip"
+                      className="absolute left-0 top-[calc(100%+8px)] z-30 w-72 max-w-[calc(100vw-3rem)] rounded-lg bg-[#191918] px-3 py-2.5 text-xs font-normal leading-5 text-white shadow-[0_4px_8px_rgba(25,25,24,0.18)]"
+                    >
+                      La formation peut débuter au plus tôt demain. Le délai minimal de 24 heures sera vérifié selon l’heure du premier cours définie dans le planning.
+                    </div>
+                  )}
+                </div>
                 <input id="manual-start-date" type="date" min={earliestStartDate} value={form.startDate} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} className={fieldClassName} />
-              </label>
+              </div>
               <label className="text-sm font-medium text-[#2C2C2A]" htmlFor="manual-training-weeks">
                 Durée de la formation
                 <div className="relative">

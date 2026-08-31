@@ -72,6 +72,15 @@ test('switches manual recruitment to a full-page form before the planning', () =
   assert.doesNotMatch(dashboardSource, /onManualStart\?\.\(\); setShowCreateModal/)
 })
 
+test('opens accessible help when the start-date information button is clicked', () => {
+  assert.match(dashboardSource, /const \[startDateInfoOpen, setStartDateInfoOpen\] = useState\(false\)/)
+  assert.match(dashboardSource, /aria-label="Informations sur la date de début"/)
+  assert.match(dashboardSource, /aria-expanded=\{startDateInfoOpen\}/)
+  assert.match(dashboardSource, /onClick=\{\(\) => setStartDateInfoOpen\(\(open\) => !open\)\}/)
+  assert.match(dashboardSource, /id="manual-start-date-help"/)
+  assert.match(dashboardSource, /event\.key === 'Escape'/)
+})
+
 test('validates active and inactive RNCP records before manual planning', () => {
   assert.match(dashboardSource, /api\/hr\/recruitment\/rncp/)
   assert.match(dashboardSource, /Code RNCP valide/)

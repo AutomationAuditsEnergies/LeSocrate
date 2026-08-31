@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-31
+
+### fix(ui): aide cliquable sur la date de début
+
+L’icône d’information du formulaire manuel ouvre désormais une aide visible au
+clic. Elle se ferme au second clic, au clic extérieur ou avec la touche Échap,
+et expose son état aux technologies d’assistance.
+
 ## 2026-08-26
 
 ### docs(spec): consolidation du planning pédagogique flexible
