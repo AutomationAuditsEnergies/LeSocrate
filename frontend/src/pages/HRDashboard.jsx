@@ -4804,13 +4804,7 @@ function AttendanceRegisterView({
                   Chargement des présences...
                 </td>
               </tr>
-            ) : (data?.students || []).length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm" style={{ color: colors.textMuted }}>
-                  Aucune entrée dans la salle n’a été enregistrée pour cette journée.
-                </td>
-              </tr>
-            ) : (
+            ) : (data?.students || []).length > 0 ? (
               data.students.map((student) => {
                 const attendance = student.attendance || {}
                 const slots = attendance.slots || []
@@ -4909,7 +4903,7 @@ function AttendanceRegisterView({
                   </tr>
                 )
               })
-            )}
+            ) : null}
           </tbody>
         </table>
       </div>
@@ -5033,11 +5027,7 @@ function AttendanceCardPanel({
         <div className="flex items-center justify-center py-5">
           <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#121212' }} />
         </div>
-      ) : students.length === 0 ? (
-        <p className="border-y py-6 text-center text-xs" style={{ color: colors.textMuted, borderColor: colors.border }}>
-          Aucune entrée dans la salle n’a été enregistrée pour cette journée.
-        </p>
-      ) : (
+      ) : students.length > 0 ? (
         <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
           {students.map((student) => {
             const attendance = student.attendance || {}
@@ -5083,7 +5073,7 @@ function AttendanceCardPanel({
             )
           })}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
