@@ -1637,7 +1637,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
           >
             <button
               type="button"
-              onClick={onBack || onClose}
+              onClick={view === 'documents' ? handleBackToFolders : (onBack || onClose)}
               className="inline-flex min-h-10 flex-shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
               style={{ color: colors.textSecondary }}
             >
@@ -1649,16 +1649,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:flex-nowrap">
                 <button
                   type="button"
-                  onClick={handleBackToFolders}
-                  className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
-                  style={{ color: colors.textSecondary }}
-                  title="Retour aux cours"
-                >
-                  <Icon name="arrow_back" style={{ fontSize: '17px' }} />
-                  <span className="hidden md:inline">Retour aux cours</span>
-                </button>
-                <button
-                  type="button"
                   onClick={handleViewContentScript}
                   disabled={loadingContentScript}
                   className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-white/5"
@@ -1668,41 +1658,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   <Icon name="description" style={{ fontSize: '17px' }} />
                   <span className="hidden md:inline">{loadingContentScript ? 'Chargement…' : 'Voir le script TTS'}</span>
                 </button>
-                {courseMaterialsLoading ? (
-                  <button
-                    type="button"
-                    disabled
-                    className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-[#121212] px-3 text-xs font-semibold text-white opacity-60"
-                  >
-                    <Icon name="hourglass_top" style={{ fontSize: '17px' }} />
-                    <span className="hidden sm:inline">PDF en cours…</span>
-                  </button>
-                ) : selectedCourseMaterial ? (
-                  <button
-                    type="button"
-                    onClick={handleDownloadCourseMaterial}
-                    disabled={downloadingCourseMaterial}
-                    className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-[#121212] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 disabled:cursor-wait disabled:opacity-60"
-                    title="Télécharger le PDF"
-                  >
-                    <Icon name={downloadingCourseMaterial ? 'hourglass_top' : 'download'} style={{ fontSize: '17px' }} />
-                    <span className="hidden sm:inline">{downloadingCourseMaterial ? 'Téléchargement…' : 'Télécharger le PDF'}</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={fetchCourseMaterials}
-                    className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
-                    style={{
-                      border: `1px solid ${courseMaterialsError ? '#fecaca' : colors.border}`,
-                      color: courseMaterialsError ? '#b91c1c' : colors.textSecondary,
-                    }}
-                    title={courseMaterialsError ? 'Réessayer de charger le PDF' : 'Actualiser le PDF'}
-                  >
-                    <Icon name="refresh" style={{ fontSize: '17px' }} />
-                    <span className="hidden sm:inline">{courseMaterialsError ? 'Réessayer' : 'Actualiser le PDF'}</span>
-                  </button>
-                )}
               </div>
             )}
           </header>
@@ -2414,6 +2369,43 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               <h1 className="min-w-0 truncate text-sm font-semibold sm:text-base" style={{ color: colors.text }}>
                 {selectedFolder?.name || 'Journée sélectionnée'}
               </h1>
+              <div className="ml-auto flex-none">
+                {courseMaterialsLoading ? (
+                  <button
+                    type="button"
+                    disabled
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white opacity-60"
+                  >
+                    <Icon name="hourglass_top" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">PDF en cours…</span>
+                  </button>
+                ) : selectedCourseMaterial ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadCourseMaterial}
+                    disabled={downloadingCourseMaterial}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 disabled:cursor-wait disabled:opacity-60"
+                    title="Télécharger le PDF"
+                  >
+                    <Icon name={downloadingCourseMaterial ? 'hourglass_top' : 'download'} style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">{downloadingCourseMaterial ? 'Téléchargement…' : 'Télécharger le PDF'}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={fetchCourseMaterials}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30 dark:hover:bg-white/5"
+                    style={{
+                      borderColor: courseMaterialsError ? '#fecaca' : colors.border,
+                      color: courseMaterialsError ? '#b91c1c' : colors.textSecondary,
+                    }}
+                    title={courseMaterialsError ? 'Réessayer de charger le PDF' : 'Actualiser le PDF'}
+                  >
+                    <Icon name="refresh" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">{courseMaterialsError ? 'Réessayer' : 'Actualiser le PDF'}</span>
+                  </button>
+                )}
+              </div>
             </header>
 
             {/* Corps : sidebar + contenu */}

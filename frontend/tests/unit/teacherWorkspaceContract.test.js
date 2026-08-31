@@ -42,6 +42,8 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.doesNotMatch(dashboardSource, /activeTool \? 'hidden sm:flex'/)
   assert.doesNotMatch(dashboardSource, /absolute left-5 top-5[\s\S]*?rosterMeta\.label/)
   assert.match(coursesSource, /Télécharger le PDF/)
+  assert.doesNotMatch(coursesSource, /Retour aux cours/)
+  assert.match(coursesSource, /view === 'documents' \? handleBackToFolders/)
   assert.doesNotMatch(coursesSource, />\s*Support PDF de la journée\s*</)
   assert.doesNotMatch(coursesSource, /Créé à la fin de la pipeline, sans balises techniques/)
   assert.doesNotMatch(coursesSource, /Support de la journée \{selectedCourseMaterial\.session_index\}/)
@@ -66,6 +68,10 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.match(coursesSource, /Rétracter le panneau d’information/)
   assert.match(coursesSource, /Retour à la journée/)
   assert.match(coursesSource, /Sous-page du script TTS généré/)
+  assert.ok(
+    coursesSource.indexOf('Télécharger le PDF') > coursesSource.indexOf('Sous-page du script TTS généré'),
+    'le téléchargement PDF doit se trouver dans la sous-page du script TTS',
+  )
   assert.doesNotMatch(coursesSource, /Modale script TTS généré/)
   assert.doesNotMatch(coursesSource, />\s*Script TTS généré\s*</)
   assert.match(coursesSource, /onScriptViewChange\?\.\(contentScriptOpen\)/)
