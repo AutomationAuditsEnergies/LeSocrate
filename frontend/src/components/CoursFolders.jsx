@@ -1651,12 +1651,12 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   type="button"
                   onClick={handleViewContentScript}
                   disabled={loadingContentScript}
-                  className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-white/5"
+                  className="inline-flex min-h-10 flex-shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-white/5"
                   style={{ color: colors.textSecondary }}
                   title="Voir le script TTS généré"
                 >
-                  <Icon name="description" style={{ fontSize: '17px' }} />
-                  <span className="hidden md:inline">{loadingContentScript ? 'Chargement…' : 'Voir le script TTS'}</span>
+                  {loadingContentScript ? 'Chargement…' : 'Voir le script TTS'}
+                  <Icon name="chevron_right" style={{ fontSize: '20px' }} />
                 </button>
               </div>
             )}
