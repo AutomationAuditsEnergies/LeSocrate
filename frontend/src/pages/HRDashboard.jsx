@@ -6656,7 +6656,7 @@ const newReminderRule = () => ({
   is_active: true,
 })
 
-function ReminderRulesPanel({ platformId, recipients, colors, standalone = false }) {
+function ReminderRulesPanel({ platformId, recipients, recipientsLoading = false, colors, standalone = false }) {
   const [rules, setRules] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -6954,38 +6954,56 @@ function ReminderRulesPanel({ platformId, recipients, colors, standalone = false
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Destinataires
             <select value={form.recipient_scope} onChange={(e) => setForm({ ...form, recipient_scope: e.target.value, recipient_ids: e.target.value === 'all' ? [] : form.recipient_ids })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-black/25" style={inputStyle}>
-              <option value="all">Tous les e-mails élèves</option>
+              <option value="all">Tous les élèves inscrits</option>
               <option value="selected_explicit">Une sélection d’élèves</option>
             </select>
           </label>
 
           {form.recipient_scope === 'selected_explicit' && (
-            <fieldset className="max-h-32 space-y-1 overflow-y-auto rounded-lg p-2" style={{ border: `1px solid ${colors.border}` }}>
-              <legend className="px-1 text-xs font-medium" style={{ color: colors.textSecondary }}>Élèves sélectionnés</legend>
-              {recipients.length === 0 ? (
-                <p className="text-xs" style={{ color: colors.textMuted }}>Ajoutez d’abord des e-mails élèves.</p>
-              ) : recipients.map((recipient) => (
-                <label key={recipient.id} className="flex items-center gap-2 text-xs" style={{ color: colors.textSecondary }}>
-                  <input
-                    type="checkbox"
-                    checked={form.recipient_ids.includes(recipient.id)}
-                    onChange={(e) => setForm({
-                      ...form,
-                      recipient_ids: e.target.checked
-                        ? [...form.recipient_ids, recipient.id]
-                        : form.recipient_ids.filter((id) => id !== recipient.id),
-                    })}
-                    className="h-4 w-4 accent-black"
-                  />
-                  <span className="truncate">{recipient.email}</span>
-                </label>
-              ))}
+            <fieldset className="max-h-48 overflow-y-auto rounded-lg" style={{ border: `1px solid ${colors.border}` }}>
+              <legend className="ml-2 px-1 text-xs font-medium" style={{ color: colors.textSecondary }}>Élèves inscrits</legend>
+              {recipientsLoading ? (
+                <div className="space-y-2 p-3" aria-label="Chargement des élèves inscrits">
+                  {[0, 1].map((item) => (
+                    <div key={item} className="h-9 animate-pulse rounded-lg" style={{ backgroundColor: colors.innerBg }} />
+                  ))}
+                </div>
+              ) : recipients.length === 0 ? (
+                <div className="px-3 py-4">
+                  <p className="text-xs font-medium" style={{ color: colors.textSecondary }}>Aucun élève inscrit.</p>
+                  <p className="mt-1 text-[11px] leading-4" style={{ color: colors.textMuted }}>Ajoutez d’abord un élève depuis l’onglet Élèves.</p>
+                </div>
+              ) : (
+                <div className="divide-y" style={{ borderColor: colors.border }}>
+                  {recipients.map((recipient) => {
+                    const studentName = [recipient.prenom, recipient.nom].filter(Boolean).join(' ').trim()
+                      || `Élève enregistré n°${recipient.id}`
+                    return (
+                      <label key={recipient.id} className="flex min-h-11 cursor-pointer items-center gap-3 px-3 py-2 text-xs transition-colors hover:bg-black/5" style={{ color: colors.textSecondary }}>
+                        <input
+                          type="checkbox"
+                          checked={form.recipient_ids.includes(recipient.id)}
+                          onChange={(e) => setForm({
+                            ...form,
+                            recipient_ids: e.target.checked
+                              ? [...form.recipient_ids, recipient.id]
+                              : form.recipient_ids.filter((id) => id !== recipient.id),
+                          })}
+                          className="h-4 w-4 flex-shrink-0 accent-black"
+                        />
+                        <Icon name="person" className="text-base" style={{ color: colors.textMuted }} />
+                        <span className="min-w-0 flex-1 truncate font-semibold">{studentName}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
             </fieldset>
           )}
 
           <div className="flex justify-end gap-2">
             <button type="button" onClick={resetForm} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>Annuler</button>
-            <button type="submit" disabled={saving} className="rounded-lg bg-[#121212] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="submit" disabled={saving || (form.recipient_scope === 'selected_explicit' && form.recipient_ids.length === 0)} className="rounded-lg bg-[#121212] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
               {saving ? 'Enregistrement…' : editingId === 'new' ? 'Créer le rappel' : 'Enregistrer le rappel'}
             </button>
           </div>
@@ -6995,13 +7013,14 @@ function ReminderRulesPanel({ platformId, recipients, colors, standalone = false
   )
 }
 
-function InvitationsToolContent({ platformId, studentEmails, colors }) {
+function InvitationsToolContent({ platformId, studentEmails, studentEmailsLoading, colors }) {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-3 sm:px-6">
       <ReminderRulesPanel
         standalone
         platformId={platformId}
         recipients={studentEmails}
+        recipientsLoading={studentEmailsLoading}
         colors={colors}
       />
     </div>
@@ -7474,6 +7493,7 @@ function PlatformCard({
             <InvitationsToolContent
               platformId={p.id}
               studentEmails={studentEmails}
+              studentEmailsLoading={studentEmailsLoading}
               colors={colors}
             />
           )}

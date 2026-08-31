@@ -24,3 +24,16 @@ test('lets the center restore the default and insert variables at the cursor', a
   assert.match(source, /Code personnel/)
   assert.match(source, /Lien habituel/)
 })
+
+test('selects registered students by identity instead of displaying their email addresses', async () => {
+  const source = await readFile(dashboardUrl, 'utf8')
+  const reminderPanel = source.slice(
+    source.indexOf('function ReminderRulesPanel'),
+    source.indexOf('function InvitationsToolContent'),
+  )
+
+  assert.match(reminderPanel, /Tous les élèves inscrits/)
+  assert.match(reminderPanel, /\[recipient\.prenom, recipient\.nom\]/)
+  assert.match(reminderPanel, /Ajoutez d’abord un élève depuis l’onglet Élèves/)
+  assert.doesNotMatch(reminderPanel, /recipient\.email/)
+})
