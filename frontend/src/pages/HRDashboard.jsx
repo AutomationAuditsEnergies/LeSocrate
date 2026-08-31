@@ -6702,7 +6702,7 @@ const newReminderRule = () => ({
   is_active: true,
 })
 
-function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
+function ReminderRulesPanel({ platformId, recipients, colors, standalone = false }) {
   const [rules, setRules] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -6853,7 +6853,11 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
   }
 
   return (
-    <section className="mt-4 border-t pt-4" style={{ borderColor: colors.border }} aria-label="Rappels automatiques">
+    <section
+      className={standalone ? '' : 'mt-4 border-t pt-4'}
+      style={{ borderColor: colors.border }}
+      aria-label="Rappels automatiques"
+    >
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Rappels automatiques</h4>
@@ -7037,8 +7041,20 @@ function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
   )
 }
 
+function InvitationsToolContent({ platformId, studentEmails, colors }) {
+  return (
+    <div className="mx-auto w-full max-w-4xl px-4 py-3 sm:px-6">
+      <ReminderRulesPanel
+        standalone
+        platformId={platformId}
+        recipients={studentEmails}
+        colors={colors}
+      />
+    </div>
+  )
+}
+
 function StudentsToolContent({
-  platformId,
   studentEmails,
   studentEmailsLoading,
   studentEmailsSaving,
@@ -7047,13 +7063,12 @@ function StudentsToolContent({
   onAddStudentEmails,
   onDeleteStudentEmail,
   colors,
-  darkMode,
 }) {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-3 sm:px-6">
       <div className="mb-5 flex items-start justify-between gap-4 border-b pb-4" style={{ borderColor: colors.border }}>
         <div>
-          <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves et invitations</h3>
+          <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves</h3>
           <p className="mt-1 max-w-[62ch] text-xs leading-5" style={{ color: colors.textMuted }}>
             Ajoutez uniquement les adresses qui recevront le lien d’accès et les rappels.
           </p>
@@ -7134,12 +7149,6 @@ function StudentsToolContent({
           ))}
         </div>
       )}
-      <ReminderRulesPanel
-        platformId={platformId}
-        recipients={studentEmails}
-        colors={colors}
-        darkMode={darkMode}
-      />
     </div>
   )
 }
@@ -7196,7 +7205,8 @@ function PlatformCard({
     ...(p.active ? [
       { key: 'planning', label: 'Planning', icon: 'schedule', IconComponent: CalendarDays, onOpen: onOpenCourseTimeModal },
       { key: 'courses', label: 'Cours', icon: 'folder_open', IconComponent: FolderOpen, onOpen: onOpenCoursFolders },
-      { key: 'students', label: 'Mail(s) d’invitation', icon: 'group', IconComponent: UsersRound, onOpen: onToggleStudentEmails },
+      { key: 'invitations', label: 'Mail(s) d’invitation', icon: 'mail', IconComponent: Mail, onOpen: onToggleStudentEmails },
+      { key: 'students', label: 'Élèves', icon: 'group', IconComponent: UsersRound, onOpen: onToggleStudentEmails },
       { key: 'attendance', label: 'Présence', icon: 'fact_check', IconComponent: ClipboardCheck, onOpen: onToggleAttendance },
     ] : []),
   ]
@@ -7493,7 +7503,6 @@ function PlatformCard({
           )}
           {activeTool === 'students' && (
             <StudentsToolContent
-              platformId={p.id}
               studentEmails={studentEmails}
               studentEmailsLoading={studentEmailsLoading}
               studentEmailsSaving={studentEmailsSaving}
@@ -7502,7 +7511,13 @@ function PlatformCard({
               onAddStudentEmails={onAddStudentEmails}
               onDeleteStudentEmail={onDeleteStudentEmail}
               colors={colors}
-              darkMode={darkMode}
+            />
+          )}
+          {activeTool === 'invitations' && (
+            <InvitationsToolContent
+              platformId={p.id}
+              studentEmails={studentEmails}
+              colors={colors}
             />
           )}
           {activeTool === 'attendance' && (
