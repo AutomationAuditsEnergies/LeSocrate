@@ -1664,9 +1664,9 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
         )}
 
         {/* Modal Header */}
-        {(!embedded || view !== 'folders' || audioEditorFile) && <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 py-2' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+        {(!embedded || view !== 'folders' || audioEditorFile) && <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 pb-3 pt-5' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
           <div className="flex min-w-0 items-center gap-2.5">
-            {audioEditorFile && <Icon name="content_cut" style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />}
+            {audioEditorFile && <Icon name="visibility" style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />}
             <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
               {audioEditorFile ? audioEditorFile : view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
             </h3>
@@ -2102,10 +2102,18 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
             <>
               <div className="mb-4">
                 {/* ── Panneau : Audios générés ── */}
-                <div className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}>
-                  <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
-                    <Icon name="music_note" style={{ color: colors.textMuted, fontSize: '17px' }} />
-                    <span className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</span>
+                <div className="overflow-hidden rounded-2xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg, boxShadow: darkMode ? 'none' : '0 10px 30px rgba(15, 23, 42, 0.04)' }}>
+                  <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+                    <span
+                      className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-xl"
+                      style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }}
+                    >
+                      <Icon name="graphic_eq" style={{ fontSize: '19px' }} />
+                    </span>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</h4>
+                      <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>Consultez ou gérez les fichiers prêts à être diffusés.</p>
+                    </div>
                     {invalidAudios.some(audio => audio.reason === 'missing_audio_sync') && (
                       <button
                         type="button"
@@ -2146,7 +2154,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     </select>
                   </div>
 
-                  <div className="max-h-[26rem] overflow-y-auto p-2">
+                  <div className="max-h-[26rem] overflow-y-auto p-3">
                     {(() => {
                       const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
                       const manifestItems = audioPlaylistItems.length
@@ -2180,7 +2188,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 	                                setAudioEditorFile(item.filename)
 	                              }
 	                            }}
-	                            className="flex min-h-[46px] items-center gap-3 rounded-lg px-3 py-2 outline-none transition-colors"
+	                            className="group flex min-h-[60px] items-center gap-3 rounded-xl px-4 py-3 outline-none transition-[background-color,border-color,box-shadow] hover:shadow-sm focus-visible:ring-2 focus-visible:ring-violet-500/40"
 	                            style={{
 	                              backgroundColor: audio ? (darkMode ? '#111827' : '#f8fafc') : 'transparent',
 	                              border: `1px solid ${audio ? colors.border : 'transparent'}`,
@@ -2216,11 +2224,12 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 	                                    e.stopPropagation()
 	                                    setAudioEditorFile(item.filename)
 	                                  }}
-	                                  title="Éditer cet audio (couper / remplacer)"
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+	                                  title="Consulter cet audio"
+                                  aria-label={`Consulter ${item.filename}`}
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-slate-700"
                                   style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
                                 >
-                                  <Icon name="content_cut" style={{ fontSize: '16px' }} />
+                                  <Icon name="visibility" style={{ fontSize: '18px' }} />
                                 </button>
 	                                <button
 	                                  type="button"
@@ -2230,7 +2239,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 	                                  }}
                                   disabled={deletingAudioFile === item.filename}
                                   title="Supprimer cet audio"
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                                   style={{ backgroundColor: darkMode ? '#3f1d22' : '#fef2f2', border: `1px solid ${darkMode ? '#7f1d1d' : '#fecaca'}`, color: '#dc2626' }}
                                 >
                                   <Icon name={deletingAudioFile === item.filename ? 'hourglass_empty' : 'delete'} style={{ fontSize: '16px' }} />
