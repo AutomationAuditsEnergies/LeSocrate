@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertCircle,
   BookOpen,
   BookmarkPlus,
   Coffee,
@@ -24,7 +25,6 @@ import {
   getScheduleSequenceDropMinute,
   getScheduleStats,
   normalizeScheduleTemplate,
-  reflowScheduleBlocks,
   removeLastScheduleSequence,
   tryRemoveScheduleBlock,
   updateScheduleBlockDuration,
@@ -38,7 +38,7 @@ import {
   TRAINING_WEEKDAYS,
   addCalendarDays,
   assignTemplateToAll,
-  getFirstSessionDateTime,
+  dateTimeInTimeZone,
   getCalendarMonthDays,
   getMinimumNewModuleStartDate,
   MIN_NEW_MODULE_LEAD_HOURS,
@@ -248,6 +248,7 @@ export default function FormationSchedulePlanner({
   const [resizingEventKey, setResizingEventKey] = useState('')
   const [templateQuickSave, setTemplateQuickSave] = useState(null)
   const [scheduleActionMessage, setScheduleActionMessage] = useState('')
+  const [leadTimeDropError, setLeadTimeDropError] = useState('')
 
   const loadTemplates = useCallback(async () => {
     if (reuse) return
@@ -304,6 +305,12 @@ export default function FormationSchedulePlanner({
     )
     return () => window.clearInterval(intervalId)
   }, [reuse])
+
+  useEffect(() => {
+    if (!leadTimeDropError) return undefined
+    const timeoutId = window.setTimeout(() => setLeadTimeDropError(''), 6000)
+    return () => window.clearTimeout(timeoutId)
+  }, [leadTimeDropError])
 
   useEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
@@ -374,23 +381,11 @@ export default function FormationSchedulePlanner({
     templates,
     validationNow,
   ])
-  const firstSessionStart = useMemo(() => getFirstSessionDateTime(
-    normalizedDates,
-    cleanAssignments,
-    templates,
-    'Europe/Paris',
-    cleanCustomDays,
-  ), [cleanAssignments, cleanCustomDays, normalizedDates, templates])
   const earliestAllowedFirstSession = useMemo(
     () => new Date(
       validationNow.getTime() + (MIN_NEW_MODULE_LEAD_HOURS * 60 * 60 * 1000),
     ),
     [validationNow],
-  )
-  const leadTimeIsTooShort = Boolean(
-    !reuse
-    && firstSessionStart
-    && firstSessionStart.getTime() < earliestAllowedFirstSession.getTime(),
   )
   const payload = useMemo(() => serializeFormationScheduleV2({
     selectedDates: normalizedDates,
@@ -655,6 +650,20 @@ export default function FormationSchedulePlanner({
     setScheduleActionMessage('')
   }
 
+  const rejectTooEarlyDrop = (date, startMinute) => {
+    if (reuse) return false
+    const requestedStart = dateTimeInTimeZone(date, startMinute, 'Europe/Paris')
+    if (
+      requestedStart
+      && requestedStart.getTime() >= earliestAllowedFirstSession.getTime()
+    ) return false
+
+    setLeadTimeDropError(
+      `Pour respecter le délai de traitement, ce bloc doit commencer au moins 24 heures après l’heure actuelle. Placez-le au plus tôt le ${formatLeadTimeDateTime(earliestAllowedFirstSession)}.`,
+    )
+    return true
+  }
+
   const removeBlockFromDay = (date, blocks, blockIndex) => {
     if (reuse || date < today) return
     const result = tryRemoveScheduleBlock(blocks, blockIndex)
@@ -914,21 +923,6 @@ export default function FormationSchedulePlanner({
           </div>
         </section>
 
-        {!reuse && (
-          <div
-            className="formation-schedule__lead-time-note"
-            data-warning={leadTimeIsTooShort || undefined}
-            role={leadTimeIsTooShort ? 'alert' : 'note'}
-          >
-            <Info size={15} aria-hidden="true" />
-            <p>
-              {leadTimeIsTooShort
-                ? `Pour respecter le délai de traitement, le premier cours doit commencer au moins 24 heures après l’heure actuelle. Placez-le au plus tôt le ${formatLeadTimeDateTime(earliestAllowedFirstSession)}.`
-                : 'Le premier cours doit commencer au moins 24 heures après l’heure actuelle afin de laisser le temps nécessaire au traitement.'}
-            </p>
-          </div>
-        )}
-
         <section className="formation-schedule__sequence" aria-labelledby="formation-sequence-title">
           <header>
             <div>
@@ -939,11 +933,11 @@ export default function FormationSchedulePlanner({
           </header>
           <div className="formation-schedule__block-palette">
             {[
-              { key: 'course', type: 'course', pauseKind: null, label: 'Cours vocal', Icon: BookOpen },
-              { key: 'qa', type: 'qa', pauseKind: null, label: 'Questions-réponses', Icon: MessageCircleQuestion },
-              { key: 'pause', type: 'pause', pauseKind: 'short', label: 'Pause courte', Icon: Coffee },
-              { key: 'lunch', type: 'pause', pauseKind: 'lunch', label: 'Pause déjeuner', Icon: Utensils },
-            ].map(({ key, type, pauseKind, label, Icon }) => {
+              { key: 'course', type: 'course', pauseKind: null, label: 'Cours vocal', icon: <BookOpen size={14} aria-hidden="true" /> },
+              { key: 'qa', type: 'qa', pauseKind: null, label: 'Questions-réponses', icon: <MessageCircleQuestion size={14} aria-hidden="true" /> },
+              { key: 'pause', type: 'pause', pauseKind: 'short', label: 'Pause courte', icon: <Coffee size={14} aria-hidden="true" /> },
+              { key: 'lunch', type: 'pause', pauseKind: 'lunch', label: 'Pause déjeuner', icon: <Utensils size={14} aria-hidden="true" /> },
+            ].map(({ key, type, pauseKind, label, icon }) => {
               const permission = activeAllowedBlocks[key]
               return (
                 <button
@@ -960,7 +954,7 @@ export default function FormationSchedulePlanner({
                   onDragEnd={() => setDropPreview(null)}
                   onClick={() => addBlockToDay(activeDate || displayedDate, type, pauseKind)}
                 >
-                  <Icon size={14} aria-hidden="true" />
+                  {icon}
                   {label}
                 </button>
               )
@@ -1162,6 +1156,7 @@ export default function FormationSchedulePlanner({
                     event.stopPropagation()
                     const startMinute = updateDropPreview(event)
                     setDropPreview(null)
+                    if (rejectTooEarlyDrop(date, startMinute)) return
                     addBlockToDay(date, ...blockDefinition, startMinute)
                   }}
                 >
@@ -1258,6 +1253,24 @@ export default function FormationSchedulePlanner({
           </div>
         </div>
       </div>
+
+      {leadTimeDropError && (
+        <div
+          className="formation-schedule__lead-time-error"
+          role="alert"
+          aria-live="assertive"
+        >
+          <AlertCircle size={18} aria-hidden="true" />
+          <p>{leadTimeDropError}</p>
+          <button
+            type="button"
+            aria-label="Masquer l’erreur"
+            onClick={() => setLeadTimeDropError('')}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
       <dialog
         ref={templateSaveDialogRef}
