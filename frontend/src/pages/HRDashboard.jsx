@@ -7044,9 +7044,9 @@ function StudentsToolContent({
 
       <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.5fr_auto]">
         {[
-          ['prenom', 'Prénom', 'Nassim'],
-          ['nom', 'Nom', 'Issad'],
-          ['email', 'Adresse e-mail', 'nassim@exemple.com'],
+          ['prenom', 'Prénom', 'Prénom de l’élève'],
+          ['nom', 'Nom', 'Nom de l’élève'],
+          ['email', 'Adresse e-mail', 'eleve@exemple.fr'],
         ].map(([field, label, placeholder]) => (
           <label key={field} className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
             {label}
