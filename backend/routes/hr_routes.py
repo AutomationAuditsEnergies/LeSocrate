@@ -4557,7 +4557,7 @@ def create_hr_blueprint():
                 "id": folder_id,
                 "name": str(folder.get("name") or f"Jour {day_number}"),
                 "day_number": day_number,
-                "label": f"Jour {day_number} — {folder.get('name') or f'Jour {day_number}'}",
+                "label": f"Jour {day_number}",
             }
 
         session_index = int(course_session.get("session_index") or 0)

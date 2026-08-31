@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { apiDownload, apiFetch, downloadExternalFile } from '../api'
 import AudioEditor from './AudioEditor'
 import { isCourseAudioFilename } from './slides/audioSlideSync'
@@ -171,6 +172,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const fileInputRef = useRef(null)
   const mockAudioInputRef = useRef(null)
   const createFolderInputRef = useRef(null)
+  const fillSelectRef = useRef(null)
   const pollingRef = useRef(null)
 
   const contentScriptOpen = Boolean(contentScriptModal)
@@ -188,6 +190,24 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
     window.addEventListener('keydown', closeInfoPanel)
     return () => window.removeEventListener('keydown', closeInfoPanel)
   }, [showFillInfo])
+
+  useEffect(() => {
+    if (!showFillForm) return undefined
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setShowFillForm(false)
+        setFillFeedback(null)
+      }
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    window.requestAnimationFrame(() => fillSelectRef.current?.focus())
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [showFillForm])
 
   const colors = darkMode ? {
     bg: '#0f172a',
@@ -1788,10 +1808,8 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       <button
                         type="button"
                         onClick={() => {
-                          setShowFillForm((value) => {
-                            if (!value) fetchNextCourseSelection()
-                            return !value
-                          })
+                          fetchNextCourseSelection()
+                          setShowFillForm(true)
                           setFillFeedback(null)
                         }}
                         className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-lg px-3 py-2 text-left text-sm font-semibold text-white"
@@ -1816,93 +1834,165 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                 </div>
               )}
 
-              {showFillForm && (
-                <form
-                  onSubmit={handleFillPlatform}
-                  className="mb-5 rounded-lg border p-3"
-                  style={{ backgroundColor: colors.innerBg, borderColor: colors.border }}
-                >
-                  <label htmlFor={`fill-folder-${platformId}`} className="block text-xs font-semibold" style={{ color: colors.text }}>
-                    {targetSessionId ? 'Cours de remplacement pour la séance en erreur' : 'Cours diffusé lors de la prochaine séance'}
-                  </label>
-                  <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
-                    Choisissez une journée dont l’audio et la visio sont déjà disponibles {targetSessionId ? 'pour cette séance' : 'pour la prochaine diffusion'}.
-                  </p>
-                  {nextCourseSelectionLoading ? (
-                    <div className="mt-3 grid gap-3 border-y py-3 sm:grid-cols-3" style={{ borderColor: colors.border }} aria-label="Chargement de la séance">
-                      {[0, 1, 2].map((item) => (
-                        <div key={item} className="h-10 animate-pulse rounded-md" style={{ backgroundColor: colors.cardBg }} />
-                      ))}
-                    </div>
-                  ) : nextCourseSelectionError ? (
-                    <p className="mt-3 border-y py-3 text-xs font-medium" style={{ color: '#b91c1c', borderColor: colors.border }} role="alert">
-                      {nextCourseSelectionError}
-                    </p>
-                  ) : nextCourseSelection?.session ? (
-                    <div className="mt-3 border-y py-3" style={{ borderColor: colors.border }}>
-                      <dl className="grid gap-3 sm:grid-cols-[1.4fr_0.65fr_1.6fr]">
-                        <div>
-                          <dt className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Date</dt>
-                          <dd className="mt-1 text-sm font-semibold capitalize" style={{ color: colors.text }}>
-                            {formatCourseSessionDate(nextCourseSelection.session.scheduled_at)}
-                          </dd>
+              {showFillForm && typeof document !== 'undefined' && createPortal(
+                <div className="fixed inset-0 z-[60] flex items-end justify-center p-0 sm:items-center sm:p-6" role="presentation">
+                  <button
+                    type="button"
+                    className="absolute inset-0 cursor-default bg-slate-950/55"
+                    aria-label="Fermer la fenêtre de sélection"
+                    onClick={() => {
+                      setShowFillForm(false)
+                      setFillFeedback(null)
+                    }}
+                  />
+                  <section
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={`fill-course-title-${platformId}`}
+                    className="relative flex max-h-[calc(100dvh-1rem)] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl shadow-2xl sm:max-h-[calc(100dvh-3rem)] sm:rounded-2xl"
+                    style={{ backgroundColor: colors.cardBg, color: colors.text }}
+                  >
+                    <header className="flex items-start justify-between gap-5 border-b px-5 py-5 sm:px-6" style={{ borderColor: colors.border }}>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="flex h-10 w-10 flex-none items-center justify-center rounded-lg" style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }} aria-hidden="true">
+                          <Icon name="calendar_month" className="text-xl" />
                         </div>
-                        <div>
-                          <dt className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Heure</dt>
-                          <dd className="mt-1 text-sm font-semibold" style={{ color: colors.text }}>
-                            {formatCourseSessionTime(nextCourseSelection.session.scheduled_at)}
-                          </dd>
+                        <div className="min-w-0">
+                          <h2 id={`fill-course-title-${platformId}`} className="text-lg font-semibold tracking-tight">
+                            {targetSessionId ? 'Choisir le cours de remplacement' : 'Choisir le prochain cours'}
+                          </h2>
+                          <p className="mt-1 max-w-[58ch] text-sm leading-5" style={{ color: colors.textSecondary }}>
+                            Cette modification concerne uniquement la séance indiquée.
+                          </p>
                         </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFillForm(false)
+                          setFillFeedback(null)
+                        }}
+                        aria-label="Fermer"
+                        className="inline-flex h-10 w-10 flex-none items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40"
+                        style={{ color: colors.textMuted }}
+                      >
+                        <Icon name="close" className="text-xl" />
+                      </button>
+                    </header>
+
+                    <form onSubmit={handleFillPlatform} className="min-h-0 overflow-y-auto">
+                      <div className="space-y-5 px-5 py-5 sm:px-6 sm:py-6">
+                        {nextCourseSelectionLoading ? (
+                          <div className="grid gap-3 sm:grid-cols-3" aria-label="Chargement de la séance">
+                            {[0, 1, 2].map((item) => (
+                              <div key={item} className="h-20 animate-pulse rounded-xl" style={{ backgroundColor: colors.innerBg }} />
+                            ))}
+                          </div>
+                        ) : nextCourseSelectionError ? (
+                          <p className="rounded-lg px-4 py-3 text-sm font-medium" style={{ color: '#b91c1c', backgroundColor: '#fef2f2' }} role="alert">
+                            {nextCourseSelectionError}
+                          </p>
+                        ) : nextCourseSelection?.session ? (
+                          <div className="rounded-xl p-4 sm:p-5" style={{ backgroundColor: colors.innerBg }}>
+                            <dl className="grid gap-4 sm:grid-cols-[1.35fr_0.65fr_1fr]">
+                              <div>
+                                <dt className="text-xs font-medium" style={{ color: colors.textMuted }}>Date</dt>
+                                <dd className="mt-1 text-sm font-semibold capitalize">
+                                  {formatCourseSessionDate(nextCourseSelection.session.scheduled_at)}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs font-medium" style={{ color: colors.textMuted }}>Heure</dt>
+                                <dd className="mt-1 text-sm font-semibold">
+                                  {formatCourseSessionTime(nextCourseSelection.session.scheduled_at)}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs font-medium" style={{ color: colors.textMuted }}>Cours prévu</dt>
+                                <dd className="mt-1 text-sm font-semibold">
+                                  {nextCourseSelection.selected_course?.label || 'Cours non identifié'}
+                                </dd>
+                              </div>
+                            </dl>
+                            {nextCourseSelection.is_manual_override && nextCourseSelection.scheduled_course?.label && (
+                              <p className="mt-4 border-t pt-3 text-xs" style={{ color: colors.textSecondary, borderColor: colors.border }}>
+                                Progression habituelle : {nextCourseSelection.scheduled_course.label}.
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="rounded-lg px-4 py-3 text-sm font-medium" style={{ color: colors.textSecondary, backgroundColor: colors.innerBg }}>
+                            Aucune prochaine séance n’est programmée.
+                          </p>
+                        )}
+
                         <div>
-                          <dt className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Cours actuellement prévu</dt>
-                          <dd className="mt-1 text-sm font-semibold" style={{ color: colors.text }}>
-                            {nextCourseSelection.selected_course?.label || 'Cours non identifié'}
-                          </dd>
+                          <label htmlFor={`fill-folder-${platformId}`} className="block text-sm font-semibold">
+                            Cours à diffuser pendant cette séance
+                          </label>
+                          <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                            Seules les journées dont l’audio et la visio sont disponibles peuvent être utilisées.
+                          </p>
+                          <select
+                            ref={fillSelectRef}
+                            id={`fill-folder-${platformId}`}
+                            value={fillFolderId}
+                            onChange={(event) => setFillFolderId(event.target.value)}
+                            className="mt-3 min-h-12 w-full rounded-lg border px-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30"
+                            style={{ backgroundColor: colors.cardBg, borderColor: colors.border, color: colors.text }}
+                          >
+                            <option value="">Sélectionner une journée</option>
+                            {folders.map((folder, index) => (
+                              <option key={folder.id} value={folder.id}>
+                                Jour {index + 1}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                      </dl>
-                      {nextCourseSelection.is_manual_override && nextCourseSelection.scheduled_course?.label && (
-                        <p className="mt-3 text-xs" style={{ color: colors.textSecondary }}>
-                          Cours habituel dans la progression : {nextCourseSelection.scheduled_course.label}.
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="mt-3 border-y py-3 text-xs font-medium" style={{ color: colors.textSecondary, borderColor: colors.border }}>
-                      Aucune prochaine séance n’est programmée.
-                    </p>
-                  )}
-                  <p className="mt-3 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                    Le changement s’applique uniquement à cette séance. Les séances suivantes conservent le cours prévu dans leur progression.
-                  </p>
-                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                    <select
-                      id={`fill-folder-${platformId}`}
-                      value={fillFolderId}
-                      onChange={(event) => setFillFolderId(event.target.value)}
-                      className="min-h-11 min-w-0 flex-1 rounded-md border px-3 text-sm outline-none"
-                      style={{ backgroundColor: colors.cardBg, borderColor: colors.border, color: colors.text }}
-                    >
-                      <option value="">Sélectionner une journée</option>
-                      {folders.map((folder, index) => (
-                        <option key={folder.id} value={folder.id}>
-                          Jour {index + 1} — {folder.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="submit"
-                      disabled={!fillFolderId || fillingPlatform || !nextCourseSelection?.session}
-                      className="min-h-11 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {fillingPlatform ? 'Enregistrement…' : 'Enregistrer pour cette séance'}
-                    </button>
-                  </div>
-                  {fillFeedback && (
-                    <p className="mt-2 text-xs font-medium" style={{ color: fillFeedback.tone === 'success' ? '#047857' : '#b91c1c' }}>
-                      {fillFeedback.text}
-                    </p>
-                  )}
-                </form>
+
+                        <div className="flex items-start gap-3 text-sm leading-5" style={{ color: colors.textSecondary }}>
+                          <Icon name="info" className="mt-0.5 text-lg" aria-hidden="true" />
+                          <p>Les séances suivantes conservent automatiquement le cours prévu dans leur progression.</p>
+                        </div>
+
+                        {fillFeedback && (
+                          <p
+                            className="rounded-lg px-4 py-3 text-sm font-medium"
+                            style={{
+                              color: fillFeedback.tone === 'success' ? '#047857' : '#b91c1c',
+                              backgroundColor: fillFeedback.tone === 'success' ? '#ecfdf5' : '#fef2f2',
+                            }}
+                            role="status"
+                          >
+                            {fillFeedback.text}
+                          </p>
+                        )}
+                      </div>
+
+                      <footer className="flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:justify-end sm:px-6" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowFillForm(false)
+                            setFillFeedback(null)
+                          }}
+                          className="min-h-11 rounded-lg border px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30"
+                          style={{ borderColor: colors.border, color: colors.textSecondary }}
+                        >
+                          Annuler
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={!fillFolderId || fillingPlatform || !nextCourseSelection?.session}
+                          className="min-h-11 rounded-lg bg-slate-900 px-5 text-sm font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {fillingPlatform ? 'Enregistrement…' : 'Enregistrer pour cette séance'}
+                        </button>
+                      </footer>
+                    </form>
+                  </section>
+                </div>,
+                document.body,
               )}
 
               {loading ? (

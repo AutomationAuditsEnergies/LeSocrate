@@ -89,7 +89,7 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
         self.assertEqual(data["session"]["scheduled_at"], "2026-09-01T09:00:00+02:00")
         self.assertEqual(data["scheduled_course"]["id"], 92)
         self.assertEqual(data["selected_course"]["id"], 93)
-        self.assertEqual(data["selected_course"]["label"], "Jour 3 — Perfectionnement")
+        self.assertEqual(data["selected_course"]["label"], "Jour 3")
         self.assertTrue(data["is_manual_override"])
 
     def _make_platforms_connection(self):
