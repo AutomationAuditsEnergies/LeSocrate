@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { apiDownload, apiFetch, downloadExternalFile } from '../api'
 import AudioEditor from './AudioEditor'
@@ -133,6 +133,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const [folderAudioStates, setFolderAudioStates] = useState({})
   const [showFillForm, setShowFillForm] = useState(false)
   const [showFillInfo, setShowFillInfo] = useState(false)
+  const [fillInfoClosing, setFillInfoClosing] = useState(false)
   const [fillFolderId, setFillFolderId] = useState('')
   const [fillingPlatform, setFillingPlatform] = useState(false)
   const [fillFeedback, setFillFeedback] = useState(null)
@@ -173,9 +174,32 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const mockAudioInputRef = useRef(null)
   const createFolderInputRef = useRef(null)
   const fillSelectRef = useRef(null)
+  const fillInfoCloseTimerRef = useRef(null)
+  const fillInfoClosingRef = useRef(false)
   const pollingRef = useRef(null)
 
   const contentScriptOpen = Boolean(contentScriptModal)
+
+  const closeFillInfo = useCallback((afterClose) => {
+    if (fillInfoClosingRef.current) return
+
+    fillInfoClosingRef.current = true
+    setFillInfoClosing(true)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    const closeDuration = reduceMotion ? 0 : 200
+
+    window.clearTimeout(fillInfoCloseTimerRef.current)
+    fillInfoCloseTimerRef.current = window.setTimeout(() => {
+      setShowFillInfo(false)
+      setFillInfoClosing(false)
+      fillInfoClosingRef.current = false
+      afterClose?.()
+    }, closeDuration)
+  }, [])
+
+  useEffect(() => () => {
+    window.clearTimeout(fillInfoCloseTimerRef.current)
+  }, [])
 
   useEffect(() => {
     onScriptViewChange?.(contentScriptOpen)
@@ -185,11 +209,11 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   useEffect(() => {
     if (!showFillInfo) return undefined
     const closeInfoPanel = (event) => {
-      if (event.key === 'Escape') setShowFillInfo(false)
+      if (event.key === 'Escape') closeFillInfo()
     }
     window.addEventListener('keydown', closeInfoPanel)
     return () => window.removeEventListener('keydown', closeInfoPanel)
-  }, [showFillInfo])
+  }, [closeFillInfo, showFillInfo])
 
   useEffect(() => {
     if (!showFillForm) return undefined
@@ -1765,7 +1789,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       aria-controls={`fill-course-info-${platformId}`}
                       aria-label="Informations sur le choix du cours diffusé"
                       title="À quoi sert ce bouton ?"
-                      onClick={() => setShowFillInfo((value) => !value)}
+                      onClick={() => {
+                        if (showFillInfo) closeFillInfo()
+                        else setShowFillInfo(true)
+                      }}
                       className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full transition-colors"
                       style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textMuted }}
                     >
@@ -2037,14 +2064,14 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   <button
                     type="button"
                     aria-label="Fermer les informations"
-                    onClick={() => setShowFillInfo(false)}
-                    className="absolute inset-0 cursor-default bg-slate-950/35"
+                    onClick={() => closeFillInfo()}
+                    className={`absolute inset-0 cursor-default bg-slate-950/35 transition-opacity duration-150 ease-out motion-reduce:transition-none ${fillInfoClosing ? 'opacity-0' : 'opacity-100'}`}
                   />
                   <aside
                     id={`fill-course-info-${platformId}`}
                     role="complementary"
                     aria-labelledby={`fill-course-info-title-${platformId}`}
-                    className="absolute inset-y-0 right-0 w-[min(380px,calc(100%-24px))] overflow-y-auto border-l p-5 shadow-2xl sm:p-6"
+                    className={`absolute inset-y-0 right-0 w-[min(380px,calc(100%-24px))] overflow-y-auto border-l p-5 shadow-2xl transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none sm:p-6 ${fillInfoClosing ? 'pointer-events-none translate-x-full opacity-95' : 'translate-x-0 opacity-100'}`}
                     style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
                   >
                     <div className="flex items-start justify-between gap-4 border-b pb-4" style={{ borderColor: colors.border }}>
@@ -2058,7 +2085,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       </div>
                       <button
                         type="button"
-                        onClick={() => setShowFillInfo(false)}
+                        onClick={() => closeFillInfo()}
                         aria-label="Rétracter le panneau d’information"
                         className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-lg transition-colors"
                         style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
@@ -2068,7 +2095,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     </div>
                     <div className="space-y-4 pt-4">
                       <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
-                        Si la séance prévue n’a pas été générée correctement avec son audio et sa visio, contactez le support.
+                        Si la séance prévue n’a pas été générée correctement avec son audio et ses diapositives, contactez le support.
                       </p>
                       <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
                         En attendant la correction, choisissez un cours précédent déjà complet. Il sera diffusé uniquement pendant la séquence indiquée.
@@ -2080,9 +2107,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         type="button"
                         onClick={() => {
                           fetchNextCourseSelection()
-                          setShowFillInfo(false)
-                          setShowFillForm(true)
                           setFillFeedback(null)
+                          closeFillInfo(() => {
+                            setShowFillForm(true)
+                          })
                         }}
                         className="inline-flex min-h-11 w-full items-center justify-center rounded-lg px-4 py-2.5 text-center text-sm font-semibold text-white"
                         style={{ backgroundColor: '#121212' }}
