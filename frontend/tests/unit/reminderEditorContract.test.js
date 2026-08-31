@@ -37,3 +37,17 @@ test('selects registered students by identity instead of displaying their email 
   assert.match(reminderPanel, /Ajoutez d’abord un élève depuis l’onglet Élèves/)
   assert.doesNotMatch(reminderPanel, /recipient\.email/)
 })
+
+test('adds a student from a compact icon button beside the identity fields', async () => {
+  const source = await readFile(dashboardUrl, 'utf8')
+  const studentsPanelStart = source.indexOf('function StudentsToolContent')
+  const studentsPanel = source.slice(
+    studentsPanelStart,
+    source.indexOf('function PlatformCard', studentsPanelStart),
+  )
+
+  assert.match(studentsPanel, /sm:grid-cols-\[1fr_1fr_1\.5fr_auto\]/)
+  assert.match(studentsPanel, /aria-label="Ajouter l’élève"/)
+  assert.match(studentsPanel, /className="inline-flex h-10 w-10/)
+  assert.doesNotMatch(studentsPanel, />\s*Ajouter l’élève\s*</)
+})

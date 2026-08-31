@@ -7049,7 +7049,7 @@ function StudentsToolContent({
         <span className="text-xs font-semibold tabular-nums" style={{ color: colors.textMuted }}>{studentEmails.length} élève{studentEmails.length > 1 ? 's' : ''}</span>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.5fr]">
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.5fr_auto]">
         {[
           ['prenom', 'Prénom', 'Nassim'],
           ['nom', 'Nom', 'Issad'],
@@ -7068,25 +7068,28 @@ function StudentsToolContent({
             />
           </label>
         ))}
+        <div className="flex items-end justify-end">
+          <button
+            type="button"
+            onClick={onAddStudentEmails}
+            disabled={!studentEmailDraft.prenom?.trim() || !studentEmailDraft.nom?.trim() || !studentEmailDraft.email?.trim() || studentEmailsSaving}
+            aria-label="Ajouter l’élève"
+            title="Ajouter l’élève"
+            className="inline-flex h-10 w-10 flex-none items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ backgroundColor: '#121212', color: 'white' }}
+          >
+            {studentEmailsSaving ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+            ) : (
+              <Icon name="person_add" style={{ fontSize: '19px' }} />
+            )}
+          </button>
+        </div>
       </div>
-      <div className="mb-5 mt-2 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-5 mt-2">
         <p className="text-[11px] leading-4" style={{ color: colors.textMuted }}>
           Le lien et le code personnels utiliseront cette identité.
         </p>
-        <button
-          type="button"
-          onClick={onAddStudentEmails}
-          disabled={!studentEmailDraft.prenom?.trim() || !studentEmailDraft.nom?.trim() || !studentEmailDraft.email?.trim() || studentEmailsSaving}
-          className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ backgroundColor: '#121212', color: 'white' }}
-        >
-          {studentEmailsSaving ? (
-            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-          ) : (
-            <Icon name="person_add" className="text-sm" />
-          )}
-          Ajouter l’élève
-        </button>
       </div>
 
       {studentEmailsLoading ? (
