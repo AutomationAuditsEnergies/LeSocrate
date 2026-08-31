@@ -24,6 +24,7 @@ from repositories.course_schedule_repository import (
     assign_fallback_audio_to_session,
     delete_explicit_course_reminder_recipient,
     get_audio_generation_session,
+    get_next_course_session,
     list_course_schedule_dashboard_states,
     list_course_sessions,
     list_explicit_course_reminder_recipients,
@@ -4505,6 +4506,109 @@ def create_hr_blueprint():
         except Exception as e:
             logger.error(f"❌ Erreur get_cours_folders: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/next-course-selection",
+        methods=["GET"],
+    )
+    def get_next_course_selection(platform_id):
+        """Describe the course currently bound to one upcoming occurrence."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        platform_denied = _require_hr_resource_access("platform", platform_id)
+        if platform_denied:
+            return platform_denied
+
+        raw_session_id = request.args.get("session_id")
+        if raw_session_id not in (None, ""):
+            try:
+                session_id = int(raw_session_id)
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "error": "session_id invalide"}), 400
+            if session_id <= 0:
+                return jsonify({"success": False, "error": "session_id invalide"}), 400
+            course_session = get_audio_generation_session(platform_id, session_id)
+        else:
+            course_session = get_next_course_session(platform_id)
+
+        if not course_session or str(course_session.get("status") or "") not in {"planned", "active"}:
+            return jsonify({
+                "success": True,
+                "session": None,
+                "scheduled_course": None,
+                "selected_course": None,
+                "is_manual_override": False,
+            }), 200
+
+        folder_result = list_course_folder_rows_for_platform(platform_id)
+        folders = list(folder_result.get("folders") or [])
+
+        def serialize_course(folder):
+            if not folder:
+                return None
+            folder_id = int(folder["id"])
+            folder_index = next(
+                (index for index, item in enumerate(folders) if int(item["id"]) == folder_id),
+                int(folder.get("position") or 0),
+            )
+            day_number = folder_index + 1
+            return {
+                "id": folder_id,
+                "name": str(folder.get("name") or f"Jour {day_number}"),
+                "day_number": day_number,
+                "label": f"Jour {day_number} — {folder.get('name') or f'Jour {day_number}'}",
+            }
+
+        session_index = int(course_session.get("session_index") or 0)
+        scheduled_folder = (
+            folders[session_index - 1]
+            if 0 < session_index <= len(folders)
+            else None
+        )
+        selected_folder = scheduled_folder
+        selected_folder_id = course_session.get("audio_folder_id")
+        if selected_folder_id:
+            selected_folder = next(
+                (
+                    folder for folder in folders
+                    if int(folder["id"]) == int(selected_folder_id)
+                ),
+                None,
+            )
+            if selected_folder is None:
+                selected_folder = get_course_folder_identity(int(selected_folder_id))
+
+        scheduled_course = serialize_course(scheduled_folder)
+        selected_course = serialize_course(selected_folder)
+        scheduled_at = course_session.get("scheduled_at")
+        if hasattr(scheduled_at, "isoformat"):
+            scheduled_at = scheduled_at.isoformat()
+        elif scheduled_at:
+            try:
+                parsed_scheduled_at = datetime.fromisoformat(str(scheduled_at))
+                if parsed_scheduled_at.tzinfo is None:
+                    parsed_scheduled_at = FRANCE_TZ.localize(parsed_scheduled_at)
+                scheduled_at = parsed_scheduled_at.astimezone(FRANCE_TZ).isoformat()
+            except (TypeError, ValueError):
+                scheduled_at = str(scheduled_at)
+
+        return jsonify({
+            "success": True,
+            "session": {
+                "id": int(course_session["id"]),
+                "session_index": session_index,
+                "scheduled_at": scheduled_at,
+                "status": str(course_session.get("status") or "planned"),
+            },
+            "scheduled_course": scheduled_course,
+            "selected_course": selected_course,
+            "is_manual_override": bool(
+                scheduled_course
+                and selected_course
+                and int(scheduled_course["id"]) != int(selected_course["id"])
+            ),
+        }), 200
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/cours-folders", methods=["POST"])
     def create_cours_folder(platform_id):

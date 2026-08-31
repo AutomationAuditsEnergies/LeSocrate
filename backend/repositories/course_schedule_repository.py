@@ -627,7 +627,7 @@ def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str,
                cs.status, cs.audio_generation_status,
                cs.audio_generation_started_at, cs.audio_generation_completed_at,
                cs.audio_generation_attempts, cs.audio_generation_next_retry_at,
-               cs.audio_storage_prefix,
+               cs.audio_folder_id, cs.audio_storage_prefix,
                pc.name,
                COALESCE(
                    pc.source_formation_id,
@@ -658,6 +658,39 @@ def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str,
         conn.row_factory = __import__("sqlite3").Row
         cursor = conn.cursor()
         cursor.execute(query, (platform_id, session_id))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_next_course_session(platform_id: int) -> dict[str, Any] | None:
+    """Return the next mutable occurrence in chronological order."""
+    postgres = schedule_store_is_postgres()
+    ph = "%s" if postgres else "?"
+    query = f"""
+        SELECT id, platform_id, session_index, scheduled_at, status,
+               module_day_id, local_date,
+               audio_generation_status, audio_generation_started_at,
+               audio_generation_completed_at, audio_folder_id,
+               audio_storage_prefix
+        FROM course_sessions
+        WHERE platform_id = {ph}
+          AND status IN ('planned', 'active')
+        ORDER BY scheduled_at ASC
+        LIMIT 1
+    """
+    if postgres:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (int(platform_id),))
+                row = cur.fetchone()
+                return dict(row) if row else None
+    conn = get_db_connection()
+    try:
+        conn.row_factory = __import__("sqlite3").Row
+        cursor = conn.cursor()
+        cursor.execute(query, (int(platform_id),))
         row = cursor.fetchone()
         return dict(row) if row else None
     finally:

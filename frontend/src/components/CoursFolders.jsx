@@ -59,6 +59,28 @@ const courseDurationLabel = (items = [], courseIndex) => {
     : 'durée variable'
 }
 
+const formatCourseSessionDate = (value) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Date non renseignée'
+  return new Intl.DateTimeFormat('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Europe/Paris',
+  }).format(date)
+}
+
+const formatCourseSessionTime = (value) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Heure non renseignée'
+  return new Intl.DateTimeFormat('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Paris',
+  }).format(date)
+}
+
 const PLAYLIST_VOICE_OPTIONS = [
   { value: 'gtts', label: 'gTTS', icon: 'bolt', hint: 'rapide, économique' },
   { value: 'fish_audio', label: 'Fish Audio', icon: 'graphic_eq', hint: 'voix premium payante' },
@@ -113,6 +135,9 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const [fillFolderId, setFillFolderId] = useState('')
   const [fillingPlatform, setFillingPlatform] = useState(false)
   const [fillFeedback, setFillFeedback] = useState(null)
+  const [nextCourseSelection, setNextCourseSelection] = useState(null)
+  const [nextCourseSelectionLoading, setNextCourseSelectionLoading] = useState(true)
+  const [nextCourseSelectionError, setNextCourseSelectionError] = useState('')
   const [courseMaterials, setCourseMaterials] = useState([]) // PDF généré à la fin de la pipeline texte
   const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
   const [courseMaterialsError, setCourseMaterialsError] = useState('')
@@ -193,6 +218,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 
     fetchFolders()
     fetchCourseMaterials()
+    fetchNextCourseSelection()
 
     // Écouter les changements de mode
     const observer = new MutationObserver(() => {
@@ -202,7 +228,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
     })
     observer.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'] })
     return () => observer.disconnect()
-  }, [platformId])
+  }, [platformId, targetSessionId])
 
   useEffect(() => {
     if (showCreateFolderForm) {
@@ -274,6 +300,34 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       console.error('Erreur chargement dossiers:', e)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchNextCourseSelection = async () => {
+    setNextCourseSelectionLoading(true)
+    setNextCourseSelectionError('')
+    try {
+      const sessionQuery = targetSessionId
+        ? `?session_id=${encodeURIComponent(targetSessionId)}`
+        : ''
+      const resp = await apiFetch(
+        `/api/hr/platforms/${platformId}/next-course-selection${sessionQuery}`,
+      )
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Impossible de charger la prochaine séance.')
+      }
+      setNextCourseSelection(data)
+      if (data.selected_course?.id) {
+        setFillFolderId(String(data.selected_course.id))
+      }
+    } catch (error) {
+      setNextCourseSelection(null)
+      setNextCourseSelectionError(
+        error.message || 'Impossible de charger la prochaine séance.',
+      )
+    } finally {
+      setNextCourseSelectionLoading(false)
     }
   }
 
@@ -1113,6 +1167,14 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const handleFillPlatform = async (event) => {
     event.preventDefault()
     if (!fillFolderId || fillingPlatform) return
+    const selectedSessionId = targetSessionId || nextCourseSelection?.session?.id
+    if (!selectedSessionId) {
+      setFillFeedback({
+        tone: 'error',
+        text: 'Aucune prochaine séance programmée ne peut être modifiée.',
+      })
+      return
+    }
     setFillingPlatform(true)
     setFillFeedback(null)
     try {
@@ -1121,7 +1183,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           folder_id: Number(fillFolderId),
-          ...(targetSessionId ? { session_id: Number(targetSessionId) } : {}),
+          session_id: Number(selectedSessionId),
         }),
       })
       const data = await resp.json().catch(() => ({}))
@@ -1130,8 +1192,9 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       }
       setFillFeedback({
         tone: 'success',
-        text: `${data.folder_name || 'Le cours'} sera diffusé lors de ${targetSessionId ? 'la séance concernée' : 'la prochaine séance'}.`,
+        text: `${data.folder_name || 'Le cours'} sera diffusé uniquement lors de cette séance. Les suivantes conservent leur progression.`,
       })
+      await fetchNextCourseSelection()
       onAudiosPublished?.(platformId)
     } catch (error) {
       setFillFeedback({
@@ -1725,7 +1788,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       <button
                         type="button"
                         onClick={() => {
-                          setShowFillForm((value) => !value)
+                          setShowFillForm((value) => {
+                            if (!value) fetchNextCourseSelection()
+                            return !value
+                          })
                           setFillFeedback(null)
                         }}
                         className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-lg px-3 py-2 text-left text-sm font-semibold text-white"
@@ -1762,6 +1828,52 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
                     Choisissez une journée dont l’audio et la visio sont déjà disponibles {targetSessionId ? 'pour cette séance' : 'pour la prochaine diffusion'}.
                   </p>
+                  {nextCourseSelectionLoading ? (
+                    <div className="mt-3 grid gap-3 border-y py-3 sm:grid-cols-3" style={{ borderColor: colors.border }} aria-label="Chargement de la séance">
+                      {[0, 1, 2].map((item) => (
+                        <div key={item} className="h-10 animate-pulse rounded-md" style={{ backgroundColor: colors.cardBg }} />
+                      ))}
+                    </div>
+                  ) : nextCourseSelectionError ? (
+                    <p className="mt-3 border-y py-3 text-xs font-medium" style={{ color: '#b91c1c', borderColor: colors.border }} role="alert">
+                      {nextCourseSelectionError}
+                    </p>
+                  ) : nextCourseSelection?.session ? (
+                    <div className="mt-3 border-y py-3" style={{ borderColor: colors.border }}>
+                      <dl className="grid gap-3 sm:grid-cols-[1.4fr_0.65fr_1.6fr]">
+                        <div>
+                          <dt className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Date</dt>
+                          <dd className="mt-1 text-sm font-semibold capitalize" style={{ color: colors.text }}>
+                            {formatCourseSessionDate(nextCourseSelection.session.scheduled_at)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Heure</dt>
+                          <dd className="mt-1 text-sm font-semibold" style={{ color: colors.text }}>
+                            {formatCourseSessionTime(nextCourseSelection.session.scheduled_at)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Cours actuellement prévu</dt>
+                          <dd className="mt-1 text-sm font-semibold" style={{ color: colors.text }}>
+                            {nextCourseSelection.selected_course?.label || 'Cours non identifié'}
+                          </dd>
+                        </div>
+                      </dl>
+                      {nextCourseSelection.is_manual_override && nextCourseSelection.scheduled_course?.label && (
+                        <p className="mt-3 text-xs" style={{ color: colors.textSecondary }}>
+                          Cours habituel dans la progression : {nextCourseSelection.scheduled_course.label}.
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-3 border-y py-3 text-xs font-medium" style={{ color: colors.textSecondary, borderColor: colors.border }}>
+                      Aucune prochaine séance n’est programmée.
+                    </p>
+                  )}
+                  <p className="mt-3 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                    Le changement s’applique uniquement à cette séance. Les séances suivantes conservent le cours prévu dans leur progression.
+                  </p>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <select
                       id={`fill-folder-${platformId}`}
@@ -1779,10 +1891,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     </select>
                     <button
                       type="submit"
-                      disabled={!fillFolderId || fillingPlatform}
+                      disabled={!fillFolderId || fillingPlatform || !nextCourseSelection?.session}
                       className="min-h-11 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {fillingPlatform ? 'Copie en cours…' : 'Utiliser ce cours'}
+                      {fillingPlatform ? 'Enregistrement…' : 'Enregistrer pour cette séance'}
                     </button>
                   </div>
                   {fillFeedback && (
@@ -1931,10 +2043,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         Si la séance prévue n’a pas été générée correctement avec son audio et sa visio, contactez le support.
                       </p>
                       <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
-                        En attendant la correction, choisissez un cours précédent déjà complet. Il sera diffusé à la date de la prochaine séance.
+                        En attendant la correction, choisissez un cours précédent déjà complet. Il sera diffusé uniquement pendant la séance indiquée.
                       </p>
                       <p className="border-t pt-4 text-xs font-semibold leading-5" style={{ color: colors.text, borderColor: colors.border }}>
-                        Utilisez cette option uniquement lorsqu’aucune séance complète n’est disponible.
+                        Les séances suivantes continuent avec les cours déjà prévus dans la progression.
                       </p>
                     </div>
                   </div>

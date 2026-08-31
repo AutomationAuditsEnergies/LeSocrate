@@ -48,6 +48,50 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
         self.assertEqual(data["folders"][0]["document_count"], 1)
         list_folders.assert_called_once_with(12)
 
+    def test_next_course_selection_exposes_the_occurrence_and_current_override(self):
+        with self.client.session_transaction() as sess:
+            sess["is_admin"] = True
+            sess["admin_account_type"] = "legacy_admin"
+
+        course_session = {
+            "id": 41,
+            "platform_id": 12,
+            "session_index": 2,
+            "scheduled_at": "2026-09-01T09:00:00+02:00",
+            "status": "planned",
+            "audio_folder_id": 93,
+        }
+        folder_result = {
+            "folders": [
+                {"id": 91, "name": "Fondations", "position": 0},
+                {"id": 92, "name": "Mise en pratique", "position": 1},
+                {"id": 93, "name": "Perfectionnement", "position": 2},
+            ],
+            "platform_id": 12,
+            "source_platform_id": None,
+        }
+
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.get_next_course_session",
+            return_value=course_session,
+        ), patch(
+            "routes.hr_routes.list_course_folder_rows_for_platform",
+            return_value=folder_result,
+        ):
+            resp = self.client.get(
+                "/api/hr/platforms/12/next-course-selection"
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["session"]["id"], 41)
+        self.assertEqual(data["session"]["scheduled_at"], "2026-09-01T09:00:00+02:00")
+        self.assertEqual(data["scheduled_course"]["id"], 92)
+        self.assertEqual(data["selected_course"]["id"], 93)
+        self.assertEqual(data["selected_course"]["label"], "Jour 3 — Perfectionnement")
+        self.assertTrue(data["is_manual_override"])
+
     def _make_platforms_connection(self):
         class KeepOpenConnection(sqlite3.Connection):
             def close(self):

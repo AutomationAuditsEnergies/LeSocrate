@@ -85,6 +85,75 @@ def _make_schedule_db():
 
 
 class CourseScheduleRepositoryTest(unittest.TestCase):
+    def test_one_session_override_does_not_change_the_following_progression(self):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        try:
+            conn = sqlite3.connect(tmp.name)
+            conn.executescript(
+                """
+                CREATE TABLE course_sessions (
+                    id INTEGER PRIMARY KEY,
+                    platform_id INTEGER NOT NULL,
+                    session_index INTEGER NOT NULL,
+                    scheduled_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    module_day_id INTEGER,
+                    local_date TEXT,
+                    audio_folder_id INTEGER,
+                    audio_storage_prefix TEXT,
+                    audio_generation_status TEXT,
+                    audio_generation_started_at TEXT,
+                    audio_generation_completed_at TEXT,
+                    audio_generation_error TEXT,
+                    audio_generation_next_retry_at TEXT,
+                    updated_at TEXT
+                );
+                INSERT INTO course_sessions (
+                    id, platform_id, session_index, scheduled_at, status,
+                    module_day_id, updated_at
+                ) VALUES
+                    (9, 12, 2, '2026-09-01 09:00:00', 'planned', 402, '2026-08-31 09:00:00'),
+                    (10, 12, 3, '2026-09-02 09:00:00', 'planned', 403, '2026-08-31 09:00:00');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            completed_at = datetime.now(FRANCE_TZ)
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(
+                    repo,
+                    "get_db_connection",
+                    side_effect=lambda: sqlite3.connect(tmp.name),
+                ),
+            ):
+                next_session = repo.get_next_course_session(12)
+                changed = repo.assign_fallback_audio_to_session(
+                    12,
+                    9,
+                    module_day_id=405,
+                    folder_id=59,
+                    completed_at=completed_at,
+                )
+
+            self.assertEqual(next_session["id"], 9)
+            self.assertTrue(changed)
+            conn = sqlite3.connect(tmp.name)
+            rows = conn.execute(
+                """
+                SELECT id, module_day_id, audio_folder_id, audio_storage_prefix
+                FROM course_sessions
+                ORDER BY id
+                """
+            ).fetchall()
+            conn.close()
+            self.assertEqual(rows[0], (9, 405, 59, "course-sessions/9"))
+            self.assertEqual(rows[1], (10, 403, None, None))
+        finally:
+            os.unlink(tmp.name)
+
     def test_legacy_save_schedule_also_keeps_completed_history(self):
         conn = sqlite3.connect(":memory:")
         cursor = conn.cursor()
@@ -576,6 +645,7 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
                     audio_generation_completed_at TEXT,
                     audio_generation_attempts INTEGER NOT NULL DEFAULT 0,
                     audio_generation_next_retry_at TEXT,
+                    audio_folder_id INTEGER,
                     audio_storage_prefix TEXT
                 );
                 INSERT INTO formation_pipeline_jobs (id, platform_id)
