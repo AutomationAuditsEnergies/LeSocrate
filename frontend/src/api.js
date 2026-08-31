@@ -132,3 +132,19 @@ export async function apiDownload(path, fallbackFilename = 'telechargement') {
   link.remove()
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
 }
+
+export async function downloadExternalFile(url, fallbackFilename = 'telechargement') {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Téléchargement impossible (${response.status})`)
+  }
+
+  const objectUrl = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = fallbackFilename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+}

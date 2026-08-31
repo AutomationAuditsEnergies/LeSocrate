@@ -7320,9 +7320,11 @@ function PlatformCard({
 
       {detailsOpen && (
         <div className={`mx-auto w-full ${courseScriptExpanded ? 'max-w-none px-0' : 'max-w-4xl px-2 sm:px-6'}`}>
-          <button type="button" onClick={activeTool ? closeTool : closeDetails} className="mb-6 inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-[#52525B] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30">
-            <ChevronLeft size={18} /> {activeTool ? activeToolMeta?.label : 'Mes professeurs'}
-          </button>
+          {activeTool !== 'courses' && (
+            <button type="button" onClick={activeTool ? closeTool : closeDetails} className="mb-6 inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-[#52525B] transition-colors hover:bg-[#F4F4F5] hover:text-[#18181B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30">
+              <ChevronLeft size={18} /> {activeTool ? activeToolMeta?.label : 'Mes professeurs'}
+            </button>
+          )}
           <section
             aria-labelledby={`teacher-details-${p.id}`}
             className="relative flex w-full flex-col overflow-hidden bg-white"
@@ -7497,6 +7499,7 @@ function PlatformCard({
               platformId={p.id}
               platformName={p.name}
               targetSessionId={fallbackSessionId}
+              onBack={closeTool}
               onAudiosPublished={onAudiosPublished}
               onScriptViewChange={setCourseScriptExpanded}
             />

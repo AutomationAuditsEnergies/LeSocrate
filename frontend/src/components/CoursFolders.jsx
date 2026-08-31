@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiDownload, apiFetch } from '../api'
+import { apiDownload, apiFetch, downloadExternalFile } from '../api'
 import AudioEditor from './AudioEditor'
 import { isCourseAudioFilename } from './slides/audioSlideSync'
 
@@ -80,7 +80,7 @@ const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function CoursFoldersModal({ platformId, platformName, targetSessionId = null, onClose, onAudiosPublished, onScriptViewChange, embedded = false }) {
+export default function CoursFoldersModal({ platformId, platformName, targetSessionId = null, onClose, onBack, onAudiosPublished, onScriptViewChange, embedded = false }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
   const [folders, setFolders] = useState([])
   const [documents, setDocuments] = useState([])
@@ -116,6 +116,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const [courseMaterials, setCourseMaterials] = useState([]) // PDF généré à la fin de la pipeline texte
   const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
   const [courseMaterialsError, setCourseMaterialsError] = useState('')
+  const [downloadingCourseMaterial, setDownloadingCourseMaterial] = useState(false)
   const [deletingAudioFile, setDeletingAudioFile] = useState('')
   // ── Consultation et correction du contenu généré ──
   const [showPromptPreview, setShowPromptPreview] = useState(false)
@@ -1516,6 +1517,24 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
     ? materialForFolder(selectedFolder, Math.max(0, selectedFolderIndex))
     : null
 
+  const handleDownloadCourseMaterial = async () => {
+    if (!selectedCourseMaterial?.url || downloadingCourseMaterial) return
+
+    setDownloadingCourseMaterial(true)
+    const fallbackFilename = `support-jour-${selectedCourseMaterial.session_index || selectedFolderIndex + 1}.pdf`
+    try {
+      await downloadExternalFile(
+        selectedCourseMaterial.url,
+        selectedCourseMaterial.filename || fallbackFilename,
+      )
+    } catch (error) {
+      console.error('Erreur téléchargement support PDF:', error)
+      alert(error.message || 'Impossible de télécharger le PDF.')
+    } finally {
+      setDownloadingCourseMaterial(false)
+    }
+  }
+
   return (
     <div
       className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4'}
@@ -1533,10 +1552,88 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {embedded && !audioEditorFile && (
+          <header
+            className="flex min-h-14 flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b px-1 py-2 sm:flex-nowrap sm:px-3"
+            style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}
+          >
+            <button
+              type="button"
+              onClick={onBack || onClose}
+              className="inline-flex min-h-10 flex-shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+              style={{ color: colors.textSecondary }}
+            >
+              <Icon name="chevron_left" style={{ fontSize: '20px' }} />
+              Cours
+            </button>
+
+            {view === 'documents' && (
+              <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:flex-nowrap">
+                <button
+                  type="button"
+                  onClick={handleBackToFolders}
+                  className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+                  style={{ color: colors.textSecondary }}
+                  title="Retour aux cours"
+                >
+                  <Icon name="arrow_back" style={{ fontSize: '17px' }} />
+                  <span className="hidden md:inline">Retour aux cours</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleViewContentScript}
+                  disabled={loadingContentScript}
+                  className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-white/5"
+                  style={{ color: colors.textSecondary }}
+                  title="Voir le script TTS généré"
+                >
+                  <Icon name="description" style={{ fontSize: '17px' }} />
+                  <span className="hidden md:inline">{loadingContentScript ? 'Chargement…' : 'Voir le script TTS'}</span>
+                </button>
+                {courseMaterialsLoading ? (
+                  <button
+                    type="button"
+                    disabled
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-[#121212] px-3 text-xs font-semibold text-white opacity-60"
+                  >
+                    <Icon name="hourglass_top" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">PDF en cours…</span>
+                  </button>
+                ) : selectedCourseMaterial ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadCourseMaterial}
+                    disabled={downloadingCourseMaterial}
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-[#121212] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 disabled:cursor-wait disabled:opacity-60"
+                    title="Télécharger le PDF"
+                  >
+                    <Icon name={downloadingCourseMaterial ? 'hourglass_top' : 'download'} style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">{downloadingCourseMaterial ? 'Téléchargement…' : 'Télécharger le PDF'}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={fetchCourseMaterials}
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+                    style={{
+                      border: `1px solid ${courseMaterialsError ? '#fecaca' : colors.border}`,
+                      color: courseMaterialsError ? '#b91c1c' : colors.textSecondary,
+                    }}
+                    title={courseMaterialsError ? 'Réessayer de charger le PDF' : 'Actualiser le PDF'}
+                  >
+                    <Icon name="refresh" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">{courseMaterialsError ? 'Réessayer' : 'Actualiser le PDF'}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </header>
+        )}
+
         {/* Modal Header */}
         {(!embedded || view !== 'folders' || audioEditorFile) && <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 py-2' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
           <div className="flex min-w-0 items-center gap-2.5">
-            <Icon name={audioEditorFile ? 'content_cut' : 'folder_special'} style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />
+            {audioEditorFile && <Icon name="content_cut" style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />}
             <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
               {audioEditorFile ? audioEditorFile : view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
             </h3>
@@ -1859,67 +1956,10 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
             </div>
           ) : (
             <>
-              {/* Navigation secondaire */}
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <button
-                  onClick={handleBackToFolders}
-                  className="flex items-center gap-1.5 text-xs font-medium transition-colors"
-                  style={{ color: colors.textSecondary }}
-                  onMouseEnter={(e) => e.currentTarget.style.color = colors.text}
-                  onMouseLeave={(e) => e.currentTarget.style.color = colors.textSecondary}
-                >
-                  <Icon name="arrow_back" style={{ fontSize: '16px' }} />
-                  Retour aux cours
-                </button>
-                <button
-                  onClick={handleViewContentScript}
-                  disabled={loadingContentScript}
-                  className="flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50"
-                  style={{ color: colors.textSecondary }}
-                  onMouseEnter={(e) => {
-                    if (!loadingContentScript) e.currentTarget.style.color = colors.text
-                  }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = colors.textSecondary }}
-                >
-                  {loadingContentScript ? 'Chargement...' : 'Voir le script TTS généré'}
-                  <Icon name="arrow_forward" style={{ fontSize: '16px' }} />
-                </button>
-              </div>
-
-              <div className="mb-4 space-y-3">
-                {/* ── Support PDF généré pour cette journée ── */}
-                <div
-                  className="flex min-h-14 items-center justify-between gap-4 rounded-xl px-4 py-3"
-                  style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}
-                >
-                  <span className="text-sm font-semibold" style={{ color: colors.text }}>Support PDF de la journée</span>
-                  {courseMaterialsLoading ? (
-                    <span className="text-xs" style={{ color: colors.textMuted }}>Vérification…</span>
-                  ) : selectedCourseMaterial ? (
-                    <a
-                      href={selectedCourseMaterial.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex min-h-9 shrink-0 items-center rounded-lg px-3 py-1.5 text-xs font-semibold no-underline"
-                      style={{ backgroundColor: colors.text, color: colors.cardBg }}
-                    >
-                      Ouvrir le PDF
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={fetchCourseMaterials}
-                      className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold"
-                      style={{ border: `1px solid ${courseMaterialsError ? '#fecaca' : colors.border}`, color: courseMaterialsError ? '#b91c1c' : colors.textSecondary }}
-                    >
-                      {courseMaterialsError ? 'Réessayer' : 'Actualiser'}
-                    </button>
-                  )}
-                </div>
-
+              <div className="mb-4">
                 {/* ── Panneau : Audios générés ── */}
                 <div className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}>
-                  <div className="flex items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+                  <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
                     <Icon name="music_note" style={{ color: colors.textMuted, fontSize: '17px' }} />
                     <span className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</span>
                     {invalidAudios.some(audio => audio.reason === 'missing_audio_sync') && (
@@ -1962,7 +2002,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     </select>
                   </div>
 
-                  <div className="max-h-72 overflow-y-auto p-2">
+                  <div className="max-h-[26rem] overflow-y-auto p-2">
                     {(() => {
                       const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
                       const manifestItems = audioPlaylistItems.length
