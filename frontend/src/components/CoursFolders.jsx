@@ -1632,8 +1632,8 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
       >
         {embedded && !audioEditorFile && (
           <header
-            className="flex min-h-14 flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b px-1 py-2 sm:flex-nowrap sm:px-3"
-            style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}
+            className="flex min-h-14 flex-shrink-0 flex-wrap items-center justify-between gap-2 px-1 py-2 sm:flex-nowrap sm:px-3"
+            style={{ backgroundColor: colors.cardBg }}
           >
             <button
               type="button"
