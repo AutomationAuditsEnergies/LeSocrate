@@ -7196,7 +7196,7 @@ function PlatformCard({
     ...(p.active ? [
       { key: 'planning', label: 'Planning', icon: 'schedule', IconComponent: CalendarDays, onOpen: onOpenCourseTimeModal },
       { key: 'courses', label: 'Cours', icon: 'folder_open', IconComponent: FolderOpen, onOpen: onOpenCoursFolders },
-      { key: 'students', label: 'Élèves', icon: 'group', IconComponent: UsersRound, onOpen: onToggleStudentEmails },
+      { key: 'students', label: 'Mail(s) d’invitation', icon: 'group', IconComponent: UsersRound, onOpen: onToggleStudentEmails },
       { key: 'attendance', label: 'Présence', icon: 'fact_check', IconComponent: ClipboardCheck, onOpen: onToggleAttendance },
     ] : []),
   ]

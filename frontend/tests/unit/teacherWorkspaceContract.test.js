@@ -17,6 +17,8 @@ test('keeps teacher tools inside one workspace without an archive action', async
   assert.match(dashboardSource, /function TeacherToolPanel/)
   assert.match(dashboardSource, /const \[activeTool, setActiveTool\] = useState\(null\)/)
   assert.match(dashboardSource, /activeTool === 'students'/)
+  assert.match(dashboardSource, /label: 'Mail\(s\) d’invitation'/)
+  assert.doesNotMatch(dashboardSource, /key: 'students', label: 'Élèves'/)
   assert.match(dashboardSource, /activeTool === 'attendance'/)
   assert.doesNotMatch(dashboardSource, /key: 'audios'/)
   assert.doesNotMatch(dashboardSource, /activeTool === 'audios'/)
