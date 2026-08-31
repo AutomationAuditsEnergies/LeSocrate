@@ -62,6 +62,7 @@ from repositories.pipeline_repository import (
     list_course_folder_rows_for_platform,
     pipeline_job_belongs_to_center,
     platform_ids_use_postgres_allocator,
+    resolve_course_folder_for_platform,
 )
 from services.course_schedule_service import (
     build_course_session_state,
@@ -6808,27 +6809,18 @@ def create_hr_blueprint():
             if folder_denied:
                 return folder_denied
 
-            # Vérifier que le dossier appartient à cette plateforme, ou à la
-            # plateforme générée qui sert de source à cette plateforme historique.
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT cf.name, cf.platform_id
-                FROM cours_folders cf
-                LEFT JOIN platform_config source_pc ON source_pc.id = cf.platform_id
-                WHERE cf.id = ?
-                  AND (cf.platform_id = ? OR source_pc.source_formation_id = ?)
-                """,
-                (folder_id, platform_id, platform_id),
+            # Vérifier via le repository actif (PostgreSQL en production) que
+            # le dossier appartient à cette plateforme ou à sa source générée.
+            folder_row = resolve_course_folder_for_platform(
+                folder_id,
+                platform_id,
             )
-            folder_row = cursor.fetchone()
-            conn.close()
-
             if not folder_row:
                 return jsonify({"success": False, "error": "Dossier introuvable pour cette plateforme"}), 404
             origin = resolve_folder_asset_origin(folder_id) or {}
-            source_platform_id = int(origin.get("source_platform_id") or folder_row[1])
+            source_platform_id = int(
+                origin.get("source_platform_id") or folder_row["platform_id"]
+            )
 
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
@@ -6971,7 +6963,7 @@ def create_hr_blueprint():
                     "copied": len(published),
                     "errors": 0,
                     "files": published,
-                    "folder_name": folder_row[0],
+                    "folder_name": folder_row["name"],
                     "session_id": session_id,
                     "scheduled_at": target_session.get("scheduled_at"),
                     "schedule_schema_version": schedule_schema_version,
@@ -7086,7 +7078,7 @@ def create_hr_blueprint():
                 "errors": len(errors),
                 "files": copied_files,
                 "error_details": errors,
-                "folder_name": folder_row[0],
+                "folder_name": folder_row["name"],
                 "schedule_schema_version": schedule_schema_version,
                 "archive": archive_result,
             }), 200

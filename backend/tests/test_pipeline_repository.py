@@ -987,6 +987,54 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(calls[1][1], (44, "Jour 1 — Accueil"))
         self.assertFalse(any("INSERT INTO cours_folders" in query for query, _ in calls))
 
+    def test_course_folder_platform_resolution_uses_postgres_without_sqlite(self):
+        calls = []
+        expected = {
+            "id": 91,
+            "name": "Jour 2",
+            "platform_id": 5,
+            "position": 1,
+            "formation_job_id": 44,
+        }
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=None):
+                calls.append((" ".join(query.split()), params))
+
+            def fetchone(self):
+                return expected
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return FakeCursor()
+
+        with (
+            patch.object(repo, "_pipeline_primary_backend", lambda: "postgres"),
+            patch.object(repo, "get_postgres_connection", lambda: FakeConnection()),
+            patch.object(
+                repo,
+                "get_db_connection",
+                side_effect=AssertionError("SQLite must not be opened"),
+            ),
+        ):
+            result = repo.resolve_course_folder_for_platform(91, 5)
+
+        self.assertEqual(result, expected)
+        self.assertEqual(calls[0][1], (91, 5, 5))
+        self.assertIn("source_pc.source_formation_id = %s", calls[0][0])
+
     def test_content_job_update_rejects_non_whitelisted_columns(self):
         with self.assertRaisesRegex(ValueError, "created_at"):
             repo.update_content_generation_job(99, created_at="2099-01-01")

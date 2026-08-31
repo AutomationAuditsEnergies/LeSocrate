@@ -3039,6 +3039,41 @@ def get_course_folder_identity(folder_id: int) -> dict[str, Any] | None:
         conn.close()
 
 
+def resolve_course_folder_for_platform(
+    folder_id: int,
+    platform_id: int,
+) -> dict[str, Any] | None:
+    """Resolve a folder through the direct or generated-source platform link."""
+    ph = _placeholder()
+    query = f"""
+        SELECT cf.id, cf.name, cf.platform_id, cf.position, cf.formation_job_id
+        FROM cours_folders cf
+        LEFT JOIN platform_config source_pc ON source_pc.id = cf.platform_id
+        WHERE cf.id = {ph}
+          AND (
+              cf.platform_id = {ph}
+              OR source_pc.source_formation_id = {ph}
+          )
+        LIMIT 1
+    """
+    params = (int(folder_id), int(platform_id), int(platform_id))
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def list_effective_course_documents(folder_id: int) -> list[tuple[int, str, str]]:
     """Return the final script when present, otherwise every source document."""
     ph = _placeholder()

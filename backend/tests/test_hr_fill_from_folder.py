@@ -80,22 +80,6 @@ class _BlobService:
         return self.containers[name]
 
 
-class _Cursor:
-    def execute(self, *_args, **_kwargs):
-        return None
-
-    def fetchone(self):
-        return ("Journée test", 5)
-
-
-class _Connection:
-    def cursor(self):
-        return _Cursor()
-
-    def close(self):
-        return None
-
-
 class HrFillFromFolderTest(unittest.TestCase):
     def setUp(self):
         app = Flask(__name__)
@@ -138,7 +122,19 @@ class HrFillFromFolderTest(unittest.TestCase):
             stack.enter_context(
                 patch(
                     "routes.hr_routes.get_db_connection",
-                    return_value=_Connection(),
+                    side_effect=AssertionError(
+                        "fill-from-folder must not access SQLite"
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "routes.hr_routes.resolve_course_folder_for_platform",
+                    return_value={
+                        "id": 91,
+                        "name": "Journée test",
+                        "platform_id": 5,
+                    },
                 )
             )
             stack.enter_context(
@@ -283,7 +279,20 @@ class HrFillFromFolderTest(unittest.TestCase):
                 "AZURE_TTS_STORAGE_CONNECTION_STRING": "tts",
                 "AZURE_AUDIO_STORAGE_CONNECTION_STRING": "audio",
             }, clear=False))
-            stack.enter_context(patch("routes.hr_routes.get_db_connection", return_value=_Connection()))
+            stack.enter_context(patch(
+                "routes.hr_routes.get_db_connection",
+                side_effect=AssertionError(
+                    "fill-from-folder must not access SQLite"
+                ),
+            ))
+            stack.enter_context(patch(
+                "routes.hr_routes.resolve_course_folder_for_platform",
+                return_value={
+                    "id": 91,
+                    "name": "Journée test",
+                    "platform_id": 5,
+                },
+            ))
             stack.enter_context(patch("routes.hr_routes.resolve_folder_asset_origin", return_value={"source_platform_id": 5}))
             stack.enter_context(patch("routes.hr_routes._get_platform_info", return_value={"audio_container": "formationaudio-test"}))
             stack.enter_context(patch("services.day_playlist_service.resolve_folder_playlist", return_value={
