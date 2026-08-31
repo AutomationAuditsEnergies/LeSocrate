@@ -1758,33 +1758,19 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                 </form>
               ) : (
                 <div className="mb-5 pb-4">
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          fetchNextCourseSelection()
-                          setShowFillForm(true)
-                          setFillFeedback(null)
-                        }}
-                        className="inline-flex min-h-10 min-w-0 items-center justify-center rounded-lg px-3 py-2 text-left text-sm font-semibold text-white"
-                        style={{ backgroundColor: '#121212' }}
-                      >
-                        {targetSessionId ? 'Choisir le cours de remplacement' : 'Choisir le prochain cours'}
-                      </button>
-                      <button
-                        type="button"
-                        aria-expanded={showFillInfo}
-                        aria-controls={`fill-course-info-${platformId}`}
-                        aria-label="Informations sur le choix du cours diffusé"
-                        title="À quoi sert ce bouton ?"
-                        onClick={() => setShowFillInfo((value) => !value)}
-                        className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full transition-colors"
-                        style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textMuted }}
-                      >
-                        <Icon name="info" className="text-[17px]" />
-                      </button>
-                    </div>
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      aria-expanded={showFillInfo}
+                      aria-controls={`fill-course-info-${platformId}`}
+                      aria-label="Informations sur le choix du cours diffusé"
+                      title="À quoi sert ce bouton ?"
+                      onClick={() => setShowFillInfo((value) => !value)}
+                      className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full transition-colors"
+                      style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textMuted }}
+                    >
+                      <Icon name="info" className="text-[17px]" />
+                    </button>
                   </div>
                 </div>
               )}
@@ -2046,24 +2032,21 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               )}
               </div>
 
-              <>
-                {showFillInfo && (
+              {showFillInfo && typeof document !== 'undefined' && createPortal(
+                <div className="fixed inset-0 z-[70]" role="presentation">
                   <button
                     type="button"
                     aria-label="Fermer les informations"
                     onClick={() => setShowFillInfo(false)}
-                    className="fixed inset-0 z-40 bg-black/25 lg:hidden"
+                    className="absolute inset-0 cursor-default bg-slate-950/35"
                   />
-                )}
-                <aside
-                  id={`fill-course-info-${platformId}`}
-                  role="complementary"
-                  aria-labelledby={`fill-course-info-title-${platformId}`}
-                  aria-hidden={!showFillInfo}
-                  className={`fixed inset-y-0 right-0 z-50 w-[min(320px,calc(100%-32px))] overflow-y-auto border-l p-5 shadow-xl transition-[transform,width,opacity,padding] duration-200 ease-out motion-reduce:transition-none lg:sticky lg:top-0 lg:z-auto lg:h-auto lg:flex-none lg:self-start lg:shadow-none ${showFillInfo ? 'translate-x-0 lg:w-72 lg:translate-x-0 lg:opacity-100 lg:p-0 lg:pl-4' : 'pointer-events-none translate-x-full lg:w-0 lg:translate-x-0 lg:border-transparent lg:p-0 lg:opacity-0'}`}
-                  style={{ backgroundColor: colors.cardBg, borderColor: showFillInfo ? colors.border : 'transparent' }}
-                >
-                  <div className="lg:w-[272px]">
+                  <aside
+                    id={`fill-course-info-${platformId}`}
+                    role="complementary"
+                    aria-labelledby={`fill-course-info-title-${platformId}`}
+                    className="absolute inset-y-0 right-0 w-[min(380px,calc(100%-24px))] overflow-y-auto border-l p-5 shadow-2xl sm:p-6"
+                    style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
+                  >
                     <div className="flex items-start justify-between gap-4 border-b pb-4" style={{ borderColor: colors.border }}>
                       <div>
                         <h3 id={`fill-course-info-title-${platformId}`} className="text-sm font-semibold" style={{ color: colors.text }}>
@@ -2088,15 +2071,32 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                         Si la séance prévue n’a pas été générée correctement avec son audio et sa visio, contactez le support.
                       </p>
                       <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
-                        En attendant la correction, choisissez un cours précédent déjà complet. Il sera diffusé uniquement pendant la séance indiquée.
+                        En attendant la correction, choisissez un cours précédent déjà complet. Il sera diffusé uniquement pendant la séquence indiquée.
                       </p>
+                      <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
+                        Cliquez sur le bouton ci-dessous pour choisir le prochain cours.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          fetchNextCourseSelection()
+                          setShowFillInfo(false)
+                          setShowFillForm(true)
+                          setFillFeedback(null)
+                        }}
+                        className="inline-flex min-h-11 w-full items-center justify-center rounded-lg px-4 py-2.5 text-center text-sm font-semibold text-white"
+                        style={{ backgroundColor: '#121212' }}
+                      >
+                        {targetSessionId ? 'Choisir le cours de remplacement' : 'Choisir le prochain cours'}
+                      </button>
                       <p className="border-t pt-4 text-xs font-semibold leading-5" style={{ color: colors.text, borderColor: colors.border }}>
                         Les séances suivantes continuent avec les cours déjà prévus dans la progression.
                       </p>
                     </div>
-                  </div>
-                </aside>
-              </>
+                  </aside>
+                </div>,
+                document.body,
+              )}
             </div>
           ) : (
             <>
