@@ -7043,7 +7043,7 @@ function StudentsToolContent({
         <div>
           <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves</h3>
           <p className="mt-1 max-w-[62ch] text-xs leading-5" style={{ color: colors.textMuted }}>
-            Ajoutez uniquement les adresses qui recevront le lien d’accès et les rappels.
+            Ajoutez uniquement les élèves qui participeront à cette formation.
           </p>
         </div>
         <span className="text-xs font-semibold tabular-nums" style={{ color: colors.textMuted }}>{studentEmails.length} élève{studentEmails.length > 1 ? 's' : ''}</span>
