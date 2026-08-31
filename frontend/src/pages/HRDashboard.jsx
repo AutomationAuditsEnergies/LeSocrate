@@ -4944,18 +4944,10 @@ function AttendanceCardPanel({
   loading,
   error,
   onCourseDateChange,
-  onRefresh,
   onExport,
 }) {
-  const inputStyle = {
-    backgroundColor: colors.cardBg,
-    color: colors.text,
-    border: `1px solid ${colors.border}`,
-  }
   const students = data?.students || []
   const dailyExports = data?.daily_exports || []
-  const readyExports = dailyExports.filter((item) => item.status === 'ready')
-  const selectedExport = readyExports.find((item) => item.course_date === courseDate)
 
   const formatDate = (value) => {
     if (!value) return ''
@@ -4964,38 +4956,22 @@ function AttendanceCardPanel({
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-3 sm:px-6">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b pb-4" style={{ borderColor: colors.border }}>
-        <div>
-          <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Présence de la journée</h4>
-          <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
-            {students.length} participant{students.length > 1 ? 's' : ''}. Les entrées et sorties sont enregistrées automatiquement.
-          </p>
-        </div>
-        <span className="text-xs font-medium" style={{ color: colors.textMuted }}>Suivi automatique</span>
-      </div>
-
-      <div className="mb-4">
-        <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
-          Journée consultée
-          <span className="mt-2 flex items-center gap-2">
-            <input
-              type="date"
-              value={courseDate}
-              onChange={(e) => onCourseDateChange(e.target.value)}
-              className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm font-normal outline-none transition-shadow focus:ring-2 focus:ring-black/25"
-              style={inputStyle}
-            />
-            <button
-              type="button"
-              onClick={onRefresh}
-              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 dark:hover:bg-white/5"
-              style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-              title="Actualiser les présences"
-              aria-label="Actualiser les présences"
-            >
-              <Icon name="refresh" className="text-base" />
-            </button>
-          </span>
+      <div className="mb-5 flex items-center justify-between gap-3 border-b pb-4" style={{ borderColor: colors.border }}>
+        <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Présence de la journée</h4>
+        <label
+          className="relative flex h-9 w-9 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-within:ring-2 focus-within:ring-black/30 dark:hover:bg-white/5"
+          style={{ color: colors.textMuted }}
+          title={`Rechercher une journée, date actuelle : ${formatDate(courseDate)}`}
+        >
+          <Icon name="search" className="text-base" />
+          <span className="sr-only">Rechercher une journée</span>
+          <input
+            type="date"
+            value={courseDate}
+            onChange={(e) => onCourseDateChange(e.target.value)}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            aria-label="Rechercher une journée"
+          />
         </label>
       </div>
 
@@ -5013,33 +4989,16 @@ function AttendanceCardPanel({
         </div>
       )}
 
-      <section className="mb-4 border-t pt-5" style={{ borderColor: colors.border }}>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <span className="text-sm font-semibold" style={{ color: colors.text }}>
-            Fichiers Excel par journée
-          </span>
-          <button
-            type="button"
-            onClick={() => onExport(selectedExport || null)}
-            disabled={!selectedExport}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 disabled:cursor-not-allowed disabled:opacity-50"
-            style={{
-              backgroundColor: selectedExport ? '#121212' : colors.cardBg,
-              color: selectedExport ? 'white' : colors.textMuted,
-              border: selectedExport ? '1px solid #121212' : `1px solid ${colors.border}`,
-            }}
-            title={selectedExport ? 'Télécharger le relevé de cette journée' : 'Disponible automatiquement le lendemain matin'}
-          >
-            <Icon name="download" className="text-sm" />
-            Télécharger l’Excel
-          </button>
-        </div>
+      <section className="mb-4">
+        <h5 className="mb-3 text-sm font-semibold" style={{ color: colors.text }}>
+          Fichiers Excel par journée
+        </h5>
         {dailyExports.length === 0 ? (
           <p className="text-xs leading-5" style={{ color: colors.textMuted }}>
             Le premier fichier apparaîtra ici le lendemain d’une journée de formation, à partir de 6 h.
           </p>
         ) : (
-          <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
+          <div className="max-h-[392px] space-y-1 overflow-y-auto pr-1">
             {dailyExports.map((dailyExport) => (
               <button
                 key={dailyExport.id}
@@ -5049,7 +5008,12 @@ function AttendanceCardPanel({
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/5 disabled:cursor-default disabled:opacity-60 dark:hover:bg-white/5"
                 style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
               >
-                <Icon name="table_chart" className="text-sm" style={{ color: colors.textMuted }} />
+                <img
+                  src="/attendance-calendar.png"
+                  alt=""
+                  aria-hidden="true"
+                  className="h-7 w-7 flex-shrink-0 object-contain"
+                />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs">Journée du {formatDate(dailyExport.course_date)}</span>
                   <span className="block text-[10px]" style={{ color: colors.textMuted }}>
