@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import io
+import json
 import os
 import re
 from typing import Any
@@ -68,23 +69,79 @@ def _merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[d
     return [(item[0], item[1]) for item in merged]
 
 
+def _training_windows(
+    scheduled_at,
+    schedule_blocks,
+    timezone_name: str,
+) -> list[tuple[datetime, datetime]]:
+    """Return the scheduled training periods, excluding the lunch break."""
+    course_start = _as_datetime(scheduled_at, timezone_name)
+    if not course_start or not schedule_blocks:
+        return []
+    if isinstance(schedule_blocks, str):
+        try:
+            schedule_blocks = json.loads(schedule_blocks)
+        except (TypeError, ValueError):
+            return []
+    if isinstance(schedule_blocks, dict):
+        schedule_blocks = schedule_blocks.get("blocks")
+    if not isinstance(schedule_blocks, list):
+        return []
+
+    local_midnight = course_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    windows: list[tuple[datetime, datetime]] = []
+    for block in schedule_blocks:
+        if not isinstance(block, dict):
+            continue
+        block_type = str(
+            block.get("block_type") or block.get("type") or ""
+        ).strip().lower()
+        pause_kind = str(
+            block.get("pause_kind") or block.get("subtype") or ""
+        ).strip().lower()
+        if block_type == "pause" and pause_kind == "lunch":
+            continue
+        try:
+            start_minute = int(block["start_minute"])
+            end_minute = int(block["end_minute"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (0 <= start_minute < end_minute <= 24 * 60):
+            continue
+        windows.append((
+            local_midnight + timedelta(minutes=start_minute),
+            local_midnight + timedelta(minutes=end_minute),
+        ))
+    return _merge_intervals(windows)
+
+
 def consolidate_presence(
     rows: list[dict[str, Any]],
     *,
     scheduled_at,
+    schedule_blocks=None,
     timezone_name: str = "Europe/Paris",
 ) -> list[dict[str, Any]]:
     """Consolidate reconnects and overlapping tabs into auditable intervals."""
     course_start = _as_datetime(scheduled_at, timezone_name)
+    training_windows = _training_windows(scheduled_at, schedule_blocks, timezone_name)
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
         started = _as_datetime(row.get("attendance_started_at"), timezone_name)
         ended = _as_datetime(row.get("depart") or row.get("last_seen_at"), timezone_name)
         if not started or not ended:
             continue
-        if course_start:
-            started = max(started, course_start)
-        if ended <= started:
+        if training_windows:
+            row_intervals = [
+                (max(started, window_start), min(ended, window_end))
+                for window_start, window_end in training_windows
+                if min(ended, window_end) > max(started, window_start)
+            ]
+        else:
+            if course_start:
+                started = max(started, course_start)
+            row_intervals = [(started, ended)] if ended > started else []
+        if not row_intervals:
             continue
         key = _participant_key(row)
         participant = grouped.setdefault(
@@ -99,7 +156,7 @@ def consolidate_presence(
         )
         if not participant["email"] and row.get("email"):
             participant["email"] = str(row["email"]).strip()
-        participant["intervals"].append((started, ended))
+        participant["intervals"].extend(row_intervals)
 
     participants = []
     for participant in grouped.values():
@@ -476,6 +533,7 @@ def process_due_attendance_exports(*, now: datetime | None = None, max_exports: 
             participants = consolidate_presence(
                 rows,
                 scheduled_at=session["scheduled_at"],
+                schedule_blocks=session.get("schedule_blocks"),
                 timezone_name=session.get("timezone") or "Europe/Paris",
             )
             course_date = job["course_date"]
@@ -554,6 +612,7 @@ def get_attendance_dashboard(platform_id: int, course_date: str, *, center_accou
         participants = consolidate_presence(
             rows,
             scheduled_at=course_session["scheduled_at"],
+            schedule_blocks=course_session.get("schedule_blocks"),
             timezone_name=course_session.get("timezone") or "Europe/Paris",
         )
     roster = list_explicit_course_reminder_recipients(platform_id) if course_session else []

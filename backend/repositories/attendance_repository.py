@@ -232,11 +232,13 @@ def get_course_session(session_id: int):
                        pc.center_account_id, pc.center_platform_number,
                        module.id AS teacher_module_id,
                        tca.center_name,
-                       COALESCE(csc.timezone, 'Europe/Paris') AS timezone
+                       COALESCE(csc.timezone, 'Europe/Paris') AS timezone,
+                       module_day.blocks_snapshot_json AS schedule_blocks
                 FROM course_sessions cs
                 JOIN platform_config pc ON pc.id = cs.platform_id
                 JOIN training_center_accounts tca ON tca.id = pc.center_account_id
                 LEFT JOIN formation_modules module ON module.id = pc.source_module_id
+                LEFT JOIN formation_module_days module_day ON module_day.id = cs.module_day_id
                 LEFT JOIN course_schedule_config csc ON csc.platform_id = cs.platform_id
                 WHERE cs.id = %s
                 """,
@@ -252,8 +254,10 @@ def get_course_session_for_date(platform_id: int, course_date: str):
                 """
                 SELECT cs.id, cs.platform_id, cs.session_index, cs.scheduled_at,
                        cs.completed_at, cs.status,
-                       COALESCE(csc.timezone, 'Europe/Paris') AS timezone
+                       COALESCE(csc.timezone, 'Europe/Paris') AS timezone,
+                       module_day.blocks_snapshot_json AS schedule_blocks
                 FROM course_sessions cs
+                LEFT JOIN formation_module_days module_day ON module_day.id = cs.module_day_id
                 LEFT JOIN course_schedule_config csc ON csc.platform_id = cs.platform_id
                 WHERE cs.platform_id = %s
                   AND (cs.scheduled_at AT TIME ZONE COALESCE(csc.timezone, 'Europe/Paris'))::date = %s::date

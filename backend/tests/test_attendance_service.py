@@ -76,6 +76,41 @@ class AttendanceConsolidationTest(unittest.TestCase):
         self.assertEqual(participants[0]["intervals"][0][0].hour, 9)
         self.assertEqual(participants[0]["total_seconds"], 2 * 60 * 60 + 30 * 60)
 
+    def test_presence_is_limited_to_training_day_and_excludes_lunch(self):
+        paris = timezone(timedelta(hours=2))
+        scheduled_at = datetime(2026, 7, 17, 9, 0, tzinfo=paris)
+        rows = [{
+            "recipient_hash": "c" * 64,
+            "nom": "Martin",
+            "prenom": "Lina",
+            "email": "lina@example.test",
+            "attendance_started_at": datetime(2026, 7, 17, 8, 45, tzinfo=paris),
+            "depart": datetime(2026, 7, 17, 17, 30, tzinfo=paris),
+        }]
+        schedule_blocks = [
+            {"block_type": "course", "start_minute": 540, "end_minute": 720},
+            {
+                "block_type": "pause",
+                "pause_kind": "lunch",
+                "start_minute": 720,
+                "end_minute": 780,
+            },
+            {"block_type": "course", "start_minute": 780, "end_minute": 1020},
+        ]
+
+        participants = attendance_service.consolidate_presence(
+            rows,
+            scheduled_at=scheduled_at,
+            schedule_blocks=schedule_blocks,
+        )
+
+        self.assertEqual(len(participants[0]["intervals"]), 2)
+        self.assertEqual(participants[0]["intervals"][0][0].hour, 9)
+        self.assertEqual(participants[0]["intervals"][0][1].hour, 12)
+        self.assertEqual(participants[0]["intervals"][1][0].hour, 13)
+        self.assertEqual(participants[0]["intervals"][1][1].hour, 17)
+        self.assertEqual(participants[0]["total_seconds"], 7 * 60 * 60)
+
     def test_daily_workbook_contains_summary_detail_and_auditable_formulas(self):
         paris = timezone(timedelta(hours=2))
         participants = [{
