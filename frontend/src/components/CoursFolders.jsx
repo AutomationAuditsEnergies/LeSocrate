@@ -356,11 +356,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   }, [view, selectedFolder])
 
   // ─── Actions ─────────────────────────────────────────────────────────
-  const handleCreateFolder = () => {
-    setShowCreateFolderForm(true)
-    setCreateFolderError('')
-  }
-
   const handleCancelCreateFolder = () => {
     setShowCreateFolderForm(false)
     setNewFolderName('')
@@ -1726,14 +1721,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               ) : (
                 <div className="mb-5 border-b pb-4" style={{ borderColor: colors.border }}>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    <button
-                      onClick={handleCreateFolder}
-                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
-                      style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                    >
-                      <Icon name="add" className="text-base" />
-                      Créer un cours
-                    </button>
                     <div className="flex min-w-0 items-center gap-1.5">
                       <button
                         type="button"
