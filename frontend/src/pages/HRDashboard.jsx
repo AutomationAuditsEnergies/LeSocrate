@@ -4940,7 +4940,6 @@ function AttendanceCardPanel({
   onCourseDateChange,
   onExport,
 }) {
-  const students = data?.students || []
   const dailyExports = data?.daily_exports || []
 
   const formatDate = (value) => {
@@ -4987,7 +4986,11 @@ function AttendanceCardPanel({
         <h5 className="mb-3 text-sm font-semibold" style={{ color: colors.text }}>
           Fichiers Excel par journée
         </h5>
-        {dailyExports.length === 0 ? (
+        {loading ? (
+          <div className="flex items-center justify-center py-5" aria-label="Chargement des fichiers Excel">
+            <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#121212' }} />
+          </div>
+        ) : dailyExports.length === 0 ? (
           <p className="text-xs leading-5" style={{ color: colors.textMuted }}>
             Le premier fichier apparaîtra ici le lendemain d’une journée de formation, à partir de 6 h.
           </p>
@@ -5022,58 +5025,6 @@ function AttendanceCardPanel({
           </div>
         )}
       </section>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-5">
-          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#121212' }} />
-        </div>
-      ) : students.length > 0 ? (
-        <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-          {students.map((student) => {
-            const attendance = student.attendance || {}
-            const slots = attendance.slots || []
-            return (
-              <div
-                key={student.id}
-                className="rounded-lg p-2"
-                style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-              >
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>
-                      {student.prenom} {student.nom}
-                    </p>
-                    <p className="truncate text-xs" style={{ color: colors.textMuted }} title={student.email}>
-                      {student.email}
-                    </p>
-                  </div>
-                  <span className="flex-shrink-0 text-xs font-semibold tabular-nums" style={{ color: colors.textSecondary }}>
-                    {formatAttendanceMinutes(attendance.total_minutes || 0)}
-                  </span>
-                </div>
-
-                <div className="space-y-1.5">
-                  {slots.map((slot, index) => (
-                    <div
-                      key={`${student.id}-${index}`}
-                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs tabular-nums"
-                      style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }}
-                    >
-                      <Icon name="login" className="text-sm" style={{ color: colors.textMuted }} />
-                      <span>{slot.start || '—'}</span>
-                      <span style={{ color: colors.textMuted }}>→</span>
-                      <span>{slot.end || '—'}</span>
-                    </div>
-                  ))}
-                  {slots.length === 0 && (
-                    <p className="text-xs" style={{ color: colors.textMuted }}>Aucun intervalle terminé.</p>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      ) : null}
     </div>
   )
 }
