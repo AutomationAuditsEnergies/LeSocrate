@@ -41,5 +41,8 @@ test('lets only the Lyon review center validate other centers from its messaging
   assert.match(reviewInbox, /training_days/)
   assert.match(reviewInbox, /Recharger Fish Audio/)
   assert.match(reviewInbox, /Recharger DeepSeek/)
+  assert.match(reviewInbox, /DeepSeek V4 Flash/)
+  assert.match(reviewInbox, /DeepSeek V4 Pro/)
+  assert.match(reviewInbox, /pipeline_model: pipelineModel/)
   assert.match(reviewInbox, /Valider et envoyer le paiement/)
 })

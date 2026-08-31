@@ -213,10 +213,14 @@ def approve_admin_teacher_order_validation(public_id):
         return jsonify({"success": False, "error": "Demande introuvable"}), 404
     if not postgres_enabled():
         return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    pipeline_model = str(
+        (request.get_json(silent=True) or {}).get("pipeline_model") or "flash"
+    ).strip().lower()
     try:
         result = approve_teacher_order_from_admin(
             str(public_id),
             os.getenv("BILLING_REVIEW_NOTIFICATION_EMAIL", "secretariat@saleshacking.fr"),
+            pipeline_model,
         )
         return jsonify({
             "success": True,

@@ -48,6 +48,12 @@ class TeacherOrderAssetReuseTest(unittest.TestCase):
         self.ensure_storage = self.storage_patcher.start()
         self.addCleanup(self.storage_patcher.stop)
 
+    def test_pipeline_model_uses_the_admin_selection(self):
+        self.assertEqual(service._pipeline_model({"pipeline_model": "pro"}), "pro")
+        self.assertEqual(service._pipeline_model({}), "flash")
+        with self.assertRaisesRegex(service.PermanentWorkError, "modèle DeepSeek"):
+            service._pipeline_model({"pipeline_model": "unknown"})
+
     def test_custom_voice_is_calibrated_before_auto_pilot_text_starts(self):
         order = {
             "id": 7,

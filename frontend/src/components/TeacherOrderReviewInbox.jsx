@@ -41,6 +41,18 @@ const formatPrice = (cents) => new Intl.NumberFormat('fr-FR', {
 
 const DEEPSEEK_COST_PER_DAY_CENTS = 314
 const FISH_AUDIO_COST_PER_DAY_CENTS = 625
+const PIPELINE_MODELS = [
+  {
+    value: 'flash',
+    name: 'DeepSeek V4 Flash',
+    description: 'Économique et rapide, recommandé pour maîtriser le coût de génération.',
+  },
+  {
+    value: 'pro',
+    name: 'DeepSeek V4 Pro',
+    description: 'Plus coûteux, à choisir lorsque la qualité de rédaction est prioritaire.',
+  },
+]
 
 const apiRechargeCost = (trainingDays, costPerDayCents) => (
   formatPrice(Number(trainingDays || 0) * costPerDayCents)
@@ -83,6 +95,7 @@ export default function TeacherOrderReviewInbox({ onUnreadCountChange }) {
   const [feedback, setFeedback] = useState('')
   const [rejecting, setRejecting] = useState(false)
   const [rejectNote, setRejectNote] = useState('')
+  const [pipelineModels, setPipelineModels] = useState({})
 
   const loadRequests = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setRefreshing(true)
@@ -128,6 +141,9 @@ export default function TeacherOrderReviewInbox({ onUnreadCountChange }) {
 
   const selected = visibleRequests.find((item) => item.id === selectedId) || visibleRequests[0] || null
   const pendingCount = requests.filter((item) => item.review_status === 'pending').length
+  const pipelineModel = selected
+    ? pipelineModels[selected.id] || selected.pipeline_model || 'flash'
+    : 'flash'
 
   const openRequest = async (requestItem) => {
     setSelectedId(requestItem.id)
@@ -151,7 +167,9 @@ export default function TeacherOrderReviewInbox({ onUnreadCountChange }) {
       const response = await apiFetch(`/api/admin/teacher-order-validations/${selected.id}/${decision}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: decision === 'reject' ? JSON.stringify({ note: rejectNote.trim() }) : undefined,
+        body: JSON.stringify(decision === 'reject'
+          ? { note: rejectNote.trim() }
+          : { pipeline_model: pipelineModel }),
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok || !payload.success) throw new Error(payload.error || 'Décision impossible')
@@ -294,6 +312,40 @@ export default function TeacherOrderReviewInbox({ onUnreadCountChange }) {
                   </a>
                 </div>
               </div>
+
+              <fieldset className="mt-6" disabled={selected.review_status !== 'pending' || busy}>
+                <legend className="text-sm font-semibold text-[#18181B]">Modèle de génération</legend>
+                <p className="mt-1 text-sm text-[#6B6B72]">Ce choix sera conservé jusqu’au lancement de la pipeline après paiement.</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {PIPELINE_MODELS.map((model) => {
+                    const checked = pipelineModel === model.value
+                    return (
+                      <label
+                        key={model.value}
+                        className={`cursor-pointer rounded-xl border p-4 transition-colors ${checked ? 'border-[#18181B] bg-[#F4F4F2]' : 'border-[#D9D9DE] bg-white hover:bg-[#F8F8F7]'} disabled:cursor-default`}
+                      >
+                        <span className="flex items-start gap-3">
+                          <input
+                            type="radio"
+                            name={`pipeline-model-${selected.id}`}
+                            value={model.value}
+                            checked={checked}
+                            onChange={() => setPipelineModels((current) => ({
+                              ...current,
+                              [selected.id]: model.value,
+                            }))}
+                            className="mt-0.5 h-4 w-4 accent-[#18181B]"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-[#18181B]">{model.name}</span>
+                            <span className="mt-1 block text-xs leading-5 text-[#6B6B72]">{model.description}</span>
+                          </span>
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </fieldset>
 
               {feedback && <p className="mt-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{feedback}</p>}
 

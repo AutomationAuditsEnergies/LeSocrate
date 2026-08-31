@@ -68,6 +68,7 @@ PRODUCTS = {
 SERVER_EXEMPT_CENTER_EMAILS = frozenset()
 SERVER_REVIEW_EXEMPT_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
 SERVER_ORDER_REVIEW_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
+PIPELINE_MODEL_CHOICES = frozenset({"flash", "pro"})
 WEEKDAY_IDS = {
     "lundi": 0,
     "mardi": 1,
@@ -673,6 +674,7 @@ def serialize_review_request(order: dict[str, Any]) -> dict[str, Any]:
         "review_note": order.get("review_note") or "",
         "reviewed_at": order.get("reviewed_at"),
         "reviewed_by": order.get("reviewed_by"),
+        "pipeline_model": project.get("pipeline_model") or "flash",
         "unread": order.get("admin_seen_at") is None,
     }
 
@@ -1225,14 +1227,18 @@ def approve_teacher_order_review(public_id: str, token: str) -> dict[str, Any]:
 def approve_teacher_order_from_admin(
     public_id: str,
     reviewed_by: str = "admin",
+    pipeline_model: str = "flash",
 ) -> dict[str, Any]:
     """Approve from the authenticated internal inbox, without an e-mail token."""
+    pipeline_model = str(pipeline_model or "").strip().lower()
+    if pipeline_model not in PIPELINE_MODEL_CHOICES:
+        raise BillingError("Modèle DeepSeek invalide.", status_code=400)
     current = get_order(public_id)
     if not current:
         raise BillingError("Demande introuvable.", status_code=404)
     if current.get("review_status") != "pending":
         raise BillingError("Cette demande a déjà été traitée.", status_code=409)
-    order = approve_order_review(public_id, reviewed_by)
+    order = approve_order_review(public_id, reviewed_by, pipeline_model)
     if not order or order.get("review_status") != "approved":
         raise BillingError("Cette demande ne peut plus être approuvée.", status_code=409)
     center = get_center_billing_account(int(order["center_account_id"]))

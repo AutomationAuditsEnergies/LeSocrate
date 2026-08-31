@@ -81,12 +81,17 @@ class BillingMessageRoutesTest(unittest.TestCase):
             billing_routes, "serialize_order", return_value={"id": str(self.public_id)}
         ):
             response = self.client.post(
-                f"/api/admin/teacher-order-validations/{self.public_id}/approve"
+                f"/api/admin/teacher-order-validations/{self.public_id}/approve",
+                json={"pipeline_model": "pro"},
             )
 
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertTrue(response.get_json()["payment_email_sent"])
-        approve.assert_called_once()
+        approve.assert_called_once_with(
+            str(self.public_id),
+            "secretariat@saleshacking.fr",
+            "pro",
+        )
 
     def test_privileged_center_can_approve_a_review_request(self):
         self._login("training_center", 42)

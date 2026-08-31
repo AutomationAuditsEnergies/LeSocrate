@@ -299,7 +299,11 @@ def mark_order_notification_sent(order_id: int, column: str) -> None:
             )
 
 
-def approve_order_review(public_id: str, reviewed_by: str) -> dict[str, Any] | None:
+def approve_order_review(
+    public_id: str,
+    reviewed_by: str,
+    pipeline_model: str = "flash",
+) -> dict[str, Any] | None:
     """Approve one request exactly once and open its Stripe payment phase."""
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
@@ -320,11 +324,21 @@ def approve_order_review(public_id: str, reviewed_by: str) -> dict[str, Any] | N
                 SET review_status = 'approved', status = 'awaiting_payment',
                     payment_status = 'awaiting_payment', reviewed_at = NOW(),
                     reviewed_by = %s, admin_seen_at = COALESCE(admin_seen_at, NOW()),
+                    request_payload_json = jsonb_set(
+                        COALESCE(request_payload_json, '{}'::jsonb),
+                        '{pipeline_model}',
+                        to_jsonb(%s::text),
+                        TRUE
+                    ),
                     center_seen_at = NULL, updated_at = NOW()
                 WHERE id = %s
                 RETURNING *
                 """,
-                (str(reviewed_by or "secretariat")[:160], int(order["id"])),
+                (
+                    str(reviewed_by or "secretariat")[:160],
+                    str(pipeline_model),
+                    int(order["id"]),
+                ),
             )
             return cur.fetchone()
 

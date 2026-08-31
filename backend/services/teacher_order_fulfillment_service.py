@@ -44,6 +44,14 @@ from services.platform_storage_service import ensure_platform_storage
 # Les nouvelles pipelines utilisent le profil économique par défaut. La valeur
 # courte est celle persistée dans auto_pilot_model et normalisée par les routes.
 DEFAULT_PIPELINE_MODEL = "flash"
+PIPELINE_MODEL_CHOICES = frozenset({"flash", "pro"})
+
+
+def _pipeline_model(payload: dict) -> str:
+    model = str(payload.get("pipeline_model") or DEFAULT_PIPELINE_MODEL).strip().lower()
+    if model not in PIPELINE_MODEL_CHOICES:
+        raise PermanentWorkError("Le modèle DeepSeek de la commande est invalide")
+    return model
 
 
 def _schedule_schema_version(schedule) -> int:
@@ -231,6 +239,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
         raise PermanentWorkError("Commande non autorisée au paiement")
 
     payload = dict(order.get("request_payload_json") or {})
+    pipeline_model = _pipeline_model(payload)
     center_id = int(order["center_account_id"])
     platform_name = str(payload.get("name") or order.get("training_title") or "Professeur IA").strip()
     teacher_name = str(payload.get("teacher_name") or "").strip() or None
@@ -338,7 +347,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
                 rncp_code=rncp_code,
                 total_hours=total_hours,
                 nb_days=nb_days,
-                model=DEFAULT_PIPELINE_MODEL,
+                model=pipeline_model,
                 teacher_name=teacher_name,
                 teacher_color=teacher_color,
                 creation_request_id=creation_request_id,
@@ -370,7 +379,7 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             update_job(
                 pipeline_job_id,
                 auto_pilot_enabled=1,
-                auto_pilot_model=DEFAULT_PIPELINE_MODEL,
+                auto_pilot_model=pipeline_model,
                 auto_pilot_tts_mode="fish_audio",
                 auto_pilot_use_cc=0,
                 auto_pilot_skip_vs=0,
