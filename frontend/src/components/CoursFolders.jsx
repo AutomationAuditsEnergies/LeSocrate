@@ -1700,12 +1700,24 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
 
         {/* Modal Header */}
         {(!embedded || view !== 'folders' || audioEditorFile) && <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 pb-3 pt-5' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
-          <div className="flex min-w-0 items-center gap-2.5">
-            {audioEditorFile && <Icon name="visibility" style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />}
-            <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
-              {audioEditorFile ? audioEditorFile : view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
-            </h3>
-          </div>
+          {audioEditorFile ? (
+            <button
+              type="button"
+              onClick={() => setAudioEditorFile(null)}
+              className="inline-flex min-h-10 flex-shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+              style={{ color: colors.textSecondary }}
+              aria-label="Retour aux audios"
+            >
+              <Icon name="chevron_left" style={{ fontSize: '20px' }} />
+              Audios
+            </button>
+          ) : (
+            <div className="flex min-w-0 items-center gap-2.5">
+              <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
+                {view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
+              </h3>
+            </div>
+          )}
           {!embedded && (
             <button
               onClick={onClose}
@@ -1729,7 +1741,6 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               filename={audioEditorFile}
               darkMode={darkMode}
               colors={colors}
-              onClose={() => setAudioEditorFile(null)}
             />
           ) : view === 'folders' ? (
             <div className="relative flex min-h-full items-start gap-4">

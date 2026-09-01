@@ -138,7 +138,6 @@ function breakDurationLabelForFilename(filename) {
 //   filename      — nom du fichier MP3 (ex: cours_9h00_9h45.mp3)
 //   darkMode      — bool
 //   colors        — objet colors du parent
-//   onClose       — callback fermeture
 function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timings, activeTiming, breakTemplate, breakDuration }) {
   const previewBg = darkMode ? '#0f172a' : '#f8fafc'
   const headerBg = darkMode ? '#111827' : '#ffffff'
@@ -255,7 +254,7 @@ function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timin
   )
 }
 
-export default function AudioEditor({ folderId, filename, darkMode, colors, onClose }) {
+export default function AudioEditor({ folderId, filename, darkMode, colors }) {
   const waveRef = useRef(null)       // div DOM pour WaveSurfer
   const wsRef = useRef(null)         // instance WaveSurfer
   const regionsRef = useRef(null)    // plugin Regions
@@ -914,40 +913,13 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const border = colors.border
   const textPrimary = colors.text
   const textMuted = colors.textMuted
-  const panelBg = darkMode ? '#111827' : '#f8fafc'
   const actionBg = colors.text
   const actionText = colors.cardBg
 
-  const handleClose = () => {
-    stopAllPlayback()
-    onClose?.()
-  }
-
   return (
     <div className="flex min-h-0 flex-col" style={{ backgroundColor: colors.cardBg }}>
-        {/* Header */}
-        <div
-          className="flex items-center justify-between gap-3 border-b px-5 py-3 flex-shrink-0"
-          style={{ backgroundColor: panelBg, borderColor: colors.border }}
-        >
-          <button
-            type="button"
-            onClick={handleClose}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
-            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-          >
-            <Icon name="arrow_back" style={{ fontSize: '16px' }} />
-            Retour aux audios
-          </button>
-          <div className="min-w-0 flex-1 text-right">
-            <p className="truncate text-xs font-medium" style={{ color: colors.textMuted }}>
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </p>
-          </div>
-        </div>
-
         {/* Corps */}
-        <div className="max-h-[calc(92vh-112px)] flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="max-h-[calc(92vh-58px)] flex-1 overflow-y-auto p-5 space-y-4">
 
           <AudioSlideSyncPreview
             colors={colors}

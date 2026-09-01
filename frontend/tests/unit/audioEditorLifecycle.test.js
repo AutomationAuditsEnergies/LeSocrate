@@ -11,6 +11,10 @@ const editorSource = readFileSync(
   new URL('../../src/components/AudioEditor.jsx', import.meta.url),
   'utf8',
 )
+const foldersSource = readFileSync(
+  new URL('../../src/components/CoursFolders.jsx', import.meta.url),
+  'utf8',
+)
 
 test('stops and unloads a temporary audio element idempotently', () => {
   const calls = []
@@ -45,15 +49,19 @@ test('pauses both WaveSurfer and its underlying media', () => {
   assert.equal(mediaPauses, 1)
 })
 
-test('stops every audio source before editor navigation and browser navigation', () => {
+test('stops every audio source before editor unmount and browser navigation', () => {
   assert.match(editorSource, /const stopAllPlayback = useCallback/)
   assert.match(editorSource, /stopPreviewPlayback\(\)/)
   assert.match(editorSource, /stopStitchedPlayback\(\{ updateState \}\)/)
   assert.match(editorSource, /stopWaveSurferPlayback\(ws\)/)
   assert.match(editorSource, /window\.addEventListener\('pagehide', stopForNavigation\)/)
   assert.match(editorSource, /window\.addEventListener\('popstate', stopForNavigation\)/)
-  assert.match(editorSource, /const handleClose = \(\) => \{[\s\S]*stopAllPlayback\(\)[\s\S]*onClose\?\.\(\)/)
-  assert.match(editorSource, /onClick=\{handleClose\}/)
+  assert.match(editorSource, /stopAllPlayback\(\{ destroyWaveSurfer: true, updateState: false \}\)/)
+})
+
+test('returns to the audio list from the parent header without a duplicate editor action', () => {
+  assert.match(foldersSource, /onClick=\{\(\) => setAudioEditorFile\(null\)\}[\s\S]*name="chevron_left"[\s\S]*Audios/)
+  assert.doesNotMatch(editorSource, /Retour aux audios/)
 })
 
 test('prevents asynchronous playback from restarting after unmount', () => {
