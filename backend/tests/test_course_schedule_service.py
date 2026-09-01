@@ -107,7 +107,7 @@ def _seed_schedule(cursor, platform_id=12):
 
 
 class CourseScheduleServiceTest(unittest.TestCase):
-    def test_reminder_email_uses_the_rule_signature_and_allows_no_signature(self):
+    def test_reminder_email_contains_only_customizable_body_and_signature(self):
         payload = {
             "subject": "Rappel",
             "content": "Votre cours commence bientôt.",
@@ -121,7 +121,17 @@ class CourseScheduleServiceTest(unittest.TestCase):
         without_signature = css._build_reminder_html({**payload, "signature_template": ""})
 
         self.assertIn("L’équipe de votre centre", customized)
+        self.assertIn("Votre cours commence bientôt.", customized)
         self.assertNotIn("L'équipe Le Socrate", customized)
+        self.assertNotIn("Le Socrate", customized)
+        self.assertNotIn("<h1>Rappel</h1>", customized)
+        self.assertNotIn("Bonjour,", customized)
+        self.assertNotIn("Accéder à la formation", customized)
+        self.assertNotIn("Horaire prévu", customized)
+        self.assertNotIn("Code personnel", customized)
+        self.assertNotIn("ABC123", customized)
+        self.assertNotIn("https://example.test/classe/test?invite=signed", customized)
+        self.assertNotIn("E-mail automatique de rappel de formation", customized)
         self.assertNotIn("L’équipe de votre centre", without_signature)
 
     def test_reminder_rule_accepts_a_custom_or_empty_signature(self):

@@ -1556,16 +1556,8 @@ def _build_reminder_html(payload):
     ).replace("\n", "<br>")
     signature = html.escape(str(payload.get("signature_template") or "")).replace("\n", "<br>")
     signature_block = (
-        f'<p style="margin-top:26px;">{signature}</p>'
+        f'<div class="signature">{signature}</div>'
         if signature
-        else ""
-    )
-    class_url = html.escape(values["class_url"], quote=True)
-    session_code = html.escape(values["session_code"])
-    code_block = (
-        f'<div class="meta">Code personnel (si vous ouvrez la page de connexion habituelle) : '
-        f"<strong>{session_code}</strong></div>"
-        if session_code
         else ""
     )
     return f"""<!doctype html>
@@ -1574,31 +1566,16 @@ def _build_reminder_html(payload):
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body {{ margin:0; padding:0; background:#f6f7fb; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; color:#0f172a; }}
+    body {{ margin:0; padding:0; background:#ffffff; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; color:#334155; }}
     .wrap {{ max-width:680px; margin:0 auto; padding:28px 18px; }}
-    .header {{ background:linear-gradient(135deg,#5b4bff,#8b5cf6); color:#fff; padding:34px 36px; border-radius:18px 18px 0 0; }}
-    .brand {{ font-size:24px; font-weight:800; margin:0; }}
-    .card {{ background:#fff; padding:38px 36px; border:1px solid #e2e8f0; border-top:0; border-radius:0 0 18px 18px; box-shadow:0 12px 32px rgba(15,23,42,.08); }}
-    h1 {{ font-size:30px; line-height:1.15; margin:0 0 20px; color:#111827; }}
-    p {{ font-size:16px; line-height:1.65; margin:0 0 22px; color:#334155; }}
-    .cta {{ display:inline-block; background:#8b5cf6; color:#fff !important; text-decoration:none; padding:15px 24px; border-radius:12px; font-weight:700; }}
-    .meta {{ margin-top:18px; padding:14px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; font-size:14px; color:#64748b; }}
-    .footer {{ text-align:center; color:#94a3b8; font-size:12px; margin-top:18px; }}
+    .content, .signature {{ font-size:16px; line-height:1.65; }}
+    .signature {{ margin-top:26px; }}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="header"><p class="brand">Le Socrate</p></div>
-    <div class="card">
-      <h1>{html.escape(str(payload.get("subject") or "Rappel de formation"))}</h1>
-      <p>Bonjour,</p>
-      <p>{content}</p>
-      <p><a class="cta" href="{class_url}" target="_blank">Accéder à la formation</a></p>
-      <div class="meta">Horaire prévu : {values["date"]} à {values["time"]}</div>
-      {code_block}
-      {signature_block}
-    </div>
-    <div class="footer">E-mail automatique de rappel de formation.</div>
+    <div class="content">{content}</div>
+    {signature_block}
   </div>
 </body>
 </html>"""
