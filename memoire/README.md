@@ -11,6 +11,7 @@ Ce dossier consolide **toutes les réflexions, décisions techniques, problèmes
 ### 1. Architecture et décisions structurantes
 
 - [Pipeline Formation Automatisé (RNCP → TTS)](01-architecture/pipeline-formation-vue-ensemble.md) — Vue d'ensemble du pipeline bout-en-bout
+- [Pipeline contenu auditable — JSON maître, prompts modulaires et slides anchor-first](01-architecture/pipeline-contenu-auditable-anchor-first.md) — Refonte contenu : artefacts par étape, micro-conformité, slides anchor-first et modales d'audit
 - [Multi-tenant : une plateforme par pipeline](01-architecture/multi-tenant-plateforme-par-pipeline.md) — Pourquoi chaque formation crée sa propre plateforme
 - [Un RNCP = un module durable (pas un job par promo)](01-architecture/un-rncp-un-module-durable.md) — Principe fondamental : pipeline exécuté une fois, module réutilisé pour toutes les promos
 - [Architecture qualité programme en 4 couches](01-architecture/architecture-4-couches-qualite-programme.md) — Enrichissement / Budget / Squelette pédagogique / RAG externe
@@ -26,6 +27,10 @@ Ce dossier consolide **toutes les réflexions, décisions techniques, problèmes
 - [Coupure du MP3 cours en pleine phrase](02-problemes/coupure-audio-tts-pleine-phrase.md) — Calibration TTS approximative + fenêtre de découpe symétrique = bloc trop long → MP3 tronqué mid-phrase ou pré-check qui stoppe l'auto-pilot 52 jours. Diagnostic complet et options envisagées.
 - [Risques résiduels avant prod 52 jours auto-pilot](02-problemes/pipeline-52-jours-risques-residuels.md) — 5 risques identifiés (calibration TTS empirique, retry segment, compteur max anti-boucle, boot recovery, heartbeat eventlet) avec criticité et plan d'action.
 - [Cas pathologiques pipeline audio cours — checklist de monitoring](02-problemes/cas-pathologiques-pipeline-audio.md) — 12 cas identifiés (bloc 7 surchargé, paragraphe trop gros, calibration fausse, closing hors-ton, carryover en cascade, etc.) avec détection + récup pour chacun.
+- [Dérive pédagogique des cours TTS longs](02-problemes/derive-pedagogique-cours-tts-longs.md) — Diagnostic des cours longs sans carte mentale : charge cognitive, transitions invisibles, conclusion cassée, contenu après Q/R et cours suivant qui finit le précédent.
+- [Fuite d'abstraction : cours, horaires et contraintes internes dans le script oral](02-problemes/fuite-abstraction-cours-horaires-script-oral.md) — Les notions techniques `course`, horaires, budgets, blocs TTS, slides et anchors ne doivent jamais fuiter dans la parole du formateur.
+- [Doublon entre introduction de journée et introduction du premier thème](02-problemes/doublon-introduction-jour-premier-theme.md) — Frontière à maintenir entre cadrage global de journée et ouverture du premier thème pour éviter les répétitions d'introduction.
+- [HR Dashboard — chargement infini au premier affichage](02-problemes/hr-dashboard-chargement-infini-initial-load.md) — Le dashboard restait sur spinner à cause d'un chargement initial trop lourd ; fix par endpoint borné, timeout et stats Blob optionnelles.
 
 ### 3. Décisions techniques et arbitrages
 
@@ -33,6 +38,10 @@ Ce dossier consolide **toutes les réflexions, décisions techniques, problèmes
 - [SQLite local vs Azure SQL — arbitrage persistance](03-decisions/sqlite-vs-azure-sql.md) — Pourquoi on garde SQLite pour la knowledge base
 - [Prompts TTS — règles anti-dérive + stratégie sandwich](03-decisions/prompts-tts-regles-anti-derive.md) — Principe cardinal "ne pas mentir", 6 règles #21-#26, paradigme cours à distance, 3 rappels en tête/milieu/fin pour le LLM
 - [Pipeline formation double colonne — API cloud + Claude Code local](03-decisions/pipeline-dual-api-et-claude-code.md) — 2 pipelines visuelles côte à côte (séparation stylée au milieu), un seul job, mixage libre par étape, badge d'origine `generated_via`. Dropdown Haiku/Sonnet par étape. V1 export/import manuel, pas de subprocess auto. Restriction prod `LOCAL_DEV=true` + `which claude`.
+- [Pipeline contenu — plan JSON et 4 couches de prompts/reviews](03-decisions/pipeline-contenu-plan-json-4-couches.md) — Conservation des intentions prompt général / prompt cours / conformité / humanisation, mais réarchitecture autour d'un plan JSON verrouillé et d'une review d'adhérence au plan.
+- [Pipeline API comme source principale, Claude Code comme secondaire](03-decisions/pipeline-api-source-principale.md) — Les corrections produit visent d'abord l'auto-pilot API, Claude Code restant un atelier local/fallback plutôt que la chaîne de production prioritaire.
+- [Slides — JSON maître et stratégie anchor-first](03-decisions/slides-json-maitre-anchor-first.md) — Le plan JSON choisit les moments pédagogiques visualisables (`teaching_beats`, `slide_anchor`) au lieu de générer les slides par simple analyse a posteriori du texte.
+- [Micro-conformité éthique locale avant les reviews globales](03-decisions/micro-conformite-ethique-locale.md) — Les règles éthiques #1-#16 sont contrôlées section par section pour produire des patches localisés et auditables avant la conformité finale.
 
 ### 4. Solutions techniques mises en place
 
@@ -44,6 +53,8 @@ Ce dossier consolide **toutes les réflexions, décisions techniques, problèmes
 - [Découpage 7 blocs cours — cap budget + cascade paragraphes](04-solutions/decoupage-blocs-cap-budget-cascade.md) — Hard cap mots par bloc calé sur le budget TTS ; les paragraphes en surplus cascadent au bloc suivant. Déterministe, gratuit, préserve verbatim les unités d'idée. Préféré au LLM-shortening réactif.
 - [Closing bloc cours contextuel — redistribution backward + texte de fin adaptatif](04-solutions/closing-bloc-cours-contextuel.md) — Suite du cap budget : si un bloc finit trop tôt, on tire d'abord des paragraphes du bloc suivant (passe 2 déterministe), puis on ajoute un closing LLM calibré sur le gap résiduel (passe 3). Le cours porte sa propre clôture pédagogique, la pause reste un sas simple.
 - [Carryover bloc 7 → folder suivant + rebalancing LLM dernier jour](04-solutions/carryover-jour-a-jour-bloc-7.md) — Si bloc 7 déborde, on reporte les paragraphes excédentaires au cours suivant via `content_generation_jobs.carryover_*`. Intro fixe "au cours dernier" (jamais "hier"). Pour le dernier jour : `_reduce_last_bloc_to_budget` remanie via LLM sans ajouter d'idées.
+- [Génération structurée — intros tardives, quality loop et parallélisation](04-solutions/generation-structuree-intros-tardives-parallelisees.md) — Accélération du mode structuré : corps de cours générés en parallèle, introductions/reprises écrites après les résumés réels, audit plan-adherence puis humanisation/conformité.
+- [Modales d'audit pipeline — artefacts, événements et diffs avant/après](04-solutions/modales-audit-pipeline-artefacts-diffs.md) — Chaque étape de la roadmap devient cliquable ; les artefacts et rapports s'affichent, avec diff rouge/bleu pour la micro-conformité éthique.
 
 ---
 

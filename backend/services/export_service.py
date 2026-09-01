@@ -108,3 +108,106 @@ def generate_excel_export(logs_data):
     except Exception as e:
         logger.error(f"❌ Erreur génération Excel: {e}")
         raise
+
+
+def _format_minutes(total_minutes):
+    total_minutes = int(total_minutes or 0)
+    heures = total_minutes // 60
+    minutes = total_minutes % 60
+    if heures and minutes:
+        return f"{heures}h {minutes:02d}"
+    if heures:
+        return f"{heures}h"
+    return f"{minutes}min"
+
+
+def _format_slots(slots):
+    if not slots:
+        return ""
+    return " ; ".join(
+        f"{slot.get('start', '')}-{slot.get('end', '')}"
+        for slot in slots
+        if slot.get("start") or slot.get("end")
+    )
+
+
+def generate_attendance_excel_export(records, platform_name="Formation"):
+    """
+    Génère un export Excel des présences consolidées par journée de cours.
+
+    Args:
+        records: liste de dicts avec student, course_date, slots, total_minutes, status, notes.
+        platform_name: nom affiché dans l'export.
+
+    Returns:
+        Chemin du fichier temporaire Excel généré.
+    """
+    try:
+        logger.info(f"📊 Génération export présences pour {len(records)} lignes")
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Présences"
+        summary = wb.create_sheet("Récapitulatif")
+
+        header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+        summary_fill = PatternFill(start_color="4C1D95", end_color="4C1D95", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+
+        ws.cell(row=1, column=1, value=f"Présences · {platform_name}")
+        ws.cell(row=1, column=1).font = Font(bold=True, size=14)
+
+        headers = ["Date du cours", "Nom", "Prénom", "Email", "Statut", "Créneaux", "Temps présent", "Minutes", "Notes"]
+        for col, title in enumerate(headers, start=1):
+            cell = ws.cell(row=3, column=col, value=title)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        totals = defaultdict(int)
+        latest = {}
+        for row_idx, record in enumerate(records, start=4):
+            key = (record.get("nom") or "", record.get("prenom") or "", record.get("email") or "")
+            total_minutes = int(record.get("total_minutes") or 0)
+            totals[key] += total_minutes
+            latest[key] = record.get("course_date")
+            ws.cell(row=row_idx, column=1, value=record.get("course_date"))
+            ws.cell(row=row_idx, column=2, value=record.get("nom"))
+            ws.cell(row=row_idx, column=3, value=record.get("prenom"))
+            ws.cell(row=row_idx, column=4, value=record.get("email"))
+            ws.cell(row=row_idx, column=5, value=record.get("status"))
+            ws.cell(row=row_idx, column=6, value=_format_slots(record.get("slots") or []))
+            ws.cell(row=row_idx, column=7, value=_format_minutes(total_minutes))
+            ws.cell(row=row_idx, column=8, value=total_minutes)
+            ws.cell(row=row_idx, column=9, value=record.get("notes") or "")
+
+        for col, width in {1: 16, 2: 20, 3: 20, 4: 30, 5: 16, 6: 28, 7: 16, 8: 12, 9: 34}.items():
+            ws.column_dimensions[ws.cell(row=3, column=col).column_letter].width = width
+
+        for col, title in enumerate(["Nom", "Prénom", "Email", "Temps total", "Minutes totales", "Dernière date"], start=1):
+            cell = summary.cell(row=1, column=col, value=title)
+            cell.font = header_font
+            cell.fill = summary_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        for row_idx, ((nom, prenom, email), total_minutes) in enumerate(
+            sorted(totals.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])),
+            start=2,
+        ):
+            summary.cell(row=row_idx, column=1, value=nom)
+            summary.cell(row=row_idx, column=2, value=prenom)
+            summary.cell(row=row_idx, column=3, value=email)
+            summary.cell(row=row_idx, column=4, value=_format_minutes(total_minutes))
+            summary.cell(row=row_idx, column=5, value=total_minutes)
+            summary.cell(row=row_idx, column=6, value=latest.get((nom, prenom, email)) or "")
+
+        for col, width in {1: 20, 2: 20, 3: 30, 4: 18, 5: 16, 6: 16}.items():
+            summary.column_dimensions[summary.cell(row=1, column=col).column_letter].width = width
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        wb.save(tmp.name)
+        tmp.seek(0)
+        logger.info("✅ Export présences généré avec succès")
+        return tmp.name
+    except Exception as e:
+        logger.error(f"❌ Erreur génération export présences: {e}")
+        raise

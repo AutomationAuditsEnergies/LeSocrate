@@ -1,0 +1,38 @@
+\section*{Conclusion générale}
+
+Ce mémoire est parti d'un besoin concret et profondément économique : permettre à une
+petite structure, Audit Énergie, de développer une activité de formation externe sans dépendre
+du coût récurrent d'un formateur en direct. Cette contrainte initiale a guidé l'ensemble du
+travail. À chaque étape, une solution a été essayée, ses limites ont été observées, puis une
+réponse plus complète a été conçue : du cours en direct au cours audio préparé à l'avance, puis
+aux essais de synthèse vocale, et enfin à une plateforme autonome combinant une pipeline de
+génération de contenus et un assistant pédagogique contextualisé.
+
+L'apport central du travail n'est pas l'utilisation isolée d'un modèle de langage ou d'un service
+de synthèse vocale, mais leur \emph{orchestration} dans une chaîne fiable et observable. La
+pipeline structurée, fondée sur un plan explicite, une génération section par section, des
+reviews ciblées et des artefacts intermédiaires, transforme une sortie d'IA opaque en un
+processus auditable. L'assistant RAG, ancré sur les documents réels de la formation, prolonge
+l'expérience du cours en répondant aux questions des élèves sans tomber dans les dérives d'un
+chatbot généraliste. Ensemble, ces deux briques répondent à la problématique posée :
+automatiser fortement le modèle de formation tout en préservant la qualité pédagogique, la
+traçabilité des contenus et la pertinence des réponses.
+
+Ce travail comporte des limites assumées. Plusieurs indicateurs — temps réellement gagné,
+coût complet, fidélité du RAG, précision de la calibration audio, satisfaction des élèves —
+restent à consolider par un protocole d'évaluation plus systématique. La solution dépend par
+ailleurs de services externes dont le coût et la disponibilité peuvent évoluer, et la supervision
+humaine demeure nécessaire sur les points les plus sensibles. Ces limites ne remettent pas en
+cause l'approche : elles tracent les pistes d'évolution, notamment la mise en place d'un banc
+d'évaluation RAG, l'évaluation croisée automatique et humaine des contenus générés, et une
+calibration audio mesurée plutôt qu'empirique.
+
+Sur le plan professionnel, ce projet a permis une véritable montée en compétences :
+l'analyse d'un besoin métier, la conception d'une architecture logicielle capable de gérer des
+traitements longs et reprenables, l'ingénierie des systèmes d'IA (savoir quand recourir à un
+prompt, à un RAG, à un enrichissement de source ou à une génération structurée) et, surtout,
+la prise de recul nécessaire pour remettre en question une solution lorsqu'elle devient
+difficile à contrôler. Au-delà de la plateforme elle-même, ce mémoire illustre une conviction
+construite tout au long du travail : la valeur de l'intelligence artificielle générative en
+entreprise ne tient pas à la puissance brute des modèles, mais à la rigueur de l'architecture
+qui les encadre.

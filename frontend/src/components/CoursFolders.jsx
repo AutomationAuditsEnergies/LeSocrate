@@ -1,53 +1,109 @@
-import { useState, useEffect, useRef } from 'react'
-import { apiUrl } from '../api'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
+import { apiDownload, apiFetch, downloadExternalFile } from '../api'
 import AudioEditor from './AudioEditor'
+import { isCourseAudioFilename } from './slides/audioSlideSync'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
   <span className={`material-icons ${className}`}>{name}</span>
 )
 
-const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
-
-const COURS_DURATIONS_MAP = { 1: 45, 2: 45, 3: 55, 4: 45, 5: 60, 6: 60, 7: 50 }
-
-const AUDIO_PLAYLIST_ITEMS = [
-  { filename: 'cours_9h00_9h45.mp3', type: 'cours', label: '9h00 → 9h45' },
-  { filename: 'qa_9h45_9h55.mp3', type: 'qa', label: '9h45 → 9h55' },
-  { filename: 'pause_9h55_10h05.mp3', type: 'pause', label: '9h55 → 10h05' },
-  { filename: 'cours_10h05_10h50.mp3', type: 'cours', label: '10h05 → 10h50' },
-  { filename: 'qa_10h50_11h00.mp3', type: 'qa', label: '10h50 → 11h00' },
-  { filename: 'pause_11h00_11h05.mp3', type: 'pause', label: '11h00 → 11h05' },
-  { filename: 'cours_11h05_12h00.mp3', type: 'cours', label: '11h05 → 12h00' },
-  { filename: 'qa_12h00_12h10.mp3', type: 'qa', label: '12h00 → 12h10' },
-  { filename: 'pause_12h10_12h20.mp3', type: 'pause', label: '12h10 → 12h20' },
-  { filename: 'pause_midi_13h15_14h45.mp3', type: 'pause', label: 'Midi 13h15 → 14h45' },
-  { filename: 'cours_12h20_13h05.mp3', type: 'cours', label: '12h20 → 13h05' },
-  { filename: 'qa_13h05_13h15.mp3', type: 'qa', label: '13h05 → 13h15' },
-  { filename: 'cours_14h45_15h45.mp3', type: 'cours', label: '14h45 → 15h45' },
-  { filename: 'qa_15h45_16h00.mp3', type: 'qa', label: '15h45 → 16h00' },
-  { filename: 'cours_16h00_17h00.mp3', type: 'cours', label: '16h00 → 17h00' },
-  { filename: 'qa_17h00_17h15.mp3', type: 'qa', label: '17h00 → 17h15' },
-  { filename: 'pause_17h15_17h25.mp3', type: 'pause', label: '17h15 → 17h25' },
-  { filename: 'cours_17h25_18h15.mp3', type: 'cours', label: '17h25 → 18h15' },
-  { filename: 'qa_18h15_18h30.mp3', type: 'qa', label: '18h15 → 18h30' },
-]
-
 const AUDIO_FILTERS = [
   { value: 'cours', label: 'Cours' },
   { value: 'qa', label: 'Q&A' },
   { value: 'pause', label: 'Pauses' },
+  { value: 'jointure', label: 'Jointures' },
   { value: 'all', label: 'Tous' },
 ]
 
 const AUDIO_TYPE_META = {
-  cours: { label: 'Cours', icon: 'record_voice_over', color: '#16a34a', lightBg: '#f0fdf4', darkBg: '#14532d22', lightBorder: '#bbf7d0', darkBorder: '#166534' },
+  cours: { label: 'Cours', icon: 'record_voice_over', iconImage: '/icons/course-books.png', color: '#16a34a', lightBg: '#f0fdf4', darkBg: '#14532d22', lightBorder: '#bbf7d0', darkBorder: '#166534' },
   qa: { label: 'Q&A', icon: 'forum', color: '#2563eb', lightBg: '#eff6ff', darkBg: '#1d4ed822', lightBorder: '#bfdbfe', darkBorder: '#1d4ed8' },
   pause: { label: 'Pause', icon: 'free_breakfast', color: '#f59e0b', lightBg: '#fffbeb', darkBg: '#92400e22', lightBorder: '#fde68a', darkBorder: '#b45309' },
+  jointure: { label: 'Jointure', icon: 'link', color: '#64748b', lightBg: '#f8fafc', darkBg: '#33415522', lightBorder: '#cbd5e1', darkBorder: '#475569' },
+}
+
+const normalizeAudioType = (fileType = '', filename = '') => {
+  const normalizedType = String(fileType || '').toLowerCase()
+  if (normalizedType === 'cours' || normalizedType === 'course') return 'cours'
+  if (normalizedType === 'qa') return 'qa'
+  if (normalizedType === 'pause' || normalizedType === 'pause_midi') return 'pause'
+  if (normalizedType === 'jointure') return 'jointure'
+  const basename = String(filename || '').toLowerCase()
+  if (/^(cours|course)(?:_|-)/.test(basename)) return 'cours'
+  if (/^(qa|qr)(?:_|-)/.test(basename)) return 'qa'
+  if (/^jointure(?:_|-)/.test(basename)) return 'jointure'
+  return 'pause'
+}
+
+const audioPlaylistLabel = (item = {}) => {
+  const minutes = Math.round(Number(item.duration_seconds || 0) / 60)
+  const type = normalizeAudioType(item.type, item.filename)
+  const typeLabel = type === 'cours'
+    ? 'Cours'
+    : type === 'qa'
+      ? 'Q&A'
+      : type === 'jointure' ? 'Jointure' : 'Pause'
+  return minutes > 0 ? `${typeLabel} · ${minutes} min` : typeLabel
+}
+
+const courseDurationLabel = (items = [], courseIndex) => {
+  const courseItem = items.find(item => (
+    normalizeAudioType(item.type, item.filename) === 'cours'
+    && Number(item.course_index) === Number(courseIndex)
+  ))
+  const durationSeconds = Number(courseItem?.duration_seconds || 0)
+
+  return durationSeconds > 0
+    ? `${Math.round(durationSeconds / 60)}min`
+    : 'durée variable'
+}
+
+const formatCourseSessionDate = (value) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Date non renseignée'
+  return new Intl.DateTimeFormat('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Europe/Paris',
+  }).format(date)
+}
+
+const formatCourseSessionTime = (value) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Heure non renseignée'
+  return new Intl.DateTimeFormat('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Paris',
+  }).format(date)
+}
+
+const PLAYLIST_VOICE_OPTIONS = [
+  { value: 'gtts', label: 'gTTS', icon: 'bolt', hint: 'rapide, économique' },
+  { value: 'fish_audio', label: 'Fish Audio', icon: 'graphic_eq', hint: 'voix premium payante' },
+]
+
+const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
+  const byBloc = new Map()
+  ;(planned || []).forEach(bloc => {
+    const key = Number(bloc?.bloc_number || 0)
+    if (key) byBloc.set(key, bloc)
+  })
+  ;(generated || []).forEach(bloc => {
+    const key = Number(bloc?.bloc_number || 0)
+    if (key) byBloc.set(key, { ...(byBloc.get(key) || {}), ...bloc })
+  })
+  return Array.from(byBloc.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([, bloc]) => bloc)
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function CoursFoldersModal({ platformId, platformName, onClose }) {
+export default function CoursFoldersModal({ platformId, platformName, targetSessionId = null, onClose, onBack, onAudiosPublished, onScriptViewChange, embedded = false }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
   const [folders, setFolders] = useState([])
   const [documents, setDocuments] = useState([])
@@ -56,7 +112,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [ttsStatus, setTtsStatus] = useState(null)
-  const [generatingAll, setGeneratingAll] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
   const [showCreateFolderForm, setShowCreateFolderForm] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -66,17 +121,31 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [deleteError, setDeleteError] = useState('')
   const [deletingItem, setDeletingItem] = useState(false)
   const [playlistJob, setPlaylistJob] = useState(null) // {status, step, total_steps, message}
+  const [playlistVoiceType, setPlaylistVoiceType] = useState('gtts') // 'gtts' | 'fish_audio'
   const playlistPollingRef = useRef(null)
   const [scriptModal, setScriptModal] = useState(null) // {blocs: [...]}
   const [wordAnalysis, setWordAnalysis] = useState(null) // résultat analyse mots
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
-  const [dragFolderIdx, setDragFolderIdx] = useState(null)
-  const [dragOverFolderIdx, setDragOverFolderIdx] = useState(null)
-  // ── Génération de contenu ──
-  const [contentJob, setContentJob] = useState(null)
-  const [programText, setProgramText] = useState('')
-  const [extracting, setExtracting] = useState(false)
+  const [invalidAudios, setInvalidAudios] = useState([]) // MP3 corrompus/stale ou sans synchro
+  const [audioPlaylistItems, setAudioPlaylistItems] = useState([]) // manifeste V1/V2 attendu
+  const [cleaningInvalidAudios, setCleaningInvalidAudios] = useState(false)
+  const [folderAudioStates, setFolderAudioStates] = useState({})
+  const [showFillForm, setShowFillForm] = useState(false)
+  const [showFillInfo, setShowFillInfo] = useState(false)
+  const [fillInfoClosing, setFillInfoClosing] = useState(false)
+  const [fillFolderId, setFillFolderId] = useState('')
+  const [fillingPlatform, setFillingPlatform] = useState(false)
+  const [fillFeedback, setFillFeedback] = useState(null)
+  const [nextCourseSelection, setNextCourseSelection] = useState(null)
+  const [nextCourseSelectionLoading, setNextCourseSelectionLoading] = useState(true)
+  const [nextCourseSelectionError, setNextCourseSelectionError] = useState('')
+  const [courseMaterials, setCourseMaterials] = useState([]) // PDF généré à la fin de la pipeline texte
+  const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
+  const [courseMaterialsError, setCourseMaterialsError] = useState('')
+  const [downloadingCourseMaterial, setDownloadingCourseMaterial] = useState(false)
+  const [deletingAudioFile, setDeletingAudioFile] = useState('')
+  // ── Consultation et correction du contenu généré ──
   const [showPromptPreview, setShowPromptPreview] = useState(false)
   const [promptPreview, setPromptPreview] = useState(null)
   const [contentScriptModal, setContentScriptModal] = useState(null)
@@ -85,38 +154,84 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [annotationComment, setAnnotationComment] = useState('')
   const [annotationError, setAnnotationError] = useState('')
   const [savingAnnotation, setSavingAnnotation] = useState(false)
-  const [scriptRules, setScriptRules] = useState(null)
-  const [rulesPanelOpen, setRulesPanelOpen] = useState(false)
-  const [extractingRules, setExtractingRules] = useState(false)
-  const [rulesError, setRulesError] = useState('')
-  const [editingRules, setEditingRules] = useState(false)
-  const [rulesDraft, setRulesDraft] = useState('')
-  const [savingRules, setSavingRules] = useState(false)
-  const [reviewingRules, setReviewingRules] = useState(false)
-  const [rulesReviewSummary, setRulesReviewSummary] = useState(null)
-  const [reviewingText, setReviewingText] = useState(false)
-  const [textReviewSummary, setTextReviewSummary] = useState(null)
-  const [textReviewProgress, setTextReviewProgress] = useState(null)
-  const textReviewPollRef = useRef(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
-  const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses' | 'planned_courses'
+  const [contentScriptView, setContentScriptView] = useState('courses')
+  const [scriptSidebarMode, setScriptSidebarMode] = useState('courses')
   const [scriptActiveSubPart, setScriptActiveSubPart] = useState(0)
   const [scriptActiveCourse, setScriptActiveCourse] = useState(1)
   const [scriptActiveBreak, setScriptActiveBreak] = useState(null)
   const [editingSegment, setEditingSegment] = useState(null) // {sub_part_index, passe}
   const [editText, setEditText] = useState('')
+  const [editBreakDraft, setEditBreakDraft] = useState({ intro: '', outro: '' })
   const [savingEdit, setSavingEdit] = useState(false)
   const [dirtyBlocs, setDirtyBlocs] = useState(null) // {dirty_blocs, total_blocs, has_script}
   const [audioEditorFile, setAudioEditorFile] = useState(null) // filename ouvert dans l'éditeur
   const [audioTypeFilter, setAudioTypeFilter] = useState('cours')
   const [mockUploading, setMockUploading] = useState(false)
   const [mockUploadQueue, setMockUploadQueue] = useState([]) // [{name, status, error}]
-  const contentPollingRef = useRef(null)
   const fileInputRef = useRef(null)
   const mockAudioInputRef = useRef(null)
   const createFolderInputRef = useRef(null)
+  const fillSelectRef = useRef(null)
+  const fillInfoCloseTimerRef = useRef(null)
+  const fillInfoClosingRef = useRef(false)
   const pollingRef = useRef(null)
+
+  const contentScriptOpen = Boolean(contentScriptModal)
+
+  const closeFillInfo = useCallback((afterClose) => {
+    if (fillInfoClosingRef.current) return
+
+    fillInfoClosingRef.current = true
+    setFillInfoClosing(true)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    const closeDuration = reduceMotion ? 0 : 200
+
+    window.clearTimeout(fillInfoCloseTimerRef.current)
+    fillInfoCloseTimerRef.current = window.setTimeout(() => {
+      setShowFillInfo(false)
+      setFillInfoClosing(false)
+      fillInfoClosingRef.current = false
+      afterClose?.()
+    }, closeDuration)
+  }, [])
+
+  useEffect(() => () => {
+    window.clearTimeout(fillInfoCloseTimerRef.current)
+  }, [])
+
+  useEffect(() => {
+    onScriptViewChange?.(contentScriptOpen)
+    return () => onScriptViewChange?.(false)
+  }, [contentScriptOpen, onScriptViewChange])
+
+  useEffect(() => {
+    if (!showFillInfo) return undefined
+    const closeInfoPanel = (event) => {
+      if (event.key === 'Escape') closeFillInfo()
+    }
+    window.addEventListener('keydown', closeInfoPanel)
+    return () => window.removeEventListener('keydown', closeInfoPanel)
+  }, [closeFillInfo, showFillInfo])
+
+  useEffect(() => {
+    if (!showFillForm) return undefined
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setShowFillForm(false)
+        setFillFeedback(null)
+      }
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    window.requestAnimationFrame(() => fillSelectRef.current?.focus())
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [showFillForm])
 
   const colors = darkMode ? {
     bg: '#0f172a',
@@ -146,6 +261,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setDarkMode(isDark)
 
     fetchFolders()
+    fetchCourseMaterials()
+    fetchNextCourseSelection()
 
     // Écouter les changements de mode
     const observer = new MutationObserver(() => {
@@ -155,7 +272,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     })
     observer.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'] })
     return () => observer.disconnect()
-  }, [platformId])
+  }, [platformId, targetSessionId])
 
   useEffect(() => {
     if (showCreateFolderForm) {
@@ -164,13 +281,64 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   }, [showCreateFolderForm])
 
   // ─── Fetch folders ──────────────────────────────────────────────────────
+  const fetchFolderAudioStates = async (folderList) => {
+    const entries = await Promise.all((folderList || []).map(async (folder) => {
+      try {
+        const [audioResp, jobResp] = await Promise.all([
+          apiFetch(`/api/hr/cours-folders/${folder.id}/generated-audios`),
+          apiFetch(`/api/hr/cours-folders/${folder.id}/playlist-status`),
+        ])
+        const audioData = await audioResp.json().catch(() => ({}))
+        const jobData = await jobResp.json().catch(() => ({}))
+        const expected = Array.isArray(audioData.audio_playlist_items)
+          ? audioData.audio_playlist_items
+          : []
+        const generated = new Set(
+          (Array.isArray(audioData.audios) ? audioData.audios : [])
+            .map((audio) => audio.filename),
+        )
+        const invalidCount = Array.isArray(audioData.invalid_audios)
+          ? audioData.invalid_audios.length
+          : 0
+        const readyCount = expected.filter((item) => generated.has(item.filename)).length
+        if (jobData.status === 'running') {
+          return [folder.id, { status: 'preparing', label: 'Audios en préparation' }]
+        }
+        if (jobData.status === 'error') {
+          return [folder.id, { status: 'error', label: 'Erreur de génération' }]
+        }
+        if (invalidCount > 0) {
+          return [folder.id, {
+            status: 'error',
+            label: `Audios invalides · ${invalidCount} à corriger`,
+          }]
+        }
+        if (expected.length > 0 && readyCount === expected.length) {
+          return [folder.id, { status: 'ready', label: `Audios prêts · ${readyCount}/${expected.length}` }]
+        }
+        return [folder.id, {
+          status: 'missing',
+          label: expected.length > 0
+            ? `Audios incomplets · ${readyCount}/${expected.length}`
+            : 'Audios non générés',
+        }]
+      } catch (error) {
+        console.warn(`État audio indisponible pour le dossier ${folder.id}:`, error)
+        return [folder.id, { status: 'unknown', label: 'État audio indisponible' }]
+      }
+    }))
+    setFolderAudioStates(Object.fromEntries(entries))
+  }
+
   const fetchFolders = async () => {
     setLoading(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`)
       const data = await resp.json()
       if (data.success) {
-        setFolders(data.folders)
+        const nextFolders = Array.isArray(data.folders) ? data.folders : []
+        setFolders(nextFolders)
+        await fetchFolderAudioStates(nextFolders)
       }
     } catch (e) {
       console.error('Erreur chargement dossiers:', e)
@@ -179,10 +347,57 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
+  const fetchNextCourseSelection = async () => {
+    setNextCourseSelectionLoading(true)
+    setNextCourseSelectionError('')
+    try {
+      const sessionQuery = targetSessionId
+        ? `?session_id=${encodeURIComponent(targetSessionId)}`
+        : ''
+      const resp = await apiFetch(
+        `/api/hr/platforms/${platformId}/next-course-selection${sessionQuery}`,
+      )
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Impossible de charger la prochaine séance.')
+      }
+      setNextCourseSelection(data)
+      if (data.selected_course?.id) {
+        setFillFolderId(String(data.selected_course.id))
+      }
+    } catch (error) {
+      setNextCourseSelection(null)
+      setNextCourseSelectionError(
+        error.message || 'Impossible de charger la prochaine séance.',
+      )
+    } finally {
+      setNextCourseSelectionLoading(false)
+    }
+  }
+
+  const fetchCourseMaterials = async () => {
+    setCourseMaterialsLoading(true)
+    setCourseMaterialsError('')
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/course-materials`)
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Impossible de charger les supports PDF.')
+      }
+      setCourseMaterials(Array.isArray(data.materials) ? data.materials : [])
+    } catch (e) {
+      console.error('Erreur chargement supports PDF:', e)
+      setCourseMaterials([])
+      setCourseMaterialsError(e.message || 'Impossible de charger les supports PDF.')
+    } finally {
+      setCourseMaterialsLoading(false)
+    }
+  }
+
   // ─── Fetch documents ───────────────────────────────────────────────────
   const fetchDocuments = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/documents`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/documents`)
       const data = await resp.json()
       if (data.success) {
         setDocuments(data.documents)
@@ -195,7 +410,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   // ─── Fetch TTS status (polling) ────────────────────────────────────────
   const fetchTtsStatus = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/tts-status`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/tts-status`)
       const data = await resp.json()
       if (data.success) {
         setTtsStatus(data)
@@ -218,7 +433,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       fetchDocuments(selectedFolder.id)
 
       const checkProcessing = async () => {
-        const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/tts-status`), { credentials: 'include' })
+        const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/tts-status`)
         const data = await resp.json()
         if (data.success) {
           const hasProcessing = data.documents.some(d => d.status === 'processing')
@@ -239,11 +454,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   }, [view, selectedFolder])
 
   // ─── Actions ─────────────────────────────────────────────────────────
-  const handleCreateFolder = () => {
-    setShowCreateFolderForm(true)
-    setCreateFolderError('')
-  }
-
   const handleCancelCreateFolder = () => {
     setShowCreateFolderForm(false)
     setNewFolderName('')
@@ -265,11 +475,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setCreatingFolder(true)
     setCreateFolderError('')
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders`), {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -298,9 +507,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
   const deleteFolder = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}`, {
         method: 'DELETE',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -314,101 +522,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
-  // ─── Génération de contenu TTS-direct ─────────────────────────────────
-  const fetchContentJob = async (folderId) => {
-    try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/content-job`), { credentials: 'include' })
-      const data = await resp.json()
-      if (data.success) setContentJob(data.job)
-    } catch (e) { console.error('Erreur fetchContentJob:', e) }
-  }
-
-  const startContentPolling = (folderId) => {
-    if (contentPollingRef.current) return
-    contentPollingRef.current = setInterval(async () => {
-      try {
-        const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/content-job`), { credentials: 'include' })
-        const data = await resp.json()
-        if (data.success) {
-          setContentJob(data.job)
-          if (data.job?.status !== 'running') {
-            clearInterval(contentPollingRef.current)
-            contentPollingRef.current = null
-            if (data.job?.status === 'completed') fetchDocuments(folderId)
-          }
-        }
-      } catch (e) { console.error('Erreur polling contenu:', e) }
-    }, 3000)
-  }
-
-  const stopContentPolling = () => {
-    if (contentPollingRef.current) {
-      clearInterval(contentPollingRef.current)
-      contentPollingRef.current = null
-    }
-  }
-
-  const handleExtractSubParts = async () => {
-    if (!programText.trim() || !selectedFolder) return
-    setExtracting(true)
-    try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ program_text: programText }),
-        credentials: 'include',
-      })
-      const data = await resp.json()
-      if (data.success) {
-        await fetchContentJob(selectedFolder.id)
-      } else {
-        alert(data.error || "Erreur lors de l'extraction")
-      }
-    } catch (e) {
-      console.error('Erreur extraction:', e)
-      alert('Erreur réseau lors de l\'extraction')
-    } finally {
-      setExtracting(false)
-    }
-  }
-
-  const handleStartContentGeneration = async (mode = 'normal') => {
-    if (!selectedFolder) return
-    try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/start`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
-        credentials: 'include',
-      })
-      const data = await resp.json()
-      if (data.success) {
-        setContentJob(prev => ({ ...prev, status: 'running' }))
-        startContentPolling(selectedFolder.id)
-      } else {
-        alert(data.error || 'Erreur lors du lancement')
-      }
-    } catch (e) {
-      console.error('Erreur start generation:', e)
-    }
-  }
-
-  const handleCancelContentGeneration = async () => {
-    if (!selectedFolder) return
-    stopContentPolling()
-    try {
-      await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/cancel`), {
-        method: 'POST',
-        credentials: 'include',
-      })
-      await fetchContentJob(selectedFolder.id)
-    } catch (e) { console.error('Erreur cancel:', e) }
-  }
-
   const handlePreviewPrompt = async () => {
     if (!selectedFolder) return
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/preview`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/preview`)
       const data = await resp.json()
       if (data.success) {
         setPromptPreview(data.prompt_preview)
@@ -421,25 +538,21 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     if (!selectedFolder) return
     setLoadingContentScript(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/script`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/script`)
       const data = await resp.json()
       if (data.success) {
+        const visibleCourseBlocs = mergeCourseBlocsForScriptModal(data.course_blocs, data.planned_course_blocs)
         setContentScriptModal(data)
         setScriptAnnotations(data.annotations || [])
         setScriptSelection(null)
         setAnnotationComment('')
         setAnnotationError('')
-        setContentScriptView('source')
+        setContentScriptView('courses')
+        setScriptSidebarMode('courses')
         setScriptActiveSubPart(0)
-        setScriptActiveCourse((data.course_blocs?.[0] || data.planned_course_blocs?.[0])?.bloc_number || 1)
+        setScriptActiveCourse(visibleCourseBlocs?.[0]?.bloc_number || 1)
         setScriptActiveBreak(null)
         setEditingSegment(null)
-        setRulesPanelOpen(false)
-        setRulesError('')
-        loadScriptRules()
-        // Reprend l'affichage d'une éventuelle revérif texte en cours pour
-        // ce folder (utile si on a fermé la modale pendant le run).
-        resumeActiveTextReview()
       } else {
         alert(data.error || 'Script non disponible')
       }
@@ -453,17 +566,13 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setAnnotationError('')
   }
 
-  const closeContentScriptModal = () => {
+  const closeContentScriptPage = () => {
     setContentScriptModal(null)
     setEditingSegment(null)
+    setEditText('')
+    setEditBreakDraft({ intro: '', outro: '' })
     resetScriptAnnotationDraft()
     setScriptAnnotations([])
-    // Arrête le polling local mais la tâche backend continue (greenlet eventlet).
-    // À la prochaine ouverture, resumeActiveTextReview() reprendra le suivi.
-    if (textReviewPollRef.current) {
-      clearInterval(textReviewPollRef.current)
-      textReviewPollRef.current = null
-    }
   }
 
   const captureScriptSelection = (event, context) => {
@@ -501,7 +610,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setSavingAnnotation(true)
     setAnnotationError('')
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -514,7 +623,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
           paragraph_context: scriptSelection.paragraph_context || '',
           comment,
         }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -541,9 +649,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const deleteScriptAnnotation = async (annotationId) => {
     if (!selectedFolder || !annotationId) return
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}`, {
         method: 'DELETE',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -560,239 +667,25 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
-  const downloadAnnotationsMarkdown = () => {
-    if (!selectedFolder) return
-    window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/markdown`), '_blank')
-  }
-
-  const loadScriptRules = async () => {
+  const downloadAnnotationsMarkdown = async () => {
     if (!selectedFolder) return
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`),
-        { credentials: 'include' }
+      await apiDownload(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/markdown`,
+        `annotations-cours-${selectedFolder.id}.md`,
       )
-      const data = await resp.json()
-      if (data.success) setScriptRules(data)
     } catch (e) {
-      console.error('Erreur chargement règles:', e)
-    }
-  }
-
-  const resumeActiveTextReview = async () => {
-    if (!selectedFolder) return
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/active`),
-        { credentials: 'include' }
-      )
-      const data = await resp.json()
-      if (!data.success || !data.task) return
-      const task = data.task
-      setTextReviewProgress(task)
-      if (task.status === 'running') {
-        // Tâche encore en cours côté backend → on reprend le polling.
-        setReviewingText(true)
-        setRulesPanelOpen(true)
-        pollTextReviewStatus(task.task_id)
-      } else if (task.status === 'completed' && task.result) {
-        // Tâche terminée pendant qu'on avait fermé la modale → on affiche le résumé.
-        setTextReviewSummary(task.result)
-        setRulesPanelOpen(true)
-      }
-    } catch (e) {
-      console.error('Erreur reprise revérif texte:', e)
-    }
-  }
-
-  const extractScriptRules = async () => {
-    if (!selectedFolder || extractingRules) return
-    setExtractingRules(true)
-    setRulesError('')
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/extract`),
-        { method: 'POST', credentials: 'include' }
-      )
-      const data = await resp.json()
-      if (data.success) {
-        setScriptRules(data)
-        setRulesPanelOpen(true)
-      } else {
-        setRulesError(data.error || 'Extraction impossible.')
-      }
-    } catch (e) {
-      console.error('Erreur extract rules:', e)
-      setRulesError('Erreur réseau pendant l\'extraction.')
-    } finally {
-      setExtractingRules(false)
-    }
-  }
-
-  const downloadRulesMarkdown = () => {
-    if (!selectedFolder) return
-    window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/markdown`), '_blank')
-  }
-
-  const startEditingRules = () => {
-    setRulesDraft(scriptRules?.rules_markdown || '')
-    setEditingRules(true)
-    setRulesError('')
-  }
-
-  const cancelEditingRules = () => {
-    setEditingRules(false)
-    setRulesDraft('')
-    setRulesError('')
-  }
-
-  const saveRulesMarkdown = async () => {
-    if (!selectedFolder || savingRules) return
-    setSavingRules(true)
-    setRulesError('')
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`),
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules_markdown: rulesDraft }),
-          credentials: 'include',
-        }
-      )
-      const data = await resp.json()
-      if (data.success) {
-        setScriptRules(prev => ({
-          ...(prev || {}),
-          rules_markdown: data.rules_markdown,
-          rules_count: data.rules_count,
-          updated_at: data.updated_at,
-          model: 'manual',
-        }))
-        setEditingRules(false)
-        setRulesDraft('')
-      } else {
-        setRulesError(data.error || 'Sauvegarde impossible.')
-      }
-    } catch (e) {
-      console.error('Erreur save rules markdown:', e)
-      setRulesError('Erreur réseau pendant la sauvegarde.')
-    } finally {
-      setSavingRules(false)
-    }
-  }
-
-  const runRulesReview = async (dryRun) => {
-    if (!selectedFolder || reviewingRules) return
-    if (!dryRun) {
-      const ok = window.confirm(
-        'Cette action va lire les MP3 du dossier, vérifier chaque chunk audio contre les règles, et patcher en place les portions non conformes. Continuer ?'
-      )
-      if (!ok) return
-    }
-    setReviewingRules(true)
-    setRulesError('')
-    setRulesReviewSummary(null)
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-post-tts`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dry_run: !!dryRun }),
-          credentials: 'include',
-        }
-      )
-      const data = await resp.json()
-      if (data.success) {
-        setRulesReviewSummary(data)
-      } else {
-        setRulesError(data.error || 'Revérif impossible.')
-      }
-    } catch (e) {
-      console.error('Erreur review post-tts:', e)
-      setRulesError('Erreur réseau pendant la revérif.')
-    } finally {
-      setReviewingRules(false)
-    }
-  }
-
-  const pollTextReviewStatus = (taskId) => {
-    if (!selectedFolder || !taskId) return
-    const tick = async () => {
-      try {
-        const resp = await fetch(
-          apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/status/${taskId}`),
-          { credentials: 'include' }
-        )
-        const data = await resp.json()
-        if (!data.success) {
-          setRulesError(data.error || 'Statut introuvable.')
-          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-          setReviewingText(false)
-          return
-        }
-        setTextReviewProgress(data)
-        if (data.status === 'completed') {
-          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-          setTextReviewSummary(data.result || null)
-          setReviewingText(false)
-        } else if (data.status === 'failed') {
-          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-          setRulesError(data.error || 'Revérif texte échouée.')
-          setReviewingText(false)
-        }
-      } catch (e) {
-        console.error('Erreur poll review text status:', e)
-      }
-    }
-    tick()
-    textReviewPollRef.current = setInterval(tick, 2000)
-  }
-
-  const runTextReview = async (dryRun) => {
-    if (!selectedFolder || reviewingText) return
-    if (!dryRun) {
-      const ok = window.confirm(
-        'Cette action va modifier le texte des segments en base de données et les marquer dirty=1. Les MP3 actuels ne changent pas, mais à la prochaine régénération TTS, ils seront refaits à partir du nouveau texte. Continuer ?'
-      )
-      if (!ok) return
-    }
-    setReviewingText(true)
-    setRulesError('')
-    setTextReviewSummary(null)
-    setTextReviewProgress(null)
-    if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dry_run: !!dryRun }),
-          credentials: 'include',
-        }
-      )
-      const data = await resp.json()
-      if (data.success && data.task_id) {
-        pollTextReviewStatus(data.task_id)
-      } else {
-        setRulesError(data.error || 'Revérif texte impossible.')
-        setReviewingText(false)
-      }
-    } catch (e) {
-      console.error('Erreur review text:', e)
-      setRulesError('Erreur réseau pendant la revérif texte.')
-      setReviewingText(false)
+      console.error('Erreur téléchargement annotations:', e)
+      alert(e.message)
     }
   }
 
   const applyAnnotationCorrection = async (annotationId) => {
     if (!selectedFolder || !annotationId) return
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/apply`),
-        { method: 'POST', credentials: 'include' }
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/apply`,
+        { method: 'POST' },
       )
       const data = await resp.json()
       if (data.success) {
@@ -812,9 +705,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const rejectAnnotationCorrection = async (annotationId) => {
     if (!selectedFolder || !annotationId) return
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/reject`),
-        { method: 'POST', credentials: 'include' }
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/reject`,
+        { method: 'POST' },
       )
       const data = await resp.json()
       if (data.success) {
@@ -839,17 +732,17 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const handleCancelEdit = () => {
     setEditingSegment(null)
     setEditText('')
+    setEditBreakDraft({ intro: '', outro: '' })
   }
 
   const handleSaveEdit = async () => {
     if (!selectedFolder || !editingSegment) return
     setSavingEdit(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/segment`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/segment`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sub_part_index: editingSegment.sub_part_index, passe: editingSegment.passe, text: editText }),
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -881,62 +774,96 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     finally { setSavingEdit(false) }
   }
 
+  const handleStartCourseBlocEdit = (bloc) => {
+    setEditingSegment({ type: 'course', bloc_number: bloc.bloc_number })
+    setEditText(bloc.text || '')
+    setEditBreakDraft({ intro: '', outro: '' })
+  }
+
+  const handleSaveCourseBlocEdit = async () => {
+    if (!selectedFolder || !editingSegment || editingSegment.type !== 'course') return
+    setSavingEdit(true)
+    try {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/course-bloc`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bloc_number: editingSegment.bloc_number, text: editText }),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setContentScriptModal(prev => prev ? {
+          ...prev,
+          course_blocs: (prev.course_blocs || []).map(bloc =>
+            bloc.bloc_number === editingSegment.bloc_number
+              ? { ...bloc, ...data.bloc }
+              : bloc
+          ),
+          planned_course_blocs: (prev.planned_course_blocs || []).map(bloc =>
+            bloc.bloc_number === editingSegment.bloc_number
+              ? { ...bloc, ...data.bloc }
+              : bloc
+          ),
+        } : prev)
+        setEditingSegment(null)
+        setEditText('')
+        fetchDirtyBlocs(selectedFolder.id)
+      } else {
+        alert(data.error || 'Erreur lors de la sauvegarde')
+      }
+    } catch (e) {
+      console.error('Erreur save course bloc:', e)
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  const handleStartBreakEdit = (br) => {
+    setEditingSegment({ type: 'break', filename: br.filename })
+    setEditText('')
+    setEditBreakDraft({ intro: br.intro || '', outro: br.outro || '' })
+  }
+
+  const handleSaveBreakEdit = async () => {
+    if (!selectedFolder || !editingSegment || editingSegment.type !== 'break') return
+    setSavingEdit(true)
+    try {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/break`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: editingSegment.filename,
+          intro: editBreakDraft.intro,
+          outro: editBreakDraft.outro,
+        }),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setContentScriptModal(prev => prev ? {
+          ...prev,
+          breaks: (prev.breaks || []).map(br =>
+            br.filename === editingSegment.filename
+              ? { ...br, ...data.break }
+              : br
+          ),
+        } : prev)
+        setEditingSegment(null)
+        setEditBreakDraft({ intro: '', outro: '' })
+      } else {
+        alert(data.error || 'Erreur lors de la sauvegarde')
+      }
+    } catch (e) {
+      console.error('Erreur save break:', e)
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
   const fetchDirtyBlocs = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/content-job/dirty-blocs`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/content-job/dirty-blocs`)
       const data = await resp.json()
       if (data.success) setDirtyBlocs(data)
     } catch (e) { /* silencieux */ }
-  }
-
-  // ─── Drag & drop réordonnancement des dossiers ────────────────────────
-  const handleFolderDragStart = (e, idx) => {
-    setDragFolderIdx(idx)
-    e.dataTransfer.effectAllowed = 'move'
-  }
-
-  const handleFolderDragOver = (e, idx) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (idx !== dragFolderIdx) setDragOverFolderIdx(idx)
-  }
-
-  const handleFolderDragLeave = () => {
-    setDragOverFolderIdx(null)
-  }
-
-  const handleFolderDrop = async (e, dropIdx) => {
-    e.preventDefault()
-    setDragOverFolderIdx(null)
-    if (dragFolderIdx === null || dragFolderIdx === dropIdx) {
-      setDragFolderIdx(null)
-      return
-    }
-    // Recalcule l'ordre local
-    const reordered = [...folders]
-    const [moved] = reordered.splice(dragFolderIdx, 1)
-    reordered.splice(dropIdx, 0, moved)
-    // Mise à jour optimiste
-    setFolders(reordered)
-    setDragFolderIdx(null)
-    // Persistance côté serveur
-    const order = reordered.map((f, i) => ({ id: f.id, position: i }))
-    try {
-      await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders/reorder`), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order }),
-        credentials: 'include',
-      })
-    } catch (e) {
-      console.error('Erreur réordonnancement:', e)
-      fetchFolders() // rollback en cas d'erreur
-    }
-  }
-
-  const handleFolderDragEnd = () => {
-    setDragFolderIdx(null)
-    setDragOverFolderIdx(null)
   }
 
   const handleOpenFolder = (folder) => {
@@ -946,11 +873,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setTtsStatus(null)
     setWordAnalysis(null)
     setGeneratedAudios([])
-    setContentJob(null)
-    setProgramText('')
-    stopContentPolling()
+    setInvalidAudios([])
+    setAudioPlaylistItems([])
     fetchGeneratedAudios(folder.id)
-    fetchContentJob(folder.id)
     fetchDirtyBlocs(folder.id)
   }
 
@@ -959,7 +884,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setSelectedFolder(null)
     setDocuments([])
     setTtsStatus(null)
-    stopContentPolling()
+    setInvalidAudios([])
+    setAudioPlaylistItems([])
+    fetchFolderAudioStates(folders)
     if (pollingRef.current) {
       clearInterval(pollingRef.current)
       pollingRef.current = null
@@ -1007,9 +934,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       const formData = new FormData()
       files.forEach(f => formData.append('files', f))
 
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/upload`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/upload`, {
         method: 'POST',
-        credentials: 'include',
         body: formData,
       })
       const data = await resp.json()
@@ -1036,9 +962,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
   const deleteDocument = async (documentId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-documents/${documentId}`), {
+      const resp = await apiFetch(`/api/hr/cours-documents/${documentId}`, {
         method: 'DELETE',
-        credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
@@ -1074,65 +999,45 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setDeletingItem(false)
   }
 
-  const handleDownloadPdf = (documentId) => {
-    window.open(apiUrl(`/api/hr/cours-documents/${documentId}/download`), '_blank')
-  }
-
-  const handleDownloadAudio = (documentId) => {
-    window.open(apiUrl(`/api/hr/cours-documents/${documentId}/audio`), '_blank')
-  }
-
-  const handleGenerateAudio = async (documentId) => {
+  const handleDownloadPdf = async (documentId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-documents/${documentId}/generate-audio`), {
-        method: 'POST',
-        credentials: 'include',
-      })
-      const data = await resp.json()
-      if (data.success) {
-        fetchDocuments(selectedFolder.id)
-        if (!pollingRef.current) {
-          pollingRef.current = setInterval(() => fetchTtsStatus(selectedFolder.id), 3000)
-        }
-      }
+      await apiDownload(
+        `/api/hr/cours-documents/${documentId}/download`,
+        `document-${documentId}.pdf`,
+      )
     } catch (e) {
-      console.error('Erreur génération audio:', e)
+      console.error('Erreur téléchargement document:', e)
+      alert(e.message)
     }
   }
 
-  const handleGenerateAll = async () => {
-    setGeneratingAll(true)
+  const handleDownloadAudio = async (documentId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-all-audio`), {
-        method: 'POST',
-        credentials: 'include',
-      })
-      const data = await resp.json()
-      if (data.success) {
-        fetchDocuments(selectedFolder.id)
-        if (!pollingRef.current) {
-          pollingRef.current = setInterval(() => fetchTtsStatus(selectedFolder.id), 3000)
-        }
-      }
+      await apiDownload(
+        `/api/hr/cours-documents/${documentId}/audio`,
+        `audio-${documentId}.mp3`,
+      )
     } catch (e) {
-      console.error('Erreur génération tous:', e)
-    } finally {
-      setGeneratingAll(false)
+      console.error('Erreur téléchargement audio:', e)
+      alert(e.message)
     }
   }
 
   // ─── Playlist pipeline ──────────────────────────────────────────────
   const fetchPlaylistStatus = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/playlist-status`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/playlist-status`)
       const data = await resp.json()
       if (data.success) {
         setPlaylistJob(data)
         if (data.status !== 'running' && playlistPollingRef.current) {
           clearInterval(playlistPollingRef.current)
           playlistPollingRef.current = null
-          // Rafraîchir les audios générés une fois la pipeline terminée
-          if (data.status === 'completed') fetchGeneratedAudios(folderId)
+          if (data.status === 'completed') {
+            fetchGeneratedAudios(folderId)
+            fetchFolderAudioStates(folders)
+            onAudiosPublished?.(platformId)
+          }
         }
       }
     } catch (e) {
@@ -1140,18 +1045,45 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
-  const handleGeneratePlaylist = async ({ mock = false, scriptMock = false, forceAll = false } = {}) => {
+  const handleGeneratePlaylist = async ({
+    mock = false,
+    scriptMock = false,
+    forceAll = false,
+    preserveExisting = false,
+    voiceType = playlistVoiceType,
+    includeBreaks = true,
+    parallelBreaks = false,
+  } = {}) => {
     if (!selectedFolder) return
+    const effectiveVoiceType = mock || scriptMock ? 'mock' : voiceType
+    const syncSlides = effectiveVoiceType !== 'mock'
+    if (effectiveVoiceType === 'fish_audio') {
+      const confirmed = window.confirm("Fish Audio consomme des crédits API. Lancer la génération audio de ce dossier avec Fish Audio ?")
+      if (!confirmed) return
+    }
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mock, script_mock: scriptMock, force_all: forceAll }),
+        body: JSON.stringify({
+          mock,
+          script_mock: scriptMock,
+          force_all: forceAll,
+          preserve_existing: preserveExisting,
+          include_breaks: includeBreaks,
+          parallel_breaks: parallelBreaks,
+          voice_type: effectiveVoiceType,
+          sync_slides: syncSlides,
+          auto_generate_slides: syncSlides,
+          max_slides: 60,
+          pace: 'normal',
+        }),
         credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
-        setPlaylistJob({ status: 'running', step: 0, total_steps: 24, message: 'Démarrage...' })
+        setPlaylistJob({ status: 'running', step: 0, total_steps: 24, message: 'Démarrage...', voice_type: effectiveVoiceType })
+        if (playlistPollingRef.current) clearInterval(playlistPollingRef.current)
         playlistPollingRef.current = setInterval(() => fetchPlaylistStatus(selectedFolder.id), 2000)
       } else {
         alert(data.error || 'Erreur lors du lancement')
@@ -1161,13 +1093,191 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
+  const handleGeneratePlaylistItem = async (filename, voiceType) => {
+    if (!selectedFolder || !filename) return
+    const syncSlides = voiceType !== 'mock' && isCourseAudioFilename(filename)
+    if (voiceType === 'fish_audio') {
+      const confirmed = window.confirm(`Fish Audio consomme des crédits API. Générer ${filename} avec Fish Audio ?`)
+      if (!confirmed) return
+    }
+    try {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist-item`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename,
+          voice_type: voiceType,
+          sync_slides: syncSlides,
+          auto_generate_slides: syncSlides,
+          max_slides: 60,
+          pace: 'normal',
+        }),
+        credentials: 'include',
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setPlaylistJob({
+          status: 'running',
+          step: 0,
+          total_steps: 1,
+          message: `Démarrage ${filename}...`,
+          voice_type: voiceType,
+          filename,
+        })
+        if (playlistPollingRef.current) clearInterval(playlistPollingRef.current)
+        playlistPollingRef.current = setInterval(() => fetchPlaylistStatus(selectedFolder.id), 2000)
+      } else {
+        alert(data.error || 'Erreur lors du lancement')
+      }
+    } catch (e) {
+      console.error('Erreur lancement item playlist:', e)
+    }
+  }
+
   const fetchGeneratedAudios = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/generated-audios`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/generated-audios`)
       const data = await resp.json()
-      if (data.success) setGeneratedAudios(data.audios)
+      if (data.success) {
+        setGeneratedAudios(Array.isArray(data.audios) ? data.audios : [])
+        setInvalidAudios(Array.isArray(data.invalid_audios) ? data.invalid_audios : [])
+        setAudioPlaylistItems(
+          Array.isArray(data.audio_playlist_items)
+            ? data.audio_playlist_items
+            : [],
+        )
+      }
     } catch (e) {
       console.error('Erreur chargement audios générés:', e)
+    }
+  }
+
+  const handleCleanupInvalidAudios = async () => {
+    if (!selectedFolder || cleaningInvalidAudios) return
+    const physicalInvalid = invalidAudios.filter(audio => (
+      !audio.physical_ready || audio.reason === 'unexpected_audio'
+    ))
+    if (!physicalInvalid.length) return
+    const confirmed = window.confirm(
+      `${physicalInvalid.length} audio(s) invalide(s) seront déplacés en quarantaine récupérable. Continuer ?`,
+    )
+    if (!confirmed) return
+    setCleaningInvalidAudios(true)
+    try {
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/cleanup-invalid-audios`,
+        { method: 'POST' },
+      )
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Nettoyage incomplet')
+      }
+      await fetchGeneratedAudios(selectedFolder.id)
+      await fetchFolderAudioStates(folders)
+      const quarantinedCount = Array.isArray(data.quarantined) ? data.quarantined.length : 0
+      alert(
+        `${quarantinedCount} audio(s) déplacé(s) en quarantaine récupérable. ` +
+        'Relancez maintenant la génération Edge ou Fish pour recréer les fichiers manquants.',
+      )
+    } catch (error) {
+      alert(error.message || 'Impossible de mettre les audios invalides en quarantaine.')
+    } finally {
+      setCleaningInvalidAudios(false)
+    }
+  }
+
+  const handleRepairInvalidAudioSync = async () => {
+    if (!selectedFolder || cleaningInvalidAudios) return
+    setCleaningInvalidAudios(true)
+    try {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/repair-audio-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: false }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || data.success === false) {
+        throw new Error(data.error || 'Réparation de synchronisation impossible')
+      }
+      await fetchGeneratedAudios(selectedFolder.id)
+      await fetchFolderAudioStates(folders)
+    } catch (error) {
+      alert(error.message || 'Réparation de synchronisation impossible.')
+    } finally {
+      setCleaningInvalidAudios(false)
+    }
+  }
+
+  const handleFillPlatform = async (event) => {
+    event.preventDefault()
+    if (!fillFolderId || fillingPlatform) return
+    const selectedSessionId = targetSessionId || nextCourseSelection?.session?.id
+    if (!selectedSessionId) {
+      setFillFeedback({
+        tone: 'error',
+        text: 'Aucune prochaine séance programmée ne peut être modifiée.',
+      })
+      return
+    }
+    setFillingPlatform(true)
+    setFillFeedback(null)
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/fill-from-folder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder_id: Number(fillFolderId),
+          session_id: Number(selectedSessionId),
+        }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Impossible de remplir la prochaine journée.')
+      }
+      setFillFeedback({
+        tone: 'success',
+        text: `${data.folder_name || 'Le cours'} sera diffusé uniquement lors de cette séance. Les suivantes conservent leur progression.`,
+      })
+      await fetchNextCourseSelection()
+      onAudiosPublished?.(platformId)
+    } catch (error) {
+      setFillFeedback({
+        tone: 'error',
+        text: error.message || 'Impossible de remplir la prochaine journée.',
+      })
+    } finally {
+      setFillingPlatform(false)
+    }
+  }
+
+  const handleDeleteGeneratedAudio = async (filename) => {
+    if (!selectedFolder || !filename || deletingAudioFile) return
+    const confirmed = window.confirm(
+      `Supprimer définitivement ${filename} ?\n\n` +
+      `Le fichier sera supprimé du dossier TTS et de la plateforme publiée.`
+    )
+    if (!confirmed) return
+
+    setDeletingAudioFile(filename)
+    try {
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/audio/${encodeURIComponent(filename)}`,
+        {
+          method: 'DELETE',
+        }
+      )
+      const data = await resp.json().catch(() => ({}))
+      if (resp.ok && data.success) {
+        setGeneratedAudios(prev => prev.filter(audio => audio.filename !== filename))
+        if (audioEditorFile === filename) setAudioEditorFile(null)
+      } else {
+        alert(data.error || `Erreur lors de la suppression de ${filename}`)
+      }
+    } catch (e) {
+      console.error('Erreur suppression audio:', e)
+      alert('Erreur réseau pendant la suppression')
+    } finally {
+      setDeletingAudioFile('')
     }
   }
 
@@ -1176,7 +1286,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     if (!selectedFolder || mockUploading) return
 
     // Garde-fou : si des audios existent déjà dans le dossier, demander confirmation
-    const existingCours = generatedAudios.filter(a => a.filename?.startsWith('cours_'))
+    const existingCours = generatedAudios.filter(a => isCourseAudioFilename(a.filename))
     if (existingCours.length > 0) {
       const confirmed = window.confirm(
         `⚠️ Attention\n\n` +
@@ -1192,11 +1302,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setMockUploadQueue([{ name: 'Lecture de output_jour1/...', status: 'uploading' }])
 
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/mock-upload-local`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/mock-upload-local`,
         {
           method: 'POST',
-          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ source_dir: 'output_jour1' }),
         }
@@ -1233,7 +1342,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setAnalysing(true)
     setWordAnalysis(null)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/analyse`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/analyse`)
       const data = await resp.json()
       if (data.success) {
         setWordAnalysis(data)
@@ -1251,7 +1360,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     if (!selectedFolder) return
     setLoadingScript(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/playlist-script`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/playlist-script`)
       const data = await resp.json()
       if (data.success) {
         setScriptModal(data)
@@ -1277,28 +1386,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       }
     }
   }, [view, selectedFolder])
-
-  const StatusBadge = ({ status }) => {
-    const statusConfig = {
-      uploaded: { color: '#94a3b8', label: 'Uploadé', bg: darkMode ? '#334155' : '#f1f5f9' },
-      processing: { color: '#f59e0b', label: 'En cours...', bg: darkMode ? '#78350f' : '#fef3c7' },
-      done: { color: '#22c55e', label: 'Terminé', bg: darkMode ? '#14532d' : '#dcfce7' },
-      error: { color: '#ef4444', label: 'Erreur', bg: darkMode ? '#7f1d1d' : '#fee2e2' },
-    }
-    const config = statusConfig[status] || statusConfig.uploaded
-    return (
-      <span
-        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
-        style={{ backgroundColor: config.bg, color: config.color }}
-      >
-        <span
-          className={`size-1.5 rounded-full ${status === 'processing' ? 'animate-pulse' : ''}`}
-          style={{ backgroundColor: config.color }}
-        />
-        {config.label}
-      </span>
-    )
-  }
 
   const annotationMatchesContext = (annotation, context) => {
     if (!annotation || !context || annotation.source_type !== context.source_type) return false
@@ -1331,14 +1418,14 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       <div
         className="mb-3 rounded-xl p-3"
         style={{
-          backgroundColor: darkMode ? '#211a3b' : '#f5f3ff',
-          border: `1px solid ${darkMode ? '#4c1d95' : '#c4b5fd'}`,
+          backgroundColor: colors.innerBg,
+          border: `1px solid ${colors.border}`,
         }}
       >
         <div className="mb-2 flex items-start gap-2">
-          <Icon name="rate_review" style={{ color: '#7c3aed', fontSize: '18px' }} />
+          <Icon name="rate_review" style={{ color: colors.textMuted, fontSize: '18px' }} />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold" style={{ color: darkMode ? '#ddd6fe' : '#5b21b6' }}>
+            <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>
               Sélection à annoter
             </p>
             <p className="mt-1 line-clamp-3 text-xs leading-relaxed" style={{ color: colors.textSecondary }}>
@@ -1376,7 +1463,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
             onClick={saveScriptAnnotation}
             disabled={savingAnnotation}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            style={{ backgroundColor: '#7c3aed', color: 'white' }}
+            style={{ backgroundColor: colors.text, color: colors.cardBg }}
           >
             <Icon name="save" style={{ fontSize: '14px' }} />
             {savingAnnotation ? 'Sauvegarde...' : 'Noter'}
@@ -1514,37 +1601,150 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     )
   }
 
+  const playlistRunning = playlistJob?.status === 'running'
+  const expectedCourseCount = Math.max(
+    0,
+    Number(dirtyBlocs?.total_blocs)
+      || audioPlaylistItems.filter(item => normalizeAudioType(item.type, item.filename) === 'cours').length
+      || Number(scriptModal?.blocs?.length)
+      || 0,
+  )
+  const materialForFolder = (folder, folderIndex) => (
+    courseMaterials.find(material => Number(material.folder_id) === Number(folder?.id))
+    || courseMaterials.find(material => Number(material.session_index) === Number(folderIndex) + 1)
+    || null
+  )
+  const selectedFolderIndex = folders.findIndex(folder => Number(folder.id) === Number(selectedFolder?.id))
+  const selectedCourseMaterial = selectedFolder
+    ? materialForFolder(selectedFolder, Math.max(0, selectedFolderIndex))
+    : null
+  const toolbarCourseBlocs = contentScriptModal
+    ? mergeCourseBlocsForScriptModal(contentScriptModal.course_blocs, contentScriptModal.planned_course_blocs)
+    : []
+  const activeToolbarCourse = toolbarCourseBlocs.find(
+    bloc => Number(bloc.bloc_number) === Number(scriptActiveCourse),
+  ) || toolbarCourseBlocs[0] || null
+  const isEditingToolbarCourse = Boolean(
+    activeToolbarCourse
+    && editingSegment?.type === 'course'
+    && Number(editingSegment.bloc_number) === Number(activeToolbarCourse.bloc_number),
+  )
+
+  const handleDownloadCourseMaterial = async () => {
+    if (!selectedCourseMaterial?.url || downloadingCourseMaterial) return
+
+    setDownloadingCourseMaterial(true)
+    const fallbackFilename = `support-jour-${selectedCourseMaterial.session_index || selectedFolderIndex + 1}.pdf`
+    try {
+      await downloadExternalFile(
+        selectedCourseMaterial.url,
+        selectedCourseMaterial.filename || fallbackFilename,
+      )
+    } catch (error) {
+      console.error('Erreur téléchargement support PDF:', error)
+      alert(error.message || 'Impossible de télécharger le PDF.')
+    } finally {
+      setDownloadingCourseMaterial(false)
+    }
+  }
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
-      onClick={onClose}
+      className={embedded ? 'h-full min-h-0 w-full' : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4'}
+      style={embedded ? undefined : { backgroundColor: 'rgba(15, 23, 42, 0.62)' }}
+      onClick={embedded ? undefined : onClose}
     >
       <div
-        className="rounded-2xl shadow-2xl w-full overflow-hidden"
-        style={{ maxWidth: '900px', maxHeight: '90vh', backgroundColor: colors.cardBg }}
+        className={embedded ? 'relative flex h-full min-h-0 w-full flex-col overflow-hidden' : 'relative w-full overflow-hidden rounded-xl'}
+        style={{
+          maxWidth: embedded ? 'none' : (audioEditorFile ? '1120px' : '960px'),
+          maxHeight: embedded ? 'none' : '92vh',
+          backgroundColor: colors.cardBg,
+          border: embedded ? 'none' : `1px solid ${colors.border}`,
+          boxShadow: embedded ? 'none' : '0 8px 24px rgba(15, 23, 42, 0.18)',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: colors.border, backgroundColor: '#8B5CF6' }}>
-          <div className="flex items-center gap-3 text-white">
-            <Icon name="folder_special" className="text-2xl" />
-            <h3 className="text-lg font-bold">
-              {view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
-            </h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-white hover:bg-white/20 rounded-full p-1 transition-colors"
+        {embedded && !audioEditorFile && (
+          <header
+            className="flex min-h-14 flex-shrink-0 flex-wrap items-center justify-between gap-2 px-1 py-2 sm:flex-nowrap sm:px-3"
+            style={{ backgroundColor: colors.cardBg }}
           >
-            <Icon name="close" className="text-2xl" />
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={view === 'documents' ? handleBackToFolders : (onBack || onClose)}
+              className="inline-flex min-h-10 flex-shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+              style={{ color: colors.textSecondary }}
+            >
+              <Icon name="chevron_left" style={{ fontSize: '20px' }} />
+              Cours
+            </button>
+
+            {view === 'documents' && (
+              <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:flex-nowrap">
+                <button
+                  type="button"
+                  onClick={handleViewContentScript}
+                  disabled={loadingContentScript}
+                  className="inline-flex min-h-10 flex-shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-white/5"
+                  style={{ color: colors.textSecondary }}
+                  title="Voir le script TTS généré"
+                >
+                  {loadingContentScript ? 'Chargement…' : 'Voir le script TTS'}
+                  <Icon name="chevron_right" style={{ fontSize: '20px' }} />
+                </button>
+              </div>
+            )}
+          </header>
+        )}
+
+        {/* Modal Header */}
+        {(!embedded || view !== 'folders' || audioEditorFile) && <div className={`flex items-center justify-between border-b ${embedded ? 'gap-2 px-3 pb-3 pt-5' : 'gap-4 px-5 py-3'}`} style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+          {audioEditorFile ? (
+            <button
+              type="button"
+              onClick={() => setAudioEditorFile(null)}
+              className="inline-flex min-h-10 flex-shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+              style={{ color: colors.textSecondary }}
+              aria-label="Retour aux audios"
+            >
+              <Icon name="chevron_left" style={{ fontSize: '20px' }} />
+              Audios
+            </button>
+          ) : (
+            <div className="flex min-w-0 items-center gap-2.5">
+              <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
+                {view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
+              </h3>
+            </div>
+          )}
+          {!embedded && (
+            <button
+              onClick={onClose}
+              className="rounded-md p-1.5 transition-colors"
+              style={{ color: colors.textMuted }}
+              title="Fermer"
+            >
+              <Icon name="close" style={{ fontSize: '20px' }} />
+            </button>
+          )}
+        </div>}
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 80px)' }}>
-          {view === 'folders' ? (
-            <>
+        <div
+          className={`${audioEditorFile ? 'overflow-hidden p-0' : embedded ? 'overflow-y-auto p-3' : 'overflow-y-auto p-5'} min-h-0 flex-1`}
+          style={{ maxHeight: embedded ? 'none' : 'calc(92vh - 58px)', backgroundColor: darkMode ? colors.bg : '#ffffff' }}
+        >
+          {audioEditorFile && selectedFolder ? (
+            <AudioEditor
+              folderId={selectedFolder.id}
+              filename={audioEditorFile}
+              darkMode={darkMode}
+              colors={colors}
+            />
+          ) : view === 'folders' ? (
+            <div className="relative flex min-h-full items-start gap-4">
+              <div className="min-w-0 flex-1">
               {showCreateFolderForm ? (
                 <form
                   onSubmit={handleCreateFolderSubmit}
@@ -1555,7 +1755,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   }}
                 >
                   <div className="mb-3 flex items-center gap-2" style={{ color: colors.text }}>
-                    <Icon name="create_new_folder" className="text-xl" style={{ color: '#8B5CF6' }} />
+                    <Icon name="create_new_folder" className="text-xl" style={{ color: colors.textMuted }} />
                     <p className="text-sm font-semibold">Créer un nouveau cours</p>
                   </div>
                   <input
@@ -1596,121 +1796,269 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       type="submit"
                       disabled={creatingFolder}
                       className="rounded-xl px-4 py-2.5 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                      style={{ backgroundColor: '#8B5CF6' }}
+                      style={{ backgroundColor: colors.text, color: colors.cardBg }}
                     >
                       {creatingFolder ? 'Création...' : 'Créer le cours'}
                     </button>
                   </div>
                 </form>
               ) : (
-                <button
-                  onClick={handleCreateFolder}
-                  className="mb-6 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-4 text-sm font-medium transition-colors border-2"
-                  style={{
-                    backgroundColor: colors.innerBg,
-                    borderColor: colors.border,
-                    color: colors.textSecondary,
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.borderColor = '#8B5CF6'}
-                  onMouseLeave={(e) => e.currentTarget.style.borderColor = colors.border}
-                >
-                  <Icon name="add" className="text-xl" />
-                  Nouveau cours
-                </button>
+                <div className="mb-5 pb-4">
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      aria-expanded={showFillInfo}
+                      aria-controls={`fill-course-info-${platformId}`}
+                      aria-label="Informations sur le choix du cours diffusé"
+                      title="À quoi sert ce bouton ?"
+                      onClick={() => {
+                        if (showFillInfo) closeFillInfo()
+                        else setShowFillInfo(true)
+                      }}
+                      className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full transition-colors"
+                      style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textMuted }}
+                    >
+                      <Icon name="info" className="text-[17px]" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {showFillForm && typeof document !== 'undefined' && createPortal(
+                <div className="fixed inset-0 z-[60] flex items-end justify-center p-0 sm:items-center sm:p-6" role="presentation">
+                  <button
+                    type="button"
+                    className="absolute inset-0 cursor-default bg-slate-950/55"
+                    aria-label="Fermer la fenêtre de sélection"
+                    onClick={() => {
+                      setShowFillForm(false)
+                      setFillFeedback(null)
+                    }}
+                  />
+                  <section
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={`fill-course-title-${platformId}`}
+                    className="relative flex max-h-[calc(100dvh-1rem)] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl shadow-2xl sm:max-h-[calc(100dvh-3rem)] sm:rounded-2xl"
+                    style={{ backgroundColor: colors.cardBg, color: colors.text }}
+                  >
+                    <header className="flex items-start justify-between gap-5 border-b px-5 py-5 sm:px-6" style={{ borderColor: colors.border }}>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="flex h-10 w-10 flex-none items-center justify-center rounded-lg" style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }} aria-hidden="true">
+                          <Icon name="calendar_month" className="text-xl" />
+                        </div>
+                        <div className="min-w-0">
+                          <h2 id={`fill-course-title-${platformId}`} className="text-lg font-semibold tracking-tight">
+                            {targetSessionId ? 'Choisir le cours de remplacement' : 'Choisir le prochain cours'}
+                          </h2>
+                          <p className="mt-1 max-w-[58ch] text-sm leading-5" style={{ color: colors.textSecondary }}>
+                            Cette modification concerne uniquement la séance indiquée.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFillForm(false)
+                          setFillFeedback(null)
+                        }}
+                        aria-label="Fermer"
+                        className="inline-flex h-10 w-10 flex-none items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40"
+                        style={{ color: colors.textMuted }}
+                      >
+                        <Icon name="close" className="text-xl" />
+                      </button>
+                    </header>
+
+                    <form onSubmit={handleFillPlatform} className="min-h-0 overflow-y-auto">
+                      <div className="space-y-5 px-5 py-5 sm:px-6 sm:py-6">
+                        {nextCourseSelectionLoading ? (
+                          <div className="grid gap-3 sm:grid-cols-3" aria-label="Chargement de la séance">
+                            {[0, 1, 2].map((item) => (
+                              <div key={item} className="h-20 animate-pulse rounded-xl" style={{ backgroundColor: colors.innerBg }} />
+                            ))}
+                          </div>
+                        ) : nextCourseSelectionError ? (
+                          <p className="rounded-lg px-4 py-3 text-sm font-medium" style={{ color: '#b91c1c', backgroundColor: '#fef2f2' }} role="alert">
+                            {nextCourseSelectionError}
+                          </p>
+                        ) : nextCourseSelection?.session ? (
+                          <div className="rounded-xl p-4 sm:p-5" style={{ backgroundColor: colors.innerBg }}>
+                            <dl className="grid gap-4 sm:grid-cols-[1.35fr_0.65fr_1fr]">
+                              <div>
+                                <dt className="text-xs font-medium" style={{ color: colors.textMuted }}>Date</dt>
+                                <dd className="mt-1 text-sm font-semibold capitalize">
+                                  {formatCourseSessionDate(nextCourseSelection.session.scheduled_at)}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs font-medium" style={{ color: colors.textMuted }}>Heure</dt>
+                                <dd className="mt-1 text-sm font-semibold">
+                                  {formatCourseSessionTime(nextCourseSelection.session.scheduled_at)}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs font-medium" style={{ color: colors.textMuted }}>Cours prévu</dt>
+                                <dd className="mt-1 text-sm font-semibold">
+                                  {nextCourseSelection.selected_course?.label || 'Cours non identifié'}
+                                </dd>
+                              </div>
+                            </dl>
+                            {nextCourseSelection.is_manual_override && nextCourseSelection.scheduled_course?.label && (
+                              <p className="mt-4 border-t pt-3 text-xs" style={{ color: colors.textSecondary, borderColor: colors.border }}>
+                                Progression habituelle : {nextCourseSelection.scheduled_course.label}.
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="rounded-lg px-4 py-3 text-sm font-medium" style={{ color: colors.textSecondary, backgroundColor: colors.innerBg }}>
+                            Aucune prochaine séance n’est programmée.
+                          </p>
+                        )}
+
+                        <div>
+                          <label htmlFor={`fill-folder-${platformId}`} className="block text-sm font-semibold">
+                            Cours à diffuser pendant cette séance
+                          </label>
+                          <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                            Seules les journées dont l’audio et la visio sont disponibles peuvent être utilisées.
+                          </p>
+                          <select
+                            ref={fillSelectRef}
+                            id={`fill-folder-${platformId}`}
+                            value={fillFolderId}
+                            onChange={(event) => setFillFolderId(event.target.value)}
+                            className="mt-3 min-h-12 w-full rounded-lg border px-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30"
+                            style={{ backgroundColor: colors.cardBg, borderColor: colors.border, color: colors.text }}
+                          >
+                            <option value="">Sélectionner une journée</option>
+                            {folders.map((folder, index) => (
+                              <option key={folder.id} value={folder.id}>
+                                Jour {index + 1}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="flex items-start gap-3 text-sm leading-5" style={{ color: colors.textSecondary }}>
+                          <Icon name="info" className="mt-0.5 text-lg" aria-hidden="true" />
+                          <p>Les séances suivantes conservent automatiquement le cours prévu dans leur progression.</p>
+                        </div>
+
+                        {fillFeedback && (
+                          <p
+                            className="rounded-lg px-4 py-3 text-sm font-medium"
+                            style={{
+                              color: fillFeedback.tone === 'success' ? '#047857' : '#b91c1c',
+                              backgroundColor: fillFeedback.tone === 'success' ? '#ecfdf5' : '#fef2f2',
+                            }}
+                            role="status"
+                          >
+                            {fillFeedback.text}
+                          </p>
+                        )}
+                      </div>
+
+                      <footer className="flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:justify-end sm:px-6" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowFillForm(false)
+                            setFillFeedback(null)
+                          }}
+                          className="min-h-11 rounded-lg border px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30"
+                          style={{ borderColor: colors.border, color: colors.textSecondary }}
+                        >
+                          Annuler
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={!fillFolderId || fillingPlatform || !nextCourseSelection?.session}
+                          className="min-h-11 rounded-lg bg-slate-900 px-5 text-sm font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {fillingPlatform ? 'Enregistrement…' : 'Enregistrer pour cette séance'}
+                        </button>
+                      </footer>
+                    </form>
+                  </section>
+                </div>,
+                document.body,
               )}
 
               {loading ? (
                 <div className="flex items-center justify-center py-12">
-                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-purple-500" />
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300" style={{ borderTopColor: colors.textSecondary }} />
                 </div>
               ) : folders.length === 0 ? (
-                <div className="py-12 text-center" style={{ color: colors.textMuted }}>
-                  <Icon name="folder_off" className="text-5xl mb-3" />
-                  <p className="text-sm">Aucun cours pour le moment</p>
-                  <p className="text-xs mt-1">Créez un nouveau cours pour commencer</p>
+                <div className="border-y py-8 text-center" style={{ color: colors.textMuted, borderColor: colors.border }}>
+                  <p className="text-sm font-medium" style={{ color: colors.textSecondary }}>Aucun cours enregistré</p>
+                  <p className="mt-1 text-xs">Créez un cours ou réutilisez une journée existante.</p>
                 </div>
               ) : (
                 <>
-                  <p className="text-xs mb-3 flex items-center gap-1.5" style={{ color: colors.textMuted }}>
-                    <Icon name="drag_indicator" style={{ fontSize: '14px' }} />
-                    Glissez les cours pour changer leur ordre chronologique
-                  </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                    {folders.map((folder, idx) => (
-                      <div
+                  <div className={`grid gap-4 ${showFillInfo ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'}`}>
+                    {folders.map((folder, idx) => {
+                      const courseMaterial = materialForFolder(folder, idx)
+                      const audioState = folderAudioStates[folder.id] || {
+                        status: 'unknown',
+                        label: 'Vérification des audios…',
+                      }
+                      const audioColor = audioState.status === 'ready'
+                        ? '#047857'
+                        : audioState.status === 'error'
+                          ? '#b91c1c'
+                          : audioState.status === 'preparing'
+                            ? '#6d28d9'
+                            : colors.textMuted
+                      return (
+                        <div
                         key={folder.id}
-                        draggable
-                        onDragStart={(e) => handleFolderDragStart(e, idx)}
-                        onDragOver={(e) => handleFolderDragOver(e, idx)}
-                        onDragLeave={handleFolderDragLeave}
-                        onDrop={(e) => handleFolderDrop(e, idx)}
-                        onDragEnd={handleFolderDragEnd}
                         onClick={() => handleOpenFolder(folder)}
-                        className="group relative rounded-2xl p-5 transition-all cursor-pointer select-none"
+                        className="group relative cursor-pointer select-none rounded-xl p-4 transition-all"
                         style={{
                           backgroundColor: colors.innerBg,
-                          border: `2px solid ${dragOverFolderIdx === idx ? '#8B5CF6' : colors.border}`,
-                          opacity: dragFolderIdx === idx ? 0.4 : 1,
-                          transform: dragOverFolderIdx === idx ? 'scale(1.02)' : 'none',
+                          border: `2px solid ${colors.border}`,
+                          transform: 'none',
                         }}
                         onMouseEnter={(e) => {
-                          if (dragFolderIdx === null) {
-                            e.currentTarget.style.borderColor = '#8B5CF6'
-                            e.currentTarget.style.transform = 'translateY(-2px)'
-                          }
+                          e.currentTarget.style.borderColor = colors.textSecondary
+                          e.currentTarget.style.transform = 'translateY(-2px)'
                         }}
                         onMouseLeave={(e) => {
-                          if (dragFolderIdx === null) {
-                            e.currentTarget.style.borderColor = colors.border
-                            e.currentTarget.style.transform = 'translateY(0)'
-                          }
+                          e.currentTarget.style.borderColor = colors.border
+                          e.currentTarget.style.transform = 'translateY(0)'
                         }}
                       >
-                        {hasCrCdTitle(folder.name) && (
-                          <div
-                            className="mb-4 overflow-hidden rounded-xl"
-                            style={{
-                              aspectRatio: '16 / 7.2',
-                              border: `1px solid ${darkMode ? '#334155' : '#E4E4E4'}`,
-                              backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
-                            }}
-                          >
-                            <img
-                              src="/tp-crcd-thumbnail.svg"
-                              alt="TP CRCD"
-                              className="h-full w-full object-cover"
-                              draggable={false}
-                            />
-                          </div>
-                        )}
-
-                        {/* Badge Jour X */}
-                        <div
-                          className="absolute top-2 right-2 text-xs font-bold px-2 py-0.5 rounded-full"
-                          style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', color: '#8B5CF6' }}
-                        >
-                          Jour {idx + 1}
-                        </div>
-
-                        {/* Handle drag */}
-                        <div
-                          className="absolute top-2 left-2 opacity-0 group-hover:opacity-50 transition-opacity cursor-grab"
-                          style={{ color: colors.textMuted }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Icon name="drag_indicator" style={{ fontSize: '16px' }} />
-                        </div>
-
-                        <div className="flex items-start justify-between mt-2">
+                        <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Icon name="folder" style={{ color: '#8B5CF6' }} />
-                              <h4 className="font-semibold truncate" style={{ color: colors.text }}>
-                                {folder.name}
-                              </h4>
-                            </div>
-                            <p className="text-sm" style={{ color: colors.textMuted }}>
-                              {folder.document_count || 0} document{folder.document_count !== 1 ? 's' : ''}
+                            <h4 className="text-sm font-semibold" style={{ color: colors.text }}>
+                              Jour {idx + 1}
+                            </h4>
+                            <p className="mt-3 flex items-center gap-1.5 text-xs" style={{ color: audioColor }}>
+                              <Icon
+                                name={audioState.status === 'ready'
+                                  ? 'check_circle'
+                                  : audioState.status === 'error'
+                                    ? 'error_outline'
+                                    : audioState.status === 'preparing'
+                                      ? 'hourglass_top'
+                                      : 'radio_button_unchecked'}
+                                style={{ fontSize: '15px' }}
+                              />
+                              {audioState.status === 'ready' ? 'Audio prêt' : audioState.label}
+                            </p>
+                            <p className="mt-1.5 flex items-center gap-1.5 text-xs" style={{ color: courseMaterial ? '#047857' : colors.textMuted }}>
+                              <Icon
+                                name={courseMaterial ? 'picture_as_pdf' : courseMaterialsError ? 'error_outline' : 'schedule'}
+                                style={{ fontSize: '15px' }}
+                              />
+                              {courseMaterialsLoading
+                                ? 'Vérification du support…'
+                                : courseMaterialsError
+                                  ? 'État du support indisponible'
+                                  : courseMaterial
+                                    ? 'Support PDF prêt'
+                                    : 'Support PDF indisponible'}
                             </p>
                           </div>
                           <button
@@ -1718,165 +2066,137 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                               e.stopPropagation()
                               handleDeleteFolder(folder.id, folder.name)
                             }}
-                            className="opacity-0 group-hover:opacity-100 transition-all p-2 rounded-full hover:bg-red-100 mt-4"
+                            aria-label={`Supprimer le cours du jour ${idx + 1}`}
+                            className="-mr-1 -mt-1 rounded-full p-2 opacity-0 transition-all hover:bg-red-100 focus:opacity-100 group-hover:opacity-100"
                             style={{ color: '#ef4444' }}
                           >
                             <Icon name="delete" className="text-sm" />
                           </button>
                         </div>
-                      </div>
-                    ))}
+                        </div>
+                      )
+                    })}
                   </div>
                 </>
               )}
-            </>
+              </div>
+
+              {showFillInfo && typeof document !== 'undefined' && createPortal(
+                <div className="fixed inset-0 z-[70]" role="presentation">
+                  <button
+                    type="button"
+                    aria-label="Fermer les informations"
+                    onClick={() => closeFillInfo()}
+                    className={`absolute inset-0 cursor-default bg-slate-950/35 transition-opacity duration-150 ease-out motion-reduce:transition-none ${fillInfoClosing ? 'opacity-0' : 'opacity-100'}`}
+                  />
+                  <aside
+                    id={`fill-course-info-${platformId}`}
+                    role="complementary"
+                    aria-labelledby={`fill-course-info-title-${platformId}`}
+                    className={`absolute inset-y-0 right-0 w-[min(380px,calc(100%-24px))] overflow-y-auto border-l p-5 shadow-2xl transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none sm:p-6 ${fillInfoClosing ? 'pointer-events-none translate-x-full opacity-95' : 'translate-x-0 opacity-100'}`}
+                    style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
+                  >
+                    <div className="flex items-start justify-between gap-4 border-b pb-4" style={{ borderColor: colors.border }}>
+                      <div>
+                        <h3 id={`fill-course-info-title-${platformId}`} className="text-sm font-semibold" style={{ color: colors.text }}>
+                          Choisir le prochain cours
+                        </h3>
+                        <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
+                          Solution de dernier recours
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => closeFillInfo()}
+                        aria-label="Rétracter le panneau d’information"
+                        className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-lg transition-colors"
+                        style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                      >
+                        <Icon name="close" className="text-lg" />
+                      </button>
+                    </div>
+                    <div className="space-y-4 pt-4">
+                      <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
+                        Si la séance prévue n’a pas été générée correctement avec son audio et ses diapositives, contactez le support.
+                      </p>
+                      <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
+                        En attendant la correction, choisissez un cours précédent déjà complet. Il sera diffusé uniquement pendant la séquence indiquée.
+                      </p>
+                      <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>
+                        Cliquez sur le bouton ci-dessous pour choisir le prochain cours.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          fetchNextCourseSelection()
+                          setFillFeedback(null)
+                          closeFillInfo(() => {
+                            setShowFillForm(true)
+                          })
+                        }}
+                        className="inline-flex min-h-11 w-full items-center justify-center rounded-lg px-4 py-2.5 text-center text-sm font-semibold text-white"
+                        style={{ backgroundColor: '#121212' }}
+                      >
+                        {targetSessionId ? 'Choisir le cours de remplacement' : 'Choisir le prochain cours'}
+                      </button>
+                      <p className="border-t pt-4 text-xs font-semibold leading-5" style={{ color: colors.text, borderColor: colors.border }}>
+                        Les séances suivantes continuent avec les cours déjà prévus dans la progression.
+                      </p>
+                    </div>
+                  </aside>
+                </div>,
+                document.body,
+              )}
+            </div>
           ) : (
             <>
-              {/* Breadcrumb / Back */}
-              <button
-                onClick={handleBackToFolders}
-                className="mb-5 flex items-center gap-2 text-sm font-medium transition-colors"
-                style={{ color: colors.textSecondary }}
-                onMouseEnter={(e) => e.currentTarget.style.color = '#8B5CF6'}
-                onMouseLeave={(e) => e.currentTarget.style.color = colors.textSecondary}
-              >
-                <Icon name="arrow_back" />
-                Retour aux cours
-              </button>
-
-              {/* ── Deux panneaux côte à côte ── */}
-              <div className="grid grid-cols-2 gap-4 mb-5">
-
-                {/* ── Panneau gauche : Textes sources ── */}
-                <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                  <div className="px-4 py-3 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#1e293b' : '#f1f5f9', borderBottom: `1px solid ${colors.border}` }}>
-                    <Icon name="description" style={{ color: '#8B5CF6', fontSize: '18px' }} />
-                    <span className="text-sm font-semibold" style={{ color: colors.text }}>Textes sources</span>
-                    {documents.length > 0 && (
-                      <span className="ml-auto text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', color: '#8B5CF6' }}>
-                        {documents.length}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Zone drag & drop */}
-                  <div
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`m-3 rounded-xl p-5 text-center transition-all cursor-pointer border-2 ${dragOver ? 'border-purple-500' : 'border-dashed'}`}
-                    style={{
-                      backgroundColor: dragOver ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
-                      borderColor: dragOver ? '#8B5CF6' : colors.border,
-                    }}
-                  >
-                    <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" multiple onChange={handleFileSelect} className="hidden" />
-                    {uploading ? (
-                      <div className="flex items-center justify-center gap-2" style={{ color: colors.textSecondary }}>
-                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-400 border-t-purple-500" />
-                        <span className="text-xs">Upload...</span>
-                      </div>
-                    ) : (
-                      <>
-                        <Icon name="cloud_upload" className="text-2xl" style={{ color: '#8B5CF6' }} />
-                        <p className="text-xs mt-1" style={{ color: colors.textMuted }}>PDF, TXT ou MD</p>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Liste des documents */}
-                  <div className="px-3 pb-3 space-y-1.5 max-h-64 overflow-y-auto">
-                    {documents.length === 0 ? (
-                      <div className="py-6 text-center" style={{ color: colors.textMuted }}>
-                        <p className="text-xs">Aucun fichier déposé</p>
-                      </div>
-                    ) : (
-                      documents.map((doc) => {
-                        const ext = doc.original_name?.split('.').pop()?.toLowerCase() || 'pdf'
-                        const fileIcon = ext === 'pdf' ? 'picture_as_pdf' : ext === 'md' ? 'description' : 'article'
-                        const fileColor = ext === 'pdf' ? '#dc2626' : ext === 'md' ? '#16a34a' : '#2563eb'
-                        return (
-                          <div
-                            key={doc.id}
-                            className="rounded-xl px-3 py-2.5 flex items-center gap-2.5 transition-all"
-                            style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
-                          >
-                            <Icon name={fileIcon} style={{ color: fileColor, fontSize: '18px', flexShrink: 0 }} />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium truncate" style={{ color: colors.text }}>{doc.original_name}</p>
-                              <StatusBadge status={doc.status} />
-                            </div>
-                            <button
-                              onClick={() => handleDeleteDocument(doc.id, doc.original_name)}
-                              className="p-1 rounded-lg transition-colors flex-shrink-0"
-                              style={{ color: '#ef4444' }}
-                            >
-                              <Icon name="delete" style={{ fontSize: '14px' }} />
-                            </button>
-                          </div>
-                        )
-                      })
-                    )}
-                  </div>
-
-                  {/* Analyser le contenu — dans le panneau Textes sources */}
-                  {documents.length > 0 && (
-                    <div className="px-3 pb-3 pt-1 border-t" style={{ borderColor: colors.border }}>
-                      <button
-                        onClick={handleAnalyse}
-                        disabled={analysing}
-                        className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                        style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                      >
-                        <Icon name="analytics" style={{ fontSize: '14px' }} />
-                        {analysing ? 'Analyse en cours...' : 'Analyser le contenu'}
-                      </button>
-
-                      {wordAnalysis && (
-                        <div
-                          className="mt-2 rounded-xl p-3"
-                          style={{
-                            backgroundColor: wordAnalysis.sufficient ? (darkMode ? '#14532d' : '#dcfce7') : (darkMode ? '#431407' : '#fff7ed'),
-                            border: `1px solid ${wordAnalysis.sufficient ? (darkMode ? '#166534' : '#86efac') : (darkMode ? '#7c2d12' : '#fed7aa')}`,
-                          }}
-                        >
-                          <div className="flex items-center gap-1.5 mb-1">
-                            <Icon name={wordAnalysis.sufficient ? 'check_circle' : 'warning'} style={{ color: wordAnalysis.sufficient ? '#22c55e' : '#f97316', fontSize: '14px' }} />
-                            <p className="text-xs font-bold" style={{ color: wordAnalysis.sufficient ? (darkMode ? '#86efac' : '#166534') : (darkMode ? '#fdba74' : '#c2410c') }}>
-                              {wordAnalysis.total_words.toLocaleString('fr-FR')} mots
-                              {wordAnalysis.sufficient
-                                ? ` · ${wordAnalysis.days_coverable >= 2 ? `${Math.floor(wordAnalysis.days_coverable)} j.` : '1 journée ✓'}`
-                                : ` · ${Math.round(wordAnalysis.days_coverable * 100)}%`}
-                            </p>
-                          </div>
-                          {!wordAnalysis.sufficient && (
-                            <p className="text-xs" style={{ color: darkMode ? '#fdba74' : '#c2410c' }}>
-                              Manque ~{wordAnalysis.words_missing.toLocaleString('fr-FR')} mots
-                            </p>
-                          )}
-                          {wordAnalysis.sufficient && wordAnalysis.surplus_words > 500 && (
-                            <p className="text-xs" style={{ color: darkMode ? '#86efac' : '#166534' }}>
-                              +{wordAnalysis.surplus_words.toLocaleString('fr-FR')} mots tronqués auto
-                            </p>
-                          )}
-                        </div>
-                      )}
+              <div className="mb-4">
+                {/* ── Panneau : Audios générés ── */}
+                <div className="overflow-hidden rounded-2xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg, boxShadow: darkMode ? 'none' : '0 10px 30px rgba(15, 23, 42, 0.04)' }}>
+                  <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
+                    <span
+                      className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-xl"
+                      style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }}
+                    >
+                      <img
+                        src="/icons/headphones.png"
+                        alt=""
+                        aria-hidden="true"
+                        className="h-[22px] w-[22px] object-contain"
+                      />
+                    </span>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</h4>
+                      <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>Consultez ou gérez les fichiers prêts à être diffusés.</p>
                     </div>
-                  )}
-                </div>
-
-                {/* ── Panneau droit : Audios générés ── */}
-                <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                  <div className="px-4 py-3 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#1e293b' : '#f1f5f9', borderBottom: `1px solid ${colors.border}` }}>
-                    <Icon name="music_note" style={{ color: '#7c3aed', fontSize: '18px' }} />
-                    <span className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</span>
+                    {invalidAudios.some(audio => audio.reason === 'missing_audio_sync') && (
+                      <button
+                        type="button"
+                        onClick={handleRepairInvalidAudioSync}
+                        disabled={cleaningInvalidAudios}
+                        className="ml-auto rounded-lg px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                      >
+                        Réparer la synchro
+                      </button>
+                    )}
+                    {invalidAudios.some(audio => !audio.physical_ready || audio.reason === 'unexpected_audio') && (
+                      <button
+                        type="button"
+                        onClick={handleCleanupInvalidAudios}
+                        disabled={cleaningInvalidAudios}
+                        className={`${invalidAudios.some(audio => audio.reason === 'missing_audio_sync') ? '' : 'ml-auto'} rounded-lg px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50`}
+                        style={{ border: '1px solid #fecaca', color: '#b91c1c', backgroundColor: '#fef2f2' }}
+                      >
+                        {cleaningInvalidAudios ? 'Traitement…' : 'Mettre en quarantaine'}
+                      </button>
+                    )}
                     <select
                       value={audioTypeFilter}
                       onChange={(e) => setAudioTypeFilter(e.target.value)}
-                      className="ml-auto text-xs rounded-lg px-2 py-1 outline-none"
+                      className={`${invalidAudios.length ? '' : 'ml-auto'} rounded-lg px-2.5 py-1.5 text-xs outline-none`}
                       style={{
-                        backgroundColor: darkMode ? '#0f172a' : '#ffffff',
+                        backgroundColor: colors.cardBg,
                         border: `1px solid ${colors.border}`,
                         color: colors.textSecondary,
                         cursor: 'pointer',
@@ -1887,424 +2207,131 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
-                    {generatedAudios.length > 0 && (() => {
-                      const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
-                      const expected = AUDIO_PLAYLIST_ITEMS.filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
-                      const readyCount = expected.filter(item => generatedMap[item.filename]).length
-                      const badgeLabel = audioTypeFilter === 'all'
-                        ? `${readyCount}/${expected.length}`
-                        : `${readyCount}/${expected.length} ${AUDIO_FILTERS.find(f => f.value === audioTypeFilter)?.label.toLowerCase()}`
-                      return (
-                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#14532d' : '#dcfce7', color: '#16a34a' }}>
-                          {badgeLabel}
-                        </span>
-                      )
-                    })()}
                   </div>
 
-                  <div className="px-3 py-3 space-y-1.5 max-h-80 overflow-y-auto">
+                  <div className="max-h-[26rem] overflow-y-auto p-3">
                     {(() => {
                       const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
-                      const visibleItems = AUDIO_PLAYLIST_ITEMS.filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
+                      const manifestItems = audioPlaylistItems.length
+                        ? audioPlaylistItems
+                        : generatedAudios.map(audio => ({
+                          filename: audio.filename,
+                          type: normalizeAudioType('', audio.filename),
+                          duration_seconds: 0,
+                        }))
+                      const visibleItems = manifestItems
+                        .map(item => ({
+                          ...item,
+                          type: normalizeAudioType(item.type, item.filename),
+                        }))
+                        .filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
                       return visibleItems.map((item) => {
                         const audio = generatedMap[item.filename]
+                        const invalid = item.readiness === 'invalid'
                         const meta = AUDIO_TYPE_META[item.type] || AUDIO_TYPE_META.cours
                         return (
-                          <div
-                            key={item.filename}
-                            className="rounded-xl px-3 py-2.5 flex items-center gap-2.5"
-                            style={{
-                              backgroundColor: audio ? (darkMode ? meta.darkBg : meta.lightBg) : colors.innerBg,
-                              border: `1px solid ${audio ? (darkMode ? meta.darkBorder : meta.lightBorder) : colors.border}`,
-                            }}
-                          >
+	                          <div
+	                            key={item.filename}
+	                            role={audio ? 'button' : undefined}
+	                            tabIndex={audio ? 0 : -1}
+	                            onClick={() => {
+	                              if (audio) setAudioEditorFile(item.filename)
+	                            }}
+	                            onKeyDown={(e) => {
+	                              if (audio && (e.key === 'Enter' || e.key === ' ')) {
+	                                e.preventDefault()
+	                                setAudioEditorFile(item.filename)
+	                              }
+	                            }}
+	                            className="group flex min-h-[60px] items-center gap-3 rounded-xl px-4 py-3 outline-none transition-[background-color,border-color,box-shadow] hover:shadow-sm focus-visible:ring-2 focus-visible:ring-violet-500/40"
+	                            style={{
+	                              backgroundColor: audio ? (darkMode ? '#111827' : '#f8fafc') : 'transparent',
+	                              border: `1px solid ${audio ? colors.border : 'transparent'}`,
+	                              cursor: audio ? 'pointer' : 'default',
+	                            }}
+	                          >
                             <Icon
-                              name={audio ? 'check_circle' : 'radio_button_unchecked'}
-                              style={{ color: audio ? meta.color : colors.textMuted, fontSize: '16px', flexShrink: 0 }}
+                              name={audio ? 'check_circle' : invalid ? 'error_outline' : 'radio_button_unchecked'}
+                              style={{ color: audio ? '#047857' : invalid ? '#b91c1c' : colors.textMuted, fontSize: '18px', flexShrink: 0 }}
                             />
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: audio ? (darkMode ? colors.text : '#14532d') : colors.textMuted }}>
-                                <Icon name={meta.icon} style={{ color: audio ? meta.color : colors.textMuted, fontSize: '13px' }} />
-                                <span>{item.label}</span>
-                                <span style={{ color: audio ? meta.color : colors.textMuted, fontWeight: 700 }}>
-                                  · {meta.label}
+                              <p className="flex items-center gap-2 text-xs font-medium" style={{ color: audio ? colors.textSecondary : colors.textMuted }}>
+                                {meta.iconImage ? (
+                                  <img
+                                    src={meta.iconImage}
+                                    alt=""
+                                    aria-hidden="true"
+                                    className="h-[18px] w-[18px] flex-none object-contain"
+                                  />
+                                ) : (
+                                  <Icon name={meta.icon} style={{ color: colors.textMuted, fontSize: '16px' }} />
+                                )}
+                                <span>{audioPlaylistLabel(item)}</span>
+                                <span style={{ color: colors.textMuted, fontWeight: 600 }}>
+                                  · {item.filename}
                                 </span>
                               </p>
-                              {audio && (
-                                <p className="text-xs" style={{ color: darkMode ? colors.textMuted : '#64748b' }}>
-                                  {audio.size_mb} Mo · {item.filename}
+                              {invalid && (
+                                <p className="mt-0.5 text-[11px] font-medium" style={{ color: '#b91c1c' }}>
+                                  {item.readiness_reason === 'missing_audio_sync'
+                                    ? 'Synchronisation slides absente ou incomplète'
+                                    : item.readiness_reason === 'unexpected_audio'
+                                      ? 'Fichier ancien hors manifeste'
+                                      : 'MP3 invalide ou durée incohérente'}
                                 </p>
                               )}
                             </div>
-                            {audio && (
-                              <button
-                                onClick={() => setAudioEditorFile(item.filename)}
-                                title="Éditer cet audio (couper / remplacer)"
-                                className="flex-shrink-0 rounded-lg p-1 hover:opacity-80 transition-opacity"
-                                style={{ backgroundColor: darkMode ? '#2d1b69' : '#ede9fe' }}
-                              >
-                                <Icon name="cut" style={{ color: '#7c3aed', fontSize: '14px' }} />
-                              </button>
+	                            {audio && (
+	                              <div className="flex flex-shrink-0 items-center gap-1.5">
+	                                <button
+	                                  onClick={(e) => {
+	                                    e.stopPropagation()
+	                                    setAudioEditorFile(item.filename)
+	                                  }}
+	                                  title="Consulter cet audio"
+                                  aria-label={`Consulter ${item.filename}`}
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-slate-700"
+                                  style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                                >
+                                  <Icon name="visibility" style={{ fontSize: '18px' }} />
+                                </button>
+	                                <button
+	                                  type="button"
+	                                  onClick={(e) => {
+	                                    e.stopPropagation()
+	                                    handleDeleteGeneratedAudio(item.filename)
+	                                  }}
+                                  disabled={deletingAudioFile === item.filename}
+                                  title="Supprimer cet audio"
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                                  style={{ backgroundColor: darkMode ? '#3f1d22' : '#fef2f2', border: `1px solid ${darkMode ? '#7f1d1d' : '#fecaca'}`, color: '#dc2626' }}
+                                >
+                                  <Icon name={deletingAudioFile === item.filename ? 'hourglass_empty' : 'delete'} style={{ fontSize: '16px' }} />
+                                </button>
+                              </div>
                             )}
                           </div>
                         )
                       })
                     })()}
                   </div>
-
-                  {/* ── Mock upload (dev only) ── */}
-                  <div
-                    className="px-3 py-3 border-t"
-                    style={{
-                      borderColor: colors.border,
-                      backgroundColor: darkMode ? '#0b1020' : '#fafafa',
-                    }}
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <Icon name="science" style={{ color: '#f59e0b', fontSize: '14px' }} />
-                      <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#f59e0b' }}>
-                        Mock test
-                      </span>
-                      <span className="text-xs" style={{ color: colors.textMuted }}>
-                        · dev only
-                      </span>
-                    </div>
-                    <p className="text-xs mb-2" style={{ color: colors.textMuted, lineHeight: 1.4 }}>
-                      Copie automatiquement les 7 MP3 depuis <code style={{ fontSize: '10px' }}>output_jour1/</code> vers Azure.
-                      Les fichiers locaux ne sont pas modifiés.
-                    </p>
-                    <button
-                      onClick={handleMockAudioUpload}
-                      disabled={mockUploading}
-                      className="w-full flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors"
-                      style={{
-                        backgroundColor: mockUploading ? colors.innerBg : (darkMode ? '#78350f33' : '#fef3c7'),
-                        color: '#f59e0b',
-                        border: `1px dashed #f59e0b`,
-                        cursor: mockUploading ? 'wait' : 'pointer',
-                      }}
-                    >
-                      {mockUploading ? (
-                        <>
-                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-amber-300 border-t-amber-600" />
-                          Upload en cours...
-                        </>
-                      ) : (
-                        <>
-                          <Icon name="cloud_upload" style={{ fontSize: '14px' }} />
-                          Uploader output_jour1
-                        </>
-                      )}
-                    </button>
-
-                    {mockUploadQueue.length > 0 && (
-                      <div className="mt-2 space-y-1">
-                        {mockUploadQueue.map((q, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center gap-2 px-2 py-1 rounded text-xs"
-                            style={{
-                              backgroundColor:
-                                q.status === 'done' ? (darkMode ? '#14532d33' : '#dcfce7') :
-                                q.status === 'error' ? (darkMode ? '#7f1d1d33' : '#fee2e2') :
-                                colors.innerBg,
-                              color:
-                                q.status === 'done' ? '#16a34a' :
-                                q.status === 'error' ? '#dc2626' :
-                                colors.textMuted,
-                            }}
-                          >
-                            <Icon
-                              name={
-                                q.status === 'done' ? 'check_circle' :
-                                q.status === 'error' ? 'error' :
-                                q.status === 'uploading' ? 'hourglass_empty' :
-                                'schedule'
-                              }
-                              style={{ fontSize: '12px' }}
-                            />
-                            <span className="flex-1 truncate">{q.name}</span>
-                            {q.error && <span className="text-xs opacity-70 truncate">{q.error}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
                 </div>
-              </div>
+	              </div>
               {/* ── Fin des deux panneaux ── */}
-
-              {/* ── Génération de contenu TTS-direct ── */}
-              <div className="mt-5 rounded-2xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                {/* Header */}
-                <div className="px-4 py-3 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#1e1b4b' : '#f5f3ff', borderBottom: `1px solid ${colors.border}` }}>
-                  <Icon name="auto_awesome" style={{ color: '#7c3aed', fontSize: '18px' }} />
-                  <span className="text-sm font-semibold" style={{ color: colors.text }}>Générer le contenu depuis un programme</span>
-                  <span className="ml-auto text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', color: '#7c3aed' }}>
-                    ~92 000 mots · 1 journée
-                  </span>
-                </div>
-
-                <div className="p-4">
-                  {/* Note utilisateur */}
-                  <p className="text-xs mb-3 flex items-start gap-1.5" style={{ color: colors.textMuted }}>
-                    <Icon name="info" style={{ fontSize: '14px', flexShrink: 0, marginTop: '1px' }} />
-                    Chaque dossier représente une journée de formation. Collez le programme ci-dessous — Claude extraira 6 sous-parties et générera ~92 000 mots de cours oral TTS-ready.
-                  </p>
-
-                  {/* État : pas de job ou idle → afficher le formulaire */}
-                  {(!contentJob || contentJob.status === 'idle') && (
-                    <>
-                      <textarea
-                        value={programText}
-                        onChange={e => setProgramText(e.target.value)}
-                        placeholder="Collez ici le programme de formation (référentiel, syllabus, plan de cours...)"
-                        rows={5}
-                        className="w-full rounded-xl px-4 py-3 text-sm resize-none outline-none transition-colors mb-3"
-                        style={{
-                          backgroundColor: colors.innerBg,
-                          border: `1px solid ${colors.border}`,
-                          color: colors.text,
-                        }}
-                      />
-                      <button
-                        onClick={handleExtractSubParts}
-                        disabled={extracting || !programText.trim()}
-                        className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                        style={{ backgroundColor: '#7c3aed', color: 'white' }}
-                      >
-                        {extracting
-                          ? <><div className="h-4 w-4 animate-spin rounded-full border-2 border-purple-300 border-t-white" />Extraction en cours...</>
-                          : <><Icon name="psychology" style={{ fontSize: '18px' }} />Extraire les sous-parties</>
-                        }
-                      </button>
-                    </>
-                  )}
-
-                  {/* État : sous-parties extraites → afficher la liste + boutons */}
-                  {contentJob && (contentJob.status === 'idle' || contentJob.status === 'cancelled') && contentJob.sub_parts?.length > 0 && (
-                    <div className="space-y-3">
-                      <div>
-                        <p className="text-xs font-semibold mb-2" style={{ color: colors.textSecondary }}>
-                          {contentJob.program_title} — {contentJob.sub_parts.length} sous-parties identifiées
-                        </p>
-                        <div className="space-y-1">
-                          {contentJob.sub_parts.map((sp, i) => (
-                            <div key={i} className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg" style={{ backgroundColor: colors.innerBg }}>
-                              <span className="font-bold" style={{ color: '#7c3aed', minWidth: '18px' }}>{i + 1}.</span>
-                              <span style={{ color: colors.text }}>{sp}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex gap-2 flex-wrap">
-                        <button
-                          onClick={() => handleStartContentGeneration('normal')}
-                          className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all"
-                          style={{ backgroundColor: '#7c3aed', color: 'white' }}
-                        >
-                          <Icon name="play_arrow" style={{ fontSize: '18px' }} />
-                          Lancer la génération
-                        </button>
-                        <button
-                          onClick={handlePreviewPrompt}
-                          className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all"
-                          style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                        >
-                          <Icon name="visibility" style={{ fontSize: '16px' }} />
-                          Prévisualiser le prompt
-                        </button>
-                        {/* Boutons test — visibles seulement en développement */}
-                        {import.meta.env.DEV && (
-                          <>
-                            <button
-                              onClick={() => handleStartContentGeneration('mock')}
-                              title="Génère du texte factice instantanément (0€, teste polling + checkpoint + modale)"
-                              className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all"
-                              style={{ backgroundColor: darkMode ? '#1a2e1a' : '#dcfce7', color: '#16a34a', border: '1px dashed #16a34a' }}
-                            >
-                              <Icon name="science" style={{ fontSize: '14px' }} />
-                              Mock (0€)
-                            </button>
-                            <button
-                              onClick={() => handleStartContentGeneration('mini')}
-                              title="Génère 1 vrai segment Claude en 300 tokens (~0.02€)"
-                              className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all"
-                              style={{ backgroundColor: darkMode ? '#1a2010' : '#fef9c3', color: '#ca8a04', border: '1px dashed #ca8a04' }}
-                            >
-                              <Icon name="bolt" style={{ fontSize: '14px' }} />
-                              Mini (~0.02€)
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => { setContentJob(null); setProgramText('') }}
-                          className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm transition-all"
-                          style={{ color: colors.textMuted }}
-                        >
-                          <Icon name="refresh" style={{ fontSize: '16px' }} />
-                          Recommencer
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* État : génération en cours */}
-                  {contentJob?.status === 'running' && (
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-3">
-                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-purple-300 border-t-purple-600 flex-shrink-0" />
-                        <p className="text-sm" style={{ color: darkMode ? '#c4b5fd' : '#6d28d9' }}>
-                          {contentJob.message}
-                        </p>
-                      </div>
-                      {/* Barre de progression */}
-                      {(() => {
-                        const totalSteps = (contentJob.num_sub_parts || 6) * 3
-                        const doneSteps = (contentJob.current_sub_part || 0) * 3 + ((contentJob.current_passe || 1) - 1)
-                        const pct = Math.round((doneSteps / totalSteps) * 100)
-                        return (
-                          <>
-                            <div className="w-full rounded-full h-2" style={{ backgroundColor: darkMode ? '#1e1b4b' : '#ddd6fe' }}>
-                              <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: '#7c3aed' }} />
-                            </div>
-                            <div className="flex items-center justify-between text-xs" style={{ color: darkMode ? '#a78bfa' : '#7c3aed' }}>
-                              <span>{doneSteps}/{totalSteps} passes</span>
-                              <span>{(contentJob.total_words || 0).toLocaleString('fr-FR')} mots générés</span>
-                            </div>
-                          </>
-                        )
-                      })()}
-                      <button
-                        onClick={handleCancelContentGeneration}
-                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-all"
-                        style={{ backgroundColor: darkMode ? '#3f1d1d' : '#fee2e2', color: '#ef4444' }}
-                      >
-                        <Icon name="stop" style={{ fontSize: '14px' }} />
-                        Annuler
-                      </button>
-                    </div>
-                  )}
-
-                  {/* État : terminé */}
-                  {contentJob?.status === 'completed' && (
-                    <div className="space-y-2">
-                      <div className="rounded-xl p-3 flex items-center gap-3" style={{ backgroundColor: darkMode ? '#14532d' : '#dcfce7', border: `1px solid ${darkMode ? '#166534' : '#86efac'}` }}>
-                        <Icon name="check_circle" style={{ color: '#22c55e', fontSize: '20px' }} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold" style={{ color: darkMode ? '#86efac' : '#166534' }}>
-                            {(contentJob.total_words || 0).toLocaleString('fr-FR')} mots générés
-                          </p>
-                          <p className="text-xs" style={{ color: darkMode ? '#4ade80' : '#16a34a' }}>
-                            Fichier .txt ajouté aux textes sources — prêt pour la pipeline audio.
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => { setContentJob(null); setProgramText('') }}
-                          className="text-xs underline flex-shrink-0"
-                          style={{ color: darkMode ? '#86efac' : '#16a34a' }}
-                        >
-                          Nouveau
-                        </button>
-                      </div>
-                      <button
-                        onClick={handleViewContentScript}
-                        disabled={loadingContentScript}
-                        className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all disabled:opacity-50"
-                        style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                      >
-                        <Icon name="article" style={{ fontSize: '18px' }} />
-                        {loadingContentScript ? 'Chargement...' : 'Voir le script TTS généré'}
-                      </button>
-                    </div>
-                  )}
-
-                  {/* État : erreur */}
-                  {contentJob?.status === 'error' && (
-                    <div className="rounded-xl p-3 space-y-2" style={{ backgroundColor: darkMode ? '#7f1d1d' : '#fee2e2', border: `1px solid ${darkMode ? '#991b1b' : '#fca5a5'}` }}>
-                      <div className="flex items-center gap-2">
-                        <Icon name="error" style={{ color: '#ef4444' }} />
-                        <p className="text-sm font-medium" style={{ color: '#ef4444' }}>Erreur : {contentJob.error_message}</p>
-                      </div>
-                      <button
-                        onClick={handleStartContentGeneration}
-                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium"
-                        style={{ backgroundColor: '#ef4444', color: 'white' }}
-                      >
-                        <Icon name="replay" style={{ fontSize: '14px' }} />
-                        Reprendre depuis le checkpoint
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-              {/* ── Fin génération de contenu ── */}
-
-              {/* ── Zone d'actions ── */}
-
-              {/* Bouton générer */}
-              {documents.length > 0 && (
-                <div className="mb-4 flex flex-col gap-2">
-                  <button
-                    onClick={() => handleGeneratePlaylist({})}
-                    disabled={playlistJob?.status === 'running'}
-                    className="w-full flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{ backgroundColor: '#8B5CF6', color: 'white' }}
-                    onMouseEnter={(e) => { if (playlistJob?.status !== 'running') e.currentTarget.style.backgroundColor = '#7c3aed' }}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#8B5CF6'}
-                  >
-                    <Icon name="auto_awesome" className="text-lg" />
-                    {playlistJob?.status === 'running'
-                      ? 'Pipeline en cours...'
-                      : dirtyBlocs?.has_script
-                        ? dirtyBlocs.dirty_blocs > 0
-                          ? `Régénérer ${dirtyBlocs.dirty_blocs}/7 bloc${dirtyBlocs.dirty_blocs > 1 ? 's' : ''} modifié${dirtyBlocs.dirty_blocs > 1 ? 's' : ''}`
-                          : 'Générer les 7 cours MP3 (script)'
-                        : 'Générer les 7 cours MP3'
-                    }
-                  </button>
-                  {import.meta.env.DEV && (
-                    <>
-                      {dirtyBlocs?.has_script && (
-                        <button
-                          onClick={() => handleGeneratePlaylist({ scriptMock: true })}
-                          disabled={playlistJob?.status === 'running'}
-                          title="Régénère uniquement les blocs modifiés avec du silence 1s (teste la logique dirty sans appeler fish.audio)"
-                          className="w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-50"
-                          style={{ backgroundColor: darkMode ? '#1a2e1a' : '#dcfce7', color: '#16a34a', border: '1px dashed #16a34a' }}
-                        >
-                          <Icon name="science" style={{ fontSize: '14px' }} />
-                          Mock régénération script (0€ — silence, blocs dirty seulement)
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleGeneratePlaylist({ mock: true })}
-                        disabled={playlistJob?.status === 'running'}
-                        title="Blocs factices + silence 1s — 0€, ~10 secondes (teste upload Azure + structure playlist)"
-                        className="w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-50"
-                        style={{ backgroundColor: darkMode ? '#1a2010' : '#fef9c3', color: '#ca8a04', border: '1px dashed #ca8a04' }}
-                      >
-                        <Icon name="science" style={{ fontSize: '14px' }} />
-                        Mock playlist classique (0€ — silence 1s, sans script)
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
 
               {/* Progression pipeline */}
               {playlistJob?.status === 'running' && (
-                <div className="mb-4 rounded-2xl p-4" style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', border: `1px solid ${darkMode ? '#4c1d95' : '#c4b5fd'}` }}>
+                <div className="mb-4 rounded-xl p-4" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-purple-300 border-t-purple-600" />
-                    <p className="text-sm font-medium" style={{ color: darkMode ? '#c4b5fd' : '#6d28d9' }}>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300" style={{ borderTopColor: colors.textSecondary }} />
+                    <p className="text-sm font-medium" style={{ color: colors.textSecondary }}>
                       {playlistJob.message}
                     </p>
                   </div>
-                  <div className="w-full rounded-full h-2" style={{ backgroundColor: darkMode ? '#1e1b4b' : '#ddd6fe' }}>
-                    <div className="h-2 rounded-full transition-all" style={{ width: `${Math.round((playlistJob.step / playlistJob.total_steps) * 100)}%`, backgroundColor: '#8B5CF6' }} />
+                  <div className="w-full rounded-full h-1.5" style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0' }}>
+                    <div className="h-1.5 rounded-full transition-all" style={{ width: `${Math.round((playlistJob.step / playlistJob.total_steps) * 100)}%`, backgroundColor: colors.textSecondary }} />
                   </div>
-                  <p className="text-xs mt-1" style={{ color: darkMode ? '#a78bfa' : '#7c3aed' }}>
+                  <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
                     Étape {playlistJob.step}/{playlistJob.total_steps}
                   </p>
                 </div>
@@ -2316,7 +2343,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   <div className="flex items-center gap-2 mb-1">
                     <Icon name="check_circle" style={{ color: '#22c55e' }} />
                     <p className="text-sm font-bold" style={{ color: darkMode ? '#86efac' : '#166534' }}>
-                      {playlistJob.result.filled_blocs || playlistJob.result.generated}/7 blocs générés
+                      {playlistJob.result.filled_blocs || playlistJob.result.generated}
+                      {expectedCourseCount ? `/${expectedCourseCount}` : ''} cours générés
                       {playlistJob.result.errors > 0 && ` · ${playlistJob.result.errors} erreur(s)`}
                     </p>
                   </div>
@@ -2346,24 +2374,34 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       {showPromptPreview && promptPreview && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
+          style={{ backgroundColor: 'rgba(15, 23, 42, 0.62)' }}
           onClick={() => setShowPromptPreview(false)}
         >
           <div
             className="w-full overflow-hidden rounded-2xl shadow-2xl flex flex-col"
-            style={{ maxWidth: '800px', maxHeight: '90vh', backgroundColor: colors.cardBg }}
+            style={{ maxWidth: '800px', maxHeight: '90vh', backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0" style={{ borderColor: colors.border, backgroundColor: '#7c3aed' }}>
-              <div className="flex items-center gap-3 text-white">
-                <Icon name="visibility" className="text-2xl" />
+            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+              <div className="flex items-center gap-3">
+                <span
+                  className="flex h-10 w-10 items-center justify-center rounded-xl"
+                  style={{ backgroundColor: darkMode ? '#1f2937' : '#e2e8f0', color: colors.text }}
+                >
+                  <Icon name="visibility" style={{ fontSize: '22px' }} />
+                </span>
                 <div>
-                  <h3 className="text-lg font-bold">Prompt Passe 1 — Aperçu</h3>
-                  <p className="text-xs text-purple-200">Ce prompt sera envoyé à Claude pour chaque sous-partie</p>
+                  <h3 className="text-base font-semibold" style={{ color: colors.text }}>Prompt Passe 1</h3>
+                  <p className="text-xs" style={{ color: colors.textMuted }}>Aperçu envoyé à Claude pour chaque sous-partie</p>
                 </div>
               </div>
-              <button onClick={() => setShowPromptPreview(false)} className="text-white hover:bg-white/20 rounded-full p-1">
-                <Icon name="close" className="text-2xl" />
+              <button
+                onClick={() => setShowPromptPreview(false)}
+                className="rounded-full p-2 transition-colors"
+                style={{ color: colors.textMuted }}
+                title="Fermer"
+              >
+                <Icon name="close" style={{ fontSize: '22px' }} />
               </button>
             </div>
             <div className="overflow-y-auto p-6">
@@ -2375,460 +2413,95 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         </div>
       )}
 
-      {/* Modale script TTS généré — 2 colonnes */}
+      {/* Sous-page du script TTS généré */}
       {contentScriptModal && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0,0,0,0.75)' }}
-          onClick={closeContentScriptModal}
+          className="absolute inset-0 z-30 flex min-h-0 flex-col"
+          style={{ backgroundColor: darkMode ? colors.bg : '#f8fafc' }}
         >
           <div
-            className="w-full overflow-hidden rounded-2xl shadow-2xl flex flex-col"
-            style={{ maxWidth: '1100px', maxHeight: '92vh', backgroundColor: colors.cardBg }}
-            onClick={e => e.stopPropagation()}
+            className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+            style={{
+              backgroundColor: colors.cardBg,
+            }}
           >
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0" style={{ borderColor: colors.border, backgroundColor: '#6d28d9' }}>
-              <div className="flex items-center gap-3 text-white">
-                <Icon name="article" className="text-2xl" />
-                <div>
-                  <h3 className="text-lg font-bold">Script TTS — {contentScriptModal.program_title}</h3>
-                  <p className="text-xs" style={{ color: '#ddd6fe' }}>
-                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {contentScriptModal.sub_parts?.length} sous-parties · {(contentScriptModal.course_blocs?.length || contentScriptModal.planned_course_blocs?.length || 0)} cours audio
-                    {scriptAnnotations.length > 0 && ` · ${scriptAnnotations.length} note${scriptAnnotations.length > 1 ? 's' : ''}`}
-                  </p>
-                </div>
-              </div>
-              <div className="ml-auto mr-3 flex rounded-lg p-1" style={{ backgroundColor: 'rgba(255,255,255,0.14)' }}>
-                {[
-                  { value: 'source', label: 'Sous-parties', icon: 'segment' },
-                  { value: 'courses', label: 'Cours audio', icon: 'record_voice_over' },
-                  { value: 'planned_courses', label: 'Cours audio prévu', icon: 'pending_actions' },
-                ].map(option => {
-                  const active = contentScriptView === option.value
-                  const disabled =
-                    (option.value === 'courses' && !(contentScriptModal.course_blocs?.length > 0)) ||
-                    (option.value === 'planned_courses' && !(contentScriptModal.planned_course_blocs?.length > 0))
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => {
-                        if (disabled) return
-                        setContentScriptView(option.value)
-                        setEditingSegment(null)
-                        resetScriptAnnotationDraft()
-                      }}
-                      disabled={disabled}
-                      className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                      style={{
-                        backgroundColor: active ? '#f8fafc' : 'transparent',
-                        color: active ? '#5b21b6' : '#f5f3ff',
-                      }}
-                    >
-                      <Icon name={option.icon} style={{ fontSize: '14px' }} />
-                      {option.label}
-                    </button>
-                  )
-                })}
-              </div>
-              {scriptAnnotations.length > 0 && (
-                <button
-                  type="button"
-                  onClick={downloadAnnotationsMarkdown}
-                  className="mr-2 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors"
-                  style={{ backgroundColor: 'rgba(255,255,255,0.14)', color: '#f5f3ff' }}
-                  title={contentScriptModal.annotations_markdown_path || 'Télécharger le markdown de revue'}
-                >
-                  <Icon name="download" style={{ fontSize: '15px' }} />
-                  Markdown
-                </button>
-              )}
+            <header
+              className="flex flex-none items-center gap-3 border-b px-4 py-3 sm:px-6"
+              style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}
+            >
               <button
                 type="button"
-                onClick={() => setRulesPanelOpen(prev => !prev)}
-                className="mr-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors"
-                style={{
-                  backgroundColor: rulesPanelOpen ? '#facc15' : 'rgba(255,255,255,0.14)',
-                  color: rulesPanelOpen ? '#1f2937' : '#f5f3ff',
-                }}
-                title="Règles apprises depuis tes annotations"
+                onClick={closeContentScriptPage}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 dark:hover:bg-white/5"
+                style={{ color: colors.textSecondary }}
+                aria-label="Retour à la journée"
+                title="Retour à la journée"
               >
-                <Icon name="rule" style={{ fontSize: '15px' }} />
-                Règles {scriptRules?.rules_count ? `(${scriptRules.rules_count})` : ''}
+                <Icon name="arrow_back" style={{ fontSize: '20px' }} />
               </button>
-              <button onClick={closeContentScriptModal} className="text-white hover:bg-white/20 rounded-full p-1">
-                <Icon name="close" className="text-2xl" />
-              </button>
-            </div>
-
-            {rulesPanelOpen && (
-              <div
-                className="border-b px-6 py-3 overflow-y-auto flex-shrink-0"
-                style={{
-                  backgroundColor: darkMode ? '#1a1332' : '#fefce8',
-                  borderColor: colors.border,
-                  maxHeight: '50vh',
-                }}
-              >
-                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold" style={{ color: colors.text }}>
-                      Règles apprises depuis tes annotations
-                    </p>
-                    <p className="text-xs" style={{ color: colors.textMuted }}>
-                      {scriptRules?.source_annotations_count
-                        ? `Extraites de ${scriptRules.source_annotations_count} annotation${scriptRules.source_annotations_count > 1 ? 's' : ''} via ${scriptRules.model || 'DeepSeek'}. Généré le ${scriptRules.generated_at || '—'}.`
-                        : 'Aucune extraction encore — applique au moins une correction puis clique sur Extraire.'}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                    <button
-                      type="button"
-                      onClick={extractScriptRules}
-                      disabled={extractingRules || scriptAnnotations.length === 0}
-                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                      style={{ backgroundColor: '#7c3aed', color: 'white' }}
-                    >
-                      <Icon name="auto_awesome" style={{ fontSize: '14px' }} />
-                      {extractingRules ? 'Extraction…' : (scriptRules?.rules_count ? 'Ré-extraire' : 'Extraire')}
-                    </button>
-                    {scriptRules?.rules_markdown && (
-                      <button
-                        type="button"
-                        onClick={downloadRulesMarkdown}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors"
-                        style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                      >
-                        <Icon name="download" style={{ fontSize: '14px' }} />
-                        Markdown
-                      </button>
-                    )}
-                    {scriptRules?.rules_markdown && !editingRules && (
-                      <button
-                        type="button"
-                        onClick={startEditingRules}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors"
-                        style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                        title="Éditer le markdown des règles à la main (sauve via PUT /rules)"
-                      >
-                        <Icon name="edit" style={{ fontSize: '14px' }} />
-                        Modifier
-                      </button>
-                    )}
-                    {scriptRules?.rules_markdown && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => runTextReview(true)}
-                          disabled={reviewingText || reviewingRules}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                          title="Simule la revérif au niveau texte (sans toucher aux segments ni aux MP3). Ne nécessite pas de script_slide_deck."
-                        >
-                          <Icon name="article" style={{ fontSize: '14px' }} />
-                          {reviewingText ? 'Analyse…' : 'Simuler cours'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runTextReview(false)}
-                          disabled={reviewingText || reviewingRules}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: '#2563eb' }}
-                          title="Modifie le texte des segments en DB + dirty=1. Les MP3 actuels ne changent pas — ils seront refaits à la prochaine relance TTS."
-                        >
-                          <Icon name="edit_note" style={{ fontSize: '14px' }} />
-                          {reviewingText ? 'Application…' : 'Appliquer cours'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runRulesReview(true)}
-                          disabled={reviewingRules || reviewingText}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                          title="Simule la revérif niveau chunk audio. Nécessite script_slide_deck (sinon utilise les boutons texte ci-dessus)."
-                        >
-                          <Icon name="visibility" style={{ fontSize: '14px' }} />
-                          {reviewingRules ? 'Analyse MP3…' : 'Simuler MP3'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runRulesReview(false)}
-                          disabled={reviewingRules || reviewingText}
-                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ backgroundColor: '#16a34a' }}
-                          title="Patche les MP3 non conformes en place via splice ms-précis. Nécessite script_slide_deck."
-                        >
-                          <Icon name="auto_fix_high" style={{ fontSize: '14px' }} />
-                          {reviewingRules ? 'Patch MP3…' : 'Appliquer aux MP3'}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {textReviewProgress && textReviewProgress.status === 'running' && (
-                  <div
-                    className="mb-2 rounded-md p-3 text-xs"
-                    style={{ backgroundColor: 'rgba(37,99,235,0.08)', color: colors.text, border: '1px solid rgba(37,99,235,0.35)' }}
+              <h1 className="min-w-0 truncate text-sm font-semibold sm:text-base" style={{ color: colors.text }}>
+                {selectedFolder?.name || 'Journée sélectionnée'}
+              </h1>
+              <div className="ml-auto flex flex-none items-center gap-2">
+                {contentScriptView !== 'source' && !scriptActiveBreak && activeToolbarCourse && !isEditingToolbarCourse && (
+                  <button
+                    type="button"
+                    onClick={() => handleStartCourseBlocEdit(activeToolbarCourse)}
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 sm:w-44"
+                    title="Modifier le texte"
                   >
-                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#2563eb' }}>
-                      ⏳ Revérif texte en cours
-                      {textReviewProgress.dry_run ? ' (simulation)' : ''}
-                      {' · '}
-                      <span style={{ color: colors.textMuted, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
-                        démarrée à {textReviewProgress.started_at}
-                      </span>
-                    </p>
-                    <div className="mb-2 flex items-center gap-2">
-                      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(37,99,235,0.15)' }}>
-                        <div
-                          style={{
-                            height: '100%',
-                            width: textReviewProgress.segments_total > 0
-                              ? `${Math.min(100, Math.round((textReviewProgress.segments_done / textReviewProgress.segments_total) * 100))}%`
-                              : '0%',
-                            background: 'linear-gradient(90deg, #2563eb, #3b82f6)',
-                            transition: 'width 0.4s ease',
-                          }}
-                        />
-                      </div>
-                      <span className="text-[11px]" style={{ color: '#2563eb', fontWeight: 600 }}>
-                        {textReviewProgress.segments_done}/{textReviewProgress.segments_total}
-                      </span>
-                    </div>
-                    <p className="text-[11px]" style={{ color: colors.text }}>
-                      {textReviewProgress.current_segment ? <>📄 <strong>{textReviewProgress.current_segment}</strong></> : 'Initialisation…'}
-                      {textReviewProgress.current_step && (
-                        <span style={{ color: colors.textMuted }}> · {textReviewProgress.current_step}</span>
-                      )}
-                    </p>
-                    <ul className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0 sm:grid-cols-4 text-[11px]">
-                      <li style={{ color: '#2563eb' }}>{textReviewProgress.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewProgress.segments_modified}</strong></li>
-                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewProgress.segments_conforme}</strong></li>
-                      <li style={{ color: colors.textMuted }}>Skipped : <strong>{textReviewProgress.segments_skipped}</strong></li>
-                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewProgress.segments_failed}</strong></li>
-                    </ul>
-                    {Array.isArray(textReviewProgress.log_lines) && textReviewProgress.log_lines.length > 0 && (
-                      <pre
-                        className="mt-2 max-h-32 overflow-auto rounded p-2 text-[10px] leading-snug"
-                        style={{ backgroundColor: colors.innerBg, color: colors.textMuted, whiteSpace: 'pre-wrap' }}
-                      >
-                        {textReviewProgress.log_lines.slice(-12).join('\n')}
-                      </pre>
-                    )}
-                  </div>
+                    <Icon name="edit" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">Modifier le texte</span>
+                  </button>
                 )}
-
-                {textReviewSummary && (
-                  <div
-                    className="mb-2 rounded-md p-3 text-xs"
-                    style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                {courseMaterialsLoading ? (
+                  <button
+                    type="button"
+                    disabled
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white opacity-60 sm:w-44"
                   >
-                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#2563eb' }}>
-                      Résumé revérif cours{textReviewSummary.dry_run ? ' (simulation)' : ''}
-                    </p>
-                    <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-                      <li>Cours examinés : <strong>{textReviewSummary.blocs_examined ?? textReviewSummary.segments_examined}</strong></li>
-                      <li style={{ color: '#2563eb' }}>{textReviewSummary.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewSummary.blocs_modified ?? textReviewSummary.segments_modified}</strong></li>
-                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewSummary.blocs_conforme ?? textReviewSummary.segments_conforme}</strong></li>
-                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewSummary.blocs_failed ?? textReviewSummary.segments_failed}</strong></li>
-                    </ul>
-                    {!textReviewSummary.dry_run && textReviewSummary.segments_modified > 0 && (
-                      <p className="mt-2 text-[11px] italic" style={{ color: '#facc15' }}>
-                        ⚠️ Segments marqués dirty=1. Les MP3 actuels ne reflètent pas encore ces changements — relance Edge TTS / Fish TTS pour les regénérer.
-                      </p>
-                    )}
-                    <div className="mt-2 max-h-[60vh] overflow-y-auto pr-1 space-y-2">
-                      {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').map((d, i) => {
-                        const isModified = d.status === 'modified' || d.status === 'would_modify'
-                        return (
-                          <div
-                            key={i}
-                            className="rounded p-2 text-[11px]"
-                            style={{ backgroundColor: 'rgba(37,99,235,0.08)', border: `1px solid ${colors.border}` }}
-                          >
-                            <p className="font-semibold mb-1">
-                              {d.bloc_number ? (
-                                <>Cours {d.bloc_number}/7{d.filename ? <span style={{ color: colors.textMuted, fontWeight: 400 }}> · {d.filename}</span> : null}</>
-                              ) : (
-                                <>{d.sub_part_name}{d.passe ? ` · passe ${d.passe}` : ''}</>
-                              )}
-                              {' · '}
-                              <span style={{ color: isModified ? '#16a34a' : '#dc2626' }}>{d.status}</span>
-                              {typeof d.patches_applied === 'number' && d.patches?.length > 0 && (
-                                <span style={{ color: colors.textMuted, fontWeight: 400 }}>
-                                  {' '}· {d.patches_applied}/{d.patches.length} patch(s) appliqué(s)
-                                </span>
-                              )}
-                              {Array.isArray(d.segments_touched) && d.segments_touched.length > 0 && (
-                                <span style={{ color: colors.textMuted, fontWeight: 400 }}>
-                                  {' '}· {d.segments_touched.length} segment(s) DB touché(s)
-                                </span>
-                              )}
-                            </p>
-                            {d.violations?.length > 0 && (
-                              <p className="mb-1" style={{ color: colors.textMuted }}>
-                                <strong>Règles violées :</strong> {d.violations.join(' · ')}
-                              </p>
-                            )}
-                            {d.words_before !== undefined && d.words_after !== undefined && (
-                              <p className="mb-2" style={{ color: colors.textMuted }}>
-                                {d.words_before} → {d.words_after} mots
-                              </p>
-                            )}
-                            {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
-                            {Array.isArray(d.patches) && d.patches.length > 0 && (
-                              <div className="space-y-2 mt-2">
-                                {d.patches.map((p, j) => (
-                                  <div
-                                    key={j}
-                                    className="rounded p-2"
-                                    style={{
-                                      backgroundColor: colors.innerBg,
-                                      border: `1px solid ${p.applied ? 'rgba(22,163,74,0.35)' : 'rgba(220,38,38,0.35)'}`,
-                                    }}
-                                  >
-                                    <p className="text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: p.applied ? '#16a34a' : '#dc2626' }}>
-                                      Patch {j + 1} · {p.applied ? 'appliqué' : 'ignoré (find ambigu/introuvable)'}
-                                    </p>
-                                    {p.reason && (
-                                      <p className="mb-1 italic" style={{ color: colors.textMuted }}>
-                                        → {p.reason}
-                                      </p>
-                                    )}
-                                    <div
-                                      className="rounded p-1.5 mb-1 whitespace-pre-wrap"
-                                      style={{ backgroundColor: 'rgba(220,38,38,0.10)', color: '#7f1d1d' }}
-                                    >
-                                      <span style={{ color: '#dc2626', fontWeight: 700 }}>−</span> {p.find}
-                                    </div>
-                                    <div
-                                      className="rounded p-1.5 whitespace-pre-wrap"
-                                      style={{ backgroundColor: 'rgba(22,163,74,0.10)', color: '#14532d' }}
-                                    >
-                                      <span style={{ color: '#16a34a', fontWeight: 700 }}>+</span> {p.replace}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            {Array.isArray(d.patch_errors) && d.patch_errors.length > 0 && (
-                              <div className="mt-2 p-2 rounded text-[10px]" style={{ backgroundColor: 'rgba(220,38,38,0.08)', color: '#7f1d1d' }}>
-                                <strong>Erreurs patches :</strong>
-                                <ul className="list-disc ml-4 mt-1">
-                                  {d.patch_errors.map((err, k) => <li key={k}>{err}</li>)}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                      {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').length === 0 && (
-                        <p className="text-[11px] italic" style={{ color: colors.textMuted }}>
-                          Aucun segment non-conforme à afficher.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {rulesReviewSummary && (
-                  <div
-                    className="mb-2 rounded-md p-3 text-xs"
-                    style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                    <Icon name="hourglass_top" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">PDF en cours…</span>
+                  </button>
+                ) : selectedCourseMaterial ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadCourseMaterial}
+                    disabled={downloadingCourseMaterial}
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 disabled:cursor-wait disabled:opacity-60 sm:w-44"
+                    title="Télécharger le PDF"
                   >
-                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#7c3aed' }}>
-                      Résumé revérif MP3{rulesReviewSummary.dry_run ? ' (simulation)' : ''}
-                    </p>
-                    <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-                      <li>Examinés : <strong>{rulesReviewSummary.chunks_examined}</strong></li>
-                      <li style={{ color: '#16a34a' }}>{rulesReviewSummary.dry_run ? 'À corriger' : 'Corrigés'} : <strong>{rulesReviewSummary.chunks_corrected}</strong></li>
-                      <li style={{ color: colors.textMuted }}>Skipped : <strong>{rulesReviewSummary.chunks_skipped}</strong></li>
-                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{rulesReviewSummary.chunks_failed}</strong></li>
-                    </ul>
-                    {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').slice(0, 6).map((d, i) => (
-                      <div key={i} className="mt-2 rounded p-2 text-[11px]" style={{ backgroundColor: 'rgba(124,58,237,0.08)' }}>
-                        <p className="font-semibold">{d.audio_filename} · bloc {d.bloc_number} · <span style={{ color: d.status === 'done' || d.status === 'would_correct' ? '#16a34a' : '#dc2626' }}>{d.status}</span></p>
-                        {d.violations?.length > 0 && (
-                          <p style={{ color: colors.textMuted }}>{d.violations.join(' · ')}</p>
-                        )}
-                        {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
-                      </div>
-                    ))}
-                    {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').length > 6 && (
-                      <p className="mt-2 text-[11px] italic" style={{ color: colors.textMuted }}>
-                        … et {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').length - 6} autres
-                      </p>
-                    )}
-                  </div>
-                )}
-                {rulesError && (
-                  <p className="mb-2 text-xs font-semibold" style={{ color: '#dc2626' }}>{rulesError}</p>
-                )}
-                {editingRules ? (
-                  <div>
-                    <textarea
-                      value={rulesDraft}
-                      onChange={(e) => setRulesDraft(e.target.value)}
-                      rows={14}
-                      spellCheck={false}
-                      className="w-full rounded-md p-3 text-xs leading-relaxed font-mono"
-                      style={{
-                        backgroundColor: colors.innerBg,
-                        color: colors.text,
-                        border: `1px solid ${colors.border}`,
-                        resize: 'vertical',
-                      }}
-                      placeholder="# Règles de revérification — …"
-                    />
-                    <div className="mt-2 flex justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={cancelEditingRules}
-                        disabled={savingRules}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                        style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-                      >
-                        Annuler
-                      </button>
-                      <button
-                        type="button"
-                        onClick={saveRulesMarkdown}
-                        disabled={savingRules}
-                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                        style={{ backgroundColor: '#16a34a' }}
-                      >
-                        <Icon name="save" style={{ fontSize: '14px' }} />
-                        {savingRules ? 'Sauvegarde…' : 'Enregistrer'}
-                      </button>
-                    </div>
-                  </div>
-                ) : scriptRules?.rules_markdown ? (
-                  <pre
-                    className="max-h-72 overflow-auto rounded-md p-3 text-xs leading-relaxed"
-                    style={{ backgroundColor: colors.innerBg, color: colors.text, whiteSpace: 'pre-wrap' }}
-                  >
-                    {scriptRules.rules_markdown}
-                  </pre>
+                    <Icon name={downloadingCourseMaterial ? 'hourglass_top' : 'download'} style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">{downloadingCourseMaterial ? 'Téléchargement…' : 'Télécharger le PDF'}</span>
+                  </button>
                 ) : (
-                  <p className="text-xs italic" style={{ color: colors.textMuted }}>
-                    Aucune règle apprise pour ce dossier. L'extraction lit toutes les annotations (appliquées et rejetées) pour produire un markdown de règles transversales.
-                  </p>
+                  <button
+                    type="button"
+                    onClick={fetchCourseMaterials}
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30 dark:hover:bg-white/5 sm:w-44"
+                    style={{
+                      borderColor: courseMaterialsError ? '#fecaca' : colors.border,
+                      color: courseMaterialsError ? '#b91c1c' : colors.textSecondary,
+                    }}
+                    title={courseMaterialsError ? 'Réessayer de charger le PDF' : 'Actualiser le PDF'}
+                  >
+                    <Icon name="refresh" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">{courseMaterialsError ? 'Réessayer' : 'Actualiser le PDF'}</span>
+                  </button>
                 )}
               </div>
-            )}
+            </header>
 
             {/* Corps : sidebar + contenu */}
             {contentScriptView === 'source' ? (
-            <div className="flex flex-1 min-h-0">
+            <div className="flex min-h-0 flex-1 flex-col md:flex-row">
 
               {/* Sidebar sommaire */}
               <div
-                className="flex-shrink-0 overflow-y-auto border-r py-3"
-                style={{ width: '260px', borderColor: colors.border, backgroundColor: darkMode ? '#1a1332' : '#f5f3ff' }}
+                className="max-h-48 w-full flex-none overflow-y-auto border-b py-3 md:max-h-none md:w-56 md:border-b-0 md:border-r"
+                style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
               >
-                <p className="px-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: '#9333ea' }}>
+                <p className="px-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: colors.textMuted }}>
                   Sommaire
                 </p>
                 {contentScriptModal.sub_parts?.map((sp) => {
@@ -2839,19 +2512,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       onClick={() => { setScriptActiveSubPart(sp.index); setEditingSegment(null); resetScriptAnnotationDraft() }}
                       className="w-full text-left px-4 py-2.5 transition-colors"
                       style={{
-                        backgroundColor: isActive ? (darkMode ? '#3b0764' : '#ede9fe') : 'transparent',
-                        boxShadow: isActive ? 'inset 0 0 0 1px rgba(124, 58, 237, 0.42)' : 'inset 0 0 0 1px transparent',
+                        backgroundColor: isActive ? (darkMode ? '#1f2937' : '#e2e8f0') : 'transparent',
+                        boxShadow: isActive ? `inset 3px 0 0 ${colors.textSecondary}` : 'inset 3px 0 0 transparent',
                       }}
                     >
                       <div className="flex items-start gap-2">
                         <span
                           className="flex-shrink-0 w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center mt-0.5"
-                          style={{ backgroundColor: isActive ? '#7c3aed' : (darkMode ? '#4c1d95' : '#ddd6fe'), color: isActive ? 'white' : '#6d28d9' }}
+                          style={{ backgroundColor: isActive ? colors.textSecondary : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? colors.cardBg : colors.textMuted }}
                         >
                           {sp.index + 1}
                         </span>
                         <div className="min-w-0">
-                          <p className="text-xs font-medium leading-snug" style={{ color: isActive ? (darkMode ? '#e9d5ff' : '#4c1d95') : colors.textSecondary }}>
+                          <p className="text-xs font-medium leading-snug" style={{ color: isActive ? colors.text : colors.textSecondary }}>
                             {sp.name}
                           </p>
                           <p className="text-xs mt-0.5" style={{ color: colors.textMuted }}>
@@ -2872,7 +2545,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   return (
                     <>
                       <div className="flex items-center gap-3 pb-2" style={{ borderBottom: `1px solid ${colors.border}` }}>
-                        <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: '#7c3aed', color: 'white' }}>
+                        <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0', color: colors.textSecondary }}>
                           {sp.index + 1}
                         </span>
                         <span className="text-sm font-semibold flex-1" style={{ color: colors.text }}>{sp.name}</span>
@@ -2881,20 +2554,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
                       {sp.passes?.map((pass) => {
                         const isEditing = editingSegment?.sub_part_index === sp.index && editingSegment?.passe === pass.passe
-                        const annotationContext = { source_type: 'segment', sub_part_index: sp.index, passe: pass.passe }
                         return (
                           <div key={pass.passe} className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
                             {/* En-tête passe */}
-                            <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: darkMode ? '#1e1b4b' : '#ede9fe' }}>
+                            <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
                               <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold" style={{ color: '#7c3aed' }}>Passe {pass.passe}</span>
+                                <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Passe {pass.passe}</span>
                                 <span className="text-xs" style={{ color: colors.textMuted }}>{(pass.word_count || 0).toLocaleString('fr-FR')} mots</span>
                               </div>
                               {!isEditing && (
                                 <button
                                   onClick={() => handleStartEdit(sp.index, pass.passe, pass.text)}
                                   className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-colors"
-                                  style={{ backgroundColor: darkMode ? '#3b0764' : '#ddd6fe', color: '#7c3aed' }}
+                                  style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
                                 >
                                   <Icon name="edit" style={{ fontSize: '14px' }} />
                                   Modifier
@@ -2914,7 +2586,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                                     onClick={handleSaveEdit}
                                     disabled={savingEdit}
                                     className="text-xs px-2.5 py-1 rounded-lg font-semibold transition-colors"
-                                    style={{ backgroundColor: '#7c3aed', color: 'white' }}
+                                    style={{ backgroundColor: colors.text, color: colors.cardBg }}
                                   >
                                     {savingEdit ? 'Sauvegarde...' : 'Sauvegarder'}
                                   </button>
@@ -2924,32 +2596,27 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
                             {/* Corps : texte ou textarea */}
                             <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                              <ScriptAnnotationComposer context={annotationContext} />
-                              {isEditing ? (
+                                  {isEditing ? (
                                 <textarea
                                   value={editText}
                                   onChange={e => setEditText(e.target.value)}
                                   rows={18}
                                   className="w-full text-xs leading-relaxed rounded-lg p-3 resize-y outline-none"
                                   style={{
-                                    backgroundColor: darkMode ? '#0f0a1f' : '#faf5ff',
+                                    backgroundColor: colors.innerBg,
                                     color: colors.text,
                                     fontFamily: 'monospace',
-                                    border: `1px solid #7c3aed`,
+                                    border: `1px solid ${colors.border}`,
                                   }}
                                 />
                               ) : (
                                 <p
                                   className="text-xs leading-relaxed whitespace-pre-wrap"
-                                  tabIndex={0}
-                                  onMouseUp={(event) => captureScriptSelection(event, annotationContext)}
-                                  onKeyUp={(event) => captureScriptSelection(event, annotationContext)}
                                   style={{ color: colors.text, fontFamily: 'monospace' }}
                                 >
                                   {pass.text}
                                 </p>
                               )}
-                              <ScriptAnnotationsList context={annotationContext} />
                             </div>
                           </div>
                         )
@@ -2960,96 +2627,167 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
               </div>
             </div>
             ) : (() => {
-              const isPlannedCoursesView = contentScriptView === 'planned_courses'
-              const visibleCourseBlocs = isPlannedCoursesView
-                ? (contentScriptModal.planned_course_blocs || [])
-                : (contentScriptModal.course_blocs || [])
-              const courseSectionLabel = isPlannedCoursesView ? 'Cours audio prévu' : 'Cours audio'
+              const generatedCourseBlocs = contentScriptModal.course_blocs || []
+              const plannedCourseBlocs = contentScriptModal.planned_course_blocs || []
+              const visibleCourseBlocs = mergeCourseBlocsForScriptModal(generatedCourseBlocs, plannedCourseBlocs)
+              const visiblePauseBreaks = (contentScriptModal.breaks || []).filter(br => br.type !== 'qa' && br.type !== 'jointure')
+              const visibleJointureBreaks = (contentScriptModal.breaks || []).filter(br => br.type === 'jointure')
+              const generatedBlocNumbers = new Set(generatedCourseBlocs.map(bloc => Number(bloc?.bloc_number || 0)).filter(Boolean))
               return (
-            <div className="flex flex-1 min-h-0">
-              <div
-                className="flex-shrink-0 overflow-y-auto border-r py-3"
-                style={{ width: '280px', borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
+            <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+              <aside
+                className="flex max-h-[44dvh] w-full flex-none flex-col border-b md:max-h-none md:w-80 md:border-b-0 md:border-r"
+                style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
               >
-                <p className="px-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: '#7c3aed' }}>
-                  {courseSectionLabel}
-                </p>
+                <div className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
+                  <p className="text-sm font-semibold" style={{ color: colors.text }}>Script audio</p>
+                </div>
+
+                <div className="px-4 py-3">
+                  <div
+                    className="grid grid-cols-2 gap-1 rounded-lg p-1"
+                    style={{ backgroundColor: darkMode ? colors.bg : '#e9eef5' }}
+                    role="group"
+                    aria-label="Contenu affiché dans la liste"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setScriptSidebarMode('courses')
+                        setScriptActiveBreak(null)
+                        setEditingSegment(null)
+                        resetScriptAnnotationDraft()
+                      }}
+                      aria-pressed={scriptSidebarMode === 'courses'}
+                      className="rounded-md px-2 py-2.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                      style={{
+                        backgroundColor: scriptSidebarMode === 'courses' ? colors.cardBg : 'transparent',
+                        color: scriptSidebarMode === 'courses' ? colors.text : colors.textMuted,
+                        boxShadow: scriptSidebarMode === 'courses' && !darkMode ? '0 1px 2px rgba(15, 23, 42, 0.08)' : 'none',
+                      }}
+                    >
+                      Cours
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScriptSidebarMode('courses_pauses')}
+                      aria-pressed={scriptSidebarMode === 'courses_pauses'}
+                      className="rounded-md px-2 py-2.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                      style={{
+                        backgroundColor: scriptSidebarMode === 'courses_pauses' ? colors.cardBg : 'transparent',
+                        color: scriptSidebarMode === 'courses_pauses' ? colors.text : colors.textMuted,
+                        boxShadow: scriptSidebarMode === 'courses_pauses' && !darkMode ? '0 1px 2px rgba(15, 23, 42, 0.08)' : 'none',
+                      }}
+                    >
+                      Cours + pauses
+                    </button>
+                  </div>
+                </div>
+
+                <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-4" aria-label="Cours audio disponibles">
                 {visibleCourseBlocs.map((bloc) => {
                   const isActive = !scriptActiveBreak && scriptActiveCourse === bloc.bloc_number
-                  const statusLabel = {
-                    generated: 'Généré',
-                    preserved: 'Conservé',
-                    preview: 'Prévu',
-                    planned: 'Prévu',
-                    skipped: 'Ignoré',
-                  }[bloc.status] || bloc.status
                   return (
                     <button
                       key={bloc.bloc_number}
                       type="button"
-                      onClick={() => { setScriptActiveCourse(bloc.bloc_number); setScriptActiveBreak(null); resetScriptAnnotationDraft() }}
-                      className="w-full text-left px-4 py-2.5 transition-colors"
+                      onClick={() => { setScriptActiveCourse(bloc.bloc_number); setScriptActiveBreak(null); setEditingSegment(null); resetScriptAnnotationDraft() }}
+                      className="mb-1.5 block w-full rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                       style={{
-                        backgroundColor: isActive ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
-                        boxShadow: isActive ? 'inset 0 0 0 1px rgba(124, 58, 237, 0.42)' : 'inset 0 0 0 1px transparent',
+                        backgroundColor: isActive ? colors.text : 'transparent',
+                        color: isActive ? colors.cardBg : colors.text,
                       }}
                     >
-                      <div className="flex items-start gap-2">
-                        <span
-                          className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center mt-0.5"
-                          style={{ backgroundColor: isActive ? '#7c3aed' : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? 'white' : colors.textSecondary }}
-                        >
-                          {bloc.bloc_number}
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-semibold" style={{ color: isActive ? colors.cardBg : colors.text }}>
+                          Cours {String(bloc.bloc_number).padStart(2, '0')}
+                        </p>
+                        <span className="shrink-0 text-[11px] font-medium tabular-nums" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
+                          {Math.round((bloc.duration_sec || 0) / 60)} min
                         </span>
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? (darkMode ? '#e9d5ff' : '#4c1d95') : colors.text }}>
-                            Cours {bloc.bloc_number} · {Math.round((bloc.duration_sec || 0) / 60)} min
-                          </p>
-                          <p className="text-xs mt-0.5 truncate" style={{ color: colors.textMuted }}>
-                            {statusLabel} · {(bloc.word_count || 0).toLocaleString('fr-FR')} mots
-                          </p>
-                          {(bloc.closing_added || bloc.runtime_conclusions?.length > 0) && (
-                            <p className="text-xs mt-0.5" style={{ color: '#7c3aed' }}>
-                              conclusion ajoutée
-                            </p>
-                          )}
-                        </div>
                       </div>
+                      <p className="mt-1 truncate text-xs" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
+                        {(bloc.word_count || 0).toLocaleString('fr-FR')} mots
+                        {(bloc.closing_added || bloc.runtime_conclusions?.length > 0) ? ' · conclusion ajoutée' : ''}
+                      </p>
                     </button>
                   )
                 })}
-                {(contentScriptModal.breaks?.length > 0) && (
+                {scriptSidebarMode === 'courses_pauses' && visibleJointureBreaks.length > 0 && (
                   <>
-                    <p className="px-4 pt-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: '#7c3aed' }}>
-                      Q&amp;A et pauses
+                    <p className="px-1 pb-2 pt-4 text-xs font-semibold" style={{ color: colors.textMuted }}>
+                      Jointures entre cours
                     </p>
-                    {contentScriptModal.breaks.map((br) => {
+                    {visibleJointureBreaks.map((br) => {
                       const isActive = scriptActiveBreak === br.filename
-                      const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déj.' : 'Pause'
-                      const iconName = br.type === 'qa' ? 'forum' : br.type === 'pause_midi' ? 'restaurant' : 'pause_circle'
+                      const fromCourse = Number(br.bloc_number || 0)
+                      const toCourse = fromCourse + 1
                       return (
                         <button
                           key={br.filename}
                           type="button"
-                          onClick={() => { setScriptActiveBreak(br.filename); resetScriptAnnotationDraft() }}
-                          className="w-full text-left px-4 py-2.5 transition-colors"
+                          onClick={() => { setScriptActiveBreak(br.filename); setEditingSegment(null); resetScriptAnnotationDraft() }}
+                          className="mb-1.5 block w-full rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                           style={{
-                            backgroundColor: isActive ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
-                            boxShadow: isActive ? 'inset 0 0 0 1px rgba(124, 58, 237, 0.42)' : 'inset 0 0 0 1px transparent',
+                            backgroundColor: isActive ? colors.text : 'transparent',
+                            color: isActive ? colors.cardBg : colors.text,
+                          }}
+                          aria-label={`Afficher la jointure entre les cours ${fromCourse} et ${toCourse}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span
+                              className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
+                              style={{ backgroundColor: isActive ? colors.cardBg : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? colors.text : colors.textSecondary }}
+                            >
+                              <Icon name="link" style={{ fontSize: '14px' }} />
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? colors.cardBg : colors.text }}>
+                                Cours {String(fromCourse).padStart(2, '0')} vers cours {String(toCourse).padStart(2, '0')}
+                              </p>
+                              <p className="mt-0.5 truncate text-xs" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
+                                Texte générique · {Math.round(br.duration_sec || 0)} s
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </>
+                )}
+                {scriptSidebarMode === 'courses_pauses' && visiblePauseBreaks.length > 0 && (
+                  <>
+                    <p className="px-1 pb-2 pt-4 text-xs font-semibold" style={{ color: colors.textMuted }}>
+                      Pauses
+                    </p>
+                    {visiblePauseBreaks.map((br) => {
+                      const isActive = scriptActiveBreak === br.filename
+                      const typeLabel = br.type === 'pause_midi' ? 'Pause déjeuner' : 'Pause'
+                      const iconName = br.type === 'pause_midi' ? 'restaurant' : 'pause_circle'
+                      const durationLabel = `${Math.round((br.duration_sec || 0) / 60)} min`
+                      return (
+                        <button
+                          key={br.filename}
+                          type="button"
+                          onClick={() => { setScriptActiveBreak(br.filename); setEditingSegment(null); resetScriptAnnotationDraft() }}
+                          className="mb-1.5 block w-full rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                          style={{
+                            backgroundColor: isActive ? colors.text : 'transparent',
+                            color: isActive ? colors.cardBg : colors.text,
                           }}
                         >
                           <div className="flex items-start gap-2">
                             <span
                               className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-0.5"
-                              style={{ backgroundColor: isActive ? '#7c3aed' : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? 'white' : colors.textSecondary }}
+                              style={{ backgroundColor: isActive ? colors.cardBg : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? colors.text : colors.textSecondary }}
                             >
                               <Icon name={iconName} style={{ fontSize: '14px' }} />
                             </span>
                             <div className="min-w-0">
-                              <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? (darkMode ? '#e9d5ff' : '#4c1d95') : colors.text }}>
-                                {typeLabel} · {Math.round((br.duration_sec || 0) / 60)} min
+                              <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? colors.cardBg : colors.text }}>
+                                {typeLabel} · {durationLabel}
                               </p>
-                              <p className="text-xs mt-0.5 truncate" style={{ color: colors.textMuted }}>
+                              <p className="mt-0.5 truncate text-xs" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
                                 {br.filename}
                               </p>
                             </div>
@@ -3059,9 +2797,16 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     })}
                   </>
                 )}
-              </div>
+                {scriptSidebarMode === 'courses_pauses' && visibleJointureBreaks.length === 0 && visiblePauseBreaks.length === 0 && (
+                  <p className="px-1 pb-2 pt-4 text-xs leading-5" style={{ color: colors.textMuted }}>
+                    Aucune pause ni jointure pour cette journée.
+                  </p>
+                )}
+                </nav>
+              </aside>
 
-              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              <main className="min-w-0 flex-1 overflow-y-auto" style={{ backgroundColor: colors.cardBg }}>
+                <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-5 sm:px-8 sm:py-7 lg:px-12 lg:py-9">
                 {(() => {
                   if (scriptActiveBreak) {
                     const br = (contentScriptModal.breaks || []).find(b => b.filename === scriptActiveBreak)
@@ -3072,11 +2817,15 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         </div>
                       )
                     }
-                    const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déjeuner' : 'Pause'
+                    const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déjeuner' : br.type === 'jointure' ? 'Jointure entre deux cours' : 'Pause'
+                    const durationLabel = br.type === 'jointure'
+                      ? `${Math.round(br.duration_sec || 0)} s`
+                      : `${Math.round((br.duration_sec || 0) / 60)} min`
+                    const isEditingBreak = editingSegment?.type === 'break' && editingSegment.filename === br.filename
                     return (
                       <>
                         <div className="flex items-start gap-3 pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
-                          <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: '#7c3aed', color: 'white' }}>
+                          <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0', color: colors.textSecondary }}>
                             {typeLabel}
                           </span>
                           <div className="flex-1 min-w-0">
@@ -3084,36 +2833,103 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                               {br.filename}
                             </p>
                             <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
-                              Texte générique · {Math.round((br.duration_sec || 0) / 60)} min · variant bloc {br.bloc_number}
+                              {br.manual_edited ? 'Texte modifié' : 'Texte par défaut'} · {durationLabel}
                             </p>
                           </div>
+                          {isEditingBreak ? (
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={handleCancelEdit}
+                                disabled={savingEdit}
+                                className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                                style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
+                              >
+                                Annuler
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSaveBreakEdit}
+                                disabled={savingEdit}
+                                className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                                style={{ backgroundColor: colors.text, color: colors.cardBg }}
+                              >
+                                {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
+                              </button>
+                            </div>
+                          ) : br.type === 'jointure' ? (
+                            <span className="rounded-lg px-3 py-1.5 text-xs font-semibold" style={{ border: `1px solid ${colors.border}`, color: colors.textMuted }}>
+                              Texte générique
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleStartBreakEdit(br)}
+                              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold"
+                              style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
+                            >
+                              <Icon name="edit" style={{ fontSize: '15px' }} />
+                              Modifier
+                            </button>
+                          )}
                         </div>
 
-                        <div className="rounded-xl px-4 py-3 text-xs leading-relaxed" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
-                          Textes statiques utilisés pour ce {typeLabel.toLowerCase()}. Le reste du créneau est rempli par un silence Edge TTS calé sur la durée cible.
-                        </div>
+                        {br.type === 'jointure' ? (
+                          <section className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}` }}>
+                            <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                              <h3 className="text-xs font-bold" style={{ color: colors.textSecondary }}>Texte lu par le TTS</h3>
+                            </div>
+                            <div className="px-4 py-4" style={{ backgroundColor: colors.cardBg }}>
+                              <p className="max-w-[72ch] whitespace-pre-wrap text-[15px] leading-8" style={{ color: colors.text, fontFamily: 'Inter, system-ui, -apple-system, sans-serif', textWrap: 'pretty' }}>
+                                {br.intro || '—'}
+                              </p>
+                            </div>
+                          </section>
+                        ) : (
+                          <>
+                            <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                              <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                                <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Intro (au début du fichier)</span>
+                              </div>
+                              <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                                {isEditingBreak ? (
+                                  <textarea
+                                    value={editBreakDraft.intro}
+                                    onChange={e => setEditBreakDraft(prev => ({ ...prev, intro: e.target.value }))}
+                                    rows={5}
+                                    className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
+                                    style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'monospace', border: `1px solid ${colors.border}` }}
+                                  />
+                                ) : (
+                                  <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                                    {br.intro || '—'}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
 
-                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                          <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-                            <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Intro (au début du fichier)</span>
-                          </div>
-                          <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                            <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
-                              {br.intro || '—'}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                          <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-                            <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Outro (à la fin du fichier)</span>
-                          </div>
-                          <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                            <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
-                              {br.outro || '—'}
-                            </p>
-                          </div>
-                        </div>
+                            <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                              <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                                <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Outro (à la fin du fichier)</span>
+                              </div>
+                              <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                                {isEditingBreak ? (
+                                  <textarea
+                                    value={editBreakDraft.outro}
+                                    onChange={e => setEditBreakDraft(prev => ({ ...prev, outro: e.target.value }))}
+                                    rows={5}
+                                    className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
+                                    style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'monospace', border: `1px solid ${colors.border}` }}
+                                  />
+                                ) : (
+                                  <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                                    {br.outro || '—'}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </>
                     )
                   }
@@ -3126,26 +2942,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       </div>
                     )
                   }
-                  const activeAnnotationContext = { source_type: 'course', bloc_number: active.bloc_number, filename: active.filename }
-                  const sourceKey = isPlannedCoursesView
-                    ? contentScriptModal.planned_course_blocs_source
-                    : contentScriptModal.course_blocs_source
-                  const sourceLabel = isPlannedCoursesView
-                    ? (sourceKey === 'last_audio_generation' ? 'Prévu lors de la dernière génération TTS' : 'Prévision actuelle')
-                    : (sourceKey === 'last_audio_generation' ? 'Dernière génération TTS' : 'Prévisualisation')
-                  const coursePlanNote = isPlannedCoursesView
-                    ? contentScriptModal.planned_course_blocs_note
-                    : contentScriptModal.course_blocs_note
-                  const coursePlanStale = isPlannedCoursesView
-                    ? contentScriptModal.planned_course_blocs_stale
-                    : contentScriptModal.course_blocs_stale
-                  const statusLabel = {
-                    generated: 'Généré',
-                    preserved: 'Conservé',
-                    preview: 'Prévu',
-                    planned: 'Prévu',
-                    skipped: 'Ignoré',
-                  }[active.status] || active.status
+                    const activeHasGeneratedText = generatedBlocNumbers.has(Number(active.bloc_number || 0))
+	                  const sourceKey = activeHasGeneratedText ? contentScriptModal.course_blocs_source : contentScriptModal.planned_course_blocs_source
+	                  const sourceLabel = sourceKey === 'last_audio_generation' ? 'Dernière génération TTS' : 'Prévisualisation'
+                  const isEditingCourse = editingSegment?.type === 'course' && editingSegment.bloc_number === active.bloc_number
+                  const isGeneratingCourse = playlistJob?.status === 'running' && playlistJob.filename === active.filename
                   const conclusionBlocks = []
                   if (active.closing_text) {
                     conclusionBlocks.push({ label: 'Conclusion de partie', text: active.closing_text })
@@ -3155,44 +2956,63 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   })
                   return (
                     <>
-                      <div className="flex items-start gap-3 pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
-                        <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: '#7c3aed', color: 'white' }}>
-                          Cours {active.bloc_number}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold" style={{ color: colors.text }}>
+                      <header className="flex flex-wrap items-start gap-x-5 gap-y-4 border-b pb-6" style={{ borderColor: colors.border }}>
+                        <div className="min-w-[240px] flex-1">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="rounded-md px-2 py-1 text-xs font-semibold" style={{ backgroundColor: darkMode ? '#334155' : '#e9eef5', color: colors.textSecondary }}>
+                              Cours {String(active.bloc_number).padStart(2, '0')}
+                            </span>
+                          </div>
+                          <h2 className="break-all text-lg font-semibold tracking-[-0.015em] sm:break-normal" style={{ color: colors.text }}>
                             {active.filename}
-                          </p>
-                          <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
-                            {sourceLabel} · {statusLabel} · {(active.word_count || 0).toLocaleString('fr-FR')} mots · {Math.round((active.duration_sec || 0) / 60)} min
+                          </h2>
+                          <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                            <span>{sourceLabel}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>{(active.word_count || 0).toLocaleString('fr-FR')} mots</span>
+                            <span aria-hidden="true">·</span>
+                            <span>Durée prévue : {Math.round((active.duration_sec || 0) / 60)} min de texte</span>
+                            {active.final_duration_sec && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>{Math.round(active.final_duration_sec / 60)} min d’audio</span>
+                              </>
+                            )}
                           </p>
                         </div>
-                        {active.final_duration_sec && (
-                          <span className="text-xs rounded-full px-2 py-1" style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: colors.textSecondary }}>
-                            audio {Math.round(active.final_duration_sec / 60)} min
-                          </span>
+                        {isEditingCourse && (
+                          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                            <>
+                              <button
+                                type="button"
+                                onClick={handleCancelEdit}
+                                disabled={savingEdit}
+                                className="min-h-10 rounded-lg px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+                                style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
+                              >
+                                Annuler
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSaveCourseBlocEdit}
+                                disabled={savingEdit}
+                                className="min-h-10 rounded-lg px-4 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 disabled:opacity-60"
+                                style={{ backgroundColor: colors.text, color: colors.cardBg }}
+                              >
+                                {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
+                              </button>
+                            </>
+                          </div>
                         )}
-                      </div>
-
-                      {coursePlanNote && (
-                        <div
-                          className="rounded-xl px-4 py-3 text-xs leading-relaxed"
-                          style={coursePlanStale ? {
-                            backgroundColor: darkMode ? '#431407' : '#fff7ed',
-                            border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}`,
-                            color: darkMode ? '#fdba74' : '#c2410c',
-                          } : {
-                            backgroundColor: colors.innerBg,
-                            border: `1px solid ${colors.border}`,
-                            color: colors.textSecondary,
-                          }}
-                        >
-                          {coursePlanNote}
+                      </header>
+                      {isGeneratingCourse && (
+                        <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
+                          {playlistJob.message || 'Génération en cours...'}
                         </div>
                       )}
 
                       {active.opening_rewritten && (
-                        <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', border: `1px solid ${darkMode ? '#4c1d95' : '#c4b5fd'}`, color: darkMode ? '#ddd6fe' : '#5b21b6' }}>
+                        <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
                           L'ouverture de ce cours a été réécrite pour enchaîner naturellement avec le fichier précédent.
                         </div>
                       )}
@@ -3203,16 +3023,43 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         </div>
                       )}
 
+                      <section>
+                        <div className="mb-5 flex items-center justify-between gap-3">
+                          <h3 className="text-sm font-semibold" style={{ color: colors.text }}>Texte du cours</h3>
+                          <span className="text-xs tabular-nums" style={{ color: colors.textMuted }}>
+                            {(active.word_count || 0).toLocaleString('fr-FR')} / {(active.word_budget || 0).toLocaleString('fr-FR')} mots
+                          </span>
+                        </div>
+                        <div>
+                          {isEditingCourse ? (
+                            <textarea
+                              value={editText}
+                              onChange={e => setEditText(e.target.value)}
+                              rows={24}
+                              className="block w-full resize-y rounded-xl p-5 text-[15px] leading-8 outline-none focus:ring-2 focus:ring-violet-500/30"
+                              style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'Inter, system-ui, -apple-system, sans-serif', border: `1px solid ${colors.border}` }}
+                            />
+                          ) : (
+                            <p
+                              className="max-w-[72ch] whitespace-pre-wrap text-[15px] leading-8"
+                              style={{ color: colors.text, fontFamily: 'Inter, system-ui, -apple-system, sans-serif', textWrap: 'pretty' }}
+                            >
+                              {active.text || 'Aucun texte pour ce cours.'}
+                            </p>
+                          )}
+                        </div>
+                      </section>
+
                       {conclusionBlocks.length > 0 && (
                         <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                          <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#1e1b4b' : '#ede9fe' }}>
-                            <Icon name="flag" style={{ color: '#7c3aed', fontSize: '16px' }} />
-                            <span className="text-xs font-bold" style={{ color: '#7c3aed' }}>Conclusions ajoutées</span>
+                          <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+                            <Icon name="flag" style={{ color: colors.textSecondary, fontSize: '16px' }} />
+                            <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Conclusions ajoutées</span>
                           </div>
                           <div className="p-4 space-y-3" style={{ backgroundColor: colors.cardBg }}>
                             {conclusionBlocks.map((item, idx) => (
                               <div key={idx} className="rounded-lg p-3" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
-                                <p className="mb-2 text-xs font-semibold" style={{ color: '#7c3aed' }}>{item.label}</p>
+                                <p className="mb-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>{item.label}</p>
                                 <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
                                   {item.text}
                                 </p>
@@ -3222,33 +3069,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         </div>
                       )}
 
-                      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                        <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-                          <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>
-                            {isPlannedCoursesView ? 'Texte prévu du cours audio' : 'Texte complet du cours audio'}
-                          </span>
-                          <span className="text-xs" style={{ color: colors.textMuted }}>
-                            budget {(active.word_budget || 0).toLocaleString('fr-FR')} mots
-                          </span>
-                        </div>
-                        <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                          {!isPlannedCoursesView && <ScriptAnnotationComposer context={activeAnnotationContext} />}
-                          <p
-                            className="text-xs leading-relaxed whitespace-pre-wrap"
-                            tabIndex={isPlannedCoursesView ? undefined : 0}
-                            onMouseUp={isPlannedCoursesView ? undefined : (event) => captureScriptSelection(event, activeAnnotationContext)}
-                            onKeyUp={isPlannedCoursesView ? undefined : (event) => captureScriptSelection(event, activeAnnotationContext)}
-                            style={{ color: colors.text, fontFamily: 'monospace' }}
-                          >
-                            {active.text || 'Aucun texte pour ce cours.'}
-                          </p>
-                          {!isPlannedCoursesView && <ScriptAnnotationsList context={activeAnnotationContext} />}
-                        </div>
-                      </div>
                     </>
                   )
                 })()}
-              </div>
+                </div>
+              </main>
             </div>
               )
             })()}
@@ -3260,28 +3085,39 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       {scriptModal && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
+          style={{ backgroundColor: 'rgba(15, 23, 42, 0.62)' }}
           onClick={() => setScriptModal(null)}
         >
           <div
             className="w-full overflow-hidden rounded-2xl shadow-2xl flex flex-col"
-            style={{ maxWidth: '800px', maxHeight: '90vh', backgroundColor: colors.cardBg }}
+            style={{ maxWidth: '800px', maxHeight: '90vh', backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0" style={{ borderColor: colors.border, backgroundColor: '#8B5CF6' }}>
-              <div className="flex items-center gap-3 text-white">
-                <Icon name="article" className="text-2xl" />
+            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+              <div className="flex items-center gap-3">
+                <span
+                  className="flex h-10 w-10 items-center justify-center rounded-xl"
+                  style={{ backgroundColor: darkMode ? '#1f2937' : '#e2e8f0', color: colors.text }}
+                >
+                  <Icon name="article" style={{ fontSize: '22px' }} />
+                </span>
                 <div>
-                  <h3 className="text-lg font-bold">Script reformulé par Claude</h3>
-                  <p className="text-xs text-purple-200">
-                    {scriptModal.filled_blocs}/7 blocs · {scriptModal.source_words} mots source
+                  <h3 className="text-base font-semibold" style={{ color: colors.text }}>Script reformulé par Claude</h3>
+                  <p className="text-xs" style={{ color: colors.textMuted }}>
+                    {scriptModal.filled_blocs}
+                    {expectedCourseCount ? `/${expectedCourseCount}` : ''} blocs · {scriptModal.source_words} mots source
                     {scriptModal.remaining_source_words > 50 && ` · ${scriptModal.remaining_source_words} mots surplus`}
                   </p>
                 </div>
               </div>
-              <button onClick={() => setScriptModal(null)} className="text-white hover:bg-white/20 rounded-full p-1">
-                <Icon name="close" className="text-2xl" />
+              <button
+                onClick={() => setScriptModal(null)}
+                className="rounded-full p-2 transition-colors"
+                style={{ color: colors.textMuted }}
+                title="Fermer"
+              >
+                <Icon name="close" style={{ fontSize: '22px' }} />
               </button>
             </div>
 
@@ -3294,16 +3130,16 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     style={{ backgroundColor: bloc.skipped ? (darkMode ? '#7f1d1d' : '#fee2e2') : (darkMode ? '#1e293b' : '#F8F7F5') }}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold" style={{ color: bloc.skipped ? '#ef4444' : '#8B5CF6' }}>
+                      <span className="text-sm font-bold" style={{ color: bloc.skipped ? '#ef4444' : colors.textSecondary }}>
                         Bloc {bloc.bloc_number}
                       </span>
                       <span className="text-xs" style={{ color: colors.textMuted }}>
-                        {COURS_DURATIONS_MAP[bloc.bloc_number]}min
+                        {courseDurationLabel(audioPlaylistItems, bloc.bloc_number)}
                       </span>
                       {bloc.skipped ? (
                         <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fee2e2', color: '#ef4444' }}>Vide</span>
                       ) : (
-                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', color: '#8B5CF6' }}>
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}>
                           {bloc.word_count} mots / {bloc.target_words} cible
                         </span>
                       )}
@@ -3323,16 +3159,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         </div>
       )}
 
-      {audioEditorFile && selectedFolder && (
-        <AudioEditor
-          folderId={selectedFolder.id}
-          filename={audioEditorFile}
-          darkMode={darkMode}
-          colors={colors}
-          onClose={() => setAudioEditorFile(null)}
-        />
-      )}
-
       {deleteConfirm && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
@@ -3344,21 +3170,21 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
             }
           }}
         >
-          <div
-            className="w-full max-w-md overflow-hidden rounded-2xl shadow-2xl"
-            style={{ backgroundColor: colors.cardBg }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className="border-b px-6 py-4"
-              style={{ borderColor: colors.border, backgroundColor: darkMode ? '#3f1d70' : '#8B5CF6' }}
-            >
-              <div className="flex items-center gap-3 text-white">
-                <Icon name="delete" className="text-2xl" />
-                <h3 className="text-lg font-bold">
-                  {deleteConfirm.type === 'folder' ? 'Supprimer ce cours ?' : 'Supprimer ce document ?'}
-                </h3>
-              </div>
+	          <div
+	            className="w-full max-w-md overflow-hidden rounded-xl"
+	            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)' }}
+	            onClick={(e) => e.stopPropagation()}
+	          >
+	            <div
+	              className="border-b px-5 py-3"
+	              style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
+	            >
+	              <div className="flex items-center gap-2.5">
+	                <Icon name="delete" style={{ color: colors.textMuted, fontSize: '18px' }} />
+	                <h3 className="text-sm font-semibold" style={{ color: colors.text }}>
+	                  {deleteConfirm.type === 'folder' ? 'Supprimer ce cours ?' : 'Supprimer ce document ?'}
+	                </h3>
+	              </div>
             </div>
             <div className="p-6">
               <p className="text-sm leading-6" style={{ color: colors.textSecondary }}>

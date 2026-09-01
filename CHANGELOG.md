@@ -1,5 +1,596 @@
 # Changelog
 
+## 2026-09-01
+
+### fix(rappels): signature personnalisable et priorité au rappel de 5 minutes
+
+Chaque règle de rappel possède désormais sa propre signature de mail. Elle peut
+être modifiée ou laissée vide depuis l’éditeur. Les rappels disposent maintenant
+d’un déclencheur Azure indépendant exécuté chaque minute, tandis que
+l’auto-planification conserve son rythme de cinq minutes. Un échec du planning
+ne peut donc plus empêcher l’envoi sensible à la minute. L’interface précise
+aussi que tous les rappels cochés restent actifs et seront envoyés à leur horaire.
+
+## 2026-08-31
+
+### fix(ui): aide cliquable sur la date de début
+
+L’icône d’information du formulaire manuel ouvre désormais une aide visible au
+clic. Elle se ferme au second clic, au clic extérieur ou avec la touche Échap,
+et expose son état aux technologies d’assistance.
+
+## 2026-08-26
+
+### docs(spec): consolidation du planning pédagogique flexible
+
+Une spécification vivante formalise le nouveau contrat : un dossier par date,
+un nombre de cours égal aux blocs cours planifiés, un budget de mots dérivé de
+la durée de chaque cours, et des Q&R/pauses facultatifs générés seulement à
+l'étape audio. Les intros des Q&R et pauses appartiennent désormais à leur
+propre fichier au lieu d'être portées par l'outro du bloc précédent. Deux cours
+contigus reçoivent une jointure audio générique, invisible dans le planning et
+générée pendant cette même étape audio tardive.
+
+## 2026-08-23
+
+### fix(ui): information RNCP dans un panneau latéral
+
+L’avertissement d’une certification remplacée est désormais signalé par un
+simple point d’exclamation orange placé contre le champ RNCP. Son détail et les
+choix de certification s’ouvrent dans un volet fixe à droite, sans déplacer le
+reste du formulaire. Pendant son ouverture, le contenu de configuration glisse
+vers la gauche pour rester lisible à côté du volet, puis reprend sa position à
+la fermeture.
+
+## 2026-08-22
+
+### feat(ui): formulaire manuel avant le planning
+
+« Recruter manuellement » remplace désormais le chat par un formulaire plein
+écran animé. Il collecte le RNCP, la date de début, le rythme, la durée, les
+jours habituels et le nom du professeur. Le RNCP est vérifié auprès de France
+Compétences, avec affichage du titre officiel et choix explicite entre une fiche
+inactive encore exploitable et ses éventuels remplacements. Une fois le
+formulaire valide, le planning s'ouvre avec les dates déjà préremplies.
+
+### feat(ui): accès direct au planning prérempli
+
+La fin de l'assistant propose désormais « Configurer le planning » sans bloc
+d'introduction redondant. Le clic calcule les dates à partir du début de la
+formation, de sa durée et des journées choisies, puis ouvre directement le
+planning avec ces dates déjà sélectionnées.
+
+### fix(ui): récapitulatif de recrutement sans robot
+
+Le visuel décoratif a été retiré de la carte de vérification. Le fil de
+conversation réserve désormais une gouttière stable à sa barre de défilement,
+afin qu'elle ne recouvre ni ne décale les messages lorsqu'elle apparaît.
+
+### fix(ui): sélection des jours de recrutement en bleu
+
+Les cases cochées de l’étape « jours habituels de formation » utilisent le
+bleu principal de l’espace de recrutement à la place du violet.
+
+### fix(recrutement): réponses conversationnelles avant recentrage
+
+Chaque tour transmet désormais l’historique récent et l’état réel du recrutement
+à une boucle en deux passes. La première passe LLM comprend le message et propose
+une mise à jour ; le code valide cette proposition sans laisser le modèle muter
+l’état ; la seconde passe reçoit le résultat de validation et rédige la réponse
+finale. Une demande initiale pertinente est ainsi accueillie comme le début du
+parcours au lieu d’être paraphrasée puis opposée mécaniquement au champ RNCP.
+
+## 2026-08-20
+
+### feat(ui): séquences personnalisées directement dans le planning
+
+La carte « Séquence pédagogique » peut désormais être déposée sur une journée
+du calendrier, ou ajoutée par clic à la journée active, sans ouvrir l’éditeur
+de templates. Les journées personnalisées sont validées et enregistrées dans
+le planning V2 ; seule l’option explicite « Créer un template » ouvre encore
+« Organisation des cours ».
+
+### refactor(ui): simplification du sélecteur de journée
+
+Le panneau d’organisation regroupe désormais la date et les commandes
+précédente/suivante dans une navigation compacte. Le choix du template et son
+application à toutes les journées partagent un seul sélecteur, sans carte
+imbriquée ni progression répétée.
+
+## 2026-08-13
+
+### refactor(pipeline): retrait définitif de l'état d'humanisation séparé
+
+La passe `humanization_review`, déjà neutralisée parce que l'oralité est intégrée
+à la génération structurée initiale, est supprimée avec ses rapports, règles de
+review dédiées et colonnes `humanized`, `humanization_error` et
+`humanization_signature`. Le schéma Postgres retire ces colonnes si elles
+existent et ne les exige plus au démarrage, ce qui rétablit les bases existantes
+créées avant leur réintroduction accidentelle par revert.
+
+### perf(pipeline): DeepSeek Flash par défaut pour les lancements
+
+Les nouvelles pipelines issues d'une commande professeur IA persistent
+désormais le profil `flash`. Les étapes de génération, y compris les slides,
+utilisent ainsi `deepseek-v4-flash` par défaut afin de réduire le coût des tests.
+Un `FORMATION_SLIDES_MODEL` explicite continue de surcharger le modèle des
+slides, et les jobs déjà enregistrés avec `pro` conservent ce choix.
+
+## 2026-07-31
+
+### refactor(runtime): retrait de SocketIO et Eventlet
+
+Le frontend n'utilisait plus aucun canal SocketIO. Les rooms, événements de
+présence, messages temps réel et signaux de déconnexion inutilisés sont donc
+supprimés. L'API Formation3 tourne désormais sous Gunicorn `gthread` et les
+fan-outs bornés du pipeline utilisent les threads standards, sans modifier la
+file durable, les checkpoints ni les limites de concurrence.
+
+### refactor(slides): retrait de l'ancien générateur audio Whisper
+
+L'ancienne chaîne audio → transcription Whisper → reconstruction des slides et
+ses modules de fusion sont supprimés. Les slides proviennent uniquement du
+script validé et de leur deck persistant par cours ; les anciennes routes
+répondent explicitement `410 Gone`.
+
+## 2026-07-29
+
+### refactor(pipeline): suppression définitive du runner Claude Code local
+
+Le service `claude_code_mission_service.py` et ses tests exclusivement liés aux
+exports, imports et subprocess locaux sont supprimés. La pipeline ne peut plus
+lancer Claude Code en local et continue d'utiliser son chemin API DeepSeek.
+
+Les responsabilités encore actives ont été isolées avant la suppression :
+l'audit de volume est désormais un service de lecture indépendant, l'état
+transitoire des relances manuelles ne dépend plus du runner historique, et les
+anciens rapports stockés dans `review_queue` restent lisibles pour préserver la
+compatibilité avec les formations déjà générées.
+
+## 2026-07-27
+
+### feat(ui): calendrier de recrutement en plein espace
+
+L’écran de recrutement devient un espace de travail fixe sans défilement global
+sur ordinateur. L’aperçu du professeur occupe toute la hauteur disponible,
+les éléments décoratifs redondants sont retirés et les trois informations
+d’identité restent regroupées dans un bandeau compact.
+
+Le calendrier devient l’élément principal de la configuration : il occupe la
+majorité de la largeur et de la hauteur, tandis que les dates retenues et leurs
+templates restent dans un rail secondaire à défilement interne. L’aide au
+préremplissage est désormais repliable afin de laisser le calendrier visible
+dès l’ouverture, sans retirer les réglages de rythme existants.
+
+La passe de densité suivante replie automatiquement la navigation à l’ouverture
+du recrutement manuel, tout en permettant de la rouvrir. Le panneau professeur
+gagne en largeur, le calendrier et le préremplissage deviennent plus compacts,
+et les textes redondants autour du planning sont retirés.
+
+Les champs prénom, formation et RNCP quittent enfin le calendrier. Un bouton
+crayon placé directement sur la fiche professeur ouvre leur panneau de saisie
+sur l’aperçu de gauche, afin de réserver toute la partie droite au planning.
+Le dashboard verrouille maintenant le défilement du document et se cale sur la
+hauteur dynamique du viewport, sans supprimer les défilements internes utiles.
+
+Le sélecteur mensuel adopte une présentation inspirée de Notion Calendar :
+jours sans cases, semaine active sur un bandeau gris continu, date cochée dans
+un carré sombre et jours hors mois atténués.
+Le préremplissage refuse désormais explicitement les dates inexistantes, comme
+le 31 septembre, et remplace toute suggestion initiale invalide par la première
+date réellement autorisée.
+
+L’affectation des templates se fait maintenant journée par journée dans un
+carrousel à flèches, sans longue liste ni validation permanente dans le rail.
+Le clic sur « Lancer la préparation » signale précisément les journées
+incomplètes ou une première date avant J+2, puis ouvre une modale récapitulative
+pour la confirmation définitive.
+
+Le panneau d’organisation est désormais aligné sur toute la hauteur du
+calendrier. La fiche journée n’est plus décalée par un numéro latéral et ses
+flèches de navigation sont intégrées en bas. Une option compacte permet
+d’appliquer, et de maintenir, le même template sur toutes les journées.
+
+### fix(ci): alignement de la fixture planning V2
+
+La fixture SQLite des tests de parité du repository pipeline expose désormais
+`module_day_id` et `local_date`, comme le schéma `course_sessions` V2. Le contrôle
+PostgreSQL peut ainsi valider la sélection dynamique des journées audio sans
+échouer sur une table de test historique incomplète.
+
+Ajout du guide `AI-Mentor-Prompt.md` à la racine du projet pour faciliter sa
+réutilisation.
+
+## 2026-07-26
+
+### feat(planning): journées pédagogiques modulables et pipeline audio dynamique
+
+Les centres peuvent désormais composer et conserver une bibliothèque de
+templates de journées en blocs `cours → questions-réponses → pause`, avec pause
+finale facultative et pause déjeuner de 60 à 120 minutes. Le planificateur
+responsive permet de préremplir un calendrier, de corriger librement les dates
+cochées puis d'affecter un template à chaque journée. La validation verrouille
+un snapshot immuable du déroulé pédagogique ; les templates déjà utilisés
+restent consultables, duplicables ou archivables sans pouvoir être modifiés.
+
+Le contrat de planning V2 remplace les hypothèses fixes de 7 cours et 19 MP3 par
+un manifeste exact propre à chaque journée. Les budgets de texte suivent la
+durée de chaque cours avec 30 secondes de marge, le TTS parcourt le manifeste à
+H-24, et les lecteurs apprenant/administration respectent l'ordre et les durées
+verrouillés. Les modules historiques continuent d'utiliser leur playlist V1.
+
+La réutilisation d'un module durable conserve ses journées et ses assets audio
+immuables, exige le même nombre de nouvelles dates, et n'est proposée qu'après
+la fin du module source lorsque son manifeste est complet. Une nouvelle
+formation refuse toute première date située à moins de 48 heures ; une
+réutilisation déjà générée ne relance pas le TTS.
+
+### refactor(pipeline): retrait du legacy et accès Lyon explicite
+
+La plateforme de référence conserve uniquement les parcours encore utilisés :
+les pages `/recorder`, `/admin`, `/generated-slides` et `/intro` sont retirées,
+ainsi que les API d'upload audio du Recorder et les cinq routes de missions
+Claude Code locales. La connexion centre mène directement au dashboard et les
+téléchargements de la pipeline utilisent désormais le client authentifié.
+
+`/formation-pipeline` devient une capacité serveur explicite des comptes centre.
+La permission est accordée une seule fois au compte Lyon
+`newpiprod@gmail.com` lors de l'introduction de la colonne, puis chaque
+révocation est conservée. Toutes les routes formation relisent la permission et
+le rattachement du job au centre avant d'exécuter leur logique ; les anciens
+comptes admin et les autres centres échouent en mode fermé. La migration ne
+rattache au compte Lyon que les plateformes orphelines qui possèdent déjà un
+job de pipeline.
+
+La pipeline Formation3 utilise désormais DeepSeek uniquement : suppression du
+fallback Anthropic, de tous les chemins runtime vers le runner Claude CLI, du
+SDK Anthropic et des sélecteurs Claude dans l'interface. Le client partagé est
+renommé `deepseek_client`. Le workflow exige `DEEPSEEK_API_KEY`, fixe le
+fournisseur DeepSeek et supprime l'ancienne clé Anthropic d'Azure au prochain
+déploiement. Les noms de modèles historiques stockés en base sont convertis
+vers les profils DeepSeek Pro/Flash afin que les jobs existants restent
+reprenables. Le fichier historique des missions reste temporairement présent
+car les diagnostics de jobs existants y lisent encore leurs artefacts ; aucun
+endpoint ne peut lancer son subprocess local.
+
+## 2026-07-21
+
+### feat(hr-dashboard): recrutement manuel avec identité professeur en direct
+
+Le formulaire manuel adopte une composition 1/3–2/3 : aperçu permanent du
+robot à gauche, formulaire complet à droite. Le nom, la formation, le RNCP, la
+durée et la couleur actualisent la fiche du professeur pendant la saisie. Une
+description est générée localement depuis le titre de formation (avec un texte
+spécifique au TP CRCD), puis reste modifiable et régénérable avant paiement.
+
+Ajout d'un symbole vectoriel original du Socrate composé de deux bandes
+violettes, sans reprendre le pictogramme fictif de la maquette. Les cinq robots
+3D existants restent les seules variantes d'identité. Le robot sélectionné
+dispose d'un mouvement d'attente discret et d'un halo orbital, tous deux coupés
+par `prefers-reduced-motion`. La description est bornée à 600 caractères côté
+serveur et conservée dans la commande professeur. La fiche propose désormais
+une palette compacte de cinq pastilles à la place du bouton d'identité visuelle,
+et le formulaire utilise des séparateurs et contours plus discrets. L'aperçu
+devient ensuite un véritable panneau scindé sur un studio réaliste, avec le
+robot 3D animé au premier plan. Le choix de couleur est masqué derrière l'action
+« Change visual color » et la section d'identité visuelle du formulaire est
+retirée. Le décor aménagé est remplacé par un fond de studio taupe, doux et
+progressivement assombri vers le bas, fidèle à la référence retenue.
+
+## 2026-07-01
+
+### feat(database): socle de migration pipeline vers Postgres
+
+Premiere tranche de migration progressive de la pipeline formation vers
+Postgres, sans changer le comportement metier visible. Le schema Postgres couvre
+desormais les tables pipeline principales : jobs, knowledge base, dossiers,
+documents, jobs/segments de generation, annotations, regles, rapports de revue,
+evenements, modules durables et decks slides.
+
+Ajout du script `migrate_sqlite_pipeline_to_postgres.py` pour copier les tables
+pipeline depuis SQLite apres la migration du coeur SaaS. Ajout d'un repository
+`pipeline_repository.py` qui conserve SQLite comme source de verite par defaut,
+peut miroir-ecrire les jobs vers Postgres avec `PIPELINE_POSTGRES_MIRROR=1`, et
+peut basculer les fonctions centralisees de jobs avec
+`PIPELINE_DATABASE_BACKEND=postgres`.
+
+Deuxieme tranche : les operations canoniques sur `cours_folders` attendus par
+journee (`get_expected_course_folders`, reparation des dossiers orphelins) passent
+elles aussi par le repository pipeline, toujours avec SQLite comme comportement
+par defaut.
+
+Troisieme tranche : l'observabilite pipeline (`content_review_reports` et
+`formation_pipeline_events`) passe par le meme repository, avec conservation de
+la creation lazy des tables en SQLite et schema explicite en Postgres.
+
+Quatrieme tranche : les checkpoints `formation_knowledge_base` (clear, insert
+pending, save enriched, mark error, list, stats) passent par le repository
+pipeline afin de preparer leur lecture/ecriture Postgres.
+
+Cinquieme tranche : les primitives centralisees de `content_generation_jobs` et
+`content_generation_segments` (creation/reset de job, lecture du job, statuts,
+checkpoint segment, dirty flag, texte segment, snapshot artefact) passent par le
+repository pipeline, tout en conservant SQLite comme backend par defaut.
+
+Sixieme tranche : le report inter-journees `carryover` (dossier suivant, stockage
+source/cible, nettoyage et dirty flag du premier segment cible) passe par le
+repository pipeline.
+
+## 2026-06-29
+
+### feat(hr-dashboard): robots transparents pré-colorés + flip au clic
+
+Suite du recto robot prof IA. Remplacement de l'asset à fond blanc (2,1 Mo +
+hack mix-blend-multiply) par 5 PNG **transparents détourés**, un par teinte
+(bleu/violet/rose/vert/ambre, ~280 Ko chacun), pré-colorés par décalage de
+teinte HSV depuis l'asset rose fourni. Le robot flotte désormais proprement
+sur n'importe quel fond (clair/sombre), en plus grand (`min-height` 340px,
+`max-w-full`), sans cadre. Le flip se déclenche au **clic sur une flèche** sous
+le robot (toggle maintenu), plus au survol. `ROBOT_THEMES` mappe désormais
+`platform_id → { src, glow }`.
+
+## 2026-06-28
+
+### feat(hr-dashboard): cartes plateformes en robots prof IA (flip 3D)
+
+Les `PlatformCard` du HR Dashboard deviennent des professeurs IA. Recto : un
+robot coloré sur son socle (PNG `/robot-prof.png` teinté par `hue-rotate` selon
+le `platform_id` — chaque plateforme garde son robot attitré, cf. `ROBOT_THEMES`
++ `getRobotTheme`). Au survol, la carte pivote (`rotateY`) pour révéler au verso
+la fiche formation **inchangée** (chip Pn, audios, actions, liens). Les deux
+faces se superposent dans la même cellule grid ; `backface-visibility` + bascule
+`pointer-events` selon l'état `flipped` pour que seule la face visible capte les
+clics. Prolonge le storytelling « déployez une armée de professeurs IA ».
+
+## 2026-06-12
+
+### fix(slides): story — le texte du tableau noir ne déborde plus
+
+Le template `story` (tableau noir) coupait souvent le récit en haut et en bas :
+tableau à hauteur fixe (600px), texte manuscrit à 86px fixe, contenu centré →
+un récit de 40+ mots dépassait des deux côtés et était rogné par
+l'`overflow: hidden` du cadre. Corrigé avec `AutoFitText` sur `ch-lines`
+(le parent `board-inner` à hauteur fixe sert de gabarit) : la police descend
+progressivement (plancher −55 %) jusqu'à ce que tout le récit tienne.
+
+L'audit `overflow-audit.mjs` détecte désormais aussi le texte rogné par un
+ancêtre `overflow: hidden` (top/bottom/left/right) — ce cas était invisible
+pour les checks scroll/stage. Deux cas story réels (Samir plateau, Léa
+télétravail) ajoutés au banc : 49 cas, 0 anomalie.
+
+### fix(slides): fin des textes coupés et débordements — audit Playwright
+
+Suite et fin du chantier « le texte ne fait pas sa loi » (troncatures `…`,
+débordements, soulignements arbitraires, textes amputés). Audit mené avec un
+banc de rendu réel (`frontend/overflow-test.html` + `overflow-audit.mjs`,
+Playwright) sur 47 slides : 42 slides réels issus des decks en base + 5 cas
+extrêmes synthétiques. Résultat : 30 anomalies → 0 (2 faux positifs
+letter-spacing restants).
+
+Corrections en plus du travail déjà en cours (AutoFitText, suppression du
+`slice + '…'`, wrapper `_SlideText` anti-troncature backend) :
+
+- **`casestudy` : cartes hors cadre** — `cols-2`/`cols-3` utilisaient
+  `1fr` (min-size = min-content en grid) : une carte au contenu large
+  élargissait la grille au-delà du slide. → `repeat(n, minmax(0, 1fr))`.
+- **`definition` : colonne écrasée** — même piège grid sur `.s-def`
+  (`1.05fr 1fr` → `minmax(0, …)` + `min-width: 0` sur `.left`).
+- **`comparison` : mauvais titres** — le grand titre de colonne affichait
+  `col.label` (eyebrow) au lieu de `col.title` ; le schéma du prompt de
+  curation documente maintenant `label` (eyebrow) vs `title` (grand titre).
+- **Mots cassés en plein milieu** (« ÉMOTIONNELL/E ») — `overflow-wrap:
+  anywhere` remplacé par pas-de-césure + auto-fit, avec `hyphens: auto`
+  (césure typographique fr) en dernier recours sur le terme de définition.
+- **`box-sizing` garanti** — les dimensions du deck source supposaient le
+  border-box du preflight Tailwind ; désormais imposé localement dans
+  `SalesHackingSourceDeck.css`.
+- **`recap`/`reprise_recap` : description dupliquée** — quand desc == titre,
+  on n'affiche plus le doublon (`pointParts` ne recopie plus le texte entier
+  en desc).
+- **Prompt curation durci** — interdiction de terminer un champ par `...`/`…`
+  (reformuler, jamais couper) ; `definition` exige une définition réellement
+  posée par la source, justifiée par `source_quote`.
+
+Le banc de test est commité : `node overflow-audit.mjs` (Vite lancé) rejoue
+l'audit complet et screenshote les cas en anomalie dans `/tmp/slide-audit/`.
+
+### feat(tts): plus d'intro dans les fichiers pause/Q&A — outro seule
+
+Les audios `pause_*`/`pause_midi_*`/`qa_*` générés en TTS portaient une intro
+parlée au début du fichier. Décision : plus jamais d'intro propre — le fichier
+commence par du silence et garde seulement son outro de fin de créneau
+(annonce de reprise), durée totale inchangée. L'annonce du break reste portée
+par l'outro de l'audio précédent quand le pipeline le permet.
+
+Implémentation : `break_intro_owned_by_previous()` retourne désormais vrai pour
+tout break (`qa`/`pause`/`pause_midi`), sans condition sur le fichier précédent
+ni sur la neutralité été/hiver. Tous les chemins en aval forcent déjà
+`intro = ""` quand ce flag est vrai : prompt LLM (`generate_break_transition`),
+fallbacks statiques, chemin générique Edge (`_generic_break_texts`), assembleurs
+(`_build_pause_audio`, `_build_timed_edge_break_audio` gèrent l'intro vide).
+Les textes manuels saisis dans la modale HR (`break_overrides`) ne sont pas
+touchés. Test `test_first_break_without_previous_audio_keeps_intro` renommé
+en `..._has_no_intro` pour refléter la nouvelle règle.
+
+### feat(video+hr): slides dédiés pause/Q&A affichés pendant les pauses
+
+Pendant les pauses (10 min, midi) et les Q&A, la page `/video` affichait une
+simple carte de compte à rebours, et la modale d'édition audio du HR Dashboard
+affichait « Aucune synchro trouvée pour cet audio » : les decks générés ne
+contiennent pas de timings pour les audios `pause_*`/`qa_*`.
+
+Les slides statiques dédiés du deck Sales Hacking (`DeckPause`, `DeckQA` via
+`SalesHackingSourceSlide`) sont maintenant affichés :
+
+- **`Video.jsx`** : pendant un audio `pause`/`pause_midi`/`qa`, le slide dédié
+  remplit la zone vidéo (via `SlidePreviewFrame`), avec un bandeau « Reprise
+  dans M:SS » + barre de progression en surimpression bas. `getBreakSlideCopy`
+  (textes de l'ancienne carte) supprimé.
+- **`AudioEditor.jsx`** (modale HR) : détection par préfixe du nom de fichier
+  (`pause_*`/`pause_midi_*` → pause, `qa_*` → qa) ; le slide dédié remplace le
+  message « Aucune synchro trouvée », avec libellé « Slide dédié pause/Q&A »
+  dans l'en-tête. Si des timings existent un jour pour ces audios, ils gardent
+  la priorité.
+- **Durée réelle sur le slide pause** : le « 5 minutes. » en dur du slide
+  statique est remplacé par la durée effective (`breakDurationLabel` dans
+  `audioSlideSync.js` : 600 s → « 10 minutes. », 5400 s → « 1h30. »).
+  Côté `/video` la durée vient de l'API (`audio_duration`), côté modale HR
+  elle est déduite de la plage horaire du nom de fichier
+  (`pause_9h55_10h05.mp3` → 10 min). `SalesHackingSourceSlide` accepte un
+  prop `replacements` pour substituer du texte dans le HTML statique.
+
+### perf(frontend): code splitting + splash — fini l'écran noir au chargement
+
+Le bundle initial (2,9 Mo : toutes les pages + runtime Spline) bloquait le
+premier rendu sur fond noir (`body #0b0b0b`) plusieurs secondes, à chaque
+déploiement (hash du bundle invalidé). Trois changements :
+
+- **Code splitting par route** (`React.lazy`) : seule la page de login reste
+  dans le bundle initial → 239 Ko (77 Ko gzip). HRDashboard, FormationPipeline,
+  Video, etc. deviennent des chunks à la demande.
+- **Spline différé** : le runtime 3D (~4 Mo avec physics) se charge après le
+  rendu du formulaire, son fade-in existant masque l'arrivée tardive.
+- **Splash inline dans index.html** (`#root:empty` + spinner violet) : pendant
+  le téléchargement du JS on voit un écran de chargement Le Socrate au lieu du
+  noir. Le fallback Suspense reprend le même visuel.
+
+### fix(hr): containers audio créés avec accès public blob
+
+Les containers audio créés par « Nouvelle plateforme » étaient privés → le
+lecteur recevait 404 sur tous les MP3 (il streame anonymement via FrontDoor,
+comme formationaudio-dev/p2/p3/p4 qui sont en accès `blob`). Création désormais
+avec `public_access="blob"` pour le container playlist uniquement (archives et
+PDFs restent privés, accès SAS). Les 35 containers existants (p5–p41) ont été
+passés en accès public via az CLI.
+
+### fix(playlist): URLs audio par plateforme depuis platform_config
+
+La playlist du lecteur construisait toutes ses URLs depuis `AZURE_AUDIO_BASE_URL`
+(env du backend), ignorant le container de la plateforme. Conséquence : les
+plateformes créées depuis le dashboard HR (P5+), servies par le backend socrate1,
+jouaient les audios de P1 (`formationaudio-dev`) au lieu des leurs.
+
+`get_playlist(platform_id)` lit maintenant `audio_base_url` et `audio_container`
+dans `platform_config` et réécrit les URLs : `audio_base_url` explicite >
+host FrontDoor commun + `audio_container` > base env (fallback, comportement
+inchangé). Neutre pour P1–P4 (leurs env vars correspondent déjà à la convention
+`formationaudio-p{id}`).
+
+## 2026-06-11
+
+### feat(db): système de sécurité SQLite — backups, intégrité, récupération auto
+
+Suite à l'incident "database disk image is malformed" (commit 5d9f00a), mise en
+place d'une défense complète dans `backend/database/db_safety.py` :
+
+- **Au boot** (avant `init_database`) : `PRAGMA integrity_check` ; si la base
+  est saine → backup horodaté dans `<dir DB>/backups/` (`/home/backups/` sur
+  Azure) avec rotation (15 max). Chaque déploiement redémarre l'app, donc
+  chaque déploiement déclenche un backup.
+- **Si corruption détectée** : quarantaine (`.corrupt-<ts>`), puis restauration
+  automatique du dernier backup sain. Sans backup sain, base recréée vide mais
+  **mode maintenance activé** : toute l'API répond 503 (sauf `/api/admin/db/*`
+  et `/api/admin/login`) au lieu de repartir vide silencieusement.
+- **Backup périodique** toutes les 6h (green thread eventlet).
+- **Durcissement connexions** (`get_db_connection`) : `timeout=30` contre les
+  "database is locked" des écritures concurrentes. En local : `journal_mode=WAL`
+  (activé au boot, persistant) + `synchronous=NORMAL`. **Pas de WAL sur Azure** :
+  `/home` est un partage réseau (Azure Files/CIFS) et SQLite documente le WAL
+  comme non fiable sur filesystem réseau — possiblement la cause de la
+  corruption d'origine. Sur Azure on garde rollback journal + `synchronous=FULL`.
+- **Endpoints admin** (session `is_admin` requise) :
+  `GET /api/admin/db/status` (intégrité, backups, notices de récupération),
+  `POST /api/admin/db/backup` (backup manuel),
+  `POST /api/admin/db/restore` (`{"backup": "<nom>"}`, vérifie l'intégrité du
+  backup, sauvegarde l'actuelle en `pre-restore`, ré-applique les migrations),
+  `POST /api/admin/db/maintenance` (`{"enabled": bool}`).
+- Le filet de sécurité existant dans `init_database` tente lui aussi la
+  restauration d'un backup sain avant de recréer une base vide.
+
+Testé : boot sain → backup ; corruption → quarantaine + restauration auto avec
+données intactes ; corruption sans backup → maintenance ON.
+
+## 2026-06-10
+
+### feat(slides): variantes structurelles 2/4 items pour les templates source
+
+Ajout de variantes de composition pour les templates source qui peuvent porter
+2 à 4 éléments sans créer de nouvelle slide : `casestudy`, `steps/process`,
+`recap` et rendu tolérant pour `situations`. Les variantes restent dans le
+même design source exact, mais adaptent grille, espacement et tailles selon le
+nombre réel d'items. La page Test Slides expose maintenant ces variantes, et
+la curation/normalisation accepte `casestudy` jusqu'à 4 cartes.
+
+### feat(slides): budgets de texte sans split ni variante visuelle
+
+Ajout d'un contrat de longueur pour les templates source exacts. Le prompt de
+curation reçoit des budgets de caractères par template et doit reformuler les
+champs trop longs pour rentrer dans le design existant, sans créer de slide
+supplémentaire et sans variante visuelle. Le backend applique aussi une sécurité
+déterministe qui compresse les champs au budget du template source en dernier
+recours et persiste `layout_fit` pour audit.
+
+### feat(plan): cohérence interne des slide_anchors (spoken_requirement ↔ shape)
+
+Le plan pouvait livrer des anchors auto-contradictoires : la
+`spoken_requirement` demandait parfois une structure orale, tandis que le
+`pedagogical_shape` et le `template_type` annonçaient une autre forme. La
+curation finale (section_slide_alignment), qui suit le texte réel, corrigeait
+alors le template — mais elle corrigeait une contradiction déjà présente dans
+le plan, pas une dérive d'écriture. Ajout dans `structured-plan.md`, le prompt
+de plan global et le prompt d'enrichissement des beats : la structure orale
+dominante demandée par la `spoken_requirement` fait autorité, puis le plan fixe
+un `pedagogical_shape` et un `template_type` compatibles. La curation finale
+garde le dernier mot si le texte dévie malgré un plan cohérent.
+
+### feat(slides): signaux génériques de plan dans le catalogue
+
+Ajout de `pedagogical_shape`, `plan_signals` et `plan_avoid` au catalogue de
+templates pour guider le plan avec des signaux structurels génériques, sans
+exemples liés à un domaine de formation. Le prompt de plan reçoit ces champs,
+la curation conserve ses `strong_signals`/`rejection_rules`, et un test
+anti-overfitting bloque les termes spécialisés dans les signaux de plan.
+
+### feat(slides): carte d'affichage déclarée par le rédacteur
+
+Ajout d'une carte technique `ORDRE_AFFICHAGE_SLIDES` / `CARTE_AFFICHAGE_SLIDES`
+à la génération de section, strippée avant budget/TTS, validée par match
+verbatim et persistée dans les artifacts de sections. Le deck sait désormais
+calculer des fenêtres de slides depuis cette carte en
+`FORMATION_SLIDES_DISPLAY_MAP_MODE=on`, avec mode `shadow` par défaut et
+fallback LLM par section si une carte est absente ou invalide.
+Durcissement avant rollout : la carte est aussi strippée si le modèle omet
+`ORDRE_AFFICHAGE_SLIDES`, un filet anti-fuite retire les marqueurs résiduels
+avant TTS, et la validation utilise le même matching tokenisé que le deck.
+Les patches de conformité appliqués aux sections transportent maintenant les
+repères de slide : si un `ANCRAGE` ou une `QUOTE` est réécrit via
+`original → replacement`, la carte hérite du texte successeur avec le statut
+`relocated_patch`; si le successeur n'est plus vérifiable, la section est
+marquée `degraded` et retombe sur le fallback LLM.
+
+## 2026-06-02
+
+### fix(slides): chevauchement du titre sur la slide "Programme journée"
+
+Le conteneur `.deck-slide` n'est pas un canevas fixe 1920×1080 mais un
+cadre fluide (`width: 90vw; max-width: 1200px`). Les dimensions
+structurelles de `deck-program7` avaient bien été réduites à cette échelle
+(gap 75, padding 88, pastilles 46px…), mais les `max` des `clamp()` de
+police étaient restés aux valeurs du design 1920 d'origine
+(`104px`/`27px`/`35px`) — soit ~1,6× trop gros pour un cadre de 1200px. Le
+`<h1>` débordait donc de sa colonne et chevauchait la timeline. Correctif :
+caler les `max` de police à la proportion du canevas 1200px
+(h1 `65px`, sous-titre `17px`, items `22px`) et resserrer le `max-width`
+du paragraphe (600→375px).
+
+Cause racine complémentaire : les polices du design (`Archivo Black`,
+`Archivo`, `Manrope`, `JetBrains Mono`, `Caveat`) n'étaient chargées nulle
+part — le projet n'importait que Fredoka/Poppins — donc tout `DeckTemplates`
+retombait sur une police de substitution (titre, numéros mono, logo
+manuscrit perdus). Ajout de l'`@import` Google Fonts en tête de
+`DeckTemplates.css`. Correction aussi du logo « Sales » qui était en
+`Archivo Black` au lieu de `Caveat` (manuscrit) comme dans le design.
+
 ## 2026-05-20
 
 ### fix(audio-editor): seek arbitraire cassé sur la waveform

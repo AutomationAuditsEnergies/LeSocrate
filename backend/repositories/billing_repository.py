@@ -1,0 +1,982 @@
+"""PostgreSQL persistence for paid AI-teacher orders.
+
+The order is the authorization boundary: a platform can only be provisioned by
+the durable fulfillment worker after this record is paid or explicitly exempt.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any
+import uuid
+
+from database.postgres import get_postgres_connection
+from repositories.teacher_asset_repository import (
+    get_module_audio_manifest_readiness,
+)
+
+
+def _enqueue_fulfillment_in_transaction(cur, order: dict[str, Any]) -> dict[str, Any]:
+    """Persist the fulfillment job and its order state in the caller transaction."""
+    if order.get("fulfillment_status") in {"queued", "running", "fulfilled"}:
+        return order
+
+    public_id = str(order["public_id"])
+    resource_key = f"ai-teacher-order:{order['id']}"
+    base_dedupe_key = f"ai-teacher-order:{order['id']}:fulfill"
+
+    # A handler failure can be scheduled for an automatic queue retry before the
+    # order row is refreshed. Reattach to that active item instead of creating a
+    # competing fulfillment for the same paid order.
+    cur.execute(
+        """
+        SELECT id, status
+        FROM pipeline_work_items
+        WHERE resource_key = %s
+          AND scope_key = 'fulfillment'
+          AND task_type = 'ai_teacher_fulfillment'
+          AND status IN ('queued', 'retry_scheduled', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (resource_key,),
+    )
+    active = cur.fetchone()
+    if active:
+        fulfillment_status = "running" if active["status"] == "running" else "queued"
+        status = "fulfilling" if fulfillment_status == "running" else "fulfillment_queued"
+        cur.execute(
+            """
+            UPDATE ai_teacher_orders
+            SET status = %s, fulfillment_status = %s,
+                fulfillment_work_item_id = %s, last_error = NULL, updated_at = NOW()
+            WHERE id = %s
+              AND fulfillment_status != 'fulfilled'
+            RETURNING *
+            """,
+            (status, fulfillment_status, active["id"], int(order["id"])),
+        )
+        return cur.fetchone() or order
+
+    # Keep the initial key stable for webhook idempotence. A manual retry gets a
+    # fresh immutable work item so the dead-letter history is retained instead
+    # of silently resetting attempts on the original row. The order lock makes
+    # the transition idempotent: a repeated HTTP request sees `queued` above.
+    if order.get("fulfillment_status") == "failed":
+        dedupe_key = f"{base_dedupe_key}:retry:{uuid.uuid4()}"
+    else:
+        dedupe_key = base_dedupe_key
+    work_id = str(uuid.uuid4())
+    cur.execute(
+        """
+        INSERT INTO pipeline_work_items (
+            id, pipeline_job_id, folder_id, resource_key, run_id, task_type,
+            scope_key, dedupe_key, payload_json, status, priority,
+            max_attempts, available_at, created_at, updated_at
+        )
+        VALUES (
+            %s, NULL, NULL, %s, %s, 'ai_teacher_fulfillment', 'fulfillment',
+            %s, %s::jsonb, 'queued', 20, 5, NOW(), NOW(), NOW()
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        """,
+        (
+            work_id,
+            resource_key,
+            f"teacher-order-{public_id}",
+            dedupe_key,
+            json.dumps(
+                {"order_id": int(order["id"]), "order_public_id": public_id},
+                sort_keys=True,
+            ),
+        ),
+    )
+    inserted = cur.fetchone()
+    if inserted:
+        work_item_id = inserted["id"]
+    else:
+        cur.execute(
+            "SELECT id FROM pipeline_work_items WHERE dedupe_key = %s",
+            (dedupe_key,),
+        )
+        existing = cur.fetchone()
+        if not existing:
+            raise RuntimeError("Travail durable de fulfillment introuvable après insertion")
+        work_item_id = existing["id"]
+    cur.execute(
+        """
+        UPDATE ai_teacher_orders
+        SET status = 'fulfillment_queued', fulfillment_status = 'queued',
+            fulfillment_work_item_id = %s, last_error = NULL, updated_at = NOW()
+        WHERE id = %s
+          AND fulfillment_status NOT IN ('running', 'fulfilled')
+        RETURNING *
+        """,
+        (work_item_id, int(order["id"])),
+    )
+    return cur.fetchone() or order
+
+
+def retry_order_fulfillment(
+    order_id: int,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    """Idempotently requeue one authorized, failed order for its owning centre."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM ai_teacher_orders
+                WHERE id = %s AND center_account_id = %s
+                FOR UPDATE
+                """,
+                (int(order_id), int(center_account_id)),
+            )
+            order = cur.fetchone()
+            if not order:
+                return None
+            if order.get("payment_status") not in {"paid", "not_required"}:
+                return order
+            if order.get("fulfillment_status") in {"queued", "running", "fulfilled"}:
+                return order
+            if order.get("fulfillment_status") != "failed":
+                return order
+            return _enqueue_fulfillment_in_transaction(cur, order)
+
+
+def _claim_webhook_event(cur, event: dict[str, Any]) -> bool:
+    """Claim a Stripe event inside the same transaction as its side effects."""
+    cur.execute(
+        """
+        INSERT INTO stripe_webhook_events (
+            event_id, event_type, livemode, payload_json, status, attempt_count
+        )
+        VALUES (%s, %s, %s, %s::jsonb, 'processing', 1)
+        ON CONFLICT (event_id) DO UPDATE
+        SET status = 'processing',
+            attempt_count = stripe_webhook_events.attempt_count + 1,
+            payload_json = EXCLUDED.payload_json,
+            last_error = NULL,
+            updated_at = NOW()
+        WHERE stripe_webhook_events.status = 'failed'
+           OR (
+                stripe_webhook_events.status = 'processing'
+                AND stripe_webhook_events.updated_at < NOW() - INTERVAL '5 minutes'
+           )
+        RETURNING event_id
+        """,
+        (
+            str(event["id"]),
+            str(event["type"]),
+            bool(event.get("livemode")),
+            json.dumps(event, ensure_ascii=False, sort_keys=True),
+        ),
+    )
+    return cur.fetchone() is not None
+
+
+def get_center_billing_account(center_account_id: int) -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, username, center_name, is_active, stripe_customer_id,
+                       billing_mode, billing_exempt_reason, billing_exempt_at
+                FROM training_center_accounts
+                WHERE id = %s
+                """,
+                (int(center_account_id),),
+            )
+            return cur.fetchone()
+
+
+def get_reusable_module(module_id: int, center_account_id: int) -> dict[str, Any] | None:
+    module = None
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.id, m.tp_name, m.rncp_code, j.total_hours,
+                       m.source_platform_id, m.source_pipeline_job_id, m.status,
+                       m.voice_type, m.nb_days, m.schedule_schema_version,
+                       m.schedule_hash, m.schedule_locked_at, m.reusable_at,
+                       (SELECT COUNT(*) FROM cours_folders cf
+                        WHERE cf.platform_id = m.source_platform_id) AS nb_folders,
+                       (SELECT COUNT(*) FROM formation_module_days md
+                        WHERE md.module_id = m.id
+                          AND md.center_account_id = m.center_account_id) AS module_day_count
+                FROM formation_modules m
+                LEFT JOIN formation_pipeline_jobs j ON j.id = m.source_pipeline_job_id
+                WHERE m.id = %s
+                  AND m.center_account_id = %s
+                  AND m.status = 'validated'
+                  AND m.immutable = TRUE
+                  AND m.reusable_at IS NOT NULL
+                  AND m.reusable_at <= NOW()
+                  AND m.archived_at IS NULL
+                  AND m.voice_type IS DISTINCT FROM 'mock'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM cours_folders reusable_folder
+                      WHERE reusable_folder.platform_id = m.source_platform_id
+                  )
+                """,
+                (int(module_id), int(center_account_id)),
+            )
+            module = cur.fetchone()
+    if not module:
+        return None
+    readiness = get_module_audio_manifest_readiness(int(module["id"]))
+    if not readiness.get("ready"):
+        return None
+    return module
+
+
+def create_order(values: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Create once per center/idempotency key and return ``(order, created)``."""
+    payload_json = json.dumps(values["request_payload"], ensure_ascii=False, sort_keys=True)
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_teacher_orders (
+                    center_account_id, operation_type, source_module_id, status,
+                    payment_status, review_status, fulfillment_status, training_title, rncp_code,
+                    total_hours, request_payload_json, creation_request_id,
+                    request_fingerprint, pricing_key, stripe_price_id,
+                    quoted_amount_cents, catalog_amount_cents, internal_api_cost_cents,
+                    charged_amount_cents,
+                    currency, authorization_kind, authorized_at
+                )
+                VALUES (
+                    %(center_account_id)s, %(operation_type)s, %(source_module_id)s,
+                    %(status)s, %(payment_status)s, %(review_status)s,
+                    'not_started', %(training_title)s,
+                    %(rncp_code)s, %(total_hours)s, %(request_payload_json)s::jsonb,
+                    %(creation_request_id)s, %(request_fingerprint)s, %(pricing_key)s,
+                    %(stripe_price_id)s, %(catalog_amount_cents)s,
+                    %(catalog_amount_cents)s, %(internal_api_cost_cents)s,
+                    %(charged_amount_cents)s, %(currency)s,
+                    %(authorization_kind)s,
+                    CASE WHEN %(payment_status)s = 'not_required' THEN NOW() ELSE NULL END
+                )
+                ON CONFLICT (center_account_id, creation_request_id) DO NOTHING
+                RETURNING *
+                """,
+                {**values, "request_payload_json": payload_json},
+            )
+            row = cur.fetchone()
+            if row:
+                created = True
+            else:
+                cur.execute(
+                    """
+                    SELECT * FROM ai_teacher_orders
+                    WHERE center_account_id = %s AND creation_request_id = %s
+                    FOR UPDATE
+                    """,
+                    (int(values["center_account_id"]), values["creation_request_id"]),
+                )
+                row = cur.fetchone()
+                created = False
+            if row and row.get("payment_status") == "not_required":
+                row = _enqueue_fulfillment_in_transaction(cur, row)
+            return row, created
+
+
+def mark_order_notification_sent(order_id: int, column: str) -> None:
+    if column not in {"review_email_sent_at", "payment_email_sent_at"}:
+        raise ValueError("Colonne de notification invalide")
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE ai_teacher_orders SET {column} = NOW(), updated_at = NOW() WHERE id = %s",
+                (int(order_id),),
+            )
+
+
+def approve_order_review(
+    public_id: str,
+    reviewed_by: str,
+    pipeline_model: str = "flash",
+) -> dict[str, Any] | None:
+    """Approve one request exactly once and open its Stripe payment phase."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE public_id = %s FOR UPDATE",
+                (str(public_id),),
+            )
+            order = cur.fetchone()
+            if not order:
+                return None
+            if order.get("review_status") == "approved":
+                return order
+            if order.get("review_status") != "pending":
+                return order
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET review_status = 'approved', status = 'awaiting_payment',
+                    payment_status = 'awaiting_payment', reviewed_at = NOW(),
+                    reviewed_by = %s, admin_seen_at = COALESCE(admin_seen_at, NOW()),
+                    request_payload_json = jsonb_set(
+                        COALESCE(request_payload_json, '{}'::jsonb),
+                        '{pipeline_model}',
+                        to_jsonb(%s::text),
+                        TRUE
+                    ),
+                    center_seen_at = NULL, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    str(reviewed_by or "secretariat")[:160],
+                    str(pipeline_model),
+                    int(order["id"]),
+                ),
+            )
+            return cur.fetchone()
+
+
+def reject_order_review(public_id: str, reviewed_by: str, note: str = "") -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET review_status = 'rejected', status = 'rejected',
+                    payment_status = 'not_requested', reviewed_at = NOW(),
+                    reviewed_by = %s, review_note = %s,
+                    admin_seen_at = COALESCE(admin_seen_at, NOW()),
+                    center_seen_at = NULL, updated_at = NOW()
+                WHERE public_id = %s AND review_status = 'pending'
+                RETURNING *
+                """,
+                (str(reviewed_by or "secretariat")[:160], str(note or "")[:1000], str(public_id)),
+            )
+            if cur.rowcount:
+                return cur.fetchone()
+            cur.execute("SELECT * FROM ai_teacher_orders WHERE public_id = %s", (str(public_id),))
+            return cur.fetchone()
+
+
+def enqueue_order_fulfillment(order_id: int) -> dict[str, Any] | None:
+    """Idempotently queue an authorized order in one PostgreSQL transaction."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM ai_teacher_orders
+                WHERE id = %s AND payment_status IN ('paid', 'not_required')
+                FOR UPDATE
+                """,
+                (int(order_id),),
+            )
+            order = cur.fetchone()
+            if not order:
+                return None
+            return _enqueue_fulfillment_in_transaction(cur, order)
+
+
+def get_order(public_id: str, *, center_account_id: int | None = None) -> dict[str, Any] | None:
+    params: list[Any] = [str(public_id)]
+    tenant_clause = ""
+    if center_account_id is not None:
+        tenant_clause = " AND center_account_id = %s"
+        params.append(int(center_account_id))
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT * FROM ai_teacher_orders WHERE public_id = %s{tenant_clause}",
+                tuple(params),
+            )
+            return cur.fetchone()
+
+
+def get_platform_slide_brand_name(platform_id: int) -> str:
+    """Return the per-promotion slide label stored with its teacher order."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT CASE
+                         WHEN request_payload_json ? 'slide_brand_name'
+                           THEN BTRIM(request_payload_json->>'slide_brand_name')
+                         ELSE 'Le Socrate'
+                       END AS slide_brand_name
+                FROM ai_teacher_orders
+                WHERE platform_id = %s
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (int(platform_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return "Le Socrate"
+            return str(row.get("slide_brand_name") or "")[:120]
+
+
+def list_center_billing_orders(center_account_id: int) -> list[dict[str, Any]]:
+    """Return the centre's durable payment history, newest charge first."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_teacher_orders
+                WHERE center_account_id = %s
+                  AND payment_status IN ('paid', 'refunded')
+                  AND COALESCE(charged_amount_cents, 0) > 0
+                ORDER BY COALESCE(paid_at, created_at) DESC, id DESC
+                LIMIT 100
+                """,
+                (int(center_account_id),),
+            )
+            return list(cur.fetchall())
+
+
+def list_teacher_order_reviews(
+    *,
+    limit: int = 100,
+    exclude_center_account_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return the internal review inbox across every training centre."""
+    exclusion_clause = ""
+    params: list[Any] = []
+    if exclude_center_account_id is not None:
+        exclusion_clause = "AND teacher_order.center_account_id <> %s"
+        params.append(int(exclude_center_account_id))
+    params.append(max(1, min(int(limit), 250)))
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT teacher_order.*, center.username AS center_email,
+                       center.center_name
+                FROM ai_teacher_orders AS teacher_order
+                JOIN training_center_accounts AS center
+                  ON center.id = teacher_order.center_account_id
+                WHERE teacher_order.review_status IN ('pending', 'approved', 'rejected')
+                  {exclusion_clause}
+                ORDER BY
+                  CASE teacher_order.review_status WHEN 'pending' THEN 0 ELSE 1 END,
+                  teacher_order.created_at DESC,
+                  teacher_order.id DESC
+                LIMIT %s
+                """,
+                tuple(params),
+            )
+            return list(cur.fetchall())
+
+
+def mark_teacher_order_admin_seen(public_id: str) -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET admin_seen_at = COALESCE(admin_seen_at, NOW())
+                WHERE public_id = %s
+                RETURNING *
+                """,
+                (str(public_id),),
+            )
+            return cur.fetchone()
+
+
+def list_center_order_messages(center_account_id: int, *, limit: int = 100) -> list[dict[str, Any]]:
+    """Return one durable conversation item per teacher request."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_teacher_orders
+                WHERE center_account_id = %s
+                ORDER BY updated_at DESC, id DESC
+                LIMIT %s
+                """,
+                (int(center_account_id), max(1, min(int(limit), 250))),
+            )
+            return list(cur.fetchall())
+
+
+def mark_center_order_message_seen(
+    public_id: str,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET center_seen_at = NOW()
+                WHERE public_id = %s AND center_account_id = %s
+                RETURNING *
+                """,
+                (str(public_id), int(center_account_id)),
+            )
+            return cur.fetchone()
+
+
+def get_order_by_pipeline_job_id(
+    pipeline_job_id: int,
+    *,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    """Return the paid teacher order bound to one centre-owned pipeline."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_teacher_orders
+                WHERE pipeline_job_id = %s
+                  AND center_account_id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (int(pipeline_job_id), int(center_account_id)),
+            )
+            return cur.fetchone()
+
+
+def mark_order_pipeline_resume_requested(
+    order_id: int,
+    *,
+    pipeline_job_id: int,
+) -> dict[str, Any] | None:
+    """Reflect a successful durable resume without downgrading a winner."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET status = 'fulfilling', fulfillment_status = 'running',
+                    last_error = NULL, center_seen_at = NULL, updated_at = NOW()
+                WHERE id = %s
+                  AND pipeline_job_id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                  AND fulfillment_status = 'failed'
+                RETURNING *
+                """,
+                (int(order_id), int(pipeline_job_id)),
+            )
+            if cur.rowcount:
+                return cur.fetchone()
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE id = %s",
+                (int(order_id),),
+            )
+            return cur.fetchone()
+
+
+def attach_checkout_session(
+    order_id: int,
+    *,
+    checkout_session_id: str,
+    payment_intent_id: str | None,
+    expires_at,
+) -> dict[str, Any]:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET stripe_checkout_session_id = %s,
+                    stripe_payment_intent_id = COALESCE(%s, stripe_payment_intent_id),
+                    checkout_expires_at = %s,
+                    checkout_attempt_count = checkout_attempt_count + 1,
+                    status = CASE
+                        WHEN status IN ('fulfilled', 'fulfilling', 'fulfillment_queued') THEN status
+                        ELSE 'awaiting_payment'
+                    END,
+                    payment_status = CASE
+                        WHEN payment_status = 'not_requested'
+                         AND review_status IN ('approved', 'not_required')
+                        THEN 'awaiting_payment'
+                        ELSE payment_status
+                    END,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND authorization_kind = 'stripe'
+                RETURNING *
+                """,
+                (checkout_session_id, payment_intent_id, expires_at, int(order_id)),
+            )
+            return cur.fetchone()
+
+
+def _stripe_resource_id(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        value = value.get("id")
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _apply_paid_checkout_session_in_transaction(
+    cur,
+    obj: dict[str, Any],
+    *,
+    center_account_id: int | None = None,
+    authorized_at: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Authorize and enqueue one server-verified Checkout Session."""
+    session_id = str(obj.get("id") or "").strip()
+    if not session_id:
+        raise ValueError("Session Stripe absente")
+
+    tenant_clause = " AND center_account_id = %s" if center_account_id is not None else ""
+    params: tuple[Any, ...] = (
+        (session_id, int(center_account_id))
+        if center_account_id is not None
+        else (session_id,)
+    )
+    cur.execute(
+        f"SELECT * FROM ai_teacher_orders "
+        f"WHERE stripe_checkout_session_id = %s{tenant_clause} FOR UPDATE",
+        params,
+    )
+    order = cur.fetchone()
+    if not order:
+        return None
+
+    payment_status = str(obj.get("payment_status") or "").strip().lower()
+    if payment_status not in {"paid", "no_payment_required"}:
+        if order.get("payment_status") not in {"paid", "refunded"}:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET payment_status = 'processing', updated_at = NOW()
+                WHERE id = %s AND authorization_kind = 'stripe'
+                RETURNING *
+                """,
+                (int(order["id"]),),
+            )
+            return cur.fetchone() or order
+        return order
+
+    if order.get("authorization_kind") != "stripe":
+        raise ValueError("Mode d’autorisation Stripe incohérent")
+    if order.get("review_status") not in {"approved", "not_required"}:
+        raise ValueError("Commande Stripe non autorisée à être payée")
+    if str(order["public_id"]) != str(obj.get("client_reference_id") or ""):
+        raise ValueError("Référence Stripe incohérente")
+
+    metadata = dict(obj.get("metadata") or {})
+    if (
+        metadata.get("ai_teacher_order_id")
+        and str(metadata["ai_teacher_order_id"]) != str(order["id"])
+    ):
+        raise ValueError("Métadonnée de commande Stripe incohérente")
+    if (
+        metadata.get("order_public_id")
+        and str(metadata["order_public_id"]) != str(order["public_id"])
+    ):
+        raise ValueError("Métadonnée publique Stripe incohérente")
+
+    amount = int(obj.get("amount_total") or 0)
+    if amount != int(order.get("catalog_amount_cents") or -1):
+        raise ValueError("Montant Stripe incohérent")
+    if str(obj.get("currency") or "").lower() != str(order["currency"]).lower():
+        raise ValueError("Devise Stripe incohérente")
+
+    payment_intent_id = _stripe_resource_id(obj.get("payment_intent"))
+    cur.execute(
+        """
+        UPDATE ai_teacher_orders
+        SET status = CASE WHEN status = 'fulfilled' THEN status ELSE 'authorized' END,
+            payment_status = 'paid',
+            stripe_payment_intent_id = COALESCE(%s, stripe_payment_intent_id),
+            charged_amount_cents = %s,
+            paid_at = COALESCE(paid_at, %s, NOW()),
+            authorized_at = COALESCE(authorized_at, %s, NOW()),
+            last_error = NULL, center_seen_at = NULL, updated_at = NOW()
+        WHERE id = %s
+          AND authorization_kind = 'stripe'
+          AND payment_status IN ('not_requested', 'awaiting_payment', 'processing', 'paid')
+        RETURNING *
+        """,
+        (
+            payment_intent_id,
+            amount,
+            authorized_at,
+            authorized_at,
+            int(order["id"]),
+        ),
+    )
+    authorized_order = cur.fetchone()
+    if not authorized_order:
+        return order
+    return _enqueue_fulfillment_in_transaction(cur, authorized_order)
+
+
+def reconcile_stripe_checkout_session(
+    obj: dict[str, Any],
+    *,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    """Reconcile a Checkout Session retrieved server-side from Stripe."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            return _apply_paid_checkout_session_in_transaction(
+                cur,
+                obj,
+                center_account_id=int(center_account_id),
+            )
+
+
+def update_order_state(order_id: int, **fields) -> dict[str, Any] | None:
+    allowed = {
+        "status", "payment_status", "fulfillment_status", "platform_id",
+        "pipeline_job_id", "fulfillment_work_item_id", "last_error",
+        "fulfilled_at", "refunded_at",
+    }
+    values = {key: value for key, value in fields.items() if key in allowed}
+    if not values:
+        return None
+    assignments = ", ".join(f"{key} = %s" for key in values)
+    if values.get("fulfillment_status") == "fulfilled" and "fulfilled_at" not in values:
+        assignments += ", fulfilled_at = COALESCE(fulfilled_at, NOW())"
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE ai_teacher_orders SET {assignments}, updated_at = NOW() WHERE id = %s RETURNING *",
+                (*values.values(), int(order_id)),
+            )
+            return cur.fetchone()
+
+
+def complete_order_pipeline_fulfillment(
+    order_id: int,
+    *,
+    pipeline_job_id: int,
+    platform_id: int,
+) -> dict[str, Any] | None:
+    """Atomically complete a paid order bound to the finishing text pipeline.
+
+    Auto-pilot ticks are durable and can be replayed.  The pipeline binding in
+    the predicate prevents a late tick from completing an order now attached
+    to another pipeline, while the fulfilled guard makes duplicate terminal
+    ticks harmless.
+    """
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET status = 'fulfilled', fulfillment_status = 'fulfilled',
+                    platform_id = %s, pipeline_job_id = %s,
+                    fulfilled_at = COALESCE(fulfilled_at, NOW()),
+                    last_error = NULL, center_seen_at = NULL, updated_at = NOW()
+                WHERE id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                  AND fulfillment_status != 'fulfilled'
+                  AND (pipeline_job_id IS NULL OR pipeline_job_id = %s)
+                RETURNING *
+                """,
+                (
+                    int(platform_id),
+                    int(pipeline_job_id),
+                    int(order_id),
+                    int(pipeline_job_id),
+                ),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE id = %s",
+                (int(order_id),),
+            )
+            return cur.fetchone()
+
+
+def fail_order_pipeline_fulfillment(
+    order_id: int,
+    *,
+    pipeline_job_id: int,
+    error: str,
+) -> dict[str, Any] | None:
+    """Make a terminally failed paid pipeline order eligible for retry.
+
+    A completion that won the race is never downgraded.  Retrying this failed
+    order reuses its original payment authorization and creates a fresh durable
+    work item via :func:`retry_order_fulfillment`.
+    """
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET status = 'fulfillment_failed', fulfillment_status = 'failed',
+                    last_error = %s, center_seen_at = NULL, updated_at = NOW()
+                WHERE id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                  AND fulfillment_status != 'fulfilled'
+                  AND (pipeline_job_id IS NULL OR pipeline_job_id = %s)
+                RETURNING *
+                """,
+                (str(error)[:500], int(order_id), int(pipeline_job_id)),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE id = %s",
+                (int(order_id),),
+            )
+            return cur.fetchone()
+
+
+def claim_order_for_fulfillment(order_id: int) -> dict[str, Any] | None:
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET status = 'fulfilling', fulfillment_status = 'running',
+                    last_error = NULL, updated_at = NOW()
+                WHERE id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                  AND fulfillment_status IN ('not_started', 'queued', 'failed')
+                RETURNING *
+                """,
+                (int(order_id),),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+            cur.execute("SELECT * FROM ai_teacher_orders WHERE id = %s", (int(order_id),))
+            return cur.fetchone()
+
+
+def apply_stripe_webhook_event(event: dict[str, Any]) -> bool:
+    """Apply a verified Stripe event and enqueue fulfillment atomically.
+
+    The event claim, order transition and durable queue insert commit together.
+    A duplicate event is a no-op; a crashed transaction is safely retryable.
+    """
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            if not _claim_webhook_event(cur, event):
+                return False
+            event_type = str(event["type"])
+            obj = dict(event["data"]["object"])
+            order = None
+
+            if event_type in {
+                "checkout.session.completed",
+                "checkout.session.async_payment_succeeded",
+            }:
+                event_created_at = event.get("created")
+                authorized_at = None
+                if event_created_at not in (None, ""):
+                    try:
+                        authorized_at = datetime.fromtimestamp(
+                            int(event_created_at),
+                            tz=timezone.utc,
+                        )
+                    except (TypeError, ValueError, OSError):
+                        authorized_at = None
+                order = _apply_paid_checkout_session_in_transaction(
+                    cur,
+                    obj,
+                    authorized_at=authorized_at,
+                )
+            elif event_type in {"checkout.session.async_payment_failed", "checkout.session.expired"}:
+                cur.execute(
+                    """
+                    UPDATE ai_teacher_orders
+                    SET status = %s, payment_status = %s, updated_at = NOW()
+                    WHERE stripe_checkout_session_id = %s
+                      AND payment_status NOT IN ('paid', 'refunded')
+                    """,
+                    (
+                        "payment_failed" if event_type.endswith("failed") else "expired",
+                        "failed" if event_type.endswith("failed") else "expired",
+                        str(obj.get("id") or ""),
+                    ),
+                )
+            elif event_type == "charge.refunded":
+                fully_refunded = bool(obj.get("refunded")) or (
+                    int(obj.get("amount") or 0) > 0
+                    and int(obj.get("amount_refunded") or 0) >= int(obj.get("amount") or 0)
+                )
+                payment_intent_id = str(obj.get("payment_intent") or "")
+                metadata = dict(obj.get("metadata") or {})
+                order_id = metadata.get("ai_teacher_order_id")
+                if payment_intent_id:
+                    cur.execute(
+                        """
+                        SELECT * FROM ai_teacher_orders
+                        WHERE stripe_payment_intent_id = %s
+                        FOR UPDATE
+                        """,
+                        (payment_intent_id,),
+                    )
+                    order = cur.fetchone()
+                if not order and str(order_id or "").isdigit():
+                    cur.execute(
+                        "SELECT * FROM ai_teacher_orders WHERE id = %s FOR UPDATE",
+                        (int(order_id),),
+                    )
+                    order = cur.fetchone()
+                if order and fully_refunded:
+                    cur.execute(
+                        """
+                        UPDATE ai_teacher_orders
+                        SET status = 'refunded', payment_status = 'refunded',
+                            stripe_payment_intent_id = COALESCE(NULLIF(%s, ''), stripe_payment_intent_id),
+                            refunded_at = COALESCE(refunded_at, NOW()), updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (payment_intent_id, int(order["id"])),
+                    )
+
+            cur.execute(
+                """
+                UPDATE stripe_webhook_events
+                SET status = 'processed', last_error = NULL,
+                    processed_at = NOW(), updated_at = NOW()
+                WHERE event_id = %s
+                """,
+                (str(event["id"]),),
+            )
+            return True
+
+
+def record_webhook_failure(event: dict[str, Any], error: str) -> None:
+    """Persist diagnostics after the atomic event transaction rolls back."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO stripe_webhook_events (
+                    event_id, event_type, livemode, payload_json, status,
+                    attempt_count, last_error
+                )
+                VALUES (%s, %s, %s, %s::jsonb, 'failed', 1, %s)
+                ON CONFLICT (event_id) DO UPDATE
+                SET status = 'failed',
+                    attempt_count = stripe_webhook_events.attempt_count + 1,
+                    payload_json = EXCLUDED.payload_json,
+                    last_error = EXCLUDED.last_error,
+                    updated_at = NOW()
+                WHERE stripe_webhook_events.status != 'processed'
+                """,
+                (
+                    str(event["id"]),
+                    str(event["type"]),
+                    bool(event.get("livemode")),
+                    json.dumps(event, ensure_ascii=False, sort_keys=True),
+                    str(error)[:500],
+                ),
+            )

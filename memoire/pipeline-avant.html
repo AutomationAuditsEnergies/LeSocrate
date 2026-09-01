@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pipeline avant - Le Socrate</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1228;
+      --panel: #171d36;
+      --card: #173142;
+      --card-2: #192f42;
+      --line: #1b6b69;
+      --line-soft: rgba(55, 211, 184, 0.2);
+      --ink: #e7edf7;
+      --muted: #a7b4c7;
+      --subtle: #70809a;
+      --ok: #34e7b0;
+      --warn: #f5b85b;
+      --danger: #ff7d7d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 8% 0%, rgba(52, 231, 176, 0.08), transparent 28%),
+        radial-gradient(circle at 100% 24%, rgba(91, 141, 245, 0.08), transparent 32%),
+        var(--bg);
+      color: var(--ink);
+      font-family: "Poppins", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    main {
+      width: min(1500px, calc(100vw - 48px));
+      margin: 28px auto;
+      padding: 32px;
+      border: 1px solid rgba(112, 128, 154, 0.28);
+      border-radius: 28px;
+      background: rgba(23, 29, 54, 0.86);
+    }
+
+    .topline {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 26px;
+    }
+
+    .title-block {
+      max-width: 980px;
+    }
+
+    .kicker {
+      margin: 0 0 10px;
+      color: var(--ok);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.16;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .lead {
+      margin: 14px 0 0;
+      max-width: 1120px;
+      color: var(--muted);
+      font-size: 21px;
+      line-height: 1.45;
+      text-wrap: pretty;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: rgba(245, 184, 91, 0.12);
+      color: #ffe1ad;
+      border: 1px solid rgba(245, 184, 91, 0.28);
+      font-size: 14px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .step {
+      min-height: 172px;
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 16px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, var(--card), var(--card-2));
+    }
+
+    .step.limit {
+      border-color: rgba(245, 184, 91, 0.48);
+      background: linear-gradient(180deg, rgba(58, 45, 33, 0.96), rgba(42, 38, 45, 0.96));
+    }
+
+    .step.problem {
+      border-color: rgba(255, 125, 125, 0.44);
+      background: linear-gradient(180deg, rgba(61, 37, 43, 0.96), rgba(41, 34, 48, 0.96));
+    }
+
+    .icon {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 13px;
+      background: rgba(13, 22, 45, 0.72);
+      color: var(--ok);
+      font-size: 26px;
+      font-weight: 700;
+    }
+
+    .limit .icon {
+      color: var(--warn);
+    }
+
+    .problem .icon {
+      color: var(--danger);
+    }
+
+    .meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 8px;
+      color: var(--subtle);
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .status {
+      color: var(--ok);
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .limit .status {
+      color: var(--warn);
+    }
+
+    .problem .status {
+      color: var(--danger);
+    }
+
+    h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 22px;
+      line-height: 1.18;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .step p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.35;
+      text-wrap: pretty;
+    }
+
+    .flow {
+      margin-top: 26px;
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .summary {
+      padding: 22px 24px;
+      border-radius: 16px;
+      border: 1px solid rgba(112, 128, 154, 0.28);
+      background: rgba(10, 17, 39, 0.5);
+    }
+
+    .summary h3 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      line-height: 1.25;
+    }
+
+    .summary p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.55;
+    }
+
+    .path {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-content: flex-start;
+      padding: 22px;
+      border-radius: 16px;
+      border: 1px solid var(--line-soft);
+      background: rgba(11, 29, 44, 0.48);
+    }
+
+    .pill {
+      padding: 9px 11px;
+      border-radius: 999px;
+      background: rgba(52, 231, 176, 0.11);
+      border: 1px solid rgba(52, 231, 176, 0.22);
+      color: #d8fff5;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 1100px) {
+      .grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow,
+      .topline {
+        grid-template-columns: 1fr;
+        flex-direction: column;
+      }
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: min(100vw - 24px, 1500px);
+        padding: 18px;
+        border-radius: 18px;
+      }
+
+      h1 {
+        font-size: 26px;
+      }
+
+      .lead {
+        font-size: 17px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .step {
+        grid-template-columns: 44px 1fr;
+        min-height: 0;
+      }
+
+      .icon {
+        width: 42px;
+        height: 42px;
+      }
+
+      h2 {
+        font-size: 19px;
+      }
+
+      .step p {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="topline" aria-labelledby="pipeline-title">
+      <div class="title-block">
+        <p class="kicker">Pipeline avant refonte JSON</p>
+        <h1 id="pipeline-title">Du REAC au remplissage des audios</h1>
+        <p class="lead">
+          Cette carte montre la première version fonctionnelle : source officielle, base de connaissances,
+          programme global, journées, 7 chapitres audio, génération texte par bloc, premiers garde-fous,
+          puis slides associées après coup.
+        </p>
+      </div>
+      <div class="badge">Version complétée</div>
+    </section>
+
+    <section class="grid" aria-label="Étapes de la pipeline avant">
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>01</span><span class="status">OK</span></p>
+          <h2>Code RNCP et récupération REAC</h2>
+          <p>Le système part du titre professionnel et récupère le référentiel officiel associé.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>02</span><span class="status">OK</span></p>
+          <h2>Extraction des compétences</h2>
+          <p>Le REAC est découpé en compétences, blocs, titres et extraits officiels exploitables.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>03</span><span class="status">OK</span></p>
+          <h2>Knowledge Base pédagogique</h2>
+          <p>Chaque compétence est enrichie avec définitions, cas fictifs, pièges, vocabulaire et terrain.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>04</span><span class="status">OK</span></p>
+          <h2>Programme global</h2>
+          <p>La formation est organisée à grande échelle : blocs, modules, compétences et progression.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>05</span><span class="status">OK</span></p>
+          <h2>Programme journalier</h2>
+          <p>Le programme global descend au niveau d’une journée avec objectif, fil conducteur et contenus.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>06</span><span class="status">OK</span></p>
+          <h2>7 chapitres audio</h2>
+          <p>Chaque journée est divisée en sept chapitres correspondant aux sept audios de cours.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>07</span><span class="status">OK</span></p>
+          <h2>Budget mots par audio</h2>
+          <p>Chaque chapitre reçoit un volume cible calculé selon la durée audio attendue.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>08</span><span class="status">OK</span></p>
+          <h2>Génération texte par bloc</h2>
+          <p>Le LLM produit le texte d’un audio complet avec thème, position dans la journée et transition.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>09</span><span class="status">OK</span></p>
+          <h2>Rythme de journée</h2>
+          <p>Le texte prévoit accueil, récapitulatifs, transitions, questions-réponses et pauses.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>10</span><span class="status">OK</span></p>
+          <h2>Garde-fou budget</h2>
+          <p>Les textes trop courts ou trop longs sont repérés pour limiter l’écart avec l’audio cible.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>11</span><span class="status">OK</span></p>
+          <h2>Première conformité</h2>
+          <p>Les formulations risquées, statistiques inventées et tournures trop écrites sont corrigées.</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="icon">✓</div>
+        <div>
+          <p class="meta"><span>12</span><span class="status">OK</span></p>
+          <h2>Transformation TTS</h2>
+          <p>Les textes validés sont envoyés vers la synthèse vocale pour produire les audios de cours.</p>
+        </div>
+      </article>
+
+      <article class="step limit">
+        <div class="icon">!</div>
+        <div>
+          <p class="meta"><span>13</span><span class="status">FRAGILE</span></p>
+          <h2>Slides après le texte</h2>
+          <p>Le modèle associe ensuite des passages du texte final à des templates de diapositives.</p>
+        </div>
+      </article>
+
+      <article class="step problem">
+        <div class="icon">×</div>
+        <div>
+          <p class="meta"><span>14</span><span class="status">LIMITE</span></p>
+          <h2>Texte encore trop libre</h2>
+          <p>Le fil pédagogique interne reste parfois insuffisant pour guider clairement l’apprenant.</p>
+        </div>
+      </article>
+
+      <article class="step problem">
+        <div class="icon">×</div>
+        <div>
+          <p class="meta"><span>15</span><span class="status">LIMITE</span></p>
+          <h2>Reviews trop larges</h2>
+          <p>Les vérifications portent encore sur des blocs longs, avec structure, style et conformité mêlés.</p>
+        </div>
+      </article>
+
+      <article class="step problem">
+        <div class="icon">×</div>
+        <div>
+          <p class="meta"><span>16</span><span class="status">LIMITE</span></p>
+          <h2>Calibrage imparfait</h2>
+          <p>Le budget mots améliore la durée, mais ne garantit pas toujours un audio bien ajusté.</p>
+        </div>
+      </article>
+
+      <article class="step problem">
+        <div class="icon">×</div>
+        <div>
+          <p class="meta"><span>17</span><span class="status">LIMITE</span></p>
+          <h2>Slides peu coordonnées</h2>
+          <p>Certaines zones restent sans slide, d’autres reçoivent un template peu adapté au passage.</p>
+        </div>
+      </article>
+
+      <article class="step limit">
+        <div class="icon">→</div>
+        <div>
+          <p class="meta"><span>18</span><span class="status">SUITE</span></p>
+          <h2>Besoin d’un plan JSON</h2>
+          <p>La limite texte, audio et slides conduit à une refonte plus structurée et anchor-first.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="flow" aria-label="Résumé du pipeline avant">
+      <div class="summary">
+        <h3>Logique de cette première version</h3>
+        <p>
+          La pipeline valide l’idée centrale : réduire progressivement une tâche trop vaste.
+          Elle transforme le référentiel officiel en matière pédagogique, puis en programme,
+          puis en blocs audio remplissables par du texte.
+        </p>
+      </div>
+      <div class="path" aria-label="Chaîne de transformation">
+        <span class="pill">RNCP</span>
+        <span class="pill">REAC</span>
+        <span class="pill">KB enrichie</span>
+        <span class="pill">Programme global</span>
+        <span class="pill">Journée</span>
+        <span class="pill">7 audios</span>
+        <span class="pill">Texte</span>
+        <span class="pill">TTS</span>
+        <span class="pill">Slides après coup</span>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,244 +1,448 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 
-// — Templates existants —
-import PlayfulTemplate from '../components/slides/templates/PlayfulTemplate';
-import ReflectionTemplate from '../components/slides/templates/ReflectionTemplate';
-import CaseStudyTemplate from '../components/slides/templates/CaseStudyTemplate';
-import FacilitatorTemplate from '../components/slides/templates/FacilitatorTemplate';
-import ChartTemplate from '../components/slides/templates/ChartTemplate';
-import StatsTemplate from '../components/slides/templates/StatsTemplate';
-import StoryTemplate from '../components/slides/templates/StoryTemplate';
-import RecapTemplate from '../components/slides/templates/RecapTemplate';
-import AnalogyTemplate from '../components/slides/templates/AnalogyTemplate';
-import WarningTemplate from '../components/slides/templates/WarningTemplate';
-import TipTemplate from '../components/slides/templates/TipTemplate';
-import OpinionTemplate from '../components/slides/templates/OpinionTemplate';
-import TransitionTemplate from '../components/slides/templates/TransitionTemplate';
-import FrameworkTemplate from '../components/slides/templates/FrameworkTemplate';
+import { SalesHackingSourceSlide, SOURCE_SLIDE_INDEX } from '../components/slides/templates/SalesHackingSourceSlides';
+import './TestSlides.css';
 
-// — Nouveaux templates (corpus TP CRCD) —
-import ComparisonTemplate from '../components/slides/templates/ComparisonTemplate';
-import StepsTemplate from '../components/slides/templates/StepsTemplate';
-import ProfilesTemplate from '../components/slides/templates/ProfilesTemplate';
-import DefinitionTemplate from '../components/slides/templates/DefinitionTemplate';
-import QuotableTemplate from '../components/slides/templates/QuotableTemplate';
-import ScriptTemplate from '../components/slides/templates/ScriptTemplate';
-import MatrixTemplate from '../components/slides/templates/MatrixTemplate';
-import GradientTemplate from '../components/slides/templates/GradientTemplate';
-import SignalsTemplate from '../components/slides/templates/SignalsTemplate';
-import TimelineTemplate from '../components/slides/templates/TimelineTemplate';
-import ChannelAdaptationTemplate from '../components/slides/templates/ChannelAdaptationTemplate';
-import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate';
-import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate';
-import EscalationLadderTemplate from '../components/slides/templates/EscalationLadderTemplate';
-import ToolkitTemplate from '../components/slides/templates/ToolkitTemplate';
-import DecisionTreeTemplate from '../components/slides/templates/DecisionTreeTemplate';
-import TemperatureScaleTemplate from '../components/slides/templates/TemperatureScaleTemplate';
-import KPIExplainerTemplate from '../components/slides/templates/KPIExplainerTemplate';
-import SelfDiagTemplate from '../components/slides/templates/SelfDiagTemplate';
-import ParadoxTemplate from '../components/slides/templates/ParadoxTemplate';
-import LearningPathTemplate from '../components/slides/templates/LearningPathTemplate';
-import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate';
-import SelfManagementTemplate from '../components/slides/templates/SelfManagementTemplate';
-import SignalRadarTemplate from '../components/slides/templates/SignalRadarTemplate';
-
-const P = { badge: 'TP-CRCD', brandName: 'SALES HACKING' };
-
-const GROUPS = [
-  {
-    label: 'Existants',
-    items: [
-      { type: 'playful', label: 'Playful', data: { title: "Pourquoi l'automatisation est vitale ?", cards: [ { title: 'Gain de temps', desc: 'Libérer les équipes des tâches répétitives.', img: 'https://images.unsplash.com/photo-1506784983877-45594efa4cbe?q=80&w=1200&auto=format&fit=crop' }, { title: 'Scalabilité', desc: 'Traiter plus de demandes sans augmenter les effectifs.', img: 'https://images.unsplash.com/photo-1558494949-ef526b0042a0?q=80&w=1200&auto=format&fit=crop' }, { title: 'Fiabilité', desc: 'Réduire les erreurs et sécuriser les informations.', img: 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?q=80&w=1200&auto=format&fit=crop' } ] } },
-      { type: 'reflection', label: 'Reflection', data: { title: 'La posture professionnelle', text: "Un bon conseiller reformule, vérifie le besoin réel et sécurise la suite de l'échange." } },
-      { type: 'casestudy', label: 'Case Study', data: { title: 'Trois situations client', cases: [ { title: 'Client pressé', desc: 'Prioriser et aller droit au résultat.' }, { title: 'Client hésitant', desc: 'Clarifier le besoin avant de proposer.' }, { title: 'Client mécontent', desc: "Traiter l'émotion avant la procédure." } ] } },
-      { type: 'facilitator', label: 'Facilitator', data: { title: 'Traiter une demande', steps: [ { title: 'Identifier', desc: 'Comprendre le besoin exprimé.', icon: 'target', color: 'orange' }, { title: 'Qualifier', desc: 'Vérifier les contraintes utiles.', icon: 'gear', color: 'purple' }, { title: 'Agir', desc: 'Proposer une réponse concrète.', icon: 'flash', color: 'lime' }, { title: 'Clore', desc: 'Confirmer la suite avec précision.', icon: 'flag', color: 'blue' } ] } },
-      { type: 'chart', label: 'Chart', data: { title: 'Progression des demandes', description: 'Le volume augmente aux heures de pointe. Le traitement doit rester structuré.' } },
-      { type: 'stats', label: 'Stats', data: { eyebrow: 'Indicateurs', title: 'Priorités', description: "Trois repères pour piloter la qualité d'un accueil.", stats: [{ number: '3' }, { number: '24h' }, { number: '95%' }], columns: ['Identifier la demande avant de répondre.', 'Respecter le délai annoncé.', 'Tracer les infos utiles.'] } },
-      { type: 'story', label: 'Story', data: { title: 'Le client qui revient', narrative: "Un client qui répète sa demande signale souvent que la première réponse n'était pas assez claire.", moral: 'La clarté évite la répétition et protège la relation.' } },
-      { type: 'recap', label: 'Recap', data: { title: 'À retenir', points: ['Écouter avant de répondre.', 'Reformuler pour vérifier.', 'Annoncer une suite réaliste.', 'Tracer les éléments utiles.'] } },
-      { type: 'analogy', label: 'Analogy', data: { title: 'Le suivi client', concept: 'CRM', comparison: 'Carnet de bord', text: "Comme un carnet de bord, le CRM sert à comprendre ce qui s'est passé et quelle est la prochaine étape." } },
-      { type: 'warning', label: 'Warning', data: { title: 'Ne pas promettre trop vite', text: 'Une promesse imprécise crée une attente difficile à tenir.' } },
-      { type: 'tip', label: 'Tip', data: { title: 'La phrase de validation', text: "Terminez par : je récapitule ce qu'on vient de convenir, puis je vous confirme la prochaine étape." } },
-      { type: 'opinion', label: 'Opinion', data: { title: 'La qualité se voit dans les détails', text: 'Une procédure bien suivie ne remplace pas la posture. Les deux doivent avancer ensemble.' } },
-      { type: 'transition', label: 'Transition', data: { title: 'Passons à la pratique', from_topic: 'Les principes', to_topic: 'Les gestes métier' } },
-      { type: 'framework', label: 'Framework 4', data: { title: 'Les 4 forces de Porter', center: { title: 'Intensité de rivalité entre concurrents' }, segments: [ { title: 'Menace des nouveaux entrants', desc: "Barrières à l'entrée faibles." }, { title: 'Menace des produits de substitution', desc: 'Alternatives plus efficaces.' }, { title: 'Pouvoir de négociation des clients', desc: 'Clients nombreux ou concentrés.' }, { title: 'Pouvoir de négociation des fournisseurs', desc: 'Fournisseurs peu nombreux.' } ] } },
-      { type: 'framework', label: 'Framework 6', data: { title: 'Les 6 leviers de la performance', center: { title: 'Performance commerciale' }, segments: [ { title: 'Prospection', desc: 'Volume des contacts entrants.' }, { title: 'Qualification', desc: 'Tri du besoin réel.' }, { title: 'Argumentaire', desc: 'Promesse adaptée.' }, { title: 'Closing', desc: 'Décision claire.' }, { title: 'Onboarding', desc: 'Démarrage sans friction.' }, { title: 'Fidélisation', desc: 'Valeur dans la durée.' } ] } },
-    ],
+const TEMPLATE_USAGE = {
+  welcome: {
+    templateId: 'welcome',
+    description: "Installer le cadre d'ouverture d'une journée ou d'une grande séquence.",
+    useCases: ['accueil de journée', 'ouverture majeure', 'lancement de séquence'],
+    useWhen: "Le passage accueille les apprenants au début d'une journée ou d'une séquence majeure.",
+    avoidWhen: 'Le passage introduit une notion, un thème, un exercice ou une transition sans accueil explicite.',
   },
-  {
-    label: 'Tier 1 — Critiques',
-    items: [
-      { type: 'comparison', label: 'Comparison (binaire)', data: {} },
-      { type: 'comparison-ternary', label: 'Comparison (ternaire)', data: { title: 'Les 3 postures face au client en difficulté', cols: [ { label: 'Sympathie', color: '#60A5FA', icon: '😢', bg: '#EFF6FF', accent: '#BFDBFE', items: ['"Oh je suis tellement désolé pour vous"', 'Partage émotionnel total', 'Le conseiller perd son objectivité', 'Relation floue, pas de solution'] }, { label: 'Empathie pro', color: '#16A34A', icon: '🎯', bg: '#F0FDF4', accent: '#BBF7D0', items: ['"Je vois que c\'est une situation difficile."', 'Reconnaît l\'émotion sans la partager', 'Posture stable et professionnelle', 'Solution proposée, relation renforcée'] }, { label: 'Neutralité froide', color: '#DC2626', icon: '🤖', bg: '#FEF2F2', accent: '#FECACA', items: ['"Votre numéro de dossier, s\'il vous plaît."', 'Ignore l\'état émotionnel du client', 'Le client se sent comme un ticket', 'Relation détériorée, risque de churn'] } ] } },
-      { type: 'steps', label: 'Steps (4 étapes)', data: {} },
-      { type: 'steps-mini', label: 'Steps (2 étapes)', data: { title: 'Recadrage cognitif entre deux appels', subtitle: 'Deux secondes suffisent pour repartir sur une page blanche.', steps: [ { title: 'Fermer mentalement', desc: 'Cet échange est terminé. J\'ai fait ce que je pouvais avec ce que j\'avais.' }, { title: 'Page blanche', desc: 'Le prochain client n\'a rien à voir avec le précédent. Recommencer à zéro.' } ] } },
-      { type: 'profiles', label: 'Profiles (3 profils)', data: {} },
-    ],
+  program_year: {
+    templateId: 'program_year',
+    description: 'Donner une vision annuelle courte des deux grandes phases de la formation.',
+    useCases: ['vision annuelle', '2 grandes phases', 'parcours long'],
+    useWhen: 'Le passage présente le parcours annuel ou les deux grands blocs de compétences.',
+    avoidWhen: "Le passage annonce seulement les thèmes d'une journée ou développe une méthode précise.",
   },
-  {
-    label: 'Tier 2 — Importants',
-    items: [
-      { type: 'definition', label: 'Definition', data: {} },
-      { type: 'quotable', label: 'Quotable', data: {} },
-      { type: 'quotable-2', label: 'Quotable (autre)', data: { quote: 'Votre voix est votre premier\ninstrument de confiance.\nPas votre script.', accentColor: '#3FA6A0' } },
-      { type: 'script', label: 'Script (dialogue)', data: {} },
-      { type: 'matrix', label: 'Matrix', data: {} },
-    ],
+  day_program_7_steps: {
+    templateId: 'day_program_7_steps',
+    description: 'Afficher une feuille de route complète en sept étapes.',
+    useCases: ['programme journée', '7 thèmes exacts', 'feuille de route'],
+    useWhen: "Le passage annonce explicitement les sept grands thèmes d'une journée complète.",
+    avoidWhen: 'Le passage donne moins ou plus de sept parties, ou seulement une liste de conseils.',
   },
-  {
-    label: 'Tier 3 — Utiles',
-    items: [
-      { type: 'gradient', label: 'Gradient (spectre)', data: {} },
-      { type: 'signals', label: 'Signals (détection)', data: {} },
-      { type: 'timeline', label: 'Timeline', data: {} },
-      { type: 'channel', label: 'Channel Adaptation', data: {} },
-      { type: 'beforeafter', label: 'Before/After', data: {} },
-      { type: 'checklist', label: 'Checklist', data: {} },
-      { type: 'escalation', label: 'Escalation Ladder', data: {} },
-      { type: 'toolkit', label: 'Toolkit', data: {} },
-    ],
+  chapter_opener: {
+    templateId: 'chapter_opener',
+    description: 'Ouvrir un chapitre ou un grand thème avec son titre et ses axes principaux.',
+    useCases: ['nouveau chapitre', 'nouveau thème', 'objectif + axes'],
+    useWhen: 'Le passage annonce un nouveau chapitre, un nouveau thème, son objectif ou ses axes.',
+    avoidWhen: 'Le passage est un récap, une méthode détaillée, une checklist ou un exemple.',
   },
-  {
-    label: 'Tier 4 — Spécialisés',
-    items: [
-      { type: 'decisiontree', label: 'Decision Tree', data: {} },
-      { type: 'temperature', label: 'Temperature Scale', data: {} },
-      { type: 'kpi', label: 'KPI Explainer', data: {} },
-      { type: 'selfdiag', label: 'Self-Diag', data: {} },
-      { type: 'paradox', label: 'Paradox', data: {} },
-      { type: 'learningpath', label: 'Learning Path', data: {} },
-      { type: 'exercise', label: 'Practice Exercise', data: {} },
-      { type: 'selfmanagement', label: 'Self Management', data: {} },
-      { type: 'signalradar', label: 'Signal Radar', data: {} },
-    ],
+  reflection: {
+    templateId: 'reflection',
+    description: 'Mettre en avant une idée centrale, une nuance ou un principe mémorisable.',
+    useCases: ['idée centrale', 'principe clé', 'phrase forte'],
+    useWhen: 'Le passage contient une idée courte qui peut tenir en une phrase forte.',
+    avoidWhen: 'Le passage contient une méthode, une comparaison, un cas terrain ou plusieurs points.',
   },
-];
-
-const ALL_ITEMS = GROUPS.flatMap((g, gi) => g.items.map((item, ii) => ({ ...item, groupLabel: g.label, globalIndex: gi * 100 + ii })));
-
-const renderSlide = (item) => {
-  const d = item.data || {};
-  switch (item.type) {
-    // — Existants —
-    case 'playful': return <PlayfulTemplate {...d} {...P} />;
-    case 'reflection': return <ReflectionTemplate {...d} {...P} />;
-    case 'casestudy': return <CaseStudyTemplate {...d} {...P} />;
-    case 'facilitator': return <FacilitatorTemplate {...d} {...P} />;
-    case 'chart': return <ChartTemplate {...d} {...P} />;
-    case 'stats': return <StatsTemplate {...d} {...P} />;
-    case 'story': return <StoryTemplate {...d} {...P} />;
-    case 'recap': return <RecapTemplate {...d} {...P} />;
-    case 'analogy': return <AnalogyTemplate {...d} {...P} />;
-    case 'warning': return <WarningTemplate {...d} {...P} />;
-    case 'tip': return <TipTemplate {...d} {...P} />;
-    case 'opinion': return <OpinionTemplate {...d} {...P} />;
-    case 'transition': return <TransitionTemplate {...d} {...P} />;
-    case 'framework': return <FrameworkTemplate {...d} {...P} />;
-    // — Nouveaux Tier 1 —
-    case 'comparison': return <ComparisonTemplate {...d} {...P} />;
-    case 'comparison-ternary': return <ComparisonTemplate {...d} {...P} />;
-    case 'steps': return <StepsTemplate {...d} {...P} />;
-    case 'steps-mini': return <StepsTemplate {...d} {...P} />;
-    case 'profiles': return <ProfilesTemplate {...d} {...P} />;
-    // — Tier 2 —
-    case 'definition': return <DefinitionTemplate {...d} {...P} />;
-    case 'quotable': return <QuotableTemplate {...d} {...P} />;
-    case 'quotable-2': return <QuotableTemplate {...d} {...P} />;
-    case 'script': return <ScriptTemplate {...d} {...P} />;
-    case 'matrix': return <MatrixTemplate {...d} {...P} />;
-    // — Tier 3 —
-    case 'gradient': return <GradientTemplate {...d} {...P} />;
-    case 'signals': return <SignalsTemplate {...d} {...P} />;
-    case 'timeline': return <TimelineTemplate {...d} {...P} />;
-    case 'channel': return <ChannelAdaptationTemplate {...d} {...P} />;
-    case 'beforeafter': return <BeforeAfterTemplate {...d} {...P} />;
-    case 'checklist': return <ChecklistTemplate {...d} {...P} />;
-    case 'escalation': return <EscalationLadderTemplate {...d} {...P} />;
-    case 'toolkit': return <ToolkitTemplate {...d} {...P} />;
-    // — Tier 4 —
-    case 'decisiontree': return <DecisionTreeTemplate {...d} {...P} />;
-    case 'temperature': return <TemperatureScaleTemplate {...d} {...P} />;
-    case 'kpi': return <KPIExplainerTemplate {...d} {...P} />;
-    case 'selfdiag': return <SelfDiagTemplate {...d} {...P} />;
-    case 'paradox': return <ParadoxTemplate {...d} {...P} />;
-    case 'learningpath': return <LearningPathTemplate {...d} {...P} />;
-    case 'exercise': return <PracticeExerciseTemplate {...d} {...P} />;
-    case 'selfmanagement': return <SelfManagementTemplate {...d} {...P} />;
-    case 'signalradar': return <SignalRadarTemplate {...d} {...P} />;
-    default: return null;
-  }
+  definition: {
+    templateId: 'definition',
+    description: 'Définir une notion métier avec quelques critères de reconnaissance.',
+    useCases: ['définition', 'vocabulaire', 'distinction de terme'],
+    useWhen: 'Le passage pose une définition, un terme ou une distinction de vocabulaire nécessaire.',
+    avoidWhen: 'Le passage donne seulement un conseil pratique ou une opinion.',
+  },
+  comparison: {
+    templateId: 'comparison',
+    description: 'Comparer deux familles, états, postures, options ou comportements pour faire apparaître leurs attentes différentes.',
+    useCases: ['comparaison 2 colonnes', 'synchrone vs asynchrone', 'deux familles', 'avant / après', 'diagnostic opposé'],
+    useWhen: "Le passage oppose explicitement deux familles ou deux modes, par exemple synchrone/asynchrone, téléphone/courriel, immédiat/différé, rapidité/exhaustivité, d'un côté/de l'autre.",
+    avoidWhen: 'Le passage définit seulement un terme sans opposition opérationnelle, raconte un cas concret, suit une chronologie ou donne une simple liste.',
+  },
+  warning: {
+    templateId: 'warning',
+    description: 'Signaler un piège, une erreur fréquente ou un risque métier.',
+    useCases: ['piège', 'erreur fréquente', 'risque', 'mauvaise pratique'],
+    useWhen: 'Le passage signale une erreur, un risque, une confusion, une expression interdite ou une mauvaise pratique à éviter.',
+    avoidWhen: "Le passage donne un conseil positif sans danger clair. S'il liste exactement trois mots ou expressions à bannir, préfère `situations`.",
+  },
+  casestudy: {
+    templateId: 'casestudy',
+    description: 'Comparer plusieurs cas métier concrets dans une même logique.',
+    useCases: ['2 à 4 cas comparables', 'canaux', 'variantes métier'],
+    useWhen: 'Le passage met en regard 2 à 4 cas concrets comparables, canaux, variantes ou situations métier contextualisées.',
+    avoidWhen: 'Le passage raconte un seul cas pour amener un conseil, une astuce ou un réflexe métier : préfère tip. Le passage raconte un seul cas avec une morale narrative : préfère story. Le passage pose une triade conceptuelle comme trois piliers, trois repères, trois profils, trois postures ou trois expressions : préfère situations.',
+  },
+  steps: {
+    templateId: 'steps',
+    description: 'Transformer une méthode ou procédure en étapes actionnables.',
+    useCases: ['procédure', '2 à 4 étapes', 'méthode ordonnée'],
+    useWhen: "Le passage présente un enchaînement, une procédure ou des étapes d'action.",
+    avoidWhen: "Le contenu n'a pas au moins deux étapes distinctes ou n'indique aucun ordre.",
+  },
+  recap: {
+    templateId: 'recap',
+    description: 'Regrouper plusieurs points à retenir ou réflexes pratiques après un développement.',
+    useCases: ['synthèse finale', 'points à retenir', 'après développement'],
+    useWhen: 'Le passage donne plusieurs points de synthèse, contrôles ou repères à retenir après avoir traité un chapitre.',
+    avoidWhen: "Le contenu introduit une structure nouvelle en trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions. Ce n'est pas une synthèse finale : préfère situations.",
+  },
+  reprise_recap: {
+    templateId: 'reprise_recap',
+    description: "Remettre en mémoire quelques repères déjà vus avant d'ouvrir le nouveau thème.",
+    useCases: ['reprise de début de cours', 'rappel chapitre précédent', 'pont vers la suite'],
+    useWhen: "Le passage arrive au début d'un cours après le premier et rappelle brièvement 2 à 4 repères de la séquence précédente avant de faire le lien avec la suite.",
+    avoidWhen: "Le passage conclut ce qui vient d'être traité : utilise recap. Le passage annonce directement un nouveau thème avec objectif et axes : utilise chapter_opener.",
+  },
+  pause: {
+    templateId: 'pause',
+    description: 'Marquer une pause explicite dans une journée animée.',
+    useCases: ['pause explicite', 'respiration journée', 'coupure animée'],
+    useWhen: 'Le passage annonce explicitement une pause.',
+    avoidWhen: 'Le passage fait une simple respiration rhétorique.',
+  },
+  qa: {
+    templateId: 'qa',
+    description: 'Ouvrir un temps de questions-réponses.',
+    useCases: ['questions-réponses', 'invitation au tchat', 'temps échange'],
+    useWhen: 'Le passage invite explicitement les apprenants à poser des questions.',
+    avoidWhen: 'Le passage mentionne une question de façon rhétorique dans un développement.',
+  },
+  quotable: {
+    templateId: 'quotable',
+    description: "Ancrer dans l'esprit des apprenants une phrase exacte qui doit devenir un repère professionnel.",
+    useCases: ['maxime à ancrer', 'phrase clé', 'citation courte', 'repère mémorisable', 'formule à isoler'],
+    useWhen: "Le passage introduit explicitement une maxime, une phrase clé, une formule ou un repère à retenir, surtout avec des signaux comme « la voici », « phrase à retenir », « maxime », « repère », « souvenez-vous ».",
+    avoidWhen: "Le passage explique surtout une scène, une expérience client ou un exemple narratif sans phrase exacte à isoler. Dans ce cas, préfère story.",
+  },
+  tip: {
+    templateId: 'tip',
+    description: 'Mettre en avant un conseil pratique immédiatement applicable.',
+    useCases: ['conseil pratique', 'réflexe métier', 'bonne pratique', 'un cas qui amène une astuce'],
+    useWhen: "Le passage donne une astuce, un réflexe métier ou une bonne pratique concrète, même s'il commence par un seul cas fictif pour faire comprendre le conseil.",
+    avoidWhen: 'Le passage compare plusieurs cas métier entre eux : préfère casestudy. Le passage est surtout un récit avec morale : préfère story. Le passage est théorique ou centré sur un risque à éviter.',
+  },
+  situations: {
+    templateId: 'situations',
+    description: 'Présenter une triade fermée qui structure une notion : trois piliers, trois profils, trois postures, trois situations ou trois expressions.',
+    useCases: ['3 piliers', 'triade structurante', '3 profils', '3 postures', '3 expressions à distinguer'],
+    useWhen: "Le passage annonce explicitement trois éléments indissociables avec des signaux comme « trois piliers », « les trois », « les voici », « trépied », « triptyque », « trois profils », « trois postures » ou « trois expressions ».",
+    avoidWhen: 'Le passage compare des cas métier contextualisés en cartes, avec des scènes ou canaux concrets : préfère casestudy. Le passage synthétise un chapitre déjà traité : préfère recap.',
+  },
+  flow: {
+    templateId: 'flow',
+    description: 'Afficher deux à quatre gestes métier enchaînés avec une logique opérationnelle.',
+    useCases: ['2 à 4 gestes métier', 'flux opérationnel', 'actions successives'],
+    useWhen: "Le passage décrit 2 à 4 actions successives qu'un apprenant doit appliquer dans l'ordre.",
+    avoidWhen: 'Le passage est un modèle conceptuel, une simple liste de conseils ou une progression sans action métier.',
+  },
+  story: {
+    templateId: 'story',
+    description: 'Transformer une phrase clé ou un principe en scène concrète pour montrer pourquoi il compte.',
+    useCases: ["déclinaison narrative d'une maxime", 'mini-récit', 'situation vécue', 'expérience client', 'morale pédagogique'],
+    useWhen: "Le passage développe une expérience vécue, une scène client, une mise en situation ou une conséquence concrète qui donne du sens à une maxime ou à un principe.",
+    avoidWhen: "Le passage sert d'abord à faire mémoriser une phrase exacte. Dans ce cas, préfère quotable; story peut venir ensuite si le texte raconte une scène qui illustre cette phrase.",
+  },
+  analogy: {
+    templateId: 'analogy',
+    description: 'Expliquer une notion abstraite par une image mentale familière.',
+    useCases: ['image mentale', 'métaphore utile', 'comparaison hors métier'],
+    useWhen: 'Le passage compare une notion à une image, un objet ou une situation connue pour aider la compréhension.',
+    avoidWhen: "La comparaison est seulement décorative ou relève d'un exemple métier concret.",
+  },
+  framework: {
+    templateId: 'framework',
+    description: 'Présenter un modèle conceptuel avec un centre et plusieurs leviers ou dimensions.',
+    useCases: ['modèle conceptuel', '4 à 6 leviers', 'dimensions multiples'],
+    useWhen: "Le passage présente un cadre d'analyse avec 4 à 6 forces, leviers ou dimensions autour d'une idée centrale.",
+    avoidWhen: 'Le passage présente exactement trois piliers, trois repères ou trois postures : préfère situations. Le passage est une procédure linéaire, une checklist ou une série de cas terrain.',
+  },
+  opinion: {
+    templateId: 'opinion',
+    description: 'Isoler une prise de position pédagogique argumentée.',
+    useCases: ['point de vue formateur', 'prise de position', 'thèse argumentée'],
+    useWhen: 'Le passage affirme un point de vue de formateur qui structure la suite du raisonnement.',
+    avoidWhen: 'Le passage est une simple phrase forte sans argument, à traiter plutôt en quotable.',
+  },
 };
+
+const SLIDES = SOURCE_SLIDE_INDEX.map((slide) => ({
+  label: `${slide.label.replace('&amp;', '&')} · ${slide.isVariant ? 'variante' : 'exact'}`,
+  sourceId: slide.id,
+  usage: TEMPLATE_USAGE[slide.templateId || slide.id],
+}));
+
+const USAGE_STORAGE_KEY = 'socrate-test-slides-usage-rules-v5';
+
+const ruleList = (value) => {
+  if (Array.isArray(value)) return value.length ? value : [''];
+  return value ? [value] : [''];
+};
+
+const getInitialDraftForSlide = (usage) => ({
+  description: usage?.description || '',
+  keywords: ruleList(usage?.keywords || usage?.useCases),
+  useWhen: ruleList(usage?.useWhen),
+  avoidWhen: ruleList(usage?.avoidWhen),
+});
 
 export default function TestSlides() {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const item = ALL_ITEMS[currentIndex];
+  const [isUsagePanelOpen, setIsUsagePanelOpen] = useState(false);
+  const [usageDrafts, setUsageDrafts] = useState(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      return JSON.parse(window.localStorage.getItem(USAGE_STORAGE_KEY) || '{}') || {};
+    } catch {
+      return {};
+    }
+  });
+  const item = SLIDES[currentIndex];
+  const usage = item.usage;
+  const editableUsage = usage ? {
+    ...usage,
+    description: usageDrafts[item.sourceId]?.description ?? usage.description ?? '',
+    keywords: usageDrafts[item.sourceId]?.keywords || ruleList(usage.keywords || usage.useCases),
+    useWhen: usageDrafts[item.sourceId]?.useWhen || ruleList(usage.useWhen),
+    avoidWhen: usageDrafts[item.sourceId]?.avoidWhen || ruleList(usage.avoidWhen),
+  } : null;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(usageDrafts));
+  }, [usageDrafts]);
+
+  const updateRule = (kind, index, value) => {
+    setUsageDrafts((current) => {
+      const currentDraft = current[item.sourceId] || getInitialDraftForSlide(usage);
+      const nextRules = ruleList(currentDraft[kind]).map((rule, ruleIndex) => (
+        ruleIndex === index ? value : rule
+      ));
+      return {
+        ...current,
+        [item.sourceId]: {
+          ...currentDraft,
+          [kind]: nextRules,
+        },
+      };
+    });
+  };
+
+  const updateDescription = (value) => {
+    setUsageDrafts((current) => {
+      const currentDraft = current[item.sourceId] || getInitialDraftForSlide(usage);
+      return {
+        ...current,
+        [item.sourceId]: {
+          ...currentDraft,
+          description: value,
+        },
+      };
+    });
+  };
+
+  const addRule = (kind) => {
+    setUsageDrafts((current) => {
+      const currentDraft = current[item.sourceId] || getInitialDraftForSlide(usage);
+      return {
+        ...current,
+        [item.sourceId]: {
+          ...currentDraft,
+          [kind]: [...ruleList(currentDraft[kind]), ''],
+        },
+      };
+    });
+  };
+
+  const removeRule = (kind, index) => {
+    setUsageDrafts((current) => {
+      const currentDraft = current[item.sourceId] || getInitialDraftForSlide(usage);
+      const nextRules = ruleList(currentDraft[kind]).filter((_, ruleIndex) => ruleIndex !== index);
+      return {
+        ...current,
+        [item.sourceId]: {
+          ...currentDraft,
+          [kind]: nextRules.length ? nextRules : [''],
+        },
+      };
+    });
+  };
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#0f172a', color: '#f1f5f9', display: 'grid', gridTemplateColumns: '260px 1fr', fontFamily: 'Inter, system-ui, sans-serif' }}>
-      {/* Sidebar */}
+    <div className="test-slides-page">
       <aside style={{ borderRight: '1px solid #334155', padding: '16px', backgroundColor: '#111827', overflowY: 'auto' }}>
         <div style={{ marginBottom: '16px' }}>
           <div style={{ color: '#a78bfa', fontSize: '10px', fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', marginBottom: '4px' }}>
-            Aperçu templates
+            Aperçu deck
           </div>
           <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>
-            {ALL_ITEMS.length} slides React
+            {SLIDES.length} slides source + variantes
           </h1>
         </div>
 
-        {GROUPS.map((group, gi) => (
-          <div key={gi} style={{ marginBottom: '16px' }}>
-            <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', marginBottom: '6px', paddingLeft: '4px' }}>
-              {group.label}
-            </div>
-            <div style={{ display: 'grid', gap: '4px' }}>
-              {group.items.map((item, ii) => {
-                const idx = ALL_ITEMS.findIndex(a => a.groupLabel === group.label && a.label === item.label && a.type === item.type);
-                const active = idx === currentIndex;
-                return (
-                  <button
-                    key={ii}
-                    type="button"
-                    onClick={() => setCurrentIndex(idx)}
-                    style={{
-                      textAlign: 'left', border: `1px solid ${active ? '#8B5CF6' : '#1e293b'}`,
-                      backgroundColor: active ? 'rgba(139,92,246,0.14)' : 'transparent',
-                      color: active ? '#f8fafc' : '#94a3b8', borderRadius: '6px',
-                      padding: '6px 10px', cursor: 'pointer', fontFamily: 'inherit',
-                    }}
-                  >
-                    <div style={{ fontSize: '12px', fontWeight: active ? 700 : 500 }}>{item.label}</div>
-                  </button>
-                );
-              })}
-            </div>
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', marginBottom: '6px', paddingLeft: '4px' }}>
+            Deck source exact + variantes
           </div>
-        ))}
+          <div style={{ display: 'grid', gap: '4px' }}>
+            {SLIDES.map((slide, index) => {
+              const active = index === currentIndex;
+              return (
+                <button
+                  key={slide.sourceId}
+                  type="button"
+                  onClick={() => setCurrentIndex(index)}
+                  style={{
+                    textAlign: 'left',
+                    border: `1px solid ${active ? '#8B5CF6' : '#1e293b'}`,
+                    backgroundColor: active ? 'rgba(139,92,246,0.14)' : 'transparent',
+                    color: active ? '#f8fafc' : '#94a3b8',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  <div style={{ fontSize: '12px', fontWeight: active ? 700 : 500 }}>{slide.label}</div>
+                  {slide.usage?.templateId && (
+                    <div style={{ marginTop: '3px', fontSize: '10px', color: active ? '#c4b5fd' : '#64748b' }}>
+                      {slide.usage.templateId}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </aside>
 
-      {/* Main */}
-      <main style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', gap: '16px', overflow: 'hidden' }}>
+      <main className={`test-slides-main ${isUsagePanelOpen ? 'test-slides-main--panel-open' : 'test-slides-main--panel-collapsed'}`}>
         <div style={{ width: 'min(1200px,100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
           <div>
             <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '2px' }}>
-              {item.groupLabel} · {currentIndex + 1}/{ALL_ITEMS.length}
+              Deck source exact + variantes · {currentIndex + 1}/{SLIDES.length}
             </div>
             <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>{item.label}</h2>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button type="button" onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0}
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: 'transparent', color: currentIndex === 0 ? '#64748b' : '#f1f5f9', cursor: currentIndex === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
-              ← Préc.
+            <button
+              type="button"
+              onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
+              disabled={currentIndex === 0}
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #334155', backgroundColor: 'transparent', color: currentIndex === 0 ? '#64748b' : '#f1f5f9', cursor: currentIndex === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
+            >
+              Préc.
             </button>
-            <button type="button" onClick={() => setCurrentIndex(Math.min(ALL_ITEMS.length - 1, currentIndex + 1))} disabled={currentIndex === ALL_ITEMS.length - 1}
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #8B5CF6', backgroundColor: currentIndex === ALL_ITEMS.length - 1 ? 'transparent' : '#8B5CF6', color: currentIndex === ALL_ITEMS.length - 1 ? '#64748b' : '#fff', cursor: currentIndex === ALL_ITEMS.length - 1 ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
-              Suiv. →
+            <button
+              type="button"
+              onClick={() => setCurrentIndex(Math.min(SLIDES.length - 1, currentIndex + 1))}
+              disabled={currentIndex === SLIDES.length - 1}
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #8B5CF6', backgroundColor: currentIndex === SLIDES.length - 1 ? 'transparent' : '#8B5CF6', color: currentIndex === SLIDES.length - 1 ? '#64748b' : '#fff', cursor: currentIndex === SLIDES.length - 1 ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
+            >
+              Suiv.
             </button>
           </div>
         </div>
 
-        <div style={{ width: 'min(1200px,100%)', display: 'flex', justifyContent: 'center', overflow: 'auto', padding: '4px' }}>
-          {renderSlide(item)}
+        {editableUsage && !isUsagePanelOpen && (
+          <section className="test-slide-usage-summary" aria-label="Résumé des cas d'usage du template">
+            <div>
+              <span className="test-slide-kicker">Cas d'usage</span>
+              <strong>{editableUsage.templateId}</strong>
+              <p>{editableUsage.description}</p>
+            </div>
+            <div className="test-slide-summary-keywords">
+              {editableUsage.keywords.filter(Boolean).slice(0, 4).map((keyword) => (
+                <span key={keyword}>{keyword}</span>
+              ))}
+            </div>
+            <button type="button" onClick={() => setIsUsagePanelOpen(true)}>Modifier</button>
+          </section>
+        )}
+
+        {editableUsage && isUsagePanelOpen && (
+          <section className="test-slide-usage-panel" aria-label="Cas d'usage du template">
+            <div className="test-slide-usage-head">
+              <div>
+                <span className="test-slide-kicker">Cas d'usage</span>
+                <h3>{editableUsage.templateId}</h3>
+              </div>
+              <div className="test-slide-usage-actions">
+                <span className="test-slide-source-id">{item.sourceId}</span>
+                <button type="button" onClick={() => setIsUsagePanelOpen(false)}>Réduire</button>
+              </div>
+            </div>
+
+            <div className="test-slide-description-block">
+              <label htmlFor={`description-${item.sourceId}`}>Description</label>
+              <textarea
+                id={`description-${item.sourceId}`}
+                value={editableUsage.description}
+                rows={2}
+                placeholder="Décrire le rôle pédagogique global de ce template"
+                onChange={(event) => updateDescription(event.target.value)}
+              />
+            </div>
+
+            <div className="test-slide-keyword-block">
+              <div className="test-slide-rule-toolbar test-slide-rule-toolbar--keywords">
+                <span>Mots-clés</span>
+                <button type="button" onClick={() => addRule('keywords')}>+ Ajouter</button>
+              </div>
+              <div className="test-slide-keyword-row">
+                {editableUsage.keywords.map((keyword, index) => (
+                  <div className="test-slide-keyword-edit" key={`keyword-${index}`}>
+                    <input
+                      type="text"
+                      value={keyword}
+                      placeholder="mot-clé"
+                      onChange={(event) => updateRule('keywords', index, event.target.value)}
+                    />
+                    <button type="button" aria-label="Supprimer ce mot-clé" onClick={() => removeRule('keywords', index)}>×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="test-slide-rule-grid">
+              <div className="test-slide-rule">
+                <div className="test-slide-rule-toolbar">
+                  <span>Utiliser quand</span>
+                  <button type="button" onClick={() => addRule('useWhen')}>+ Ajouter</button>
+                </div>
+                <div className="test-slide-rule-list">
+                  {editableUsage.useWhen.map((rule, index) => (
+                    <div className="test-slide-rule-edit" key={`use-${index}`}>
+                      <textarea
+                        value={rule}
+                        rows={2}
+                        placeholder="Ajouter un cas où ce template doit être utilisé"
+                        onChange={(event) => updateRule('useWhen', index, event.target.value)}
+                      />
+                      <button type="button" aria-label="Supprimer cette règle" onClick={() => removeRule('useWhen', index)}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="test-slide-rule test-slide-rule--avoid">
+                <div className="test-slide-rule-toolbar">
+                  <span>À éviter</span>
+                  <button type="button" onClick={() => addRule('avoidWhen')}>+ Ajouter</button>
+                </div>
+                <div className="test-slide-rule-list">
+                  {editableUsage.avoidWhen.map((rule, index) => (
+                    <div className="test-slide-rule-edit" key={`avoid-${index}`}>
+                      <textarea
+                        value={rule}
+                        rows={2}
+                        placeholder="Ajouter un cas où ce template ne doit pas être utilisé"
+                        onChange={(event) => updateRule('avoidWhen', index, event.target.value)}
+                      />
+                      <button type="button" aria-label="Supprimer cette règle" onClick={() => removeRule('avoidWhen', index)}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <div className="test-slide-preview">
+          <SalesHackingSourceSlide sourceId={item.sourceId} />
         </div>
       </main>
     </div>

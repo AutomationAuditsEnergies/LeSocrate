@@ -1,0 +1,451 @@
+\section{État de l'art}
+
+\subsection{Positionnement de l'état de l'art}
+
+Le problème posé par ce mémoire n'est pas seulement celui de l'utilisation d'un chatbot
+ou d'un générateur de texte. Il concerne la conception d'une plateforme de formation
+autonome alimentée par l'intelligence artificielle. Deux dimensions doivent donc être
+étudiées conjointement. La première concerne l'assistant pédagogique : comment permettre
+à un modèle de langage de répondre aux questions des apprenants à partir des contenus
+réels de la formation ? La seconde concerne la production de contenus : comment générer
+des cours longs, structurés, oralisables et contrôlables sans se limiter à une simple sortie
+textuelle produite par un prompt ?
+
+L'état de l'art est volontairement centré sur les techniques plutôt que sur un catalogue
+d'outils commerciaux. Les plateformes d'apprentissage en ligne permettent déjà de
+diffuser des cours, de suivre des élèves ou de proposer des évaluations, mais elles ne
+répondent pas directement à la question de recherche de ce mémoire : rendre une chaîne
+de formation suffisamment autonome tout en conservant une qualité pédagogique, une
+traçabilité et une capacité d'évaluation. Les approches étudiées ici sont donc celles qui
+permettent d'adapter ou d'encadrer les modèles de langage dans un contexte métier.
+
+La progression adoptée est la suivante. On étudie d'abord les approches permettant de
+donner un contexte à un modèle de langage : prompt engineering, fine-tuning et RAG. On
+analyse ensuite les variantes du RAG, notamment la recherche vectorielle, la recherche
+hybride, le reclassement sémantique, les métadonnées et l'évaluation. Enfin, on étudie
+les méthodes de génération contrôlée de contenus longs : décomposition de tâche,
+génération structurée, schémas intermédiaires, auto-évaluation et validation humaine. Ce
+cheminement prépare l'étude originale, sans encore détailler la solution développée.
+
+\subsection{Modèles de langage et adaptation au contexte}
+
+Les grands modèles de langage ont montré qu'ils peuvent réaliser de nombreuses tâches
+à partir d'instructions en langage naturel et de quelques exemples fournis dans le
+prompt. Les travaux sur le few-shot learning ont mis en évidence cette capacité à adapter
+le comportement du modèle sans modifier ses poids \cite{brown2020language}. Pour une
+plateforme de formation, cette propriété est importante : un modèle généraliste peut être
+orienté vers un rôle d'assistant pédagogique, de rédacteur de cours ou de correcteur de
+contenu simplement à partir d'instructions.
+
+Cette flexibilité explique l'intérêt du prompt engineering. Dans sa forme la plus simple,
+il consiste à fournir au modèle une consigne, un rôle, des contraintes de style, un format
+de sortie et parfois des exemples. Dans le cas d'un chatbot pédagogique, le prompt peut
+indiquer que le modèle doit répondre clairement, ne pas inventer d'information et rester
+dans le périmètre du cours. Dans le cas d'une génération de contenu, il peut préciser le
+niveau de l'apprenant, le ton attendu, la structure du cours ou les règles de conformité.
+
+Le prompt engineering présente trois avantages. Il est rapide à mettre en place, peu
+coûteux à modifier et compatible avec des modèles propriétaires accessibles par API. Il
+est donc très utile en phase de prototypage. Cependant, il a aussi des limites fortes. Le
+contexte disponible dans le prompt reste limité ; les consignes peuvent entrer en
+concurrence ; et le modèle peut suivre certaines instructions tout en en négligeant
+d'autres. Lorsque le volume documentaire augmente ou lorsque les règles métier deviennent
+nombreuses, le prompt devient difficile à maintenir.
+
+Surtout, le prompt ne constitue pas une mémoire documentaire fiable. Il permet de
+fournir ponctuellement des informations, mais il ne garantit pas que le modèle réponde
+à partir d'une source précise. Dans une formation, cette limite est critique : l'assistant
+doit répondre à partir des contenus réellement enseignés, pas à partir d'une connaissance
+générale ou approximative. De même, un générateur de cours doit respecter un programme
+et ne pas produire une progression plausible mais non conforme.
+
+\subsection{Fine-tuning et spécialisation du modèle}
+
+Une autre approche consiste à adapter le modèle par fine-tuning. Au lieu de fournir toutes
+les règles dans le prompt, on entraîne le modèle sur des exemples représentatifs de la
+tâche attendue. Cette approche peut améliorer le style, le format de sortie ou la
+répétabilité d'un comportement. Elle est particulièrement utile lorsque l'on souhaite
+spécialiser un modèle sur un type de réponse ou un domaine récurrent.
+
+Le fine-tuning classique peut cependant être coûteux, car il nécessite de modifier un
+grand nombre de paramètres. Des méthodes plus légères, comme LoRA, cherchent à
+réduire ce coût en gelant les poids du modèle et en ajoutant des matrices de bas rang
+entraînables \cite{hu2021lora}. Ces approches rendent la spécialisation plus accessible,
+mais elles ne suppriment pas les contraintes fondamentales du fine-tuning : il faut
+constituer un jeu de données de qualité, entraîner ou adapter un modèle, évaluer le
+résultat et maintenir cette adaptation dans le temps.
+
+Dans le contexte d'un assistant pédagogique, le fine-tuning n'est pas toujours la meilleure
+réponse au problème de connaissance. Il permet d'apprendre un style ou une procédure,
+mais il est moins adapté pour intégrer des documents qui changent souvent. Si un cours,
+un référentiel ou un support est modifié, il n'est pas souhaitable de réentraîner le modèle
+à chaque mise à jour. En outre, le fine-tuning ne garantit pas que la réponse produite soit
+fidèle à un document précis. Un modèle fine-tuné peut continuer à halluciner ou à
+mélanger des informations apprises avec des informations plausibles.
+
+Pour une plateforme de formation, le fine-tuning est donc pertinent pour stabiliser un
+comportement, mais insuffisant comme mécanisme principal de contextualisation
+documentaire. Il peut apprendre au modèle à répondre comme un assistant pédagogique,
+mais il ne suffit pas à lui donner une mémoire fiable, actualisable et traçable des cours.
+
+\subsection{RAG : ancrer la génération dans des documents}
+
+Le Retrieval-Augmented Generation, ou RAG, répond à cette limite en séparant deux
+fonctions : la récupération d'information et la génération de réponse. Le principe est de
+ne pas modifier directement le modèle, mais de rechercher au moment de la question des
+passages pertinents dans une base documentaire, puis de fournir ces passages au modèle
+comme contexte. Le modèle génère alors une réponse à partir des documents récupérés.
+Cette approche a été formalisée dans les travaux de Lewis et al. sur les tâches de NLP
+intensives en connaissances \cite{lewis2020retrieval}.
+
+Le RAG présente plusieurs avantages pour un assistant pédagogique. D'abord, les contenus
+peuvent être mis à jour sans réentraîner le modèle. Il suffit de réindexer les documents.
+Ensuite, la réponse peut être rattachée à des passages sources, ce qui améliore la
+traçabilité. Enfin, le modèle est moins dépendant de sa mémoire paramétrique : il peut
+répondre à partir du cours réellement fourni, même si ce contenu est spécifique à une
+formation ou à une promotion.
+
+Cette architecture est particulièrement adaptée au contexte de ce mémoire. Les élèves ne
+doivent pas recevoir une réponse générique sur un métier ou une notion ; ils doivent
+recevoir une réponse cohérente avec le cours diffusé, le référentiel utilisé et les supports
+mis à disposition. Le RAG permet donc de transformer un modèle généraliste en assistant
+contextualisé.
+
+Cependant, le RAG ne supprime pas tous les risques. Il déplace une partie du problème
+vers la qualité de la récupération. Si les passages récupérés sont incomplets, trop larges,
+hors sujet ou mal classés, le modèle peut produire une réponse faible. De plus, même
+avec un bon contexte, le modèle peut reformuler de manière imprécise ou ajouter une
+information non supportée par les documents. Les travaux sur les hallucinations montrent
+que les modèles de langage peuvent générer des informations plausibles mais non fondées,
+ce qui impose des mécanismes d'évaluation et de contrôle \cite{ji2023hallucination}.
+
+\subsection{Techniques de recherche dans les architectures RAG}
+
+Un système RAG n'est pas une technique unique. Il regroupe plusieurs choix d'architecture
+qui influencent directement la qualité des réponses. Le premier choix concerne le
+découpage documentaire. Les documents sont rarement injectés entiers dans le modèle :
+ils sont découpés en segments, ou chunks, qui seront indexés puis récupérés. Des chunks
+trop petits peuvent perdre le contexte nécessaire à la compréhension ; des chunks trop
+grands peuvent diluer l'information pertinente. Le choix de la taille, du chevauchement
+et des métadonnées est donc déterminant.
+
+Le deuxième choix concerne la représentation des documents. Une recherche par mots-clés
+fonctionne bien lorsque la question reprend le vocabulaire exact du document, mais elle
+peut échouer lorsque l'élève reformule avec d'autres termes. La recherche vectorielle
+répond à cette limite en représentant les questions et les passages dans un espace
+sémantique. Elle permet de retrouver des passages proches par le sens, même si les mots
+ne sont pas identiques.
+
+La recherche vectorielle a elle aussi des limites. Elle peut retrouver des passages
+sémantiquement proches mais pas exactement pertinents, ou négliger des mots clés
+importants comme une référence, un code, une notion réglementaire ou un terme métier.
+C'est pourquoi de nombreuses architectures combinent recherche lexicale et recherche
+vectorielle. On parle alors de recherche hybride. Les travaux récents sur le RAG décrivent
+cette évolution d'un RAG naïf vers des architectures plus avancées ou modulaires
+\cite{gao2023retrieval}.
+
+Le troisième choix concerne le reclassement des résultats. Après une première recherche,
+un système peut reranker les passages candidats pour privilégier ceux qui correspondent
+le mieux à l'intention de la question. Ce reclassement peut s'appuyer sur des modèles de
+langage ou des systèmes spécialisés. Dans un contexte pédagogique, il est utile car les
+questions des élèves sont souvent courtes, imprécises ou formulées avec des termes non
+experts.
+
+Le quatrième choix concerne les métadonnées. Un même corpus peut contenir plusieurs
+formations, plusieurs jours, plusieurs modules ou plusieurs types de documents. Sans
+filtrage, l'assistant risque de récupérer un passage provenant d'un mauvais cours. Les
+métadonnées permettent de restreindre la recherche à un périmètre pertinent : formation,
+jour, module, type de support ou version du document.
+
+\subsection{Azure AI Search comme approche industrielle du RAG}
+
+Plusieurs solutions peuvent être utilisées pour construire un RAG : base vectorielle locale,
+index spécialisé, moteur de recherche hybride ou service cloud managé. Dans un prototype,
+une bibliothèque locale comme FAISS peut suffire pour tester la recherche vectorielle.
+Dans une plateforme destinée à être utilisée par de vrais élèves, d'autres critères
+deviennent importants : indexation automatique, recherche hybride, filtrage, supervision,
+sécurité, intégration avec le stockage documentaire et capacité à maintenir plusieurs
+corpus.
+
+Azure AI Search s'inscrit dans cette logique industrielle. La documentation Microsoft
+présente Azure AI Search comme un service d'indexation et de recherche pouvant être
+utilisé dans des architectures RAG avec des données textuelles et vectorielles
+\cite{microsoft2026foundryrag}. Le service permet de combiner recherche par mots-clés
+et recherche vectorielle dans une requête hybride ; les résultats sont fusionnés avant
+d'être exploités par l'application \cite{microsoft2026hybridsearch}. Il propose également
+un semantic ranker, qui reclasse les résultats textuels ou hybrides à partir de modèles de
+compréhension du langage \cite{microsoft2026semanticranker}.
+
+Dans le contexte d'un chatbot pédagogique, ces fonctionnalités répondent à plusieurs
+besoins. La recherche hybride permet de traiter à la fois les formulations approximatives
+des élèves et les termes précis présents dans les supports. Le semantic ranking permet
+d'améliorer la pertinence des passages présentés au modèle. Les index et métadonnées
+permettent de séparer les formations ou les plateformes. Enfin, l'intégration avec Azure
+OpenAI simplifie la construction d'une chaîne de question-réponse où les documents
+indexés sont fournis comme source au modèle.
+
+Cette approche a toutefois des limites. Un service managé réduit la complexité
+d'infrastructure, mais il ne dispense pas de concevoir correctement le corpus. La qualité
+du RAG dépend encore du découpage, des métadonnées, des documents indexés, de la
+formulation des requêtes et du prompt final. Le semantic ranker reclasse des résultats
+déjà récupérés ; il ne peut pas compenser entièrement une mauvaise indexation ou un
+corpus incomplet. Le choix d'Azure AI Search doit donc être compris comme un choix
+d'architecture robuste, pas comme une garantie automatique de qualité.
+
+\subsection{Évaluation des systèmes RAG}
+
+L'évaluation d'un RAG doit distinguer la qualité de la récupération et la qualité de la
+réponse. Une réponse peut être bien formulée mais fondée sur de mauvais passages ; à
+l'inverse, les bons passages peuvent être récupérés mais mal exploités par le modèle.
+Plusieurs cadres d'évaluation récents proposent donc de mesurer séparément la pertinence
+du contexte, la fidélité de la réponse aux sources et la pertinence de la réponse finale.
+C'est le cas de RAGAS \cite{es2023ragas} et d'ARES \cite{saadfalcon2023ares}.
+
+Dans un contexte pédagogique, les métriques utiles peuvent être regroupées en quatre
+familles. La première concerne la récupération : précision@k, rappel@k, rang moyen du
+bon passage, taux de questions pour lesquelles au moins une source pertinente est
+retrouvée. La deuxième concerne la fidélité : la réponse est-elle supportée par les passages
+fournis ? Ajoute-t-elle une information non présente dans les documents ? La troisième
+concerne l'utilité pédagogique : la réponse est-elle claire, adaptée au niveau de l'élève et
+suffisamment concise ? La quatrième concerne l'expérience réelle : les élèves reposent-ils
+la même question, utilisent-ils l'assistant et jugent-ils les réponses utiles ?
+
+La citation des sources est également un enjeu. Les travaux sur la vérifiabilité dans les
+moteurs génératifs montrent que les systèmes doivent citer de manière complète et
+précise les éléments qui soutiennent leurs réponses \cite{liu2023evaluating}. Pour une
+formation, cette exigence est moins formelle que dans une recherche documentaire
+académique, mais elle reste importante : un responsable pédagogique doit pouvoir
+vérifier d'où vient une réponse.
+
+Ces considérations conduisent à une conclusion claire : un RAG ne doit pas être évalué
+uniquement par impression subjective. Il faut construire un jeu de questions représentatif,
+identifier les passages attendus, comparer plusieurs configurations de recherche et
+mesurer la fidélité des réponses. Sans cette évaluation, il est impossible de justifier
+scientifiquement le choix d'une architecture RAG plutôt qu'une autre.
+
+\subsection{Génération de contenus longs par prompt unique}
+
+La deuxième dimension du mémoire concerne la génération automatique des contenus de
+formation. La première approche possible consiste à demander directement à un modèle
+de langage de produire un cours complet à partir d'un programme, d'un référentiel et de
+quelques consignes. Cette approche est séduisante parce qu'elle exploite la capacité des
+modèles à rédiger des textes cohérents et à suivre un format général.
+
+Dans un contexte simple, la génération directe peut donner des résultats acceptables. Elle
+est utile pour produire un premier brouillon, un résumé, un plan de cours ou une
+explication courte. Elle montre rapidement que l'IA peut réduire le temps de rédaction.
+Cependant, elle devient fragile lorsque la sortie attendue est longue, structurée,
+oralisable et destinée à être utilisée sans réécriture complète.
+
+Plusieurs problèmes apparaissent alors. Le modèle peut répéter des idées, perdre le fil de
+la progression, produire des transitions artificielles, dépasser la longueur attendue ou
+oublier certaines contraintes. Il peut aussi mélanger le langage interne du système avec
+le langage destiné à l'apprenant, par exemple en verbalisant des contraintes techniques
+qui ne devraient pas apparaître dans le cours. Enfin, si le résultat final est mauvais, il est
+difficile de savoir quelle partie du prompt ou de la génération est responsable.
+
+Ces limites ne signifient pas que le prompt engineering est inutile. Elles montrent plutôt
+que le prompt unique atteint rapidement ses limites lorsqu'il doit porter toutes les
+responsabilités : structure pédagogique, style oral, durée, conformité, exemples,
+supports, exercices et qualité. Un prompt trop chargé devient un artefact fragile, difficile
+à faire évoluer et difficile à évaluer.
+
+\subsection{Décomposition de tâches et génération structurée}
+
+Pour dépasser ces limites, de nombreux travaux sur les modèles de langage insistent sur
+la décomposition des tâches complexes. Le chain-of-thought a montré que faire produire
+des étapes intermédiaires peut améliorer certaines tâches de raisonnement
+\cite{wei2022chain}. Le least-to-most prompting va plus loin en demandant au modèle de
+décomposer un problème en sous-problèmes plus simples avant de les résoudre
+\cite{zhou2022least}. Les approches de type Tree of Thoughts proposent d'explorer
+plusieurs pistes intermédiaires avant de choisir une solution \cite{yao2023tree}.
+
+Ces travaux portent principalement sur le raisonnement, mais leur logique est applicable
+à la génération de contenus pédagogiques longs. Un cours complet est une tâche complexe
+qui peut être décomposée : analyser le programme, construire un plan, détailler les
+sections, rédiger les transitions, adapter le texte à l'oral, générer des supports, produire
+des questions, puis vérifier la conformité. La qualité peut alors être contrôlée à chaque
+étape plutôt qu'uniquement à la fin.
+
+La génération structurée repose sur la même idée. Au lieu de produire directement un
+texte final, le modèle produit d'abord une représentation intermédiaire : plan, JSON,
+liste d'objectifs, sections, contraintes de durée ou points clés. Cette représentation sert
+de contrat entre les étapes. Elle permet d'auditer la structure avant de rédiger, de répartir
+les budgets, de générer section par section et de rattacher les supports à des intentions
+pédagogiques explicites.
+
+Cette approche présente des avantages importants. Elle réduit la charge imposée au
+modèle à chaque appel, rend les erreurs plus localisables et facilite l'intégration logicielle.
+Elle introduit aussi une forme de traçabilité : on peut comparer le plan prévu, le texte
+généré et les corrections appliquées. En revanche, elle augmente la complexité de
+l'orchestration. Il faut gérer plusieurs appels au modèle, valider les formats, traiter les
+erreurs JSON, conserver les artefacts et maîtriser le coût.
+
+\subsection{Auto-évaluation, reviews automatiques et validation humaine}
+
+Une autre famille d'approches consiste à utiliser les modèles de langage non seulement
+pour générer, mais aussi pour critiquer ou améliorer leurs propres sorties. Des travaux
+comme Reflexion explorent l'idée d'agents capables d'utiliser un retour verbal pour
+améliorer leurs actions \cite{shinn2023reflexion}. Dans les applications de génération de
+contenu, cette idée se traduit souvent par des passes de review : un modèle relit le texte,
+identifie des problèmes, propose des corrections ou vérifie le respect de règles.
+
+Les reviews automatiques sont intéressantes pour une plateforme de formation, car elles
+permettent de contrôler plusieurs dimensions : cohérence avec le plan, ton pédagogique,
+adaptation à l'oral, conformité éthique, absence de formulations sensibles, respect de la
+durée ou qualité des QCM. Elles peuvent réduire la charge de validation humaine en
+signalant les passages problématiques.
+
+Elles ne doivent toutefois pas être considérées comme infaillibles. Un modèle peut ne pas
+détecter une erreur, proposer une correction qui dégrade le contenu ou valider une
+réponse insuffisamment sourcée. L'évaluation par LLM-as-a-judge peut être utile, mais
+elle possède des biais et doit être encadrée par des critères explicites \cite{zheng2023judging}.
+Dans un système rigoureux, les reviews automatiques doivent donc être combinées avec
+des règles déterministes, des métriques et, lorsque le risque le justifie, une validation
+humaine.
+
+La validation humaine garde une place importante dans les systèmes pédagogiques. Elle
+peut intervenir à plusieurs niveaux : validation du programme, relecture d'échantillons,
+contrôle des sorties à risque, analyse des retours élèves et amélioration des règles. Le
+but n'est pas nécessairement de relire chaque phrase produite, mais de déplacer
+l'intervention humaine vers les points où elle apporte le plus de valeur.
+
+\subsection{Évaluation des contenus pédagogiques générés}
+
+L'évaluation des contenus générés est plus difficile que l'évaluation d'une tâche fermée.
+Un cours n'a pas une seule bonne réponse. Il faut donc combiner plusieurs indicateurs.
+Le premier est la fidélité au programme : les compétences prévues sont-elles couvertes ?
+Les notions importantes sont-elles présentes ? Le cours évite-t-il les informations hors
+périmètre ?
+
+Le deuxième indicateur est la cohérence pédagogique. Un cours doit suivre une progression
+compréhensible, éviter les répétitions inutiles, introduire les notions avant de les utiliser
+et proposer des exemples adaptés. Cette dimension peut être évaluée par relecture humaine,
+par grille critériée ou par comparaison entre le plan et le texte généré.
+
+Le troisième indicateur est l'adaptation à l'oral. Un texte destiné à la synthèse vocale ne
+doit pas être écrit comme un support PDF. Il doit contenir des phrases prononçables, des
+transitions, un rythme d'écoute et des formulations naturelles. La durée est également
+un critère : si le texte dépasse le créneau audio prévu, la formation devient difficile à
+diffuser.
+
+Le quatrième indicateur concerne les supports associés. Les slides doivent correspondre
+aux moments pédagogiques importants, et les QCM doivent vérifier des notions réellement
+enseignées. Un QCM généré indépendamment du cours peut donner une illusion
+d'évaluation sans mesurer la compréhension du contenu diffusé.
+
+Enfin, il faut mesurer l'impact opérationnel. Une pipeline de génération n'a d'intérêt que
+si elle réduit effectivement le temps de production, les manipulations manuelles ou le
+coût, tout en maintenant une qualité acceptable. Les métriques doivent donc combiner
+qualité pédagogique et efficacité industrielle.
+
+\subsection{Synthèse critique}
+
+Les approches étudiées montrent que les modèles de langage ne suffisent pas, à eux
+seuls, à construire une plateforme de formation autonome. Le prompt engineering est
+utile pour orienter le comportement du modèle, mais il devient fragile lorsque les règles
+et les documents se multiplient. Le fine-tuning permet d'adapter un style ou une tâche,
+mais il n'est pas idéal pour injecter des connaissances documentaires souvent mises à
+jour. Le RAG apporte une solution plus adaptée pour l'assistant pédagogique, car il
+ancre les réponses dans les contenus de formation et permet une mise à jour des sources.
+
+De la même manière, la génération directe d'un cours par prompt unique est insuffisante
+pour produire des contenus longs, oralisables et contrôlables. Les approches de
+décomposition, de génération structurée et de review automatique offrent une meilleure
+base pour construire une pipeline fiable. Elles transforment la génération en processus,
+avec des étapes, des artefacts et des points de contrôle.
+
+Le point commun entre ces deux axes est la nécessité d'encadrer l'IA. Dans un assistant
+RAG, l'encadrement passe par la récupération, les sources et l'évaluation de la fidélité.
+Dans une pipeline de génération, il passe par le plan, les formats structurés, les reviews
+et les métriques. L'originalité de l'approche étudiée dans la suite du mémoire devra donc
+être évaluée à partir de cette double exigence : contextualiser les réponses du chatbot et
+structurer la génération des contenus.
+
+\subsection{Tableau récapitulatif des approches}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{|p{3cm}|p{3.4cm}|p{4.2cm}|p{3.4cm}|}
+\hline
+\textbf{Approche} & \textbf{Apport principal} & \textbf{Limites} & \textbf{Intérêt pour le projet} \\
+\hline
+Prompt engineering &
+Orientation rapide du modèle par consignes, rôles, exemples et contraintes. &
+Contexte limité, maintenance difficile, faible traçabilité, risque d'oubli de consignes. &
+Utile pour le style et les règles locales, insuffisant seul pour une plateforme autonome. \\
+\hline
+Fine-tuning &
+Adaptation du comportement ou du style du modèle sur des exemples. &
+Coût de constitution des données, maintenance lourde, pas idéal pour documents changeants. &
+Pertinent pour stabiliser un comportement, moins adapté à la connaissance pédagogique actualisable. \\
+\hline
+RAG simple &
+Recherche de passages pertinents puis génération ancrée dans les documents. &
+Dépend du chunking, de la qualité du corpus et de la pertinence de la récupération. &
+Base pertinente pour répondre aux élèves à partir des contenus de cours. \\
+\hline
+RAG avancé &
+Recherche hybride, reranking, métadonnées, citations et évaluation. &
+Architecture plus complexe, coûts supplémentaires, besoin de jeux de tests. &
+Approche la plus adaptée pour un assistant pédagogique traçable et maintenable. \\
+\hline
+Azure AI Search &
+Service managé combinant indexation, recherche vectorielle, recherche hybride et semantic ranker. &
+Ne compense pas un mauvais corpus ; dépend de la configuration, des filtres et de l'évaluation. &
+Choix cohérent pour industrialiser le RAG dans une plateforme utilisée par de vrais élèves. \\
+\hline
+Génération directe de cours &
+Production rapide de brouillons ou de contenus courts. &
+Dérive sur contenus longs, répétitions, contrôle faible de la durée et de la structure. &
+Approche utile au prototypage, mais insuffisante comme chaîne de production. \\
+\hline
+Génération structurée &
+Plan, sections, schémas et artefacts intermédiaires. &
+Orchestration plus complexe, validation JSON et coût d'appels multiples. &
+Approche adaptée à la production de cours longs, audios, slides et QCM. \\
+\hline
+Reviews automatiques &
+Contrôle du style, de la conformité, de l'adhérence au plan et de la qualité. &
+Risque de faux positifs ou faux négatifs ; nécessite métriques et supervision. &
+Permet de réduire la relecture humaine tout en rendant la qualité plus observable. \\
+\hline
+Human-in-the-loop &
+Validation humaine sur les points critiques. &
+Réintroduit du coût humain et limite l'autonomie complète. &
+Nécessaire pour superviser le système, surtout en production pédagogique. \\
+\hline
+\end{tabular}
+\caption{Synthèse des approches existantes et de leur intérêt pour une plateforme de formation autonome}
+\end{table}
+
+\subsection{Comparaisons et évaluations à réaliser}
+
+Pour rendre le mémoire scientifiquement rigoureux, plusieurs comparaisons doivent être
+réalisées ou, à défaut, présentées comme des évaluations à consolider. La première
+comparaison concerne le chatbot : prompt seul contre RAG. Il s'agit de construire un
+jeu de questions d'élèves, de définir les passages sources attendus, puis de comparer la
+fidélité, la pertinence et le taux d'hallucination des réponses.
+
+La deuxième comparaison concerne les variantes de RAG. Il serait pertinent de comparer
+une recherche vectorielle simple, une recherche hybride et une recherche hybride avec
+reclassement sémantique lorsque la configuration le permet. Les métriques attendues
+sont la précision@k, le rappel@k, le rang du premier passage pertinent et la fidélité de
+la réponse finale.
+
+La troisième comparaison concerne la génération de contenus. Une génération directe par
+prompt unique peut être comparée à une génération structurée par plan et sections. Les
+critères peuvent porter sur le respect du programme, la répétition, la longueur, la
+cohérence de la progression, la qualité orale et le nombre de corrections nécessaires.
+
+La quatrième comparaison concerne les reviews automatiques. Il faut mesurer ce qu'elles
+détectent réellement : nombre de problèmes signalés, taux de corrections acceptées,
+effets indésirables sur le texte et réduction de la charge de relecture humaine. Cette
+évaluation est importante pour éviter de présenter les reviews comme une garantie de
+qualité sans preuve.
+
+La cinquième comparaison concerne l'impact opérationnel. Il faut comparer le temps de
+production et le nombre d'interventions humaines avant et après automatisation. Même si
+les chiffres restent partiels, cette mesure est indispensable pour relier la solution à la
+problématique économique de l'entreprise.

@@ -27,13 +27,16 @@ jobs:
           source antenv/bin/activate
           pip install -r requirements.txt
 
+      - name: Package backend
+        run: |
+          cd backend
+          zip -r ../python-app.zip . -x "antenv/*" "__pycache__/*" "*.pyc"
+
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: |
-            ./backend
-            !./backend/antenv/
+          path: python-app.zip
 
   deploy:
     runs-on: ubuntu-latest
@@ -41,6 +44,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      APP_NAME: socrate-backend-p2
+      STARTUP_COMMAND: python -m gunicorn --worker-class gthread --workers 1 --threads 8 --bind 0.0.0.0:8000 --timeout 120 main_app:app
 
     steps:
       - name: Download artifact from build job
@@ -55,9 +61,33 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_61374C97DFF94D3195E6CDF1A4AB7FB1 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_CB20F65568DF4FA88BD5D532C46B5121 }}
 
+      - name: Configure Azure App Service production
+        shell: bash
+        run: |
+          RESOURCE_GROUP="$(az webapp list --query "[?name=='${APP_NAME}'].resourceGroup | [0]" -o tsv)"
+          if [ -z "${RESOURCE_GROUP}" ] || [ "${RESOURCE_GROUP}" = "null" ]; then
+            echo "Unable to resolve resource group for ${APP_NAME}" >&2
+            exit 1
+          fi
+
+          az webapp config appsettings set \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              ENABLE_ORYX_BUILD=true \
+              PORT=8000 \
+              WEBSITES_PORT=8000 \
+              FORMATION_CONTENT_DAY_WORKERS=52 \
+              PLATFORM_2_FRONTEND_URL=https://brave-mud-064e06d03.2.azurestaticapps.net
+
+          az webapp config set \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --startup-file "${STARTUP_COMMAND}"
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'socrate-backend-p2'
-          slot-name: 'Production'
-          package: .
+          package: python-app.zip

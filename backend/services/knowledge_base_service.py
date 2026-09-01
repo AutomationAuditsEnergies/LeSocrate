@@ -6,8 +6,8 @@ base de connaissances pédagogique dense (~120-150k mots exploitables) avant
 la génération du programme de formation.
 
 Flux :
-  1. Extraction des compétences structurées depuis le REAC brut (Claude)
-  2. Enrichissement de chaque compétence (Claude, 1 appel par compétence) :
+  1. Extraction des compétences structurées depuis le REAC brut (DeepSeek)
+  2. Enrichissement de chaque compétence (DeepSeek, 1 appel par compétence) :
      définition pédagogique, études de cas, pièges, vocabulaire métier,
      contexte terrain, liens connexes
   3. Stockage checkpointé en DB (table formation_knowledge_base)
@@ -22,27 +22,32 @@ Le flag `dirty` permet la régénération sélective si l'utilisateur édite.
 import os
 import re
 import json
-import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
-from database.db import get_db_connection
-from utils.anthropic_client import (
-    AnthropicAPIError,
-    AnthropicRateLimitError,
+from repositories.pipeline_repository import (
+    clear_knowledge_base,
+    knowledge_base_stats_rows,
+    list_knowledge_base_rows,
+    mark_knowledge_base_entry_error,
+    save_enriched_knowledge_base_entry,
+    upsert_pending_knowledge_base_entries,
+)
+from utils.deepseek_client import (
     default_model,
-    post_message as _anthropic_post,
+    is_deterministic_deepseek_error,
+    post_message as _post_deepseek_message,
 )
 from utils.logger import get_logger
+from services.pipeline_queue.contracts import LeaseLostError
 
 logger = get_logger(__name__)
 
-CLAUDE_MODEL = default_model()
+DEEPSEEK_MODEL = default_model()
 
-# Concurrence enrichissement : 1 par défaut pour rester sous la limite
-# output-tokens/min d'Anthropic (ex. Haiku : 10 000 tokens/min — un seul appel
-# à max_tokens=8000 réserve 80 % du bucket, donc la parallélisation naïve
-# déclenche des 429 en cascade). Configurable via env pour les tiers plus hauts.
+# Concurrence enrichissement : 1 par défaut pour éviter les 429 en cascade.
+# Configurable via env pour les quotas DeepSeek plus élevés.
 KB_ENRICH_CONCURRENCY = int(os.environ.get("KB_ENRICH_CONCURRENCY", "1"))
 
 # Lock pour les écritures DB concurrentes (évite "database is locked" SQLite)
@@ -54,11 +59,10 @@ _DB_WRITE_LOCK = threading.Lock()
 # éthiques, de contenu, et anti-hallucination que les 3 passes TTS. Ces règles
 # sont éditables par l'utilisateur via /schedule-config → POST /api/hr/tts-prompt,
 # on les charge donc dynamiquement depuis le fichier source (pas de duplication).
-# Le fichier scratch contient les règles de la pipeline formation active
-# (identique à direct.md sauf pour les consignes de passe — cf. README scratch.md).
+# Le fichier de prompts généraux contient les règles de la pipeline formation active.
 
 _TTS_PROMPT_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+    os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
 )
 
 _EDITORIAL_RULES_CACHE = None
@@ -68,7 +72,7 @@ _EDITORIAL_RULES_MTIME = 0.0
 def _load_editorial_rules() -> str:
     """
     Extrait la section 'CONTENU — RÈGLES ABSOLUES' + 'HALLUCINATION' du
-    fichier prompt-generation-tts-direct.md (règles #1 à #20).
+    fichier de prompts généraux de contenu formation (règles #1 à #20).
     Cache invalidé si le fichier est modifié (mtime).
     """
     global _EDITORIAL_RULES_CACHE, _EDITORIAL_RULES_MTIME
@@ -98,7 +102,7 @@ def _load_editorial_rules() -> str:
         logger.warning(f"⚠️ Impossible de charger les règles éditoriales : {e}")
         return ""
 
-# ─── Prompts Claude ───────────────────────────────────────────────────────────
+# ─── Prompts DeepSeek ─────────────────────────────────────────────────────────
 
 _EXTRACT_COMPETENCES_PROMPT = """Tu es un expert en ingénierie pédagogique spécialisé dans l'analyse des référentiels de titres professionnels (REAC, France Compétences).
 
@@ -165,7 +169,7 @@ Ta mission : produire une base de connaissances pédagogique dense et exploitabl
 ═══════════════════════════════════════════════════
 RÈGLES ÉDITORIALES NON NÉGOCIABLES
 ═══════════════════════════════════════════════════
-Le contenu que tu produis (études de cas, pièges, vocabulaire, contexte
+Le contenu que tu produis (illustrations professionnelles commentées, pièges, vocabulaire, contexte
 terrain, définition) sera injecté comme source primaire dans la génération
 du cours audio final. TOUTES les règles éditoriales qui s'appliquent au
 cours audio s'appliquent donc AUSSI à ta sortie JSON, sans exception :
@@ -173,10 +177,14 @@ cours audio s'appliquent donc AUSSI à ta sortie JSON, sans exception :
 {EDITORIAL_RULES}
 
 Points d'attention spécifiques à l'enrichissement :
-- Les **études de cas** sont souvent des cas fictifs — tu dois les annoncer
-  comme tels dans la clé `situation` (ex: "Cas fictif pédagogique : une
-  entreprise du secteur X...") et JAMAIS inventer un nom d'entreprise ou
-  des chiffres précis non vérifiables.
+- La clé technique `etudes_de_cas` contient uniquement des **illustrations
+  professionnelles racontées et commentées par le formateur**. Elles ne sont
+  jamais des exercices, ateliers, mises en situation ou consignes destinées
+  aux apprenants.
+- Ces illustrations sont souvent fictives — tu dois les annoncer comme telles
+  dans la clé `situation` (ex: "Exemple fictif commenté : une entreprise du
+  secteur X...") et JAMAIS inventer un nom d'entreprise ou des chiffres précis
+  non vérifiables.
 - Le **vocabulaire métier** doit rester factuel et professionnel, sans
   références spirituelles, religieuses, ésotériques, ni promotion
   implicite de secteurs proscrits.
@@ -194,10 +202,10 @@ Réponds **uniquement avec un JSON valide** au format suivant, sans préambule :
   "definition_pedagogique": "Explication claire et structurée de la compétence en ~250 mots. Va au-delà du REAC : explique POURQUOI cette compétence existe, dans QUELS contextes elle s'applique, ce qu'elle permet d'accomplir concrètement. Un apprenant doit comprendre l'enjeu.",
   "etudes_de_cas": [
     {
-      "titre": "Titre court de l'étude de cas",
-      "situation": "Décor concret : lieu, acteurs, contexte (80 mots)",
+      "titre": "Titre court de l'illustration professionnelle commentée",
+      "situation": "Exemple fictif raconté par le formateur : décor, acteurs et contexte (80 mots)",
       "enjeu": "Qu'est-ce qui se joue dans cette situation ? (40 mots)",
-      "resolution_attendue": "Comment un professionnel compétent s'y prend (120 mots)",
+      "resolution_attendue": "Explication par le formateur de la conduite professionnelle adaptée (120 mots)",
       "variantes": "Variantes courantes du cas (50 mots)"
     }
   ],
@@ -218,7 +226,7 @@ Réponds **uniquement avec un JSON valide** au format suivant, sans préambule :
 ```
 
 Contraintes de densité :
-- `etudes_de_cas` : **4 à 6 études** concrètes, ancrées dans la réalité du métier
+- `etudes_de_cas` : **4 à 6 illustrations commentées** ancrées dans la réalité du métier, sans aucune activité à réaliser
 - `pieges_frequents` : **4 à 6 pièges** réalistes
 - `vocabulaire_metier` : **8 à 15 termes** clés
 - `contexte_terrain` : 200 mots minimum, immersif
@@ -228,19 +236,27 @@ Contraintes de densité :
 """
 
 
-# ─── Helper Claude ────────────────────────────────────────────────────────────
+# ─── Helper DeepSeek ──────────────────────────────────────────────────────────
 
-def _claude_post(messages, max_tokens=8000, model=None):
-    """Wrapper local qui injecte le modèle par défaut du service."""
-    return _anthropic_post(messages, max_tokens=max_tokens, model=model or CLAUDE_MODEL)
+def _deepseek_post(messages, max_tokens=8000, model=None):
+    """Un seul appel HTTP ; la file durable possède la politique de retry."""
+    return _post_deepseek_message(
+        messages,
+        max_tokens=max_tokens,
+        model=model or DEEPSEEK_MODEL,
+        http_max_attempts=1,
+    )
 
 
 def _parse_json_response(text: str) -> dict:
     """
-    Extrait un JSON depuis une réponse Claude (supporte ```json ... ``` ou JSON brut).
-    Tolère les réponses tronquées (max_tokens atteint) en réparant le JSON :
-    on coupe au dernier champ complet et on ferme les structures ouvertes.
+    Extrait un JSON depuis une réponse DeepSeek (```json ... ``` ou JSON brut).
+    Répare les erreurs de syntaxe courantes des LLM et, en dernier recours,
+    une réponse tronquée au dernier champ complet.
     """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Réponse JSON vide ou non textuelle")
+
     text = text.strip()
     if "```json" in text:
         start = text.find("```json") + len("```json")
@@ -255,18 +271,105 @@ def _parse_json_response(text: str) -> dict:
         if text.startswith("json"):
             text = text[4:].strip()
 
+    # Certains fournisseurs ajoutent un court préambule malgré la consigne.
+    # On isole alors l'objet JSON au lieu de confier tout le texte au parser.
+    first_object = text.find("{")
+    if first_object > 0:
+        text = text[first_object:]
+
     try:
-        return json.loads(text)
+        result = json.loads(text)
     except json.JSONDecodeError as first_err:
-        logger.warning(f"⚠️ JSON malformé ({first_err}), tentative de réparation (troncature probable)")
-        repaired = _repair_truncated_json(text)
+        logger.warning("⚠️ JSON malformé (%s), tentative de réparation tolérante", first_err)
+
+        # json-repair couvre les erreurs de syntaxe courantes des LLM : clé ou
+        # guillemet manquant, virgule finale, échappement invalide, mais aussi
+        # une réponse coupée. L'ancien réparateur ne traitait que la troncature
+        # et laissait précisément passer l'erreur « property name ... quotes ».
         try:
-            result = json.loads(repaired)
-            logger.info(f"✅ JSON réparé avec succès ({len(text)} → {len(repaired)} chars)")
-            return result
-        except json.JSONDecodeError as second_err:
-            logger.error(f"❌ Réparation JSON échouée : {second_err}")
-            raise first_err  # on remonte l'erreur originale
+            from json_repair import repair_json
+
+            repaired = repair_json(text)
+            result = repaired if isinstance(repaired, dict) else json.loads(repaired)
+            logger.info("✅ JSON réparé avec succès (%s caractères)", len(text))
+        except Exception as repair_err:
+            # Fallback conservateur pour une troncature franche : ne garder que
+            # les champs entièrement reçus, puis fermer les structures.
+            truncated = _repair_truncated_json(text)
+            try:
+                result = json.loads(truncated)
+                logger.info(
+                    "✅ JSON tronqué réparé avec succès (%s → %s caractères)",
+                    len(text),
+                    len(truncated),
+                )
+            except (TypeError, ValueError, json.JSONDecodeError) as truncated_err:
+                logger.error(
+                    "❌ Réparation JSON échouée : json-repair=%s ; troncature=%s",
+                    repair_err,
+                    truncated_err,
+                )
+                raise ValueError(f"Réponse JSON invalide : {first_err}") from first_err
+
+    if not isinstance(result, dict):
+        raise ValueError(
+            f"Réponse JSON invalide : objet attendu, {type(result).__name__} reçu"
+        )
+    return result
+
+
+def _require_string(value, path: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Réponse KB invalide : {path} doit être un texte non vide")
+
+
+def _validate_extracted_competences(data: dict) -> list[dict]:
+    """Refuse une extraction réparée mais structurellement incomplète."""
+    competences = data.get("competences")
+    if not isinstance(competences, list) or not competences:
+        raise ValueError("Réponse DeepSeek sans compétences")
+    for index, competence in enumerate(competences):
+        if not isinstance(competence, dict):
+            raise ValueError(f"Réponse KB invalide : competences[{index}] doit être un objet")
+        for field in ("bloc", "competence_title", "competence_key", "raw_source"):
+            _require_string(competence.get(field), f"competences[{index}].{field}")
+    return competences
+
+
+def _validate_enriched_competence(data: dict) -> dict:
+    """Valide le contrat consommé par le stockage et le programme global."""
+    _require_string(data.get("definition_pedagogique"), "definition_pedagogique")
+    _require_string(data.get("contexte_terrain"), "contexte_terrain")
+
+    cases = data.get("etudes_de_cas")
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("Réponse KB invalide : etudes_de_cas doit être une liste non vide")
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            raise ValueError(f"Réponse KB invalide : etudes_de_cas[{index}] doit être un objet")
+        for field in ("titre", "situation", "enjeu", "resolution_attendue"):
+            _require_string(case.get(field), f"etudes_de_cas[{index}].{field}")
+
+    traps = data.get("pieges_frequents")
+    if not isinstance(traps, list) or not traps:
+        raise ValueError("Réponse KB invalide : pieges_frequents doit être une liste non vide")
+    for index, trap in enumerate(traps):
+        if not isinstance(trap, dict):
+            raise ValueError(f"Réponse KB invalide : pieges_frequents[{index}] doit être un objet")
+        for field in ("piege", "pourquoi_frequent", "comment_eviter"):
+            _require_string(trap.get(field), f"pieges_frequents[{index}].{field}")
+
+    vocabulary = data.get("vocabulaire_metier")
+    if not isinstance(vocabulary, dict) or not vocabulary:
+        raise ValueError("Réponse KB invalide : vocabulaire_metier doit être un objet non vide")
+    for term, definition in vocabulary.items():
+        _require_string(term, "vocabulaire_metier.<terme>")
+        _require_string(definition, f"vocabulaire_metier.{term}")
+
+    links = data.get("liens_connexes")
+    if not isinstance(links, list) or any(not isinstance(link, str) for link in links):
+        raise ValueError("Réponse KB invalide : liens_connexes doit être une liste de textes")
+    return data
 
 
 def _repair_truncated_json(text: str) -> str:
@@ -276,7 +379,7 @@ def _repair_truncated_json(text: str) -> str:
     2. Coupant à cette position
     3. Fermant les structures ({, [) encore ouvertes
 
-    Principe : si Claude a coupé au milieu d'un champ, on garde tous les
+    Principe : si DeepSeek a coupé au milieu d'un champ, on garde tous les
     champs précédents complets et on ferme proprement les crochets/accolades.
     """
     stack = []          # pile des caractères fermants attendus (']' ou '}')
@@ -346,111 +449,56 @@ def _repair_truncated_json(text: str) -> str:
 
 def clear_kb(job_id: int) -> None:
     """Supprime toutes les entrées KB d'un job (pour relance complète)."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM formation_knowledge_base WHERE job_id = ?", (job_id,))
-    conn.commit()
-    conn.close()
+    clear_knowledge_base(job_id)
 
 
 def insert_pending_competences(job_id: int, competences: list) -> None:
     """Insère les compétences extraites en status='pending'."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    for idx, c in enumerate(competences):
-        cursor.execute(
-            """INSERT OR REPLACE INTO formation_knowledge_base
-               (job_id, competence_index, competence_key, competence_title, bloc, raw_source, status, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)""",
-            (job_id, idx, c["competence_key"], c["competence_title"], c.get("bloc", ""), c.get("raw_source", "")),
-        )
-    conn.commit()
-    conn.close()
+    upsert_pending_knowledge_base_entries(job_id, competences)
 
 
 def save_enriched_competence(job_id: int, competence_index: int, enriched: dict, word_count: int) -> None:
     """Enregistre le contenu enrichi d'une compétence. Protégé par lock pour workers parallèles."""
     with _DB_WRITE_LOCK:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """UPDATE formation_knowledge_base
-               SET definition_pedagogique = ?,
-                   etudes_de_cas = ?,
-                   pieges_frequents = ?,
-                   vocabulaire_metier = ?,
-                   contexte_terrain = ?,
-                   liens_connexes = ?,
-                   total_words = ?,
-                   status = 'completed',
-                   dirty = 0,
-                   error_message = NULL,
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE job_id = ? AND competence_index = ?""",
-            (
-                enriched.get("definition_pedagogique", ""),
-                json.dumps(enriched.get("etudes_de_cas", []), ensure_ascii=False),
-                json.dumps(enriched.get("pieges_frequents", []), ensure_ascii=False),
-                json.dumps(enriched.get("vocabulaire_metier", {}), ensure_ascii=False),
-                enriched.get("contexte_terrain", ""),
-                json.dumps(enriched.get("liens_connexes", []), ensure_ascii=False),
-                word_count,
-                job_id,
-                competence_index,
-            ),
+        save_enriched_knowledge_base_entry(
+            job_id=job_id,
+            competence_index=competence_index,
+            definition_pedagogique=enriched.get("definition_pedagogique", ""),
+            etudes_de_cas_json=json.dumps(enriched.get("etudes_de_cas", []), ensure_ascii=False),
+            pieges_frequents_json=json.dumps(enriched.get("pieges_frequents", []), ensure_ascii=False),
+            vocabulaire_metier_json=json.dumps(enriched.get("vocabulaire_metier", {}), ensure_ascii=False),
+            contexte_terrain=enriched.get("contexte_terrain", ""),
+            liens_connexes_json=json.dumps(enriched.get("liens_connexes", []), ensure_ascii=False),
+            word_count=word_count,
         )
-        conn.commit()
-        conn.close()
 
 
 def mark_competence_error(job_id: int, competence_index: int, error_msg: str) -> None:
     """Marque une compétence en erreur. Protégé par lock pour workers parallèles."""
     with _DB_WRITE_LOCK:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """UPDATE formation_knowledge_base
-               SET status = 'error', error_message = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE job_id = ? AND competence_index = ?""",
-            (error_msg, job_id, competence_index),
-        )
-        conn.commit()
-        conn.close()
+        mark_knowledge_base_entry_error(job_id, competence_index, error_msg)
 
 
 def list_kb(job_id: int) -> list:
     """Liste toutes les entrées KB d'un job (pour UI + consommation)."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """SELECT id, competence_index, competence_key, competence_title, bloc,
-                  definition_pedagogique, etudes_de_cas, pieges_frequents,
-                  vocabulaire_metier, contexte_terrain, liens_connexes,
-                  status, total_words, error_message, raw_source
-           FROM formation_knowledge_base
-           WHERE job_id = ?
-           ORDER BY competence_index""",
-        (job_id,),
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_knowledge_base_rows(job_id)
     return [
         {
-            "id": r[0],
-            "competence_index": r[1],
-            "competence_key": r[2],
-            "competence_title": r[3],
-            "bloc": r[4],
-            "definition_pedagogique": r[5],
-            "etudes_de_cas": json.loads(r[6]) if r[6] else [],
-            "pieges_frequents": json.loads(r[7]) if r[7] else [],
-            "vocabulaire_metier": json.loads(r[8]) if r[8] else {},
-            "contexte_terrain": r[9],
-            "liens_connexes": json.loads(r[10]) if r[10] else [],
-            "status": r[11],
-            "total_words": r[12] or 0,
-            "error_message": r[13],
-            "raw_source": r[14] or "",
+            "id": r.get("id"),
+            "competence_index": r.get("competence_index"),
+            "competence_key": r.get("competence_key"),
+            "competence_title": r.get("competence_title"),
+            "bloc": r.get("bloc"),
+            "definition_pedagogique": r.get("definition_pedagogique"),
+            "etudes_de_cas": json.loads(r.get("etudes_de_cas")) if r.get("etudes_de_cas") else [],
+            "pieges_frequents": json.loads(r.get("pieges_frequents")) if r.get("pieges_frequents") else [],
+            "vocabulaire_metier": json.loads(r.get("vocabulaire_metier")) if r.get("vocabulaire_metier") else {},
+            "contexte_terrain": r.get("contexte_terrain"),
+            "liens_connexes": json.loads(r.get("liens_connexes")) if r.get("liens_connexes") else [],
+            "status": r.get("status"),
+            "total_words": r.get("total_words") or 0,
+            "error_message": r.get("error_message"),
+            "raw_source": r.get("raw_source") or "",
         }
         for r in rows
     ]
@@ -458,19 +506,12 @@ def list_kb(job_id: int) -> list:
 
 def kb_stats(job_id: int) -> dict:
     """Statistiques agrégées : nb total, nb completed, nb error, total mots."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """SELECT status, COUNT(*), COALESCE(SUM(total_words), 0)
-           FROM formation_knowledge_base
-           WHERE job_id = ?
-           GROUP BY status""",
-        (job_id,),
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = knowledge_base_stats_rows(job_id)
     stats = {"total": 0, "pending": 0, "processing": 0, "completed": 0, "error": 0, "total_words": 0}
-    for status, count, words in rows:
+    for row in rows:
+        status = row.get("status")
+        count = row.get("count") or 0
+        words = row.get("words") or 0
         stats[status] = count
         stats["total"] += count
         stats["total_words"] += words or 0
@@ -479,8 +520,14 @@ def kb_stats(job_id: int) -> dict:
 
 # ─── Extraction compétences ───────────────────────────────────────────────────
 
-def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str = None) -> list:
-    """Appelle Claude pour extraire la liste structurée des compétences du REAC."""
+def extract_competences(
+    reac_text: str,
+    tp_name: str,
+    rncp_code: str,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> list:
+    """Appelle DeepSeek pour extraire les compétences structurées du REAC."""
     prompt = (
         _EXTRACT_COMPETENCES_PROMPT
         .replace("{TP_NAME}", tp_name)
@@ -488,37 +535,31 @@ def extract_competences(reac_text: str, tp_name: str, rncp_code: str, model: str
         .replace("{EDITORIAL_RULES}", _load_editorial_rules())
         .replace("{REAC_TEXT}", reac_text[:80000])
     )
-    for attempt in range(5):
-        try:
-            response = _claude_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=8000,
-                model=model,
-            )
-            data = _parse_json_response(response)
-            competences = data.get("competences", [])
-            if not competences:
-                raise ValueError("Réponse Claude sans compétences")
-            logger.info(f"✅ {len(competences)} compétences extraites du REAC")
-            return competences
-        except AnthropicRateLimitError as e:
-            if attempt < 4:
-                logger.warning(f"⏳ Retry {attempt+1}/5 extraction (429, sleep {e.wait_seconds:.0f}s)")
-                time.sleep(e.wait_seconds)
-            else:
-                raise
-        except Exception as e:
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 extraction compétences : {e}")
-                time.sleep(10)
-            else:
-                raise
+    if checkpoint:
+        checkpoint()
+    response = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=8000,
+        model=model,
+    )
+    data = _parse_json_response(response)
+    competences = _validate_extracted_competences(data)
+    if checkpoint:
+        checkpoint()
+    logger.info(f"✅ {len(competences)} compétences extraites du REAC")
+    return competences
 
 
 # ─── Enrichissement d'une compétence ──────────────────────────────────────────
 
-def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str = None) -> dict:
-    """Appelle Claude pour enrichir une compétence avec KB dense."""
+def enrich_competence(
+    competence: dict,
+    tp_name: str,
+    rncp_code: str,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> dict:
+    """Appelle DeepSeek pour enrichir une compétence avec une KB dense."""
     prompt = (
         _ENRICH_COMPETENCE_PROMPT
         .replace("{TP_NAME}", tp_name)
@@ -528,44 +569,17 @@ def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str
         .replace("{EDITORIAL_RULES}", _load_editorial_rules())
         .replace("{RAW_SOURCE}", competence.get("raw_source", ""))
     )
-    for attempt in range(5):
-        try:
-            response = _claude_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=12000,  # augmenté de 8000 : JSON enrichi peut dépasser
-                model=model,
-            )
-            return _parse_json_response(response)
-        except AnthropicRateLimitError as e:
-            if attempt < 4:
-                logger.warning(
-                    f"⏳ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' "
-                    f"(429, sleep {e.wait_seconds:.0f}s)"
-                )
-                time.sleep(e.wait_seconds)
-            else:
-                raise
-        except AnthropicAPIError as e:
-            # Fail-fast sur les erreurs déterministes (400, 401, 403, 404, 422) :
-            # retry n'aidera pas (credit balance vide, mauvaise clé, modèle
-            # invalide…). Propager le message lisible plutôt que de spammer.
-            if e.is_deterministic:
-                logger.error(
-                    f"⛔ Enrichissement '{competence['competence_title']}' — "
-                    f"erreur déterministe {e.status_code} ({e.error_type}), no retry : {e.message}"
-                )
-                raise
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' : {e}")
-                time.sleep(10)
-            else:
-                raise
-        except Exception as e:
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' : {e}")
-                time.sleep(10)
-            else:
-                raise
+    if checkpoint:
+        checkpoint()
+    response = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=12000,
+        model=model,
+    )
+    result = _validate_enriched_competence(_parse_json_response(response))
+    if checkpoint:
+        checkpoint()
+    return result
 
 
 def _count_words_in_enriched(enriched: dict) -> int:
@@ -586,29 +600,35 @@ def _count_words_in_enriched(enriched: dict) -> int:
 
 # ─── Orchestration ────────────────────────────────────────────────────────────
 
-def _build_kb_thread(job_id: int, model: str = None):
+def build_knowledge_base(
+    job_id: int,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> None:
     """
-    Thread : construit la KB pour un job. **Résumable** — si des compétences
-    sont déjà en DB (completed), on les garde et on n'enrichit que les
-    pending/error. Permet de reprendre après crash / redémarrage backend /
-    re-clic sur "Relancer" sans tout perdre.
+    Construit la KB dans le work-item durable courant.
+
+    Les compétences déjà terminées restent en DB et seules les entrées
+    pending/error sont rejouées après une interruption. ``checkpoint`` relie
+    les appels coûteux au lease du worker et empêche un ancien worker de
+    poursuivre ses écritures après avoir perdu la propriété du work-item.
     """
     # Import local pour éviter un import circulaire
     from services.formation_pipeline_service import get_job, update_job
 
     try:
+        if checkpoint:
+            checkpoint()
         job = get_job(job_id)
         if not job:
-            logger.error(f"❌ Job {job_id} introuvable")
-            return
+            raise RuntimeError(f"Job {job_id} introuvable")
 
         reac_text = job.get("reac_text") or ""
         if not reac_text.strip():
-            update_job(job_id, status="error", error_message="REAC vide — télécharger d'abord le REAC")
-            return
+            raise RuntimeError("REAC vide — télécharger d'abord le REAC")
 
         update_job(job_id, status="kb_building")
-        logger.info(f"🔄 Job {job_id} : construction knowledge base (modèle: {model or CLAUDE_MODEL})...")
+        logger.info(f"🔄 Job {job_id} : construction knowledge base (modèle: {model or DEEPSEEK_MODEL})...")
 
         # ── Étape 1 : déterminer la liste des compétences à enrichir ──
         # Si des entrées existent déjà en DB (reprise après crash), on les
@@ -617,7 +637,7 @@ def _build_kb_thread(job_id: int, model: str = None):
         existing = list_kb(job_id)
         completed_count = sum(1 for e in existing if e["status"] == "completed")
 
-        if existing and completed_count > 0:
+        if existing:
             logger.info(
                 f"🔁 Reprise Job {job_id} : {completed_count}/{len(existing)} compétences déjà enrichies, "
                 f"on ne retraite que les pending/error"
@@ -641,7 +661,10 @@ def _build_kb_thread(job_id: int, model: str = None):
                 tp_name=job["tp_name"],
                 rncp_code=job.get("rncp_code") or "",
                 model=model,
+                checkpoint=checkpoint,
             )
+            if checkpoint:
+                checkpoint()
             clear_kb(job_id)
             insert_pending_competences(job_id, extracted)
             competences = [
@@ -651,12 +674,10 @@ def _build_kb_thread(job_id: int, model: str = None):
 
         # ── Étape 2 : enrichissement parallèle (pool de workers) ──
         # KB_ENRICH_CONCURRENCY workers simultanés pour accélérer × 3.
-        # Chaque worker gère sa propre requête Claude + écriture DB (lock).
+        # Chaque worker gère sa propre requête DeepSeek + écriture DB (lock).
         total_words_kb = sum(e["total_words"] for e in existing if e["status"] == "completed")
         to_enrich = [c for c in competences if c["_status_in_db"] != "completed"]
         skipped = len(competences) - len(to_enrich)
-        errors = 0
-
         def _enrich_one(c):
             """Enrichit une compétence unique (exécuté dans un worker)."""
             idx = c["competence_index"]
@@ -668,35 +689,71 @@ def _build_kb_thread(job_id: int, model: str = None):
                     tp_name=job["tp_name"],
                     rncp_code=job.get("rncp_code") or "",
                     model=model,
+                    checkpoint=checkpoint,
                 )
                 word_count = _count_words_in_enriched(enriched)
+                if checkpoint:
+                    checkpoint()
                 save_enriched_competence(job_id, idx, enriched, word_count)
                 logger.info(f"✅ '{title}' enrichi ({word_count} mots)")
                 return ("ok", word_count)
+            except LeaseLostError:
+                raise
             except Exception as e:
+                if is_deterministic_deepseek_error(e):
+                    raise
                 logger.error(f"❌ Enrichissement '{title}' : {e}")
                 mark_competence_error(job_id, idx, str(e))
                 return ("error", 0)
 
         if to_enrich:
+            active_workers = max(1, min(KB_ENRICH_CONCURRENCY, len(to_enrich)))
             logger.info(
                 f"🚀 Job {job_id} : enrichissement en parallèle "
-                f"({len(to_enrich)} à traiter, {KB_ENRICH_CONCURRENCY} workers, "
+                f"({len(to_enrich)} à traiter, {active_workers} workers, "
                 f"{skipped} réutilisées)"
             )
-            with ThreadPoolExecutor(max_workers=KB_ENRICH_CONCURRENCY) as executor:
-                futures = {executor.submit(_enrich_one, c): c for c in to_enrich}
-                for fut in as_completed(futures):
-                    status, words = fut.result()
-                    if status == "ok":
-                        total_words_kb += words
-                    else:
-                        errors += 1
+            # Ne soumettre qu'un lot borné à la fois : si le lease est perdu,
+            # aucune nouvelle compétence coûteuse n'est démarrée.
+            for offset in range(0, len(to_enrich), active_workers):
+                if checkpoint:
+                    checkpoint()
+                batch = to_enrich[offset: offset + active_workers]
+                with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                    futures = {executor.submit(_enrich_one, c): c for c in batch}
+                    for fut in as_completed(futures):
+                        status, words = fut.result()
+                        if status == "ok":
+                            total_words_kb += words
+                if checkpoint:
+                    checkpoint()
 
-        completed_final = len(competences) - errors
-        if completed_final == 0:
-            raise Exception(f"Toutes les compétences ({errors}) ont échoué à l'enrichissement")
+        # La DB est la source de vérité. Une seule compétence en erreur doit
+        # faire échouer cette tentative durable : le worker la rejouera avec
+        # backoff, tandis que les compétences déjà complétées resteront intactes.
+        final_stats = kb_stats(job_id)
+        completed_final = int(final_stats.get("completed") or 0)
+        total_final = int(final_stats.get("total") or 0)
+        failed_final = int(final_stats.get("error") or 0)
+        pending_final = (
+            int(final_stats.get("pending") or 0)
+            + int(final_stats.get("processing") or 0)
+        )
+        if (
+            total_final <= 0
+            or completed_final != total_final
+            or failed_final > 0
+            or pending_final > 0
+        ):
+            raise RuntimeError(
+                "Knowledge Base incomplète : "
+                f"{completed_final}/{total_final} compétences terminées, "
+                f"{failed_final} en erreur, {pending_final} en attente. "
+                "La file durable relancera uniquement les compétences non terminées."
+            )
 
+        if checkpoint:
+            checkpoint()
         update_job(job_id, status="kb_ready", kb_generated_via="api")
         logger.info(
             f"✅ Job {job_id} : KB prête — {completed_final}/{len(competences)} compétences "
@@ -705,18 +762,13 @@ def _build_kb_thread(job_id: int, model: str = None):
             f"ratio x{total_words_kb / max(len(reac_text.split()), 1):.1f} vs REAC"
         )
 
+    except LeaseLostError:
+        logger.warning("PIPELINE_KB_LEASE_LOST job=%s", job_id)
+        raise
     except Exception as e:
         logger.error(f"❌ Job {job_id} construction KB échouée : {e}")
-        # Import local pour éviter un import circulaire
-        from services.formation_pipeline_service import update_job as _uj
-        _uj(job_id, status="error", error_message=str(e))
-
-
-def launch_kb_building(job_id: int, model: str = None):
-    """Lance la construction de la KB en thread."""
-    thread = threading.Thread(target=_build_kb_thread, args=(job_id, model), daemon=True)
-    thread.start()
-    logger.info(f"🚀 Job {job_id} : construction KB lancée en background")
+        update_job(job_id, status="error", error_message=str(e))
+        raise
 
 
 # ─── Assemblage pour prompt programme global ──────────────────────────────────
@@ -747,9 +799,16 @@ def build_kb_context(job_id: int, max_chars: int = 180000) -> str:
             if e["contexte_terrain"]:
                 parts.append(f"**Contexte terrain** : {e['contexte_terrain']}\n")
             if e["etudes_de_cas"]:
-                parts.append("**Études de cas** :")
+                parts.append(
+                    "**Illustrations professionnelles fictives à raconter et commenter dans le cours** "
+                    "[jamais des activités apprenant] :"
+                )
                 for c in e["etudes_de_cas"]:
-                    parts.append(f"- *{c.get('titre', '')}* — {c.get('situation', '')} | Enjeu : {c.get('enjeu', '')} | Résolution : {c.get('resolution_attendue', '')}")
+                    parts.append(
+                        f"- Illustration commentée — {c.get('situation', '')} "
+                        f"| Enjeu expliqué : {c.get('enjeu', '')} "
+                        f"| Conduite professionnelle commentée : {c.get('resolution_attendue', '')}"
+                    )
             if e["pieges_frequents"]:
                 parts.append("**Pièges fréquents** :")
                 for p in e["pieges_frequents"]:

@@ -1,56 +1,86 @@
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { apiUrl } from '../api'
+import { apiFetch } from '../api'
+import { hasAdminAccess } from '../adminAccess'
+import { clearSupabaseSession } from '../supabaseClient'
+import AppLoader from './AppLoader.jsx'
 
-export default function ProtectedAdminRoute({ children }) {
+const NO_REQUIRED_PERMISSIONS = []
+
+export default function ProtectedAdminRoute({
+  children,
+  loginPath = '/connexion-centre',
+  allowedAccountTypes = null,
+  requiredPermissions = NO_REQUIRED_PERMISSIONS,
+}) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
+    let isMounted = true
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => {
+      controller.abort()
+    }, 12000)
+
     // Vérifier si l'utilisateur est authentifié comme admin
     const checkAuth = async () => {
       try {
-        const response = await fetch(apiUrl('/api/admin/logs'), {
+        const response = await apiFetch('/api/admin/session', {
           method: 'GET',
-          credentials: 'include', // Important pour envoyer les cookies de session
+          signal: controller.signal,
         })
 
         if (response.ok) {
-          // Si on peut accéder aux logs, c'est qu'on est admin
-          setIsAuthenticated(true)
+          const data = await response.json().catch(() => ({}))
+          if (isMounted) {
+            setIsAuthenticated(hasAdminAccess(data.account, {
+              allowedAccountTypes,
+              requiredPermissions,
+            }))
+          }
         } else if (response.status === 403 || response.status === 401) {
           // Non authentifié
-          setIsAuthenticated(false)
+          localStorage.removeItem('admin_auth_token')
+          await clearSupabaseSession().catch(() => {})
+          if (isMounted) {
+            setIsAuthenticated(false)
+          }
         } else {
           // Autre erreur
-          setIsAuthenticated(false)
+          if (isMounted) {
+            setIsAuthenticated(false)
+          }
         }
       } catch (error) {
+        if (error?.name === 'AbortError' || !isMounted) return
         console.error('Erreur vérification auth admin:', error)
-        setIsAuthenticated(false)
+        if (isMounted) {
+          setIsAuthenticated(false)
+        }
       } finally {
-        setIsLoading(false)
+        window.clearTimeout(timeoutId)
+        if (isMounted) {
+          setIsLoading(false)
+        }
       }
     }
 
     checkAuth()
-  }, [])
+
+    return () => {
+      isMounted = false
+      window.clearTimeout(timeoutId)
+      controller.abort()
+    }
+  }, [allowedAccountTypes, requiredPermissions])
 
   if (isLoading) {
-    // Afficher un loader pendant la vérification
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Vérification...</p>
-        </div>
-      </div>
-    )
+    return <AppLoader label="Vérification de votre accès" />
   }
 
   if (!isAuthenticated) {
-    // Rediriger vers la page de login admin
-    return <Navigate to="/login-admin" replace />
+    return <Navigate to={loginPath} replace />
   }
 
   // Afficher la page protégée

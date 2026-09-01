@@ -1,19 +1,15 @@
-"""
-Transitions contextuelles pour fichiers Q&A et pauses.
+"""Transitions des fichiers Q&A et pauses, pilotées par leur voisinage.
 
-Chaque break produit deux textes :
-- intro : annonce uniquement la fonction du fichier courant (questions ou pause)
-- outro : clôture le fichier courant et raccorde vers le cours suivant
-
-La logique est pilotée par la playlist effective. Quand le fichier précédent
-annonce déjà une pause, le fichier pause ne refait pas d'intro : il garde
-seulement son outro en fin de créneau.
+Chaque bloc facultatif porte désormais sa propre intro et sa propre outro. Le
+cours précédent ne l'annonce jamais. L'outro annonce une reprise seulement si
+un cours suit directement ; si un autre bloc facultatif suit, elle clôture le
+bloc courant sans l'annoncer. Un Q&A final clôt toute la séance.
 """
 
 import json
 import re
 
-from utils.anthropic_client import default_model, post_message as _llm_post
+from utils.deepseek_client import default_model, post_message as _llm_post
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,29 +17,29 @@ logger = get_logger(__name__)
 
 _QA_FALLBACKS = [
     (
-        "On prend maintenant un temps pour vos questions sur la partie que l'on vient de travailler. Vous pouvez les poser dans le chat.",
-        "Très bien, on clôt ce temps de questions. On reprend ensuite le fil du cours.",
+        "Nous ouvrons maintenant un temps de questions-réponses. Vous pouvez poser dans le chat les points que vous souhaitez clarifier.",
+        "Ce temps de questions-réponses est maintenant terminé.",
     ),
     (
         "C'est le moment des questions. Posez dans le chat ce que vous voulez clarifier sur ce qui vient d'être vu.",
-        "Merci pour ce temps d'échange. On va maintenant continuer avec la suite du programme.",
+        "Merci pour vos questions. Ce temps d'échange est maintenant terminé.",
     ),
 ]
 
 _PAUSE_FALLBACKS = [
     (
-        "On fait maintenant une courte pause. Prenez le temps de souffler.",
-        "La pause est terminée. On reprend maintenant la suite du cours.",
+        "Nous marquons maintenant une courte pause.",
+        "Cette pause est maintenant terminée.",
     ),
     (
-        "On marque une petite pause. Profitez-en pour vous reposer un instant.",
-        "La pause est finie. On reprend avec la suite.",
+        "Nous faisons maintenant une courte pause.",
+        "Nous arrivons au terme de cette pause.",
     ),
 ]
 
 _PAUSE_MIDI_FALLBACK = (
-    "On marque maintenant la pause déjeuner. Prenez le temps de souffler et de vous reposer.",
-    "La pause déjeuner est terminée. On reprend tranquillement le fil de la journée.",
+    "Nous marquons maintenant la pause déjeuner.",
+    "La pause déjeuner est maintenant terminée.",
 )
 
 _SCHEDULE_NEUTRAL_BREAK_FILENAMES = {
@@ -194,17 +190,8 @@ def break_intro_owned_by_previous(
     start_idx: int,
     break_type: str,
 ) -> bool:
-    """Vrai si le break doit commencer sans intro.
-
-    Les fichiers sensibles été/hiver restent neutres : si le fichier précédent
-    est lui-même sensible, on ne suppose pas qu'il a annoncé ce break.
-    """
-    if break_type not in {"qa", "pause", "pause_midi"}:
-        return False
-    if previous_item_type(playlist_items, start_idx) not in {"cours", "qa"}:
-        return False
-    prev_filename = _item_filename(playlist_items, start_idx - 1)
-    return not is_schedule_neutral_break(prev_filename)
+    """Les blocs facultatifs possèdent toujours leur propre intro."""
+    return False
 
 
 def should_announce_next_break_in_outro(
@@ -212,12 +199,8 @@ def should_announce_next_break_in_outro(
     current_type: str,
     next_type: str | None,
 ) -> bool:
-    """Vrai si l'audio courant doit annoncer le break qui arrive ensuite."""
-    if next_type not in {"qa", "pause", "pause_midi"}:
-        return False
-    if current_type not in {"cours", "qa"}:
-        return False
-    return not is_schedule_neutral_break(filename)
+    """Aucun audio ne vole désormais l'intro du bloc facultatif suivant."""
+    return False
 
 
 def fallback_break_transition(
@@ -231,34 +214,22 @@ def fallback_break_transition(
     """Fallback statique sans appel LLM."""
     if break_type == "pause_midi":
         intro, outro = _PAUSE_MIDI_FALLBACK
-        return ("", outro) if intro_owned_by_previous else (intro, outro)
-
-    variants = _QA_FALLBACKS if break_type == "qa" else _PAUSE_FALLBACKS
-    intro, outro = variants[(max(1, int(bloc_num or 1)) - 1) % len(variants)]
-    label = duration_label(duration_sec, break_type)
-    if intro_owned_by_previous:
-        intro = ""
-    elif break_type == "pause" and label:
-        intro = f"On fait maintenant une pause de {label}. Prenez le temps de souffler."
-    if break_type == "pause" and label:
-        pause_sentence = f"On va maintenant prendre une pause de {label}."
     else:
-        pause_sentence = "On va maintenant prendre une courte pause."
-    if break_type == "qa" and label and not intro_owned_by_previous:
-        intro = f"On prend maintenant {label} pour vos questions sur la partie que l'on vient de travailler. Vous pouvez les poser dans le chat."
-    if break_type == "qa" and next_item_type in {"pause", "pause_midi"}:
-        next_intro = _planned_break_intro(next_item_type, bloc_num)
-        if next_intro:
-            pause_sentence = next_intro
-        outro = (
-            "Très bien, on clôt ce temps de questions. Merci pour vos retours, "
-            f"gardez simplement ces repères en tête. {pause_sentence}"
-        )
-    if schedule_neutral:
+        variants = _QA_FALLBACKS if break_type == "qa" else _PAUSE_FALLBACKS
+        intro, outro = variants[(max(1, int(bloc_num or 1)) - 1) % len(variants)]
+
+    if next_item_type == "cours":
         if break_type == "qa":
-            outro = "Très bien, on clôt ce temps de questions. Gardez ces repères en tête pour la suite de la journée."
-        elif break_type == "pause":
-            outro = "On arrive au terme de ce temps de respiration. Gardez simplement le fil pour la suite de la journée."
+            outro = "Ce temps de questions-réponses est terminé. Nous allons maintenant reprendre le cours."
+        elif break_type == "pause_midi":
+            outro = "La pause déjeuner est terminée. Nous allons maintenant reprendre le cours."
+        else:
+            outro = "La pause est terminée. Nous allons maintenant reprendre le cours."
+    elif next_item_type is None and break_type == "qa":
+        outro = (
+            "Ce temps de questions-réponses conclut notre séance. "
+            "Nous nous retrouverons lors de la prochaine séance."
+        )
     return intro, outro
 
 
@@ -280,65 +251,35 @@ def _build_prompt(
         else "Ne mentionne pas de durée précise."
     )
 
-    if intro_owned_by_previous and break_type in {"qa", "pause", "pause_midi"}:
-        role = (
-            "INTRO : chaîne vide obligatoire, car le fichier précédent annonce déjà ce moment.\n"
-            "OUTRO : clôture seulement ce moment. Si ce n'est pas une "
-            "transition sensible été/hiver, raccorde sobrement vers la suite."
+    if break_type == "qa":
+        intro_role = (
+            "INTRO : annonce sobrement le temps de questions-réponses et indique "
+            "que les questions peuvent être posées dans le chat."
         )
-        target = "intro 0 mot, outro 25-65 mots"
-    elif schedule_neutral and break_type == "qa":
-        role = (
-            "INTRO : annonce le temps de questions, mentionne le chat, et contextualise "
-            "brièvement avec le thème qui vient d'être travaillé.\n"
-            "OUTRO : clôture le temps de questions SANS annoncer ce qui vient après. "
-            "Ne parle ni de pause déjeuner, ni de prochain cours, ni de reprise immédiate."
-        )
-        target = "intro 35-70 mots, outro 25-55 mots"
-    elif schedule_neutral and break_type == "pause_midi":
-        role = (
-            "INTRO : annonce seulement la pause déjeuner, sobrement.\n"
-            "OUTRO : annonce seulement la fin de la pause déjeuner, sans annoncer "
-            "le cours ou le thème qui suit."
-        )
-        target = "intro 30-60 mots, outro 25-55 mots"
-    elif schedule_neutral:
-        role = (
-            "INTRO : annonce uniquement la pause. Reste court.\n"
-            "OUTRO : clôture ce temps de respiration SANS annoncer ce qui vient après. "
-            "Ne parle ni de pause déjeuner, ni de prochain cours, ni de reprise immédiate."
-        )
-        target = "intro 20-45 mots, outro 20-50 mots"
-    elif break_type == "qa" and next_item_type in {"pause", "pause_midi"}:
-        role = (
-            "INTRO : annonce le temps de questions, mentionne le chat, et contextualise "
-            "brièvement avec le thème qui vient d'être travaillé.\n"
-            "OUTRO : clôture chaleureusement le temps de questions, puis annonce "
-            "sobrement la pause qui arrive. Le fichier pause suivant ne refera pas "
-            "d'intro ; il gardera seulement son outro."
-        )
-        target = "intro 35-70 mots, outro 35-70 mots"
-    elif break_type == "qa":
-        role = (
-            "INTRO : annonce le temps de questions, mentionne le chat, et contextualise "
-            "brièvement avec le thème qui vient d'être travaillé.\n"
-            "OUTRO : clôture le temps de questions. Si ce n'est pas la fin de journée, "
-            "annonce sobrement ce qui vient après et, si un prochain cours existe, "
-            "raccorde vers son thème."
-        )
-        target = "intro 35-70 mots, outro 35-80 mots"
+        target = "intro 20-45 mots, outro 20-55 mots"
     elif break_type == "pause_midi":
-        role = (
-            "INTRO : annonce seulement la pause déjeuner, sobrement.\n"
-            "OUTRO : annonce la reprise après la pause déjeuner et raccorde vers le prochain thème."
-        )
-        target = "intro 35-70 mots, outro 45-90 mots"
+        intro_role = "INTRO : annonce uniquement la pause déjeuner, sobrement."
+        target = "intro 12-30 mots, outro 15-45 mots"
     else:
-        role = (
-            "INTRO : annonce uniquement la pause. Reste court.\n"
-            "OUTRO : annonce que la pause est terminée et raccorde vers le prochain cours."
+        intro_role = "INTRO : annonce uniquement la pause, en une phrase courte."
+        target = "intro 10-25 mots, outro 15-45 mots"
+
+    if next_item_type == "cours":
+        outro_role = (
+            "OUTRO : clôture le bloc courant puis annonce simplement la reprise "
+            "du cours, sans inventer son thème."
         )
-        target = "intro 20-45 mots, outro 35-80 mots"
+    elif next_item_type is None and break_type == "qa":
+        outro_role = (
+            "OUTRO : clôture le temps de questions puis toute la séance de la "
+            "journée, avec une formule sobre vers la prochaine séance."
+        )
+    else:
+        outro_role = (
+            "OUTRO : clôture uniquement le bloc courant. N'annonce pas le bloc "
+            "facultatif qui suit : il possède sa propre intro."
+        )
+    role = f"{intro_role}\n{outro_role}"
 
     next_label = {
         "cours": "un cours",
@@ -375,7 +316,7 @@ DURÉE DU FICHIER : {duration_sec} secondes
 ÉLÉMENT QUI SUIT CE FICHIER : {next_label}
 DERNIER BREAK DE LA JOURNÉE : {"oui" if is_last_break else "non"}
 TRANSITION SENSIBLE ÉTÉ/HIVER : {"oui" if schedule_neutral else "non"}
-INTRO DÉJÀ PORTÉE PAR LE FICHIER PRÉCÉDENT : {"oui" if intro_owned_by_previous else "non"}
+INTRO PORTÉE PAR CE FICHIER : oui
 
 FIN DU COURS PRÉCÉDENT :
 ---
@@ -396,15 +337,14 @@ CONSIGNES :
 - Pour les Q&A, mentionne que les questions peuvent être posées dans le chat.
 - Pour les pauses, ne parle pas trop : l'intro doit rester courte.
 - Pour la pause déjeuner, l'intro NE doit faire AUCUNE référence au contenu du
-  matin ou au bloc précédent. Elle annonce uniquement la pause déjeuner.
-- Si TRANSITION SENSIBLE ÉTÉ/HIVER vaut oui, l'outro ne doit jamais annoncer
-  l'élément suivant : ni prochain cours, ni pause déjeuner, ni reprise immédiate,
-  ni thème à venir. Le fichier doit rester valable si l'ordre change.
-- Si INTRO DÉJÀ PORTÉE PAR LE FICHIER PRÉCÉDENT vaut oui, mets exactement
-  "intro": "" dans le JSON. Ne recrée aucune intro de pause.
+  matin ou au cours précédent. Elle annonce uniquement la pause déjeuner.
+- Ne suppose jamais que les apprenants mangent, boivent, prennent un encas,
+  se reposent, soufflent ou se détendent.
+- N'annonce l'élément suivant que s'il s'agit directement d'un cours.
+- Si un Q&R termine la journée, son outro clôt toute la séance.
 - Ton de formateur adulte, sobre, clair, professionnel.
 - Pas de "super", "génial", "bravo", "je vous vois", "levez la main", "vous m'entendez".
-- Pas d'horaires absolus.
+- Pas d'horaires, de créneaux ou de planning.
 - Pas de guillemets, pas de JSON imbriqué, pas de markdown.
 - Cibles : {target}.
 
@@ -491,6 +431,34 @@ def build_break_transition_texts(
     `get_bloc_text(bloc_num)` est injecté pour laisser chaque pipeline exposer
     son propre modèle de données sans dupliquer la logique de transition.
     """
+    # Dynamic schedule assets deliberately use deterministic generic copy: the
+    # same pedagogical content remains reusable while the occurrence decides
+    # only which contextual outro variant is needed.
+    dynamic_filename = re.fullmatch(r"(?:qa|pause)_\d{2}\.mp3", _item_filename([[filename, 0, break_type, bloc_num]], 0))
+    if dynamic_filename:
+        return fallback_break_transition(
+            break_type,
+            bloc_num,
+            duration_sec,
+            next_item_type=next_item_type(playlist_items, item_idx),
+        )
+
+    try:
+        from services.fixed_break_scripts import get_fixed_break_script
+
+        fixed = get_fixed_break_script(
+            filename,
+            intro_owned_by_previous=break_intro_owned_by_previous(
+                playlist_items,
+                item_idx,
+                break_type,
+            ),
+        )
+        if fixed:
+            return fixed["intro"], fixed["outro"]
+    except Exception as e:
+        logger.warning("⚠️ Script fixe break indisponible pour %s: %s", filename, e)
+
     prev_bloc = nearest_course_bloc(playlist_items, item_idx, -1) or bloc_num
     next_bloc = nearest_course_bloc(playlist_items, item_idx, 1)
     prev_text = get_bloc_text(prev_bloc) if prev_bloc else ""

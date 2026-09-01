@@ -16,12 +16,16 @@ Calibration du closing selon la taille du gap résiduel :
 | 120–300 s       | Recap + respiration       | 360–900    | LLM          |
 | Bloc 7 final    | Conclusion de journée     | selon gap  | LLM          |
 
-La fin du cours tient aussi compte de l'élément suivant dans la playlist :
-si une Q&A ou une pause arrive, c'est le cours qui l'annonce sobrement.
+La fin du cours clôt uniquement son contenu. Chaque Q&A/pause porte sa propre
+intro et une jointure technique porte le raccord entre deux cours contigus.
 """
 
 import re
-from utils.anthropic_client import default_model, post_message as _llm_post, AnthropicAPIError
+from utils.deepseek_client import (
+    DeepSeekAPIError,
+    default_model,
+    post_message as _llm_post,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,8 +42,8 @@ GAP_FILL_RATIO = 0.92
 # wpm Fish Audio calibré pour la voix/vitesse de production.
 WPM_REFERENCE = 165.7
 # Cap absolu du closing : ~4 min audio max. Au-delà, le résidu reste silence
-# (un gap > 5 min signale un volume_safety insuffisant en amont, pas un closing à
-# rallonge pédagogiquement absurde).
+# (un gap > 5 min signale un calibrage budget texte insuffisant en amont, pas
+# un closing à rallonge pédagogiquement absurde).
 MAX_CLOSING_WORDS = 700
 _FORBIDDEN_DEICTIC_RE = re.compile(r"\b(hier|demain)\b", re.IGNORECASE)
 
@@ -80,36 +84,9 @@ def _item_duration(item) -> int:
 
 
 def _handoff_sentence(next_item) -> str:
-    next_type = _item_type(next_item)
-    duration_sec = _item_duration(next_item)
-    if next_type in {"qa", "pause", "pause_midi"}:
-        try:
-            from services.content_generation_service import _break_intro_text_for_playlist_item
-            planned_intro = _break_intro_text_for_playlist_item(next_item)
-        except Exception:
-            planned_intro = ""
-        if planned_intro:
-            return planned_intro
-        try:
-            from services.break_transition_service import duration_label
-            label = duration_label(duration_sec, next_type)
-        except Exception:
-            label = ""
-        if next_type == "qa":
-            return (
-                "On va maintenant prendre un temps pour vos questions. "
-                "Gardez les points importants en tête, et posez ce que vous voulez clarifier."
-            )
-        if next_type == "pause_midi" or label == "pause déjeuner":
-            return (
-                "On va maintenant marquer la pause déjeuner. "
-                "Prenez le temps de souffler, et on reprendra ensuite calmement."
-            )
-        if label:
-            return f"On va maintenant prendre une pause de {label}. Profitez-en pour souffler un peu."
-        return "On va maintenant prendre une courte pause. Profitez-en pour souffler un peu."
-    if next_type == "cours":
-        return "On enchaînera ensuite avec la suite du parcours, en gardant cette base comme appui."
+    # The following asset owns every logistical announcement. This also keeps
+    # durable course text reusable when the same chapter is scheduled with or
+    # without an optional block.
     return ""
 
 
@@ -123,8 +100,7 @@ def _handoff_instruction(next_item) -> str:
     return (
         "Termine avec cette transition de playlist, reformulée naturellement si besoin : "
         f"{sentence} "
-        "N'ajoute pas d'horaire absolu. Si c'est une pause, rappelle-toi que le "
-        "fichier pause suivant ne refera pas d'intro."
+        "N'ajoute pas d'horaire absolu et n'annonce aucun bloc facultatif."
     )
 
 
@@ -362,7 +338,7 @@ def generate_closing(
             f"{len(text.split())} mots générés"
         )
         return text
-    except (AnthropicAPIError, Exception) as e:
+    except (DeepSeekAPIError, Exception) as e:
         logger.warning(
             f"   ⚠️ Closing bloc {bloc_num} (gap {gap_sec:.0f}s, {registre}) "
             f"échec LLM ({type(e).__name__}: {str(e)[:120]}), fallback"

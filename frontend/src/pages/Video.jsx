@@ -1,14 +1,25 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
-import LeftSidebar from '../components/LeftSidebar.jsx'
-import { apiUrl, apiFetch, getPlatformName, setPlatformId } from '../api'
-
-const BREAK_AUDIO_TYPES = new Set(['qa', 'pause', 'pause_midi'])
-
-function isBreakAudioType(type) {
-  return BREAK_AUDIO_TYPES.has(type)
-}
+import AppLoader from '../components/AppLoader.jsx'
+import { apiFetch, apiUrl, getPlatformId, getPlatformName, getStudentLoginPath, setPlatformId } from '../api'
+import { SlidePreviewFrame } from '../components/slides/PipelineSlidePreview.jsx'
+import {
+  audioBasename,
+  breakDurationLabel,
+  buildAudioSlideTimings,
+  findActiveAudioSlideTiming,
+} from '../components/slides/audioSlideSync'
+import {
+  getStudentLiveAudioOffset,
+  getStudentCourseView,
+  getStudentAudioProxyPath,
+  isBreakAudioType,
+  positionStudentAudio,
+  saveStudentCourseView,
+  synchronizeStudentAudioToLiveOffset,
+} from '../studentCoursePlayback.js'
+import './Video.css'
 
 function formatCountdown(seconds) {
   const total = Math.max(0, Math.ceil(Number(seconds) || 0))
@@ -17,34 +28,101 @@ function formatCountdown(seconds) {
   return `${minutes}:${String(secs).padStart(2, '0')}`
 }
 
-function getBreakSlideCopy(type) {
-  if (type === 'qa') {
-    return {
-      eyebrow: 'Questions-réponses',
-      title: 'Posez vos questions dans le chat',
-      body: 'Le cours reprend automatiquement à la fin de ce temps.',
-      countdownLabel: 'Reprise dans',
-    }
+function slideTemplateType(slide) {
+  return String(slide?.template_type || slide?.type || slide?.template || '').toLowerCase()
+}
+
+function CourseEndScreen({ title, message, onLeave }) {
+  const sessionDate = new Intl.DateTimeFormat('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date())
+
+  return (
+    <main className="course-end-screen">
+      <aside className="course-end-screen__identity" aria-label="Le Socrate">
+        <div className="course-end-brand">
+          <span className="course-end-brand__mark" aria-hidden="true">S</span>
+          <span>SOCRATE</span>
+        </div>
+
+        <div className="course-end-screen__intro">
+          <p className="course-end-screen__kicker">Fin de session</p>
+          <h1>{title}</h1>
+          <p>La séance est maintenant clôturée. Vous pouvez quitter la classe.</p>
+        </div>
+
+        <p className="course-end-screen__footnote">Formation certifiante · Session sécurisée</p>
+      </aside>
+
+      <section className="course-end-screen__content" aria-labelledby="course-end-message">
+        <div className="course-end-panel">
+          <header className="course-end-panel__header">
+            <h2 id="course-end-message">{message}</h2>
+            <p>Aucune action supplémentaire n’est requise.</p>
+          </header>
+
+          <dl className="course-end-summary" aria-label="Récapitulatif de la session">
+            <div>
+              <dt>Formation</dt>
+              <dd>{getPlatformName()}</dd>
+            </div>
+            <div>
+              <dt>Date</dt>
+              <dd>{sessionDate}</dd>
+            </div>
+          </dl>
+
+          <button className="course-end-button" type="button" onClick={onLeave}>
+            Quitter la classe
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
+              <path d="M5 12h14M14 7l5 5-5 5" />
+            </svg>
+          </button>
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function CourseStatusScreen({ tone = 'loading', title, message, onLeave }) {
+  const isError = tone === 'error'
+
+  if (tone === 'loading') {
+    return <AppLoader label={title} message={message} surface="light" />
   }
-  if (type === 'pause_midi') {
-    return {
-      eyebrow: 'Pause déjeuner',
-      title: 'Prenez le temps de couper',
-      body: 'Le cours reprend automatiquement après la pause.',
-      countdownLabel: 'Reprise dans',
-    }
+
+  if (tone === 'done') {
+    return <CourseEndScreen title={title} message={message} onLeave={onLeave} />
   }
-  return {
-    eyebrow: 'Pause',
-    title: 'Soufflez quelques minutes',
-    body: 'Le cours reprend automatiquement après la pause.',
-    countdownLabel: 'Reprise dans',
-  }
+
+  return (
+    <div
+      className="flex h-screen w-full items-center justify-center px-6"
+      style={{ backgroundColor: '#F8F7F5', fontFamily: 'Inter, sans-serif' }}
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white px-7 py-8 text-center shadow-sm">
+        <div
+          className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full"
+          style={{
+            backgroundColor: isError ? '#fee2e2' : '#f3e8ff',
+            color: isError ? '#dc2626' : '#7c3aed',
+          }}
+        >
+          <span className="material-icons text-xl">{isError ? 'warning' : 'check'}</span>
+        </div>
+        <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
+        {message && <p className="mt-2 text-sm leading-6 text-gray-500">{message}</p>}
+      </div>
+    </div>
+  )
 }
 
 export default function Video() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const pParam = searchParams.get('p')
   const [chatOpen, setChatOpen] = useState(false)
   const [muted, setMuted] = useState(false)
   const [audioInfo, setAudioInfo] = useState(null)
@@ -52,17 +130,19 @@ export default function Video() {
   const [error, setError] = useState(null)
   const [showPlayPrompt, setShowPlayPrompt] = useState(false)
   const [breakRemaining, setBreakRemaining] = useState(null)
+  const [slideDeck, setSlideDeck] = useState({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
+  const [slideView, setSlideView] = useState(() => getStudentCourseView())
+  const [playbackTime, setPlaybackTime] = useState(0)
   const audioRef = useRef(null)
 
   // Synchroniser la propriété muted directement sur l'élément DOM
   // (React ne met pas à jour muted sur <audio> après le rendu initial)
   // Lire le platform_id depuis l'URL (?p=2) et le stocker
   useEffect(() => {
-    const pParam = searchParams.get('p')
     if (pParam) {
       setPlatformId(pParam)
     }
-  }, [searchParams])
+  }, [pParam])
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
@@ -76,10 +156,50 @@ export default function Video() {
   }, [])
 
   useEffect(() => {
+    let stopped = false
+    const signalPresence = async ({ keepalive = false } = {}) => {
+      try {
+        const response = await apiFetch('/api/auth/heartbeat', {
+          method: 'POST',
+          keepalive,
+          timeoutMs: keepalive ? 0 : 10000,
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!stopped && response.ok && payload.token) {
+          localStorage.setItem('auth_token', payload.token)
+        }
+      } catch (error) {
+        if (!stopped && !keepalive) {
+          console.warn('Signal de présence momentanément indisponible', error)
+        }
+      }
+    }
+
+    signalPresence()
+    const interval = window.setInterval(signalPresence, 30000)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') signalPresence()
+    }
+    const handlePageHide = () => signalPresence({ keepalive: true })
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('pagehide', handlePageHide)
+    return () => {
+      stopped = true
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('pagehide', handlePageHide)
+    }
+  }, [])
+
+  useEffect(() => {
     if (audioRef.current) {
       audioRef.current.muted = muted
     }
   }, [muted])
+
+  useEffect(() => {
+    saveStudentCourseView(slideView)
+  }, [slideView])
 
   // Fonction pour basculer le mute
   const handleToggleMute = () => {
@@ -90,10 +210,10 @@ export default function Video() {
   const handleHangup = async () => {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' })
-      navigate('/')
+      navigate(getStudentLoginPath())
     } catch (err) {
       console.error('Erreur déconnexion:', err)
-      navigate('/')
+      navigate(getStudentLoginPath())
     }
   }
 
@@ -105,16 +225,13 @@ export default function Video() {
   // Gestionnaire de clic pour dé-muter l'audio si autoplay bloqué
   const handlePageClick = () => {
     if (!showPlayPrompt) return
-    if (!audioRef.current || audioInfo?.status !== 'playing') return
     const audio = audioRef.current
+    if (!audio || audioInfo?.status !== 'playing') return
     audio.muted = false
     setMuted(false)
-    if (audio.paused) {
-      audio.play().catch((err) => {
-        console.error('Impossible de lire l\'audio:', err)
-      })
-    }
-    setShowPlayPrompt(false)
+    audio.play().then(() => setShowPlayPrompt(false)).catch((err) => {
+      console.error('Impossible de reprendre l\'audio:', err)
+    })
   }
 
   const fetchAudioStatus = useCallback(async ({ silent = false } = {}) => {
@@ -125,13 +242,16 @@ export default function Video() {
       const response = await apiFetch('/api/video/status')
       const data = await response.json()
 
-      if (!data.authenticated) {
-        navigate('/')
+      if (!response.ok || !data.authenticated) {
+        const platformId = pParam || getPlatformId()
+        const loginPath = getStudentLoginPath()
+        navigate(loginPath !== '/' ? loginPath : (platformId && platformId !== '1' ? `/?p=${platformId}` : '/'), { replace: true })
         return
       }
 
       if (data.status === 'waiting') {
-        navigate('/attente')
+        const platformId = pParam || getPlatformId()
+        navigate(platformId && platformId !== '1' ? `/attente?p=${platformId}` : '/attente', { replace: true })
         return
       }
 
@@ -145,16 +265,29 @@ export default function Video() {
         setError(null)
         setAudioInfo({
           status: 'playing',
-          filename: data.audio_filename,
+          audioKey: data.audio_key,
           title: data.audio_title,
           offset: data.offset,
           duration: data.audio_duration,
+          plannedDuration: data.audio_planned_duration,
+          assetDuration: data.audio_asset_duration,
+          hardStopped: Boolean(data.audio_hard_stopped),
           remaining: data.remaining,
+          streamToken: data.audio_stream_token,
           id: data.audio_id,
           type: data.audio_type,
+          nextAudio: {
+            id: data.next_audio_id,
+            title: data.next_audio_title,
+            type: data.next_audio_type,
+            duration: data.next_audio_duration,
+          },
         })
+        setPlaybackTime((Number(data.offset) || 0) * 1000)
         if (isBreakAudioType(data.audio_type)) {
           setBreakRemaining(data.remaining ?? Math.max(0, (data.audio_duration || 0) - (data.offset || 0)))
+        } else {
+          setBreakRemaining(null)
         }
         setLoading(false)
       }
@@ -163,126 +296,262 @@ export default function Video() {
       setError('Impossible de charger le cours')
       setLoading(false)
     }
-  }, [navigate])
+  }, [navigate, pParam])
 
   // Charger les informations audio depuis l'API
   useEffect(() => {
-    fetchAudioStatus()
+    const timer = window.setTimeout(() => {
+      fetchAudioStatus()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [fetchAudioStatus])
+
+  const currentAudioName = audioInfo?.status === 'playing' ? audioBasename(audioInfo.audioKey) : ''
+  const isCurrentBreakAudio = audioInfo?.status === 'playing' && isBreakAudioType(audioInfo.type)
+  const audioProxyPath = getStudentAudioProxyPath(audioInfo, currentAudioName)
+  const audioSrc = audioProxyPath ? apiUrl(audioProxyPath) : ''
+
+  useEffect(() => {
+    let cancelled = false
+    const resetTimer = window.setTimeout(() => {
+      if (cancelled) return
+      setSlideDeck({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
+    }, 0)
+
+    if (audioInfo?.status !== 'playing' || isCurrentBreakAudio || !currentAudioName) {
+      return () => {
+        cancelled = true
+        window.clearTimeout(resetTimer)
+      }
+    }
+
+    apiFetch('/api/video/slides')
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || (data.status !== 'success' && data.status !== 'no_data')) {
+          throw new Error(data.message || data.error || 'Slides indisponibles')
+        }
+        if (cancelled) return
+        if (data.status === 'success') {
+          setSlideDeck({
+            slides: Array.isArray(data.slides) ? data.slides : [],
+            audioSync: data.audio_sync || {},
+            brandName: data.brand_name == null ? 'Le Socrate' : String(data.brand_name),
+          })
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Erreur chargement slides synchronisées:', err)
+        }
+      })
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(resetTimer)
+    }
+  }, [audioInfo?.status, currentAudioName, isCurrentBreakAudio])
+
+  const slideTimings = buildAudioSlideTimings(slideDeck.slides, slideDeck.audioSync, currentAudioName)
+  const activeSlideTiming = findActiveAudioSlideTiming(slideTimings, playbackTime)
+  const hasProjectedSlides = slideTimings.length > 0 && Boolean(activeSlideTiming)
+  const showProjectedSlides = slideView === 'slides' && hasProjectedSlides && !isCurrentBreakAudio
+  const hasCompletedSyncedSpeech = (
+    audioInfo?.status === 'playing'
+    && !isCurrentBreakAudio
+    && slideTimings.length > 0
+    && !activeSlideTiming
+  )
+  const nextBreakType = isBreakAudioType(audioInfo?.nextAudio?.type) ? audioInfo.nextAudio.type : null
+  const secondsRemainingInAudio = Math.max(0, Number(audioInfo?.remaining ?? 0))
+  const activeSlideType = slideTemplateType(activeSlideTiming?.slide)
+  const isLateMisplacedReprise = (
+    slideView === 'slides'
+    && Boolean(nextBreakType)
+    && secondsRemainingInAudio <= 180
+    && ['reprise', 'reprise_recap', 'opening_recap', 'rappel'].includes(activeSlideType)
+  )
+  const showNextBreakPreview = (
+    slideView === 'slides'
+    && Boolean(nextBreakType)
+    && (hasCompletedSyncedSpeech || isLateMisplacedReprise)
+  )
 
   // Positionner l'audio à l'offset correct quand il est chargé
   useEffect(() => {
-    if (audioInfo?.status === 'playing' && audioRef.current) {
-      const audio = audioRef.current
-      const targetOffset = audioInfo.offset || 0
-      const isBreakAudio = isBreakAudioType(audioInfo.type)
-      let hasAttemptedPlay = false
-      let countdownTimer = null
+    if (audioInfo?.status !== 'playing' || !audioRef.current || !audioSrc) return undefined
 
-      const updateBreakRemaining = () => {
-        if (!isBreakAudio) return
-        const duration = Number(audioInfo.duration || audio.duration || 0)
-        if (!Number.isFinite(duration) || duration <= 0) return
-        setBreakRemaining(Math.max(0, Math.ceil(duration - audio.currentTime)))
-      }
+    const audio = audioRef.current
+    const breakAudio = isBreakAudioType(audioInfo.type)
+    const initialOffset = Math.max(0, Number(audioInfo.offset) || 0)
+    const initialRemaining = Math.max(0, Number(audioInfo.remaining) || 0)
+    const startedAt = Date.now()
+    let hasAttemptedPlay = false
+    let playbackReady = false
+    let refreshed = false
+    let endedTimer = null
+    const positioningController = new AbortController()
 
-      const handleLoadedMetadata = () => {
-        if (targetOffset > 0) {
-          audio.currentTime = targetOffset
-        }
-        updateBreakRemaining()
-      }
+    const liveOffsetNow = () => getStudentLiveAudioOffset(initialOffset, startedAt, {
+      duration: audioInfo.assetDuration,
+    })
 
-      const handleSeeked = () => {
-        updateBreakRemaining()
-      }
+    const refreshAtBoundary = (delay = 0) => {
+      if (refreshed) return
+      refreshed = true
+      setShowPlayPrompt(false)
+      endedTimer = window.setTimeout(
+        () => fetchAudioStatus({ silent: true }),
+        delay,
+      )
+    }
 
-      const handleCanPlay = () => {
-        if (hasAttemptedPlay || !audio.paused) return
-        hasAttemptedPlay = true
-        audio.play().catch((err) => {
-          if (err.name === 'NotAllowedError') {
-            audio.muted = true
-            setMuted(true)
-            audio.play().then(() => {
-              setShowPlayPrompt(true)
-            }).catch(() => {
-              // Même en muet bloqué — afficher le bouton pour interaction manuelle
-              setShowPlayPrompt(true)
-            })
-          }
+    const syncPlaybackClock = () => {
+      const liveOffset = liveOffsetNow()
+      if (playbackReady) {
+        synchronizeStudentAudioToLiveOffset(audio, liveOffset, {
+          knownDuration: audioInfo.assetDuration,
         })
       }
 
-      const handleError = () => {
-        console.error('[Audio] Erreur chargement:', audio.error)
+      if (!breakAudio) {
+        setPlaybackTime(liveOffset * 1000)
+        return
       }
 
-      let endedTimer = null
-      const handleEnded = () => {
-        setShowPlayPrompt(false)
-        endedTimer = window.setTimeout(() => {
-          fetchAudioStatus({ silent: true })
-        }, 500)
-      }
-
-      audio.addEventListener('loadedmetadata', handleLoadedMetadata)
-      audio.addEventListener('seeked', handleSeeked)
-      audio.addEventListener('canplay', handleCanPlay)
-      audio.addEventListener('error', handleError)
-      audio.addEventListener('ended', handleEnded)
-
-      audio.load()
-      if (isBreakAudio) {
-        setBreakRemaining(audioInfo.remaining ?? Math.max(0, (audioInfo.duration || 0) - targetOffset))
-        countdownTimer = window.setInterval(updateBreakRemaining, 500)
-      }
-
-      return () => {
-        audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
-        audio.removeEventListener('seeked', handleSeeked)
-        audio.removeEventListener('canplay', handleCanPlay)
-        audio.removeEventListener('error', handleError)
-        audio.removeEventListener('ended', handleEnded)
-        if (endedTimer) {
-          window.clearTimeout(endedTimer)
-        }
-        if (countdownTimer) {
-          window.clearInterval(countdownTimer)
-        }
+      const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
+      const remaining = Math.max(0, initialRemaining - elapsed)
+      setBreakRemaining(Math.ceil(remaining))
+      setPlaybackTime(liveOffset * 1000)
+      if (remaining <= 0) {
+        audio.pause()
+        refreshAtBoundary()
       }
     }
-  }, [audioInfo, fetchAudioStatus])
+
+    const attemptPlay = () => {
+      if (hasAttemptedPlay || !audio.paused) return
+      hasAttemptedPlay = true
+      audio.play().then(() => setShowPlayPrompt(false)).catch((err) => {
+        if (err.name === 'NotAllowedError') {
+          audio.muted = true
+          setMuted(true)
+          audio.play().then(() => setShowPlayPrompt(true)).catch(() => {
+            setShowPlayPrompt(true)
+          })
+        }
+      })
+    }
+
+    const handleTimeUpdate = () => syncPlaybackClock()
+    const handleEnded = () => {
+      const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
+      const boundaryDelay = Math.max(0, initialRemaining - elapsed) * 1000
+      refreshAtBoundary(boundaryDelay + 50)
+    }
+    const handleError = () => {
+      console.error('[Audio] Erreur chargement du proxy:', audio.error)
+    }
+
+    audio.addEventListener('timeupdate', handleTimeUpdate)
+    audio.addEventListener('loadeddata', syncPlaybackClock)
+    audio.addEventListener('canplay', syncPlaybackClock)
+    audio.addEventListener('playing', syncPlaybackClock)
+    audio.addEventListener('seeked', syncPlaybackClock)
+    audio.addEventListener('ended', handleEnded)
+    audio.addEventListener('error', handleError)
+    audio.load()
+
+    positionStudentAudio(audio, initialOffset, {
+      knownDuration: audioInfo.assetDuration,
+      signal: positioningController.signal,
+    }).then((positionedOffset) => {
+      if (positioningController.signal.aborted) return
+      playbackReady = true
+      if (!breakAudio) setPlaybackTime(positionedOffset * 1000)
+      syncPlaybackClock()
+      attemptPlay()
+    }).catch((err) => {
+      if (err.name === 'AbortError' || positioningController.signal.aborted) return
+      console.warn('[Audio] Reprise exacte indisponible, nouvelle tentative au démarrage:', err)
+      playbackReady = true
+      try {
+        audio.currentTime = initialOffset
+      } catch {
+        // The media element will retain its nearest playable position.
+      }
+      syncPlaybackClock()
+      attemptPlay()
+    })
+
+    const clockTimer = window.setInterval(syncPlaybackClock, 250)
+    const hardBoundaryTimer = window.setTimeout(() => {
+      audio.pause()
+      refreshAtBoundary()
+    }, Math.max(0, initialRemaining * 1000))
+
+    return () => {
+      positioningController.abort()
+      audio.pause()
+      audio.removeEventListener('timeupdate', handleTimeUpdate)
+      audio.removeEventListener('loadeddata', syncPlaybackClock)
+      audio.removeEventListener('canplay', syncPlaybackClock)
+      audio.removeEventListener('playing', syncPlaybackClock)
+      audio.removeEventListener('seeked', syncPlaybackClock)
+      audio.removeEventListener('ended', handleEnded)
+      audio.removeEventListener('error', handleError)
+      window.clearInterval(clockTimer)
+      window.clearTimeout(hardBoundaryTimer)
+      if (endedTimer) window.clearTimeout(endedTimer)
+    }
+  }, [
+    audioInfo?.status,
+    audioInfo?.audioKey,
+    audioInfo?.id,
+    audioInfo?.type,
+    audioInfo?.duration,
+    audioInfo?.assetDuration,
+    audioInfo?.offset,
+    audioInfo?.remaining,
+    currentAudioName,
+    audioSrc,
+    fetchAudioStatus,
+  ])
 
   // Afficher le chargement
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
-        <div className="text-white text-xl">Chargement du cours...</div>
-      </div>
+      <CourseStatusScreen
+        title="Chargement du cours..."
+        message="Préparation de la session en cours."
+      />
     )
   }
 
   // Afficher une erreur
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
-        <div className="text-red-500 text-xl">{error}</div>
-      </div>
+      <CourseStatusScreen
+        tone="error"
+        title={error}
+        message="Réessayez dans quelques instants ou revenez à l'accueil."
+      />
     )
   }
 
   // Cours terminé
   if (audioInfo?.status === 'finished') {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
-        <div className="text-white text-2xl">Le cours est terminé</div>
-      </div>
+      <CourseStatusScreen
+        tone="done"
+        title="Le cours est terminé"
+        message="Merci pour votre participation."
+        onLeave={handleHangup}
+      />
     )
   }
 
   const isBreakScreen = audioInfo?.status === 'playing' && isBreakAudioType(audioInfo.type)
-  const breakCopy = getBreakSlideCopy(audioInfo?.type)
   const breakDuration = Math.max(1, Number(audioInfo?.duration || 0))
   const breakSecondsRemaining = Math.max(
     0,
@@ -296,7 +565,7 @@ export default function Video() {
   return (
     <>
       <div
-        className="h-screen w-full flex"
+        className="flex h-dvh w-full overflow-hidden"
         style={{ backgroundColor: '#F8F7F5' }}
         onClick={handlePageClick}
       >
@@ -307,43 +576,45 @@ export default function Video() {
         >
 
       {/* Header */}
-      <div className="border-b border-gray-200 px-8 flex items-center justify-between flex-shrink-0" style={{ height: '64px', backgroundColor: '#FFFFFF' }}>
-        <div>
-          <h1 className="text-xl font-semibold text-gray-800">{getPlatformName()}</h1>
+      <div className="flex h-[72px] flex-shrink-0 items-center justify-between border-b border-gray-200 bg-white px-5 sm:h-16 sm:px-8">
+        <div className="min-w-0">
+          <h1 className="truncate text-lg font-semibold text-gray-800 sm:text-xl">{getPlatformName()}</h1>
           <p className="text-sm text-gray-500">{new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
         </div>
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-hidden">
-        <div className="w-full max-w-4xl">
+      <div className="flex-1 overflow-y-auto px-4 pb-28 pt-5 sm:flex sm:flex-col sm:items-center sm:justify-center sm:overflow-hidden sm:p-8">
+        <div className="mx-auto w-full max-w-4xl">
           <div
             id="video-zone"
-            className="relative aspect-video w-full rounded-3xl overflow-hidden flex items-center justify-center shadow-2xl border-4 bg-gradient-to-br from-gray-700 to-gray-900"
-            style={{ transform: 'translateY(-20px)', borderColor: '#E4E4E4' }}
+            className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-2xl border-2 bg-gradient-to-br from-gray-700 to-gray-900 shadow-lg sm:rounded-3xl sm:border-4 sm:shadow-2xl"
+            style={{ borderColor: '#E4E4E4' }}
           >
             {isBreakScreen ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center" style={{ backgroundColor: '#2B2138' }}>
-                <div className="mb-5 text-sm font-semibold uppercase tracking-[0.2em]" style={{ color: '#D8C7FF' }}>
-                  {breakCopy.eyebrow}
-                </div>
-                <h2 className="max-w-2xl text-4xl font-semibold leading-tight text-white">
-                  {breakCopy.title}
-                </h2>
-                <p className="mt-4 max-w-xl text-base leading-7" style={{ color: '#E7DCF7' }}>
-                  {breakCopy.body}
-                </p>
-
-                <div className="mt-10 w-full max-w-xl">
-                  <div className="flex items-end justify-between gap-4">
-                    <span className="text-sm font-medium" style={{ color: '#D8C7FF' }}>
-                      {breakCopy.countdownLabel}
-                    </span>
-                    <span className="text-6xl font-semibold tabular-nums text-white">
-                      {formatCountdown(breakSecondsRemaining)}
-                    </span>
-                  </div>
-                  <div className="mt-4 h-3 overflow-hidden rounded-full" style={{ backgroundColor: 'rgba(248, 247, 245, 0.18)' }}>
+              <div className="absolute inset-0" style={{ backgroundColor: '#020617' }}>
+                <SlidePreviewFrame
+                  slide={{
+                    template_type: audioInfo.type === 'qa' ? 'qa' : 'pause',
+                    data: { duration_label: breakDurationLabel(audioInfo.duration) },
+                  }}
+                  maxWidth={896}
+                  renderProps={{ brandName: slideDeck.brandName }}
+                  padding={0}
+                  className="h-full w-full"
+                  style={{ width: '100%', height: '100%', background: '#020617' }}
+                />
+                <div
+                  className="absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-3 pt-8 sm:flex-nowrap sm:gap-4 sm:px-6 sm:pb-4 sm:pt-10"
+                  style={{ background: 'linear-gradient(to top, rgba(2, 6, 23, 0.85), rgba(2, 6, 23, 0))' }}
+                >
+                  <span className="text-sm font-medium" style={{ color: '#D8C7FF' }}>
+                    Reprise dans
+                  </span>
+                  <span className="text-2xl font-semibold tabular-nums text-white sm:text-3xl">
+                    {formatCountdown(breakSecondsRemaining)}
+                  </span>
+                  <div className="h-2 min-w-full flex-1 overflow-hidden rounded-full sm:min-w-0" style={{ backgroundColor: 'rgba(248, 247, 245, 0.25)' }}>
                     <div
                       className="h-full rounded-full transition-[width] duration-500 ease-out"
                       style={{ width: `${breakProgress}%`, backgroundColor: '#BFA7FF' }}
@@ -351,20 +622,62 @@ export default function Video() {
                   </div>
                 </div>
               </div>
+            ) : showNextBreakPreview ? (
+              <div className="absolute inset-0" style={{ backgroundColor: '#020617' }}>
+                <SlidePreviewFrame
+                  slide={{
+                    template_type: nextBreakType === 'qa' ? 'qa' : 'pause',
+                    data: { duration_label: breakDurationLabel(audioInfo.nextAudio.duration) },
+                  }}
+                  maxWidth={896}
+                  renderProps={{ brandName: slideDeck.brandName }}
+                  padding={0}
+                  className="h-full w-full"
+                  style={{ width: '100%', height: '100%', background: '#020617' }}
+                />
+              </div>
+            ) : showProjectedSlides ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#020617]">
+                <SlidePreviewFrame
+                  slide={activeSlideTiming.slide}
+                  maxWidth={896}
+                  renderProps={{ brandName: slideDeck.brandName }}
+                  padding={0}
+                  className="h-full w-full"
+                  style={{ width: '100%', height: '100%', background: '#020617' }}
+                />
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center">
-                <div className="w-40 h-40 rounded-full bg-white flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-24 h-24 text-gray-800" fill="currentColor" viewBox="0 0 24 24">
+                <div className="flex h-24 w-24 items-center justify-center rounded-full bg-white sm:h-40 sm:w-40">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-14 w-14 text-gray-800 sm:h-24 sm:w-24" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
                   </svg>
                 </div>
-                <span className="mt-4 text-white text-xl font-medium">Professeur</span>
+                <span className="mt-3 text-lg font-medium text-white sm:mt-4 sm:text-xl">Professeur</span>
               </div>
             )}
 
-            <div className="absolute bottom-6 left-6 bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm">
-              {isBreakScreen ? breakCopy.eyebrow : 'Professeur'}
-            </div>
+            {!isBreakScreen && (
+              <div className="absolute bottom-3 left-3 rounded-lg bg-black/60 px-3 py-1.5 text-xs text-white backdrop-blur-sm sm:bottom-6 sm:left-6">
+                {showNextBreakPreview
+                  ? (nextBreakType === 'qa' ? 'Questions-réponses' : 'Pause')
+                  : showProjectedSlides ? `Slide ${activeSlideTiming.slideIndex + 1}` : 'Professeur'}
+              </div>
+            )}
+
+            {audioInfo?.status === 'playing' && !isBreakScreen && (hasProjectedSlides || hasCompletedSyncedSpeech) && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setSlideView((showProjectedSlides || showNextBreakPreview) ? 'professor' : 'slides')
+                }}
+                className="absolute right-3 top-3 max-w-[calc(100%-1.5rem)] rounded-lg bg-white/95 px-3 py-2 text-xs font-semibold text-gray-900 shadow-md transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 sm:right-5 sm:top-5 sm:rounded-xl sm:px-4 sm:text-sm sm:shadow-lg"
+              >
+                {(showProjectedSlides || showNextBreakPreview) ? 'Professeur' : 'Visualiser les slides'}
+              </button>
+            )}
 
             {showPlayPrompt && (
               <button
@@ -381,25 +694,26 @@ export default function Video() {
               </button>
             )}
 
-            {audioInfo?.status === 'playing' && (
+            {audioInfo?.status === 'playing' && audioSrc && (
               <audio
                 ref={audioRef}
                 id="audio"
+                src={audioSrc}
+                preload="auto"
                 controlsList="nodownload noplaybackrate noremoteplayback"
                 disablePictureInPicture
                 style={{ display: 'none' }}
-              >
-                <source src={audioInfo.filename} type="audio/mpeg" />
-              </audio>
+              />
             )}
+
           </div>
 
           {/* Boutons de contrôle */}
-          <div className="flex items-center justify-center gap-4 mt-6">
+          <div className="fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-20 flex items-center justify-center gap-4 px-4 sm:static sm:mt-6 sm:px-0">
             {/* Bouton micro/son */}
             <button
               onClick={handleToggleMute}
-              className="w-14 h-14 rounded-xl bg-white hover:shadow-lg flex items-center justify-center transition-all duration-200 border-2 hover:border-gray-400"
+              className="flex h-14 w-14 items-center justify-center rounded-xl border-2 bg-white transition-all duration-200 hover:border-gray-400 hover:shadow-lg"
               style={{ borderColor: '#E4E4E4', boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px #E4E4E4' }}
               title={muted ? "Activer le son" : "Couper le son"}
             >
@@ -424,7 +738,7 @@ export default function Video() {
             {/* Bouton raccrocher */}
             <button
               onClick={handleHangup}
-              className="w-16 h-16 rounded-xl bg-purple-600 hover:bg-purple-700 flex items-center justify-center transition-all duration-200"
+              className="flex h-16 w-16 items-center justify-center rounded-xl bg-purple-600 transition-all duration-200 hover:bg-purple-700"
               style={{ boxShadow: '0 4px 12px rgba(147, 51, 234, 0.3), 0 0 0 4px #E4E4E4' }}
               title="Quitter le cours"
             >
@@ -436,7 +750,7 @@ export default function Video() {
             {/* Bouton chat */}
             <button
               onClick={handleToggleChat}
-              className="w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-200 border-2 bg-white hover:shadow-lg hover:border-gray-400"
+              className="flex h-14 w-14 items-center justify-center rounded-xl border-2 bg-white transition-all duration-200 hover:border-gray-400 hover:shadow-lg"
               style={{ borderColor: '#E4E4E4', boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px #E4E4E4' }}
               title={chatOpen ? "Fermer le chat" : "Ouvrir le chat"}
             >
