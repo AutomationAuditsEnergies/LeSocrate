@@ -90,6 +90,31 @@ def upload_blob(container_name, blob_path, data, *, metadata=None):
         content_settings=_content_settings_for_blob(blob_path),
         metadata=effective_metadata or None,
     )
+    if (
+        container_name == CONTAINER_AUDIOS
+        and str(blob_path or "").lower().endswith(".mp3")
+        and isinstance(data, (bytes, bytearray, memoryview))
+    ):
+        try:
+            from services.audio_waveform_service import (
+                create_waveform_for_uploaded_bytes,
+                waveform_cache_blob_path,
+            )
+
+            cache_client = client.get_blob_client(
+                container=container_name,
+                blob=waveform_cache_blob_path(blob_path),
+            )
+            create_waveform_for_uploaded_bytes(
+                blob_client,
+                cache_client,
+                bytes(data),
+                audio_properties=blob_client.get_blob_properties(),
+            )
+        except Exception as exc:
+            # Audio publication must remain available even if peak extraction
+            # is unsupported for an unusual codec.
+            logger.warning("⚠️ Forme d'onde non générée pour %s: %s", blob_path, exc)
     logger.info(f"✅ Blob uploadé: {container_name}/{blob_path}")
     return blob_path
 

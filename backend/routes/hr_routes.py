@@ -6350,6 +6350,7 @@ def create_hr_blueprint():
                     cache_blob_client,
                     audio_properties=props,
                     points=DEFAULT_WAVEFORM_POINTS,
+                    generate_if_missing=False,
                 )
                 waveform_source = "cache" if waveform.get("cache_hit") else "generated"
             except Exception as waveform_error:

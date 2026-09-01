@@ -69,6 +69,7 @@ def get_or_create_waveform(
     *,
     audio_properties=None,
     points: int = DEFAULT_WAVEFORM_POINTS,
+    generate_if_missing: bool = True,
 ) -> dict:
     """Read a valid cached manifest or generate it using bounded memory."""
     props = audio_properties or audio_blob_client.get_blob_properties()
@@ -90,6 +91,9 @@ def get_or_create_waveform(
         # Missing, stale or malformed cache: regenerate from the source MP3.
         pass
 
+    if not generate_if_missing:
+        raise FileNotFoundError("Waveform cache missing or stale")
+
     suffix = os.path.splitext(getattr(audio_blob_client, "blob_name", "") or "")[1] or ".mp3"
     temp_path = None
     try:
@@ -109,6 +113,56 @@ def get_or_create_waveform(
         "schema_version": WAVEFORM_SCHEMA_VERSION,
         "source_etag": source_etag,
         "source_size": source_size,
+        "duration": round(float(waveform["duration"]), 4),
+        "peaks": waveform["peaks"],
+        "points": waveform["points"],
+        "sample_rate": waveform["sample_rate"],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "cache_hit": False,
+    }
+    cache_blob_client.upload_blob(
+        json.dumps(manifest, separators=(",", ":")).encode("utf-8"),
+        overwrite=True,
+        content_settings=ContentSettings(
+            content_type="application/json",
+            cache_control="private, max-age=86400",
+        ),
+    )
+    return manifest
+
+
+def create_waveform_for_uploaded_bytes(
+    audio_blob_client,
+    cache_blob_client,
+    audio_bytes: bytes,
+    *,
+    audio_properties=None,
+    points: int = DEFAULT_WAVEFORM_POINTS,
+) -> dict:
+    """Create the cache while upload bytes are already available in memory."""
+    props = audio_properties or audio_blob_client.get_blob_properties()
+    payload = bytes(audio_bytes or b"")
+    if not payload:
+        raise ValueError("Fichier audio vide")
+
+    suffix = os.path.splitext(getattr(audio_blob_client, "blob_name", "") or "")[1] or ".mp3"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+            temp_path = temp_file.name
+            temp_file.write(payload)
+        waveform = extract_waveform(temp_path, points=points)
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+    manifest = {
+        "schema_version": WAVEFORM_SCHEMA_VERSION,
+        "source_etag": _normalise_etag(getattr(props, "etag", "")),
+        "source_size": int(getattr(props, "size", 0) or len(payload)),
         "duration": round(float(waveform["duration"]), 4),
         "peaks": waveform["peaks"],
         "points": waveform["points"],
