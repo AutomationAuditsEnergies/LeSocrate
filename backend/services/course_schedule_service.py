@@ -186,6 +186,7 @@ def ensure_course_schedule_tables(cursor):
             local_time TEXT,
             subject_template TEXT NOT NULL,
             content_template TEXT NOT NULL,
+            signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate',
             recipient_scope TEXT NOT NULL DEFAULT 'all',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -194,6 +195,14 @@ def ensure_course_schedule_tables(cursor):
         )
         """
     )
+    reminder_rule_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(course_reminder_rules)").fetchall()
+    }
+    if "signature_template" not in reminder_rule_columns:
+        cursor.execute(
+            "ALTER TABLE course_reminder_rules "
+            "ADD COLUMN signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate'"
+        )
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS course_reminder_rule_recipients (
@@ -1545,6 +1554,12 @@ def _build_reminder_html(payload):
         payload.get("content")
         or _format_reminder_template(payload.get("content_template"), values)
     ).replace("\n", "<br>")
+    signature = html.escape(str(payload.get("signature_template") or "")).replace("\n", "<br>")
+    signature_block = (
+        f'<p style="margin-top:26px;">{signature}</p>'
+        if signature
+        else ""
+    )
     class_url = html.escape(values["class_url"], quote=True)
     session_code = html.escape(values["session_code"])
     code_block = (
@@ -1581,7 +1596,7 @@ def _build_reminder_html(payload):
       <p><a class="cta" href="{class_url}" target="_blank">Accéder à la formation</a></p>
       <div class="meta">Horaire prévu : {values["date"]} à {values["time"]}</div>
       {code_block}
-      <p style="margin-top:26px;">L'équipe Le Socrate</p>
+      {signature_block}
     </div>
     <div class="footer">E-mail automatique de rappel de formation.</div>
   </div>
@@ -1941,6 +1956,7 @@ def _process_due_delivery_candidates(
             "subject": _format_reminder_template(candidate.get("subject_template"), values),
             "content_template": candidate.get("content_template"),
             "content": _format_reminder_template(candidate.get("content_template"), values),
+            "signature_template": candidate.get("signature_template"),
             "recipient": recipient,
             "recipients": [recipient],
         }
@@ -2163,12 +2179,16 @@ def _validated_reminder_rule(data):
 
     subject_template = str(payload.get("subject_template") or "").strip()
     content_template = str(payload.get("content_template") or "").strip()
+    raw_signature = payload.get("signature_template", "L'équipe Le Socrate")
+    signature_template = str(raw_signature if raw_signature is not None else "").strip()
     if not subject_template or len(subject_template) > 200:
         raise ValueError("L'objet du mail est requis (200 caractères maximum)")
     if "\r" in subject_template or "\n" in subject_template:
         raise ValueError("L'objet du mail ne peut pas contenir de saut de ligne")
     if not content_template or len(content_template) > 5000:
         raise ValueError("Le contenu du mail est requis (5000 caractères maximum)")
+    if len(signature_template) > 500:
+        raise ValueError("La signature du mail ne peut pas dépasser 500 caractères")
     recipient_scope = str(payload.get("recipient_scope") or "all")
     if recipient_scope not in {"all", "selected_explicit"}:
         raise ValueError("Audience du rappel invalide")
@@ -2189,6 +2209,7 @@ def _validated_reminder_rule(data):
         "local_time": local_time,
         "subject_template": subject_template,
         "content_template": content_template,
+        "signature_template": signature_template,
         "recipient_scope": recipient_scope,
         "recipient_ids": recipient_ids,
         "is_active": bool(payload.get("is_active", True)),

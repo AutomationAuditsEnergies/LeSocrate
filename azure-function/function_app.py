@@ -6,6 +6,20 @@ import requests
 app = func.FunctionApp()
 
 
+def _call_backend_endpoint(endpoint: str) -> None:
+    api_url = os.environ["SOCRATE_API_URL"].rstrip("/")
+    api_key = os.environ["PLATFORM_API_KEY"]
+    url = f"{api_url}{endpoint}"
+    headers = {"X-Platform-Key": api_key, "Content-Type": "application/json"}
+
+    logging.info(f"Lancement automation -> {url}")
+    resp = requests.post(url, headers=headers, json={}, timeout=30)
+    result = resp.json()
+    if not result.get("success"):
+        raise RuntimeError(f"Erreur automation {endpoint}: {result}")
+    logging.info(f"Automation OK {endpoint}: {len(result.get('results', []))} résultat(s)")
+
+
 @app.timer_trigger(
     schedule="0 */5 * * * *",
     arg_name="myTimer",
@@ -17,29 +31,22 @@ def course_automation_tick(myTimer: func.TimerRequest) -> None:
     Timer Trigger : s'exécute toutes les 5 minutes.
     - /api/internal/auto-schedule maintient cours_config sur la séance active
       ou la prochaine séance planifiée.
-    - /api/internal/reminders/tick envoie les rappels dus.
     """
     if myTimer.past_due:
-        logging.warning("Le timer est en retard !")
+        logging.warning("Le timer d'auto-planification est en retard !")
 
-    api_url = os.environ["SOCRATE_API_URL"].rstrip("/")
-    api_key = os.environ["PLATFORM_API_KEY"]
+    _call_backend_endpoint("/api/internal/auto-schedule")
 
-    headers = {"X-Platform-Key": api_key, "Content-Type": "application/json"}
 
-    for endpoint in ("/api/internal/auto-schedule", "/api/internal/reminders/tick"):
-        url = f"{api_url}{endpoint}"
-        logging.info(f"Lancement automation -> {url}")
+@app.timer_trigger(
+    schedule="0 * * * * *",
+    arg_name="myTimer",
+    run_on_startup=False,
+    use_monitor=False,
+)
+def course_reminder_tick(myTimer: func.TimerRequest) -> None:
+    """Envoie les rappels dus chaque minute, indépendamment du planning."""
+    if myTimer.past_due:
+        logging.warning("Le timer de rappels est en retard !")
 
-        try:
-            resp = requests.post(url, headers=headers, json={}, timeout=30)
-            result = resp.json()
-
-            if result.get("success"):
-                logging.info(f"Automation OK {endpoint}: {len(result.get('results', []))} résultat(s)")
-            else:
-                logging.error(f"Erreur automation {endpoint}: {result}")
-
-        except Exception as e:
-            logging.error(f"Impossible d'appeler {endpoint}: {e}")
-            raise
+    _call_backend_endpoint("/api/internal/reminders/tick")

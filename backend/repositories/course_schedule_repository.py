@@ -1640,6 +1640,7 @@ def _ensure_sqlite_reminder_tables(cursor) -> None:
             local_time TEXT,
             subject_template TEXT NOT NULL,
             content_template TEXT NOT NULL,
+            signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate',
             recipient_scope TEXT NOT NULL DEFAULT 'all',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -1648,6 +1649,14 @@ def _ensure_sqlite_reminder_tables(cursor) -> None:
         )
         """
     )
+    rule_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(course_reminder_rules)").fetchall()
+    }
+    if "signature_template" not in rule_columns:
+        cursor.execute(
+            "ALTER TABLE course_reminder_rules "
+            "ADD COLUMN signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate'"
+        )
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS course_reminder_rule_recipients (
@@ -1855,6 +1864,7 @@ DEFAULT_COURSE_REMINDER_RULES = (
             "Cliquez ici pour vous connecter avec votre code {session_code} : "
             "{class_url_accueil}"
         ),
+        "signature_template": "L'équipe Le Socrate",
     },
     {
         "system_key": "five_minutes_before",
@@ -1869,6 +1879,7 @@ DEFAULT_COURSE_REMINDER_RULES = (
             "Cliquez ici pour vous connecter avec votre code {session_code} : "
             "{class_url_accueil}"
         ),
+        "signature_template": "L'équipe Le Socrate",
     },
 )
 
@@ -1895,6 +1906,7 @@ def ensure_default_course_reminder_rules(
                 local_time if rule["trigger_mode"] == "local_day_time" else None,
                 rule["subject_template"],
                 rule["content_template"],
+                rule["signature_template"],
                 "all",
                 now,
                 now,
@@ -1908,8 +1920,8 @@ def ensure_default_course_reminder_rules(
                     INSERT INTO course_reminder_rules (
                         platform_id, system_key, name, trigger_mode, days_before,
                         minutes_before, local_time, subject_template, content_template,
-                        recipient_scope, is_active, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s)
+                        signature_template, recipient_scope, is_active, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s)
                     ON CONFLICT (platform_id, system_key) WHERE system_key IS NOT NULL
                     DO NOTHING
                     """,
@@ -1925,8 +1937,8 @@ def ensure_default_course_reminder_rules(
             INSERT OR IGNORE INTO course_reminder_rules (
                 platform_id, system_key, name, trigger_mode, days_before,
                 minutes_before, local_time, subject_template, content_template,
-                recipient_scope, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                signature_template, recipient_scope, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
             [
                 (*row[:-2], _sqlite_datetime(row[-2]), _sqlite_datetime(row[-1]))
@@ -1956,10 +1968,10 @@ def ensure_default_course_reminder_rules_for_schedules(
                         INSERT INTO course_reminder_rules (
                             platform_id, system_key, name, trigger_mode, days_before,
                             minutes_before, local_time, subject_template, content_template,
-                            recipient_scope, is_active, created_at, updated_at
+                            signature_template, recipient_scope, is_active, created_at, updated_at
                         )
                         SELECT scheduled.platform_id, %s, %s, %s, %s, %s, %s,
-                               %s, %s, 'all', TRUE, %s, %s
+                               %s, %s, %s, 'all', TRUE, %s, %s
                         FROM (
                             SELECT DISTINCT platform_id
                             FROM course_sessions
@@ -1973,7 +1985,8 @@ def ensure_default_course_reminder_rules_for_schedules(
                             rule["system_key"], rule["name"], rule["trigger_mode"],
                             rule["days_before"], rule["minutes_before"],
                             local_time if rule["trigger_mode"] == "local_day_time" else None,
-                            rule["subject_template"], rule["content_template"], now, now,
+                            rule["subject_template"], rule["content_template"],
+                            rule["signature_template"], now, now,
                         ),
                     )
         return
@@ -1989,9 +2002,9 @@ def ensure_default_course_reminder_rules_for_schedules(
                 INSERT OR IGNORE INTO course_reminder_rules (
                     platform_id, system_key, name, trigger_mode, days_before,
                     minutes_before, local_time, subject_template, content_template,
-                    recipient_scope, is_active, created_at, updated_at
+                    signature_template, recipient_scope, is_active, created_at, updated_at
                 )
-                SELECT scheduled.platform_id, ?, ?, ?, ?, ?, ?, ?, ?, 'all', 1, ?, ?
+                SELECT scheduled.platform_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'all', 1, ?, ?
                 FROM (
                     SELECT DISTINCT platform_id
                     FROM course_sessions
@@ -2002,7 +2015,7 @@ def ensure_default_course_reminder_rules_for_schedules(
                     rule["system_key"], rule["name"], rule["trigger_mode"],
                     rule["days_before"], rule["minutes_before"],
                     local_time if rule["trigger_mode"] == "local_day_time" else None,
-                    rule["subject_template"], rule["content_template"],
+                    rule["subject_template"], rule["content_template"], rule["signature_template"],
                     _sqlite_datetime(now), _sqlite_datetime(now),
                 ),
             )
@@ -2032,7 +2045,7 @@ def _normalize_rule_row(row: dict[str, Any]) -> dict[str, Any]:
 def list_course_reminder_rules(platform_id: int) -> list[dict[str, Any]]:
     columns = (
         "id, platform_id, system_key, name, trigger_mode, days_before, minutes_before, "
-        "local_time, subject_template, content_template, recipient_scope, is_active, "
+        "local_time, subject_template, content_template, signature_template, recipient_scope, is_active, "
         "created_at, updated_at"
     )
     if schedule_store_is_postgres():
@@ -2101,6 +2114,7 @@ def save_course_reminder_rule(
     local_time: str | None,
     subject_template: str,
     content_template: str,
+    signature_template: str,
     recipient_scope: str,
     recipient_ids: list[int],
     is_active: bool,
@@ -2110,7 +2124,8 @@ def save_course_reminder_rule(
     normalized_ids = sorted({int(value) for value in recipient_ids or []})
     values = (
         str(name), str(trigger_mode), days_before, minutes_before, local_time,
-        str(subject_template), str(content_template), str(recipient_scope), bool(is_active), now,
+        str(subject_template), str(content_template), str(signature_template),
+        str(recipient_scope), bool(is_active), now,
     )
     if schedule_store_is_postgres():
         with get_postgres_connection() as conn:
@@ -2127,9 +2142,9 @@ def save_course_reminder_rule(
                         """
                         INSERT INTO course_reminder_rules (
                             platform_id, name, trigger_mode, days_before, minutes_before,
-                            local_time, subject_template, content_template, recipient_scope,
+                            local_time, subject_template, content_template, signature_template, recipient_scope,
                             is_active, created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                         """,
                         (int(platform_id), *values[:-1], now, now),
@@ -2140,7 +2155,8 @@ def save_course_reminder_rule(
                         UPDATE course_reminder_rules
                         SET name = %s, trigger_mode = %s, days_before = %s,
                             minutes_before = %s, local_time = %s, subject_template = %s,
-                            content_template = %s, recipient_scope = %s, is_active = %s,
+                            content_template = %s, signature_template = %s,
+                            recipient_scope = %s, is_active = %s,
                             updated_at = %s
                         WHERE id = %s AND platform_id = %s
                         RETURNING id
@@ -2178,15 +2194,15 @@ def save_course_reminder_rule(
             )
             if {int(row[0]) for row in cursor.fetchall()} != set(normalized_ids):
                 raise ValueError("Un destinataire sélectionné n'appartient pas à cette plateforme")
-        sqlite_values = (*values[:8], int(bool(is_active)), _sqlite_datetime(now))
+        sqlite_values = (*values[:9], int(bool(is_active)), _sqlite_datetime(now))
         if rule_id is None:
             cursor.execute(
                 """
                 INSERT INTO course_reminder_rules (
                     platform_id, name, trigger_mode, days_before, minutes_before,
-                    local_time, subject_template, content_template, recipient_scope,
+                    local_time, subject_template, content_template, signature_template, recipient_scope,
                     is_active, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (int(platform_id), *sqlite_values[:-1], _sqlite_datetime(now), _sqlite_datetime(now)),
             )
@@ -2197,7 +2213,7 @@ def save_course_reminder_rule(
                 UPDATE course_reminder_rules
                 SET name = ?, trigger_mode = ?, days_before = ?, minutes_before = ?,
                     local_time = ?, subject_template = ?, content_template = ?,
-                    recipient_scope = ?, is_active = ?, updated_at = ?
+                    signature_template = ?, recipient_scope = ?, is_active = ?, updated_at = ?
                 WHERE id = ? AND platform_id = ?
                 """,
                 (*sqlite_values, int(rule_id), int(platform_id)),
@@ -2300,6 +2316,7 @@ def list_due_reminder_delivery_candidates(
                             r.local_time,
                             r.subject_template,
                             r.content_template,
+                            r.signature_template,
                             r.recipient_scope,
                             CASE
                                 WHEN r.trigger_mode = 'relative_minutes' THEN
@@ -2418,6 +2435,7 @@ def list_due_reminder_delivery_candidates(
                     r.local_time,
                     r.subject_template,
                     r.content_template,
+                    r.signature_template,
                     r.recipient_scope,
                     CASE
                         WHEN r.trigger_mode = 'relative_minutes' THEN

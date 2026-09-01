@@ -6622,6 +6622,7 @@ function AudioCard({ title, icon, audios }) {
 // Slide-to-confirm + backup pipeline ne sont plus rendus ici : ils ont été
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
 const DEFAULT_REMINDER_SUBJECT = 'Votre cours commence le {date} à {time}'
+const DEFAULT_REMINDER_SIGNATURE = "L’équipe Le Socrate"
 const DEFAULT_REMINDER_MESSAGE = `Votre cours commence le {date} à {time}.
 
 Cliquez ici pour vous connecter directement : {class_url_connexion}
@@ -6644,6 +6645,7 @@ const newReminderRule = () => ({
   local_time: '18:00',
   subject_template: DEFAULT_REMINDER_SUBJECT,
   content_template: DEFAULT_REMINDER_MESSAGE,
+  signature_template: DEFAULT_REMINDER_SIGNATURE,
   recipient_scope: 'all',
   recipient_ids: [],
   is_active: true,
@@ -6808,7 +6810,9 @@ function ReminderRulesPanel({ platformId, recipients, recipientsLoading = false,
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Rappels automatiques</h4>
-          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>Chaque élève reçoit son propre lien d’accès.</p>
+          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>
+            Chaque élève reçoit son propre lien d’accès. Tous les rappels cochés seront envoyés.
+          </p>
         </div>
         {!editingId && (
           <button
@@ -6943,6 +6947,21 @@ function ReminderRulesPanel({ platformId, recipients, recipientsLoading = false,
               ))}
             </div>
           </div>
+
+          <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
+            Signature
+            <input
+              maxLength={500}
+              value={form.signature_template ?? DEFAULT_REMINDER_SIGNATURE}
+              onChange={(e) => setForm({ ...form, signature_template: e.target.value })}
+              placeholder="L’équipe Le Socrate"
+              className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-black/25"
+              style={inputStyle}
+            />
+            <span className="mt-1 block text-[11px] font-normal leading-4" style={{ color: colors.textMuted }}>
+              Laissez ce champ vide pour ne pas afficher de signature.
+            </span>
+          </label>
 
           <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
             Destinataires

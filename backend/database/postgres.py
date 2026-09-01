@@ -172,6 +172,7 @@ PIPELINE_REQUIRED_SCHEMA = {
         "trigger_mode",
         "subject_template",
         "content_template",
+        "signature_template",
         "recipient_scope",
         "is_active",
     },

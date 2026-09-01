@@ -267,6 +267,7 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
                 )
                 repo.ensure_default_course_reminder_rules(12, now=now)
                 rule = repo.list_course_reminder_rules(12)[0]
+                self.assertEqual(rule["signature_template"], "L'équipe Le Socrate")
                 delivery_id = repo.claim_course_reminder_delivery(
                     platform_id=12,
                     session_id=9,
@@ -298,6 +299,36 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
                     lease_seconds=900,
                     max_attempts=3,
                 ))
+        finally:
+            os.unlink(db_path)
+
+    def test_sqlite_reminder_rule_persists_a_custom_signature(self):
+        db_path = _make_schedule_db()
+        try:
+            now = datetime.now(FRANCE_TZ)
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
+            ):
+                saved = repo.save_course_reminder_rule(
+                    12,
+                    rule_id=None,
+                    name="Cinq minutes avant",
+                    trigger_mode="relative_minutes",
+                    days_before=None,
+                    minutes_before=5,
+                    local_time=None,
+                    subject_template="Cours dans cinq minutes",
+                    content_template="Cours à {time}",
+                    signature_template="L’équipe pédagogique",
+                    recipient_scope="all",
+                    recipient_ids=[],
+                    is_active=True,
+                    now=now,
+                )
+
+            self.assertEqual(saved["signature_template"], "L’équipe pédagogique")
+            self.assertEqual(saved["minutes_before"], 5)
         finally:
             os.unlink(db_path)
 

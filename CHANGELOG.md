@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-01
+
+### fix(rappels): signature personnalisable et priorité au rappel de 5 minutes
+
+Chaque règle de rappel possède désormais sa propre signature de mail. Elle peut
+être modifiée ou laissée vide depuis l’éditeur. Les rappels disposent maintenant
+d’un déclencheur Azure indépendant exécuté chaque minute, tandis que
+l’auto-planification conserve son rythme de cinq minutes. Un échec du planning
+ne peut donc plus empêcher l’envoi sensible à la minute. L’interface précise
+aussi que tous les rappels cochés restent actifs et seront envoyés à leur horaire.
+
 ## 2026-08-31
 
 ### fix(ui): aide cliquable sur la date de début

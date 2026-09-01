@@ -344,6 +344,7 @@ def init_database(_recovered_from_corruption: bool = False):
                 local_time TEXT,
                 subject_template TEXT NOT NULL,
                 content_template TEXT NOT NULL,
+                signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate',
                 recipient_scope TEXT NOT NULL DEFAULT 'all',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -352,6 +353,14 @@ def init_database(_recovered_from_corruption: bool = False):
             )
             """
         )
+        reminder_rule_columns = {
+            row[1] for row in cursor.execute("PRAGMA table_info(course_reminder_rules)").fetchall()
+        }
+        if "signature_template" not in reminder_rule_columns:
+            cursor.execute(
+                "ALTER TABLE course_reminder_rules "
+                "ADD COLUMN signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate'"
+            )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS course_reminder_rule_recipients (

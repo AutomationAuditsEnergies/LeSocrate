@@ -25,6 +25,20 @@ test('lets the center restore the default and insert variables at the cursor', a
   assert.match(source, /Lien habituel/)
 })
 
+test('lets the center customize or remove the reminder signature', async () => {
+  const source = await readFile(dashboardUrl, 'utf8')
+  const reminderPanel = source.slice(
+    source.indexOf('function ReminderRulesPanel'),
+    source.indexOf('function InvitationsToolContent'),
+  )
+
+  assert.match(source, /DEFAULT_REMINDER_SIGNATURE/)
+  assert.match(reminderPanel, />\s*Signature\s*</)
+  assert.match(reminderPanel, /signature_template/)
+  assert.match(reminderPanel, /Laissez ce champ vide pour ne pas afficher de signature/)
+  assert.match(reminderPanel, /Tous les rappels cochés seront envoyés/)
+})
+
 test('selects registered students by identity instead of displaying their email addresses', async () => {
   const source = await readFile(dashboardUrl, 'utf8')
   const reminderPanel = source.slice(

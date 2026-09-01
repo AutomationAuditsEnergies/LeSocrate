@@ -442,6 +442,7 @@ CREATE TABLE IF NOT EXISTS course_reminder_rules (
     local_time TIME,
     subject_template TEXT NOT NULL,
     content_template TEXT NOT NULL,
+    signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate',
     recipient_scope TEXT NOT NULL DEFAULT 'all',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -451,6 +452,9 @@ CREATE TABLE IF NOT EXISTS course_reminder_rules (
     CHECK (days_before IS NULL OR days_before >= 0),
     CHECK (minutes_before IS NULL OR minutes_before >= 1)
 );
+
+ALTER TABLE course_reminder_rules
+    ADD COLUMN IF NOT EXISTS signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_course_reminder_rules_system_key
     ON course_reminder_rules(platform_id, system_key)

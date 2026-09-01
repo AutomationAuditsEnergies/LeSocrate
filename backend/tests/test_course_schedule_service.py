@@ -107,6 +107,44 @@ def _seed_schedule(cursor, platform_id=12):
 
 
 class CourseScheduleServiceTest(unittest.TestCase):
+    def test_reminder_email_uses_the_rule_signature_and_allows_no_signature(self):
+        payload = {
+            "subject": "Rappel",
+            "content": "Votre cours commence bientôt.",
+            "class_url": "https://example.test/classe/test?invite=signed",
+            "scheduled_at": "2026-07-20 09:00:00",
+            "session_password": "ABC123",
+            "signature_template": "L’équipe de votre centre",
+        }
+
+        customized = css._build_reminder_html(payload)
+        without_signature = css._build_reminder_html({**payload, "signature_template": ""})
+
+        self.assertIn("L’équipe de votre centre", customized)
+        self.assertNotIn("L'équipe Le Socrate", customized)
+        self.assertNotIn("L’équipe de votre centre", without_signature)
+
+    def test_reminder_rule_accepts_a_custom_or_empty_signature(self):
+        base = {
+            "name": "Rappel",
+            "trigger_mode": "relative_minutes",
+            "minutes_before": 5,
+            "subject_template": "Cours dans 5 minutes",
+            "content_template": "Cours à {time}",
+        }
+
+        self.assertEqual(
+            css._validated_reminder_rule({
+                **base,
+                "signature_template": "Votre équipe pédagogique",
+            })["signature_template"],
+            "Votre équipe pédagogique",
+        )
+        self.assertEqual(
+            css._validated_reminder_rule({**base, "signature_template": ""})["signature_template"],
+            "",
+        )
+
     def test_webhook_delivery_has_stable_idempotency_key(self):
         response = Mock(status_code=200, text="")
         with patch.dict("os.environ", {
