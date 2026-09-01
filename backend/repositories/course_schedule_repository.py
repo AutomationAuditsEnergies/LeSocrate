@@ -2349,7 +2349,10 @@ def list_due_reminder_delivery_candidates(
                         SELECT *
                         FROM occurrences
                         WHERE due_at <= %(now)s
-                          AND (%(due_not_before)s IS NULL OR due_at >= %(due_not_before)s)
+                          AND (
+                            %(due_not_before)s::timestamptz IS NULL
+                            OR due_at >= %(due_not_before)s::timestamptz
+                          )
                           AND %(now)s < scheduled_at
                     ),
                     candidates AS (
