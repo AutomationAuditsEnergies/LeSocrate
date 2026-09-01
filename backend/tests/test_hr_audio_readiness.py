@@ -163,6 +163,74 @@ class HrAudioReadinessTest(unittest.TestCase):
         source.delete_blob.assert_called_once_with()
         self.assertEqual(events, ["upload", "delete"])
 
+    def test_playback_manifest_returns_cached_peaks_and_fresh_stream_url(self):
+        audio_blob = Mock()
+        audio_blob.get_blob_properties.return_value = SimpleNamespace(
+            size=70_000_000,
+            etag='"audio-etag"',
+            content_settings=SimpleNamespace(
+                content_type="audio/mpeg",
+                content_disposition=None,
+            ),
+        )
+        cache_blob = Mock()
+        blob_service = Mock()
+        blob_service.account_name = "ttsaccount"
+        blob_service.credential = SimpleNamespace(account_key="secret")
+        blob_service.get_blob_client.side_effect = lambda **kwargs: (
+            cache_blob if kwargs["blob"].endswith(".json") else audio_blob
+        )
+        ready_audio = {
+            "filename": "course_01.mp3",
+            "estimated_duration_seconds": 2100,
+        }
+
+        with patch(
+            "routes.hr_routes.HR_ENABLED",
+            True,
+        ), patch(
+            "routes.hr_routes.get_course_folder_identity",
+            return_value={"id": 91, "platform_id": 5},
+        ), patch(
+            "services.day_playlist_service.resolve_folder_playlist",
+            return_value={"schema_version": 2, "playlist_items": []},
+        ), patch(
+            "routes.hr_routes._inspect_generated_audio_assets",
+            return_value={"audios": [ready_audio], "invalid_audios": []},
+        ), patch(
+            "routes.hr_routes.resolve_folder_blob_path",
+            return_value="platform-5/folder-91/playlist/course_01.mp3",
+        ), patch.dict(
+            hr_routes.os.environ,
+            {"AZURE_TTS_STORAGE_CONNECTION_STRING": "tts"},
+            clear=False,
+        ), patch.object(
+            hr_routes.BlobServiceClient,
+            "from_connection_string",
+            return_value=blob_service,
+        ), patch(
+            "services.audio_waveform_service.get_or_create_waveform",
+            return_value={
+                "duration": 2100.0,
+                "peaks": [0.1, 0.4, 0.2],
+                "points": 3,
+                "cache_hit": True,
+            },
+        ), patch(
+            "routes.hr_routes.generate_blob_sas",
+            return_value="sig=fresh",
+        ):
+            response = self.client.get(
+                "/api/hr/cours-folders/91/audio-playback-manifest/course_01.mp3"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["peaks"], [0.1, 0.4, 0.2])
+        self.assertEqual(payload["duration"], 2100.0)
+        self.assertEqual(payload["waveform_source"], "cache")
+        self.assertIn("sig=fresh", payload["url"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,62 +56,56 @@ function waitForMediaReadyAfterSeek(media, targetSeconds, timeoutMs = 1200) {
   })
 }
 
-async function readAudioBlobResponse(resp, label = 'audio') {
-  if (!resp.ok) {
-    let detail = ''
-    const contentType = resp.headers.get('content-type') || ''
-    if (contentType.includes('application/json')) {
-      const data = await resp.json().catch(() => ({}))
-      detail = data.error || data.message || ''
-    } else {
-      detail = await resp.text().catch(() => '')
+function waitBeforeRetry(delayMs) {
+  return new Promise(resolve => window.setTimeout(resolve, delayMs))
+}
+
+function playMediaSegment(media, startSeconds, endSeconds, playbackId, activePlaybackIdRef) {
+  return new Promise((resolve, reject) => {
+    const start = Math.max(0, Number(startSeconds) || 0)
+    const end = Math.max(start, Number(endSeconds) || start)
+    if (!media || end - start < 0.02) {
+      resolve()
+      return
     }
-    const suffix = detail ? ` (${detail})` : ''
-    throw new Error(`${label} indisponible : HTTP ${resp.status}${suffix}`)
-  }
 
-  const blob = await resp.blob()
-  if (!blob.size) {
-    throw new Error(`${label} vide`)
-  }
-  if (blob.type === 'audio/mpeg') {
-    return blob
-  }
-  return new Blob([blob], { type: 'audio/mpeg' })
-}
+    let settled = false
+    const timeoutMs = Math.max(3000, (end - start + 8) * 1000)
+    let timeoutId = null
+    const cleanup = () => {
+      media.removeEventListener('timeupdate', checkPosition)
+      media.removeEventListener('error', fail)
+      media.removeEventListener('ended', finish)
+      if (timeoutId) window.clearTimeout(timeoutId)
+    }
+    const finish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      media.pause()
+      resolve()
+    }
+    const fail = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error('Le flux audio de prévisualisation est indisponible'))
+    }
+    const checkPosition = () => {
+      if (activePlaybackIdRef.current !== playbackId || media.currentTime >= end - 0.03) {
+        finish()
+      }
+    }
 
-async function fetchAudioBlob(url, { credentials = 'omit', headers = {}, label = 'audio' } = {}) {
-  let resp
-  try {
-    resp = await fetch(url, {
-      method: 'GET',
-      credentials,
-      cache: 'no-store',
-      headers,
-    })
-  } catch (e) {
-    throw new Error(e?.message === 'Failed to fetch'
-      ? `${label} inaccessible`
-      : (e?.message || `${label} indisponible`))
-  }
-
-  return readAudioBlobResponse(resp, label)
-}
-
-async function fetchProtectedAudioBlob(path, label = 'audio') {
-  let resp
-  try {
-    resp = await apiFetch(path, {
-      method: 'GET',
-      cache: 'no-store',
-    })
-  } catch (e) {
-    throw new Error(e?.message === 'Failed to fetch'
-      ? `${label} inaccessible`
-      : (e?.message || `${label} indisponible`))
-  }
-
-  return readAudioBlobResponse(resp, label)
+    media.addEventListener('timeupdate', checkPosition)
+    media.addEventListener('error', fail, { once: true })
+    media.addEventListener('ended', finish, { once: true })
+    timeoutId = window.setTimeout(finish, timeoutMs)
+    media.currentTime = start
+    waitForMediaReadyAfterSeek(media, start, 3000)
+      .then(() => media.play())
+      .catch(fail)
+  })
 }
 
 // Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
@@ -263,9 +257,15 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
   const syncRepairAttemptRef = useRef(new Set())
   const mountedRef = useRef(false)
   const playbackEpochRef = useRef(0)
+  const playingRef = useRef(false)
+  const streamLoadSequenceRef = useRef(0)
+  const streamLoadInProgressRef = useRef(false)
+  const streamRecoveryInProgressRef = useRef(false)
 
-  const audioCtxRef = useRef(null)      // Web Audio API context pour écoute splicée
-  const stitchedSourcesRef = useRef([]) // sources planifiées (pour pouvoir stopper)
+  const audioCtxRef = useRef(null)      // Web Audio API pour le clip TTS de remplacement
+  const stitchedSourcesRef = useRef([]) // sources TTS planifiées (pour pouvoir stopper)
+  const stitchedMediaRef = useRef([])   // flux original joué autour du remplacement
+  const stitchedPlaybackIdRef = useRef(0)
   const previewAudioRef = useRef(null)  // lecteur TTS temporaire
   const previewAudioUrlRef = useRef(null)
 
@@ -322,36 +322,78 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
     return url
   }, [clearAudioUrl, folderId, filename])
 
-  const buildBackendAudioStreamPath = useCallback(() => (
-    `/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`
-  ), [folderId, filename])
-
-  const loadAudioIntoWaveSurfer = useCallback(async (ws) => {
-    const url = await buildAudioStreamUrl()
-    let sasError = null
-    try {
-      const blob = await fetchAudioBlob(url, { credentials: 'omit', label: 'stockage audio' })
-      if (!mountedRef.current || wsRef.current !== ws) return undefined
-      return ws.loadBlob(blob)
-    } catch (e) {
-      sasError = e
-      console.warn('Chargement audio Azure direct échoué, fallback backend:', e)
-    }
+  const loadAudioIntoWaveSurfer = useCallback(async (
+    ws,
+    { resumeAt = 0, resumePlayback = false } = {},
+  ) => {
+    const loadSequence = ++streamLoadSequenceRef.current
+    streamLoadInProgressRef.current = true
+    let lastError = null
 
     try {
-      const blob = await fetchProtectedAudioBlob(
-        buildBackendAudioStreamPath(),
-        'proxy audio backend',
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          if (attempt > 0) {
+            setStatus(`Reconnexion au flux audio… tentative ${attempt + 1}/3`)
+            await waitBeforeRetry(attempt * 500)
+          }
+
+          const response = await apiFetch(
+            `/api/hr/cours-folders/${folderId}/audio-playback-manifest/${encodeURIComponent(filename)}?v=${Date.now()}`,
+            { cache: 'no-store', timeoutMs: 110000 },
+          )
+          const manifest = await response.json().catch(() => ({}))
+          if (!response.ok || !manifest.success || !manifest.url) {
+            throw new Error(manifest.error || `Manifeste audio indisponible (${response.status})`)
+          }
+
+          const manifestDuration = Number(manifest.duration)
+          const peaks = Array.isArray(manifest.peaks)
+            ? manifest.peaks.map(value => Number(value) || 0)
+            : []
+          if (!Number.isFinite(manifestDuration) || manifestDuration <= 0 || !peaks.length) {
+            throw new Error('Forme d’onde audio invalide')
+          }
+          if (
+            !mountedRef.current
+            || wsRef.current !== ws
+            || streamLoadSequenceRef.current !== loadSequence
+          ) return undefined
+
+          audioUrlRef.current = manifest.url
+          await ws.load(manifest.url, [peaks], manifestDuration)
+          if (
+            !mountedRef.current
+            || wsRef.current !== ws
+            || streamLoadSequenceRef.current !== loadSequence
+          ) return undefined
+
+          const safeResumeAt = Math.max(0, Math.min(Number(resumeAt) || 0, manifestDuration - 0.05))
+          if (safeResumeAt > 0) ws.setTime(safeResumeAt)
+          if (resumePlayback) await ws.play()
+          setError(null)
+          if (attempt > 0) setStatus(null)
+          return manifest
+        } catch (loadError) {
+          if (loadError?.name === 'AbortError') throw loadError
+          lastError = loadError
+          if (streamLoadSequenceRef.current !== loadSequence) return undefined
+        }
+      }
+
+      throw new Error(
+        `Le flux audio reste indisponible après 3 tentatives : ${lastError?.message || 'erreur réseau'}`,
       )
-      if (!mountedRef.current || wsRef.current !== ws) return undefined
-      return ws.loadBlob(blob)
-    } catch (backendError) {
-      throw new Error(`${backendError.message}${sasError ? ` (Azure direct: ${sasError.message})` : ''}`)
+    } finally {
+      if (streamLoadSequenceRef.current === loadSequence) {
+        streamLoadInProgressRef.current = false
+      }
     }
-  }, [buildAudioStreamUrl, buildBackendAudioStreamPath])
+  }, [folderId, filename])
 
   // ── Écoute splicée côté client (Web Audio API) ──
   const stopStitchedPlayback = useCallback(({ updateState = true } = {}) => {
+    stitchedPlaybackIdRef.current += 1
     stitchedSourcesRef.current.forEach(src => {
       try {
         src.stop()
@@ -360,6 +402,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
       }
     })
     stitchedSourcesRef.current = []
+    stitchedMediaRef.current.forEach(media => stopMediaPlayback(media, { unload: true }))
+    stitchedMediaRef.current = []
     try {
       audioCtxRef.current?.close()
     } catch {
@@ -385,6 +429,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
       }
       if (wsRef.current === ws) wsRef.current = null
     }
+    playingRef.current = false
     if (updateState) setPlaying(false)
   }, [stopPreviewPlayback, stopStitchedPlayback])
 
@@ -504,7 +549,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
 
     const ws = WaveSurfer.create({
       container: waveRef.current,
-      backend: 'WebAudio',
       waveColor: darkMode ? '#475569' : '#cbd5e1',
       progressColor: darkMode ? '#cbd5e1' : '#334155',
       cursorColor: '#f59e0b',
@@ -516,10 +560,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
       minPxPerSec: 0, // auto-fit au chargement
       autoScroll: true,
       fillParent: true,
-      blobMimeType: 'audio/mpeg',
-      fetchParams: {
-        credentials: 'omit',
-      },
       plugins: [regions],
     })
     wsRef.current = ws
@@ -620,15 +660,46 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
       const nextTime = Math.max(0, Math.min(Number(percent) || 0, 1)) * durationSeconds
       seekToSeconds(nextTime, { resumePlayback: true })
     })
-    ws.on('play', () => setPlaying(true))
-    ws.on('pause', () => setPlaying(false))
-    ws.on('finish', () => setPlaying(false))
+    ws.on('play', () => {
+      playingRef.current = true
+      setPlaying(true)
+    })
+    ws.on('pause', () => {
+      playingRef.current = false
+      setPlaying(false)
+    })
+    ws.on('finish', () => {
+      playingRef.current = false
+      setPlaying(false)
+    })
     ws.on('error', (e) => {
       if (cancelled) return
       if (e?.name === 'AbortError') return
+      // ws.load() emits this event before rejecting its promise. The retry
+      // loop above owns those failures and only exposes the final result.
+      if (streamLoadInProgressRef.current) return
+      if (streamRecoveryInProgressRef.current) return
+
       const message = typeof e === 'string' ? e : (e?.message || 'stream audio indisponible')
-      setLoading(false)
-      setError(`Impossible de charger l'audio : ${message}`)
+      const resumeAt = ws.getCurrentTime?.() || 0
+      const resumePlayback = ws.isPlaying?.() || playingRef.current
+      streamRecoveryInProgressRef.current = true
+      setStatus('Connexion au flux audio interrompue, reprise automatique…')
+      loadAudioIntoWaveSurfer(ws, { resumeAt, resumePlayback })
+        .then(() => {
+          if (!cancelled) setStatus(null)
+        })
+        .catch(recoveryError => {
+          if (cancelled || recoveryError?.name === 'AbortError') return
+          setLoading(false)
+          setStatus(null)
+          setError(
+            `Impossible de reprendre l'audio : ${recoveryError?.message || message}`,
+          )
+        })
+        .finally(() => {
+          streamRecoveryInProgressRef.current = false
+        })
     })
 
     // Permettre la création de régions par drag
@@ -652,6 +723,9 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
       cancelled = true
       waveEl?.removeEventListener('wheel', handleWheel)
       stopAllPlayback({ destroyWaveSurfer: true, updateState: false })
+      streamLoadSequenceRef.current += 1
+      streamLoadInProgressRef.current = false
+      streamRecoveryInProgressRef.current = false
       clearAudioUrl()
     }
   }, [clearAudioUrl, clearPreview, darkMode, loadAudioIntoWaveSurfer, stopAllPlayback])
@@ -725,18 +799,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
     try {
       const audioCtx = new AudioContext()
       audioCtxRef.current = audioCtx
-
-      // Récupérer le buffer décodé depuis WaveSurfer (déjà en mémoire, 0 réseau)
-      const wsBuffer = wsRef.current?.getDecodedData()
-      if (!wsBuffer) throw new Error('Audio non chargé')
-
-      // Copier dans notre AudioContext (les buffers sont liés à leur context)
-      const origBuffer = audioCtx.createBuffer(
-        wsBuffer.numberOfChannels, wsBuffer.length, wsBuffer.sampleRate
-      )
-      for (let ch = 0; ch < wsBuffer.numberOfChannels; ch++) {
-        origBuffer.copyToChannel(wsBuffer.getChannelData(ch), ch)
-      }
+      await audioCtx.resume()
 
       // Décoder le TTS preview depuis le base64
       const previewBytes = Uint8Array.from(atob(previewB64), c => c.charCodeAt(0))
@@ -747,42 +810,53 @@ export default function AudioEditor({ folderId, filename, darkMode, colors }) {
 
       // Jouer 8s avant la région (ou depuis le début)
       const listenFrom = Math.max(0, startSec - 8)
+      const originalDuration = (duration || wsRef.current?.getDuration?.() * 1000 || 0) / 1000
+      const listenUntil = Math.min(originalDuration, endSec + 8)
+      const streamUrl = audioUrlRef.current || await buildAudioStreamUrl()
+      const originalMedia = new Audio(streamUrl)
+      originalMedia.preload = 'auto'
+      stitchedMediaRef.current = [originalMedia]
+      const playbackId = ++stitchedPlaybackIdRef.current
 
-      const now = audioCtx.currentTime + 0.05
-
-      // Part 1 : original de listenFrom jusqu'au début de la région
-      const src1 = audioCtx.createBufferSource()
-      src1.buffer = origBuffer
-      const part1Duration = startSec - listenFrom
-      src1.connect(audioCtx.destination)
-      src1.start(now, listenFrom, part1Duration)
-
-      // Part 2 : TTS preview
-      const src2 = audioCtx.createBufferSource()
-      src2.buffer = previewBuffer
-      src2.connect(audioCtx.destination)
-      src2.start(now + part1Duration)
-
-      // Part 3 : original à partir de la fin de la région, pendant 8s max
-      const src3 = audioCtx.createBufferSource()
-      src3.buffer = origBuffer
-      const part3Duration = Math.min(8, origBuffer.duration - endSec)
-      src3.connect(audioCtx.destination)
-      src3.start(now + part1Duration + previewBuffer.duration, endSec, part3Duration)
-
-      stitchedSourcesRef.current = [src1, src2, src3]
-
-      const totalDuration = part1Duration + previewBuffer.duration + part3Duration
       setStitchedPlaying(true)
       setLoadingStitch(false)
 
-      setTimeout(() => {
-        if (audioCtxRef.current === audioCtx) {
-          stopStitchedPlayback()
+      // Le MP3 original reste streamé. Seul le petit clip TTS temporaire est
+      // décodé, puis inséré entre les deux segments de contexte.
+      await playMediaSegment(
+        originalMedia,
+        listenFrom,
+        startSec,
+        playbackId,
+        stitchedPlaybackIdRef,
+      )
+      if (stitchedPlaybackIdRef.current !== playbackId) return
+
+      await new Promise((resolve, reject) => {
+        const previewSource = audioCtx.createBufferSource()
+        previewSource.buffer = previewBuffer
+        previewSource.connect(audioCtx.destination)
+        previewSource.addEventListener('ended', resolve, { once: true })
+        stitchedSourcesRef.current = [previewSource]
+        try {
+          previewSource.start()
+        } catch (previewError) {
+          reject(previewError)
         }
-      }, (totalDuration + 0.5) * 1000)
+      })
+      if (stitchedPlaybackIdRef.current !== playbackId) return
+
+      await playMediaSegment(
+        originalMedia,
+        endSec,
+        listenUntil,
+        playbackId,
+        stitchedPlaybackIdRef,
+      )
+      if (stitchedPlaybackIdRef.current === playbackId) stopStitchedPlayback()
 
     } catch (e) {
+      stopStitchedPlayback()
       setError('Erreur lors de la lecture splicée : ' + e.message)
       setLoadingStitch(false)
     }

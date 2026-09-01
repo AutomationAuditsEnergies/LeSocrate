@@ -17,6 +17,7 @@ PyPDF2==3.0.1
 reportlab>=4.2.0,<5
 librosa>=0.10.0
 numpy>=1.24.0
+soundfile>=0.12.1
 python-docx>=1.1.0
 edge-tts>=7.2.0
 json-repair>=0.30.0

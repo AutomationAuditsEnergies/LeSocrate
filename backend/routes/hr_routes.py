@@ -6173,6 +6173,23 @@ def create_hr_blueprint():
             raise ValueError(f"Dossier {folder_id} introuvable")
         return int(folder["platform_id"])
 
+    def _build_audio_sas_url(blob_service_client, blob_path, filename):
+        """Mint a fresh read-only URL after all potentially slow preparation."""
+        account_name = blob_service_client.account_name
+        account_key = blob_service_client.credential.account_key
+        expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name="audiostts",
+            blob_name=blob_path,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=expiry,
+            content_type="audio/mpeg",
+            content_disposition=f'inline; filename="{os.path.basename(filename)}"',
+        )
+        return f"https://{account_name}.blob.core.windows.net/audiostts/{blob_path}?{sas_token}"
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-url/<path:filename>", methods=["GET"])
     def get_audio_sas_url(folder_id, filename):
         """Génère une SAS URL temporaire (1h) pour streamer l'audio directement depuis Azure."""
@@ -6243,20 +6260,7 @@ def create_hr_blueprint():
                     "size": blob_size,
                 }), 422
 
-            account_name = blob_service_client.account_name
-            account_key = blob_service_client.credential.account_key
-            expiry = datetime.now(timezone.utc) + timedelta(hours=1)
-            sas_token = generate_blob_sas(
-                account_name=account_name,
-                container_name="audiostts",
-                blob_name=blob_path,
-                account_key=account_key,
-                permission=BlobSasPermissions(read=True),
-                expiry=expiry,
-                content_type="audio/mpeg",
-                content_disposition=f'inline; filename="{os.path.basename(filename)}"',
-            )
-            url = f"https://{account_name}.blob.core.windows.net/audiostts/{blob_path}?{sas_token}"
+            url = _build_audio_sas_url(blob_service_client, blob_path, filename)
             return jsonify({
                 "success": True,
                 "url": url,
@@ -6266,6 +6270,133 @@ def create_hr_blueprint():
             })
         except Exception as e:
             logger.error(f"❌ get_audio_sas_url: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route(
+        "/api/hr/cours-folders/<int:folder_id>/audio-playback-manifest/<path:filename>",
+        methods=["GET"],
+    )
+    def get_audio_playback_manifest(folder_id, filename):
+        """Return cached peaks, duration and a fresh URL for Range streaming.
+
+        Peak extraction happens once per source blob ETag and is stored next to
+        the MP3.  If decoding the waveform fails, playback remains available
+        with estimated peaks instead of falling back to a full browser fetch.
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+            platform_id = int(folder["platform_id"])
+            from services.azure_blob_service import CONTAINER_AUDIOS
+            from services.audio_waveform_service import (
+                DEFAULT_WAVEFORM_POINTS,
+                get_or_create_waveform,
+                waveform_cache_blob_path,
+            )
+            from services.day_playlist_service import resolve_folder_playlist
+
+            inspection = _inspect_generated_audio_assets(
+                folder_id,
+                folder,
+                resolve_folder_playlist(folder_id),
+            )
+            ready_by_name = {
+                item["filename"]: item for item in inspection.get("audios") or []
+            }
+            ready_audio = ready_by_name.get(filename)
+            if not ready_audio:
+                invalid = next(
+                    (
+                        item for item in inspection.get("invalid_audios") or []
+                        if item.get("filename") == filename
+                    ),
+                    None,
+                )
+                return jsonify({
+                    "success": False,
+                    "error": "Audio non prêt ou synchronisation slides incomplète.",
+                    "code": (invalid or {}).get("reason") or "audio_not_ready",
+                }), 422
+
+            storage_connection = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+            if not storage_connection:
+                return jsonify({
+                    "success": False,
+                    "error": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant",
+                }), 500
+
+            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+            blob_service_client = BlobServiceClient.from_connection_string(storage_connection)
+            audio_blob_client = blob_service_client.get_blob_client(
+                container=CONTAINER_AUDIOS,
+                blob=blob_path,
+            )
+            props = audio_blob_client.get_blob_properties()
+            blob_size = int(props.size or 0)
+
+            waveform_source = "cached"
+            waveform_warning = None
+            try:
+                cache_blob_client = blob_service_client.get_blob_client(
+                    container=CONTAINER_AUDIOS,
+                    blob=waveform_cache_blob_path(blob_path),
+                )
+                waveform = get_or_create_waveform(
+                    audio_blob_client,
+                    cache_blob_client,
+                    audio_properties=props,
+                    points=DEFAULT_WAVEFORM_POINTS,
+                )
+                waveform_source = "cache" if waveform.get("cache_hit") else "generated"
+            except Exception as waveform_error:
+                logger.warning(
+                    "Waveform extraction failed for %s; using estimated peaks: %s",
+                    blob_path,
+                    waveform_error,
+                )
+                duration_guess = float(
+                    ready_audio.get("estimated_duration_seconds")
+                    or ready_audio.get("duration_seconds")
+                    or 1
+                )
+                # A deterministic lightweight placeholder keeps native Range
+                # streaming operational even if the decoder is unavailable.
+                estimated_points = 512
+                waveform = {
+                    "duration": duration_guess,
+                    "peaks": [
+                        round(0.08 + ((index * 37) % 23) / 100, 3)
+                        for index in range(estimated_points)
+                    ],
+                    "points": estimated_points,
+                    "cache_hit": False,
+                }
+                waveform_source = "estimated"
+                waveform_warning = "waveform_generation_failed"
+
+            # Mint the SAS only after waveform generation so its full lifetime
+            # is available to the media element.
+            stream_url = _build_audio_sas_url(
+                blob_service_client,
+                blob_path,
+                filename,
+            )
+            return jsonify({
+                "success": True,
+                "url": stream_url,
+                "duration": float(waveform["duration"]),
+                "peaks": waveform["peaks"],
+                "points": int(waveform.get("points") or len(waveform["peaks"])),
+                "size": blob_size,
+                "waveform_source": waveform_source,
+                "warning": waveform_warning,
+            })
+        except Exception as e:
+            logger.error(f"❌ get_audio_playback_manifest: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-stream/<path:filename>", methods=["GET"])

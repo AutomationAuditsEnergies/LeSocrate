@@ -23,16 +23,13 @@ test('routes protected course and schedule requests through apiFetch', async () 
   assert.doesNotMatch(coursesSource, /window\.open\s*\(/)
 })
 
-test('keeps raw fetch limited to the external audio URL', async () => {
+test('loads the protected audio manifest without a browser-side full-file fetch', async () => {
   const audioSource = await readSource('components/AudioEditor.jsx')
   const rawFetchCalls = [...audioSource.matchAll(/\bfetch\s*\(/g)]
 
-  assert.equal(rawFetchCalls.length, 1)
-  assert.match(audioSource, /async function fetchAudioBlob\(url,/)
-  assert.match(
-    audioSource,
-    /async function fetchProtectedAudioBlob\(path,[\s\S]*?apiFetch\(path,/,
-  )
+  assert.equal(rawFetchCalls.length, 0)
+  assert.match(audioSource, /audio-playback-manifest/)
+  assert.match(audioSource, /await ws\.load\(manifest\.url, \[peaks\], manifestDuration\)/)
   assert.doesNotMatch(audioSource, /apiRequestHeaders/)
   assert.doesNotMatch(audioSource, /\bapiUrl\s*\(/)
 })
