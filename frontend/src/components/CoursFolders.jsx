@@ -18,7 +18,7 @@ const AUDIO_FILTERS = [
 ]
 
 const AUDIO_TYPE_META = {
-  cours: { label: 'Cours', icon: 'record_voice_over', color: '#16a34a', lightBg: '#f0fdf4', darkBg: '#14532d22', lightBorder: '#bbf7d0', darkBorder: '#166534' },
+  cours: { label: 'Cours', icon: 'record_voice_over', iconImage: '/icons/course-books.png', color: '#16a34a', lightBg: '#f0fdf4', darkBg: '#14532d22', lightBorder: '#bbf7d0', darkBorder: '#166534' },
   qa: { label: 'Q&A', icon: 'forum', color: '#2563eb', lightBg: '#eff6ff', darkBg: '#1d4ed822', lightBorder: '#bfdbfe', darkBorder: '#1d4ed8' },
   pause: { label: 'Pause', icon: 'free_breakfast', color: '#f59e0b', lightBg: '#fffbeb', darkBg: '#92400e22', lightBorder: '#fde68a', darkBorder: '#b45309' },
   jointure: { label: 'Jointure', icon: 'link', color: '#64748b', lightBg: '#f8fafc', darkBg: '#33415522', lightBorder: '#cbd5e1', darkBorder: '#475569' },
@@ -1618,6 +1618,17 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
   const selectedCourseMaterial = selectedFolder
     ? materialForFolder(selectedFolder, Math.max(0, selectedFolderIndex))
     : null
+  const toolbarCourseBlocs = contentScriptModal
+    ? mergeCourseBlocsForScriptModal(contentScriptModal.course_blocs, contentScriptModal.planned_course_blocs)
+    : []
+  const activeToolbarCourse = toolbarCourseBlocs.find(
+    bloc => Number(bloc.bloc_number) === Number(scriptActiveCourse),
+  ) || toolbarCourseBlocs[0] || null
+  const isEditingToolbarCourse = Boolean(
+    activeToolbarCourse
+    && editingSegment?.type === 'course'
+    && Number(editingSegment.bloc_number) === Number(activeToolbarCourse.bloc_number),
+  )
 
   const handleDownloadCourseMaterial = async () => {
     if (!selectedCourseMaterial?.url || downloadingCourseMaterial) return
@@ -2136,7 +2147,12 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                       className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-xl"
                       style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }}
                     >
-                      <Icon name="graphic_eq" style={{ fontSize: '19px' }} />
+                      <img
+                        src="/icons/headphones.png"
+                        alt=""
+                        aria-hidden="true"
+                        className="h-[22px] w-[22px] object-contain"
+                      />
                     </span>
                     <div className="min-w-0">
                       <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</h4>
@@ -2229,7 +2245,16 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                             />
                             <div className="flex-1 min-w-0">
                               <p className="flex items-center gap-2 text-xs font-medium" style={{ color: audio ? colors.textSecondary : colors.textMuted }}>
-                                <Icon name={meta.icon} style={{ color: colors.textMuted, fontSize: '16px' }} />
+                                {meta.iconImage ? (
+                                  <img
+                                    src={meta.iconImage}
+                                    alt=""
+                                    aria-hidden="true"
+                                    className="h-[18px] w-[18px] flex-none object-contain"
+                                  />
+                                ) : (
+                                  <Icon name={meta.icon} style={{ color: colors.textMuted, fontSize: '16px' }} />
+                                )}
                                 <span>{audioPlaylistLabel(item)}</span>
                                 <span style={{ color: colors.textMuted, fontWeight: 600 }}>
                                   · {item.filename}
@@ -2406,12 +2431,23 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               <h1 className="min-w-0 truncate text-sm font-semibold sm:text-base" style={{ color: colors.text }}>
                 {selectedFolder?.name || 'Journée sélectionnée'}
               </h1>
-              <div className="ml-auto flex-none">
+              <div className="ml-auto flex flex-none items-center gap-2">
+                {contentScriptView !== 'source' && !scriptActiveBreak && activeToolbarCourse && !isEditingToolbarCourse && (
+                  <button
+                    type="button"
+                    onClick={() => handleStartCourseBlocEdit(activeToolbarCourse)}
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 sm:w-44"
+                    title="Modifier le texte"
+                  >
+                    <Icon name="edit" style={{ fontSize: '17px' }} />
+                    <span className="hidden sm:inline">Modifier le texte</span>
+                  </button>
+                )}
                 {courseMaterialsLoading ? (
                   <button
                     type="button"
                     disabled
-                    className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white opacity-60"
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white opacity-60 sm:w-44"
                   >
                     <Icon name="hourglass_top" style={{ fontSize: '17px' }} />
                     <span className="hidden sm:inline">PDF en cours…</span>
@@ -2421,7 +2457,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     type="button"
                     onClick={handleDownloadCourseMaterial}
                     disabled={downloadingCourseMaterial}
-                    className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 disabled:cursor-wait disabled:opacity-60"
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40 disabled:cursor-wait disabled:opacity-60 sm:w-44"
                     title="Télécharger le PDF"
                   >
                     <Icon name={downloadingCourseMaterial ? 'hourglass_top' : 'download'} style={{ fontSize: '17px' }} />
@@ -2431,7 +2467,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                   <button
                     type="button"
                     onClick={fetchCourseMaterials}
-                    className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30 dark:hover:bg-white/5"
+                    className="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30 dark:hover:bg-white/5 sm:w-44"
                     style={{
                       borderColor: courseMaterialsError ? '#fecaca' : colors.border,
                       color: courseMaterialsError ? '#b91c1c' : colors.textSecondary,
@@ -2875,8 +2911,8 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                             )}
                           </p>
                         </div>
-                        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-                          {isEditingCourse ? (
+                        {isEditingCourse && (
+                          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                             <>
                               <button
                                 type="button"
@@ -2897,18 +2933,8 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                                 {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
                               </button>
                             </>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleStartCourseBlocEdit(active)}
-                              className="flex min-h-10 items-center gap-2 rounded-lg px-4 text-xs font-semibold transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
-                              style={{ color: colors.cardBg, backgroundColor: colors.text }}
-                            >
-                              <Icon name="edit" style={{ fontSize: '15px' }} />
-                              Modifier le texte
-                            </button>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </header>
                       {isGeneratingCourse && (
                         <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
