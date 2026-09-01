@@ -11,8 +11,11 @@ import {
   findActiveAudioSlideTiming,
 } from '../components/slides/audioSlideSync'
 import {
+  getStudentCourseView,
   getStudentAudioProxyPath,
   isBreakAudioType,
+  positionStudentAudio,
+  saveStudentCourseView,
 } from '../studentCoursePlayback.js'
 import './Video.css'
 
@@ -126,7 +129,7 @@ export default function Video() {
   const [showPlayPrompt, setShowPlayPrompt] = useState(false)
   const [breakRemaining, setBreakRemaining] = useState(null)
   const [slideDeck, setSlideDeck] = useState({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
-  const [slideView, setSlideView] = useState('professor')
+  const [slideView, setSlideView] = useState(() => getStudentCourseView())
   const [playbackTime, setPlaybackTime] = useState(0)
   const audioRef = useRef(null)
 
@@ -191,6 +194,10 @@ export default function Video() {
       audioRef.current.muted = muted
     }
   }, [muted])
+
+  useEffect(() => {
+    saveStudentCourseView(slideView)
+  }, [slideView])
 
   // Fonction pour basculer le mute
   const handleToggleMute = () => {
@@ -306,7 +313,6 @@ export default function Video() {
     let cancelled = false
     const resetTimer = window.setTimeout(() => {
       if (cancelled) return
-      setSlideView('professor')
       setSlideDeck({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
     }, 0)
 
@@ -379,8 +385,10 @@ export default function Video() {
     const initialRemaining = Math.max(0, Number(audioInfo.remaining) || 0)
     const startedAt = Date.now()
     let hasAttemptedPlay = false
+    let playbackReady = false
     let refreshed = false
     let endedTimer = null
+    const positioningController = new AbortController()
 
     const refreshAtBoundary = (delay = 0) => {
       if (refreshed) return
@@ -392,19 +400,9 @@ export default function Video() {
       )
     }
 
-    const positionMedia = () => {
-      const decodedAssetDuration = Number.isFinite(audio.duration)
-        ? audio.duration
-        : Math.max(0, Number(audioInfo.assetDuration) || 0)
-      const maxOffset = decodedAssetDuration > 0
-        ? Math.max(0, decodedAssetDuration - 0.05)
-        : initialOffset
-      audio.currentTime = Math.min(initialOffset, maxOffset)
-      setPlaybackTime(initialOffset * 1000)
-    }
-
     const syncPlaybackClock = () => {
       if (!breakAudio) {
+        if (!playbackReady) return
         setPlaybackTime((Number(audio.currentTime) || 0) * 1000)
         return
       }
@@ -433,11 +431,6 @@ export default function Video() {
       })
     }
 
-    const handleLoadedMetadata = () => {
-      positionMedia()
-      syncPlaybackClock()
-    }
-    const handleCanPlay = () => attemptPlay()
     const handleTimeUpdate = () => syncPlaybackClock()
     const handleEnded = () => {
       const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
@@ -448,13 +441,33 @@ export default function Video() {
       console.error('[Audio] Erreur chargement du proxy:', audio.error)
     }
 
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata)
     audio.addEventListener('timeupdate', handleTimeUpdate)
     audio.addEventListener('playing', syncPlaybackClock)
-    audio.addEventListener('canplay', handleCanPlay)
     audio.addEventListener('ended', handleEnded)
     audio.addEventListener('error', handleError)
     audio.load()
+
+    positionStudentAudio(audio, initialOffset, {
+      knownDuration: audioInfo.assetDuration,
+      signal: positioningController.signal,
+    }).then((positionedOffset) => {
+      if (positioningController.signal.aborted) return
+      playbackReady = true
+      if (!breakAudio) setPlaybackTime(positionedOffset * 1000)
+      syncPlaybackClock()
+      attemptPlay()
+    }).catch((err) => {
+      if (err.name === 'AbortError' || positioningController.signal.aborted) return
+      console.warn('[Audio] Reprise exacte indisponible, nouvelle tentative au démarrage:', err)
+      playbackReady = true
+      try {
+        audio.currentTime = initialOffset
+      } catch {
+        // The media element will retain its nearest playable position.
+      }
+      syncPlaybackClock()
+      attemptPlay()
+    })
 
     const clockTimer = window.setInterval(syncPlaybackClock, 250)
     const hardBoundaryTimer = window.setTimeout(() => {
@@ -463,11 +476,10 @@ export default function Video() {
     }, Math.max(0, initialRemaining * 1000))
 
     return () => {
+      positioningController.abort()
       audio.pause()
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('playing', syncPlaybackClock)
-      audio.removeEventListener('canplay', handleCanPlay)
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('error', handleError)
       window.clearInterval(clockTimer)
