@@ -2631,6 +2631,7 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
               const plannedCourseBlocs = contentScriptModal.planned_course_blocs || []
               const visibleCourseBlocs = mergeCourseBlocsForScriptModal(generatedCourseBlocs, plannedCourseBlocs)
               const visiblePauseBreaks = (contentScriptModal.breaks || []).filter(br => br.type !== 'qa' && br.type !== 'jointure')
+              const visibleJointureBreaks = (contentScriptModal.breaks || []).filter(br => br.type === 'jointure')
               const generatedBlocNumbers = new Set(generatedCourseBlocs.map(bloc => Number(bloc?.bloc_number || 0)).filter(Boolean))
               return (
             <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -2712,6 +2713,48 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     </button>
                   )
                 })}
+                {scriptSidebarMode === 'courses_pauses' && visibleJointureBreaks.length > 0 && (
+                  <>
+                    <p className="px-1 pb-2 pt-4 text-xs font-semibold" style={{ color: colors.textMuted }}>
+                      Jointures entre cours
+                    </p>
+                    {visibleJointureBreaks.map((br) => {
+                      const isActive = scriptActiveBreak === br.filename
+                      const fromCourse = Number(br.bloc_number || 0)
+                      const toCourse = fromCourse + 1
+                      return (
+                        <button
+                          key={br.filename}
+                          type="button"
+                          onClick={() => { setScriptActiveBreak(br.filename); setEditingSegment(null); resetScriptAnnotationDraft() }}
+                          className="mb-1.5 block w-full rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                          style={{
+                            backgroundColor: isActive ? colors.text : 'transparent',
+                            color: isActive ? colors.cardBg : colors.text,
+                          }}
+                          aria-label={`Afficher la jointure entre les cours ${fromCourse} et ${toCourse}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span
+                              className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
+                              style={{ backgroundColor: isActive ? colors.cardBg : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? colors.text : colors.textSecondary }}
+                            >
+                              <Icon name="link" style={{ fontSize: '14px' }} />
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? colors.cardBg : colors.text }}>
+                                Cours {String(fromCourse).padStart(2, '0')} vers cours {String(toCourse).padStart(2, '0')}
+                              </p>
+                              <p className="mt-0.5 truncate text-xs" style={{ color: isActive ? colors.cardBg : colors.textMuted, opacity: isActive ? 0.72 : 1 }}>
+                                Texte générique · {Math.round(br.duration_sec || 0)} s
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </>
+                )}
                 {scriptSidebarMode === 'courses_pauses' && visiblePauseBreaks.length > 0 && (
                   <>
                     <p className="px-1 pb-2 pt-4 text-xs font-semibold" style={{ color: colors.textMuted }}>
@@ -2754,9 +2797,9 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                     })}
                   </>
                 )}
-                {scriptSidebarMode === 'courses_pauses' && visiblePauseBreaks.length === 0 && (
+                {scriptSidebarMode === 'courses_pauses' && visibleJointureBreaks.length === 0 && visiblePauseBreaks.length === 0 && (
                   <p className="px-1 pb-2 pt-4 text-xs leading-5" style={{ color: colors.textMuted }}>
-                    Aucune pause pour cette journée.
+                    Aucune pause ni jointure pour cette journée.
                   </p>
                 )}
                 </nav>
@@ -2831,47 +2874,62 @@ export default function CoursFoldersModal({ platformId, platformName, targetSess
                           )}
                         </div>
 
-                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                          <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-                            <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Intro (au début du fichier)</span>
-                          </div>
-                          <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                            {isEditingBreak ? (
-                              <textarea
-                                value={editBreakDraft.intro}
-                                onChange={e => setEditBreakDraft(prev => ({ ...prev, intro: e.target.value }))}
-                                rows={5}
-                                className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
-                                style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'monospace', border: `1px solid ${colors.border}` }}
-                              />
-                            ) : (
-                              <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                        {br.type === 'jointure' ? (
+                          <section className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}` }}>
+                            <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                              <h3 className="text-xs font-bold" style={{ color: colors.textSecondary }}>Texte lu par le TTS</h3>
+                            </div>
+                            <div className="px-4 py-4" style={{ backgroundColor: colors.cardBg }}>
+                              <p className="max-w-[72ch] whitespace-pre-wrap text-[15px] leading-8" style={{ color: colors.text, fontFamily: 'Inter, system-ui, -apple-system, sans-serif', textWrap: 'pretty' }}>
                                 {br.intro || '—'}
                               </p>
-                            )}
-                          </div>
-                        </div>
+                            </div>
+                          </section>
+                        ) : (
+                          <>
+                            <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                              <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                                <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Intro (au début du fichier)</span>
+                              </div>
+                              <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                                {isEditingBreak ? (
+                                  <textarea
+                                    value={editBreakDraft.intro}
+                                    onChange={e => setEditBreakDraft(prev => ({ ...prev, intro: e.target.value }))}
+                                    rows={5}
+                                    className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
+                                    style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'monospace', border: `1px solid ${colors.border}` }}
+                                  />
+                                ) : (
+                                  <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                                    {br.intro || '—'}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
 
-                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                          <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-                            <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Outro (à la fin du fichier)</span>
-                          </div>
-                          <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                            {isEditingBreak ? (
-                              <textarea
-                                value={editBreakDraft.outro}
-                                onChange={e => setEditBreakDraft(prev => ({ ...prev, outro: e.target.value }))}
-                                rows={5}
-                                className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
-                                style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'monospace', border: `1px solid ${colors.border}` }}
-                              />
-                            ) : (
-                              <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
-                                {br.outro || '—'}
-                              </p>
-                            )}
-                          </div>
-                        </div>
+                            <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                              <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                                <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Outro (à la fin du fichier)</span>
+                              </div>
+                              <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                                {isEditingBreak ? (
+                                  <textarea
+                                    value={editBreakDraft.outro}
+                                    onChange={e => setEditBreakDraft(prev => ({ ...prev, outro: e.target.value }))}
+                                    rows={5}
+                                    className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
+                                    style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'monospace', border: `1px solid ${colors.border}` }}
+                                  />
+                                ) : (
+                                  <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                                    {br.outro || '—'}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </>
                     )
                   }
