@@ -36,17 +36,3 @@ def course_automation_tick(myTimer: func.TimerRequest) -> None:
         logging.warning("Le timer d'auto-planification est en retard !")
 
     _call_backend_endpoint("/api/internal/auto-schedule")
-
-
-@app.timer_trigger(
-    schedule="0 * * * * *",
-    arg_name="myTimer",
-    run_on_startup=False,
-    use_monitor=False,
-)
-def course_reminder_tick(myTimer: func.TimerRequest) -> None:
-    """Envoie les rappels dus chaque minute, indépendamment du planning."""
-    if myTimer.past_due:
-        logging.warning("Le timer de rappels est en retard !")
-
-    _call_backend_endpoint("/api/internal/reminders/tick")
