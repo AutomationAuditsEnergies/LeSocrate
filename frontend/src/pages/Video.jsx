@@ -11,11 +11,13 @@ import {
   findActiveAudioSlideTiming,
 } from '../components/slides/audioSlideSync'
 import {
+  getStudentLiveAudioOffset,
   getStudentCourseView,
   getStudentAudioProxyPath,
   isBreakAudioType,
   positionStudentAudio,
   saveStudentCourseView,
+  synchronizeStudentAudioToLiveOffset,
 } from '../studentCoursePlayback.js'
 import './Video.css'
 
@@ -390,6 +392,10 @@ export default function Video() {
     let endedTimer = null
     const positioningController = new AbortController()
 
+    const liveOffsetNow = () => getStudentLiveAudioOffset(initialOffset, startedAt, {
+      duration: audioInfo.assetDuration,
+    })
+
     const refreshAtBoundary = (delay = 0) => {
       if (refreshed) return
       refreshed = true
@@ -401,16 +407,22 @@ export default function Video() {
     }
 
     const syncPlaybackClock = () => {
+      const liveOffset = liveOffsetNow()
+      if (playbackReady) {
+        synchronizeStudentAudioToLiveOffset(audio, liveOffset, {
+          knownDuration: audioInfo.assetDuration,
+        })
+      }
+
       if (!breakAudio) {
-        if (!playbackReady) return
-        setPlaybackTime((Number(audio.currentTime) || 0) * 1000)
+        setPlaybackTime(liveOffset * 1000)
         return
       }
 
       const elapsed = Math.max(0, (Date.now() - startedAt) / 1000)
       const remaining = Math.max(0, initialRemaining - elapsed)
       setBreakRemaining(Math.ceil(remaining))
-      setPlaybackTime((initialOffset + elapsed) * 1000)
+      setPlaybackTime(liveOffset * 1000)
       if (remaining <= 0) {
         audio.pause()
         refreshAtBoundary()
@@ -442,7 +454,10 @@ export default function Video() {
     }
 
     audio.addEventListener('timeupdate', handleTimeUpdate)
+    audio.addEventListener('loadeddata', syncPlaybackClock)
+    audio.addEventListener('canplay', syncPlaybackClock)
     audio.addEventListener('playing', syncPlaybackClock)
+    audio.addEventListener('seeked', syncPlaybackClock)
     audio.addEventListener('ended', handleEnded)
     audio.addEventListener('error', handleError)
     audio.load()
@@ -479,7 +494,10 @@ export default function Video() {
       positioningController.abort()
       audio.pause()
       audio.removeEventListener('timeupdate', handleTimeUpdate)
+      audio.removeEventListener('loadeddata', syncPlaybackClock)
+      audio.removeEventListener('canplay', syncPlaybackClock)
       audio.removeEventListener('playing', syncPlaybackClock)
+      audio.removeEventListener('seeked', syncPlaybackClock)
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('error', handleError)
       window.clearInterval(clockTimer)

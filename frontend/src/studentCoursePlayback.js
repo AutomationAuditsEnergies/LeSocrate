@@ -42,6 +42,44 @@ export function clampStudentAudioOffset(offset, duration) {
   return Math.min(requestedOffset, Math.max(0, decodedDuration - 0.05))
 }
 
+export function getStudentLiveAudioOffset(
+  initialOffset,
+  startedAtMs,
+  {
+    nowMs = Date.now(),
+    duration = 0,
+  } = {},
+) {
+  const elapsedSeconds = Math.max(0, (Number(nowMs) - Number(startedAtMs)) / 1000) || 0
+  return clampStudentAudioOffset((Number(initialOffset) || 0) + elapsedSeconds, duration)
+}
+
+export function synchronizeStudentAudioToLiveOffset(
+  media,
+  liveOffset,
+  {
+    knownDuration = 0,
+    toleranceSeconds = 1.25,
+  } = {},
+) {
+  if (!media || Number(media.readyState) < MEDIA_METADATA_READY_STATE || media.seeking) return false
+
+  const mediaDuration = Number.isFinite(Number(media.duration))
+    ? Number(media.duration)
+    : Number(knownDuration)
+  const targetOffset = clampStudentAudioOffset(liveOffset, mediaDuration)
+  const currentOffset = Math.max(0, Number(media.currentTime) || 0)
+  const tolerance = Math.max(0, Number(toleranceSeconds) || 0)
+  if (Math.abs(currentOffset - targetOffset) <= tolerance) return false
+
+  try {
+    media.currentTime = targetOffset
+    return true
+  } catch {
+    return false
+  }
+}
+
 function abortError() {
   const error = new Error('Audio positioning cancelled')
   error.name = 'AbortError'

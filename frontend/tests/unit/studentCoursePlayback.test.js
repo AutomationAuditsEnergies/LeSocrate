@@ -5,8 +5,10 @@ import {
   clampStudentAudioOffset,
   getStudentAudioProxyPath,
   getStudentCourseView,
+  getStudentLiveAudioOffset,
   positionStudentAudio,
   saveStudentCourseView,
+  synchronizeStudentAudioToLiveOffset,
 } from '../../src/studentCoursePlayback.js'
 
 test('streams teaching audio through the authenticated API proxy', () => {
@@ -62,6 +64,25 @@ test('clamps a resumed offset inside the decoded audio duration', () => {
   assert.equal(clampStudentAudioOffset(120, 600), 120)
   assert.equal(clampStudentAudioOffset(700, 600), 599.95)
   assert.equal(clampStudentAudioOffset(-10, 600), 0)
+})
+
+test('keeps a late arrival and a refreshed player on the live course clock', () => {
+  const courseStartedAt = Date.UTC(2026, 8, 1, 8, 5, 0)
+  const liveOffset = getStudentLiveAudioOffset(300, courseStartedAt, {
+    nowMs: courseStartedAt + 2500,
+    duration: 2100,
+  })
+  assert.equal(liveOffset, 302.5)
+
+  const media = {
+    readyState: 4,
+    duration: 2100,
+    seeking: false,
+    currentTime: 0,
+  }
+  assert.equal(synchronizeStudentAudioToLiveOffset(media, liveOffset), true)
+  assert.equal(media.currentTime, 302.5)
+  assert.equal(synchronizeStudentAudioToLiveOffset(media, 303), false)
 })
 
 test('waits for metadata and a completed seek before resuming audio', async () => {
