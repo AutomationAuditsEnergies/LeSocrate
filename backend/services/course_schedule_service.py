@@ -1817,6 +1817,7 @@ def _process_due_delivery_candidates(
     conn,
     cursor,
     now,
+    due_not_before,
     base_url,
     dry_run,
     previous_evening_hour,
@@ -1837,6 +1838,7 @@ def _process_due_delivery_candidates(
 
     candidates = schedule_repo.list_due_reminder_delivery_candidates(
         now=now,
+        due_not_before=due_not_before,
         active_hours=active_hours,
         limit=min(1000, max(batch_size, batch_size * 2)),
         sqlite_cursor=cursor,
@@ -2014,7 +2016,14 @@ def _process_due_delivery_candidates(
     return results
 
 
-def process_due_reminders(base_url=None, dry_run=False, *, now=None, platform_ids=None):
+def process_due_reminders(
+    base_url=None,
+    dry_run=False,
+    *,
+    now=None,
+    platform_ids=None,
+    due_not_before=None,
+):
     """Materialize, claim and drain bounded reminder delivery batches.
 
     One scheduler tick may need to notify thousands of recipients at the same
@@ -2101,6 +2110,7 @@ def process_due_reminders(base_url=None, dry_run=False, *, now=None, platform_id
                 conn=conn,
                 cursor=cursor,
                 now=now,
+                due_not_before=due_not_before,
                 base_url=base_url,
                 dry_run=dry_run,
                 previous_evening_hour=previous_evening_hour,
@@ -2140,6 +2150,7 @@ def process_due_test_clock_reminders(base_url=None):
                 base_url=base_url,
                 now=simulated_now,
                 platform_ids=platform_ids,
+                due_not_before=_as_france_time(clock["simulated_anchor"]),
             ))
     return results
 

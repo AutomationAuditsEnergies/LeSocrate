@@ -1046,9 +1046,22 @@ def create_hr_blueprint():
 
         from repositories.test_clock_repository import (
             list_center_platform_ids,
+            reset_center_test_state,
             set_center_test_clock,
         )
 
+        try:
+            active_hours = max(
+                1.0,
+                float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12")),
+            )
+        except (TypeError, ValueError):
+            active_hours = 12.0
+        reset_result = reset_center_test_state(
+            center_account_id,
+            requested_time,
+            active_hours=active_hours,
+        )
         set_center_test_clock(center_account_id, requested_time, real_now)
         platform_ids = list_center_platform_ids(center_account_id)
         # Le réglage est immédiatement observable : nul besoin d'attendre le
@@ -1061,11 +1074,14 @@ def create_hr_blueprint():
             ),
             now=requested_time,
             platform_ids=platform_ids,
+            due_not_before=requested_time,
         )
         payload = _test_clock_payload(center_account_id)
         payload["scheduler"] = {
             "platform_count": len(platform_ids),
             "reminder_count": len(reminder_results or []),
+            "reset_session_count": reset_result["session_count"],
+            "reset_delivery_count": reset_result["delivery_count"],
         }
         return jsonify(payload), 200
 

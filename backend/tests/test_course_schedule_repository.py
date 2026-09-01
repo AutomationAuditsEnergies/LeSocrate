@@ -435,6 +435,61 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         conn.close()
         self.assertEqual(rows, [])
 
+    def test_test_clock_window_does_not_backfill_previous_evening_reminder(self):
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        service.ensure_course_schedule_tables(cursor)
+        now = FRANCE_TZ.localize(datetime(2026, 9, 1, 7, 55))
+        test_anchor = now - timedelta(minutes=1)
+        scheduled_at = FRANCE_TZ.localize(datetime(2026, 9, 1, 8, 0))
+        created = now.strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            """
+            INSERT INTO course_sessions (
+                platform_id, session_index, scheduled_at, status, session_password,
+                created_at, updated_at
+            ) VALUES (20, 1, ?, 'planned', 'CODE1234', ?, ?)
+            """,
+            (scheduled_at.strftime("%Y-%m-%d %H:%M:%S"), created, created),
+        )
+        cursor.execute(
+            "INSERT INTO course_reminder_recipients (platform_id, email, created_at) VALUES (20, 'clock@example.test', ?)",
+            (created,),
+        )
+        cursor.executemany(
+            """
+            INSERT INTO course_reminder_rules (
+                platform_id, system_key, name, trigger_mode, days_before,
+                minutes_before, local_time, subject_template, content_template,
+                recipient_scope, is_active, created_at, updated_at
+            ) VALUES (20, ?, ?, ?, ?, ?, ?, ?, 'Cours', 'all', 1, ?, ?)
+            """,
+            [
+                (
+                    "previous_evening", "La veille", "local_day_time", 1,
+                    None, "18:00", "Demain", created, created,
+                ),
+                (
+                    "five_minutes_before", "5 minutes", "relative_minutes", None,
+                    5, None, "Dans 5 minutes", created, created,
+                ),
+            ],
+        )
+
+        with patch.object(repo, "schedule_store_is_postgres", lambda: False):
+            rows = repo.list_due_reminder_delivery_candidates(
+                now=now,
+                due_not_before=test_anchor,
+                active_hours=12,
+                limit=10,
+                sqlite_cursor=cursor,
+                platform_ids=[20],
+            )
+
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["system_key"], "five_minutes_before")
+
     def test_schedule_backend_follows_pipeline_postgres_in_hybrid_mode(self):
         with patch.object(repo, "DATABASE_BACKEND", "hybrid"), patch.object(
             repo, "PIPELINE_DATABASE_BACKEND", "sqlite"

@@ -2275,6 +2275,7 @@ def delete_course_reminder_rule(platform_id: int, rule_id: int) -> bool:
 def list_due_reminder_delivery_candidates(
     *,
     now,
+    due_not_before=None,
     active_hours: float = 12.0,
     limit: int = 100,
     sqlite_cursor=None,
@@ -2348,6 +2349,7 @@ def list_due_reminder_delivery_candidates(
                         SELECT *
                         FROM occurrences
                         WHERE due_at <= %(now)s
+                          AND (%(due_not_before)s IS NULL OR due_at >= %(due_not_before)s)
                           AND %(now)s < scheduled_at
                     ),
                     candidates AS (
@@ -2398,6 +2400,7 @@ def list_due_reminder_delivery_candidates(
                     """,
                     {
                         "now": now,
+                        "due_not_before": due_not_before,
                         "active_hours": float(active_hours),
                         "limit": safe_limit,
                         "platform_ids": scoped_platform_ids,
@@ -2412,6 +2415,9 @@ def list_due_reminder_delivery_candidates(
         if own_connection:
             _ensure_sqlite_reminder_tables(cursor)
         now_value = _sqlite_datetime(now)
+        due_not_before_value = (
+            _sqlite_datetime(due_not_before) if due_not_before is not None else None
+        )
         platform_scope_sql = (
             f"AND cs.platform_id IN ({','.join('?' for _ in scoped_platform_ids)})"
             if scoped_platform_ids
@@ -2465,6 +2471,7 @@ def list_due_reminder_delivery_candidates(
                 SELECT *
                 FROM occurrences
                 WHERE due_at <= ?
+                  AND (? IS NULL OR due_at >= ?)
                   AND ? < scheduled_at
             ),
             candidates AS (
@@ -2514,8 +2521,9 @@ def list_due_reminder_delivery_candidates(
             LIMIT ?
             """,
             (
-                float(active_hours), now_value, *scoped_platform_ids, now_value, now_value,
-                now_value, now_value, safe_limit,
+                float(active_hours), now_value, *scoped_platform_ids, now_value,
+                due_not_before_value, due_not_before_value,
+                now_value, now_value, now_value, safe_limit,
             ),
         )
         columns = [description[0] for description in cursor.description]
