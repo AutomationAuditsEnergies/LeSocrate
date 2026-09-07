@@ -6,11 +6,6 @@ const source = readFileSync(
   new URL('../../src/pages/HRDashboard.jsx', import.meta.url),
   'utf8',
 )
-const styles = readFileSync(
-  new URL('../../src/index.css', import.meta.url),
-  'utf8',
-)
-
 test('submits teacher orders for review before opening Stripe Checkout', () => {
   assert.match(source, /data\.next_action === 'pending_review'/)
   assert.match(source, /Demande envoyée/)
@@ -30,14 +25,13 @@ test('reconciles the browser success redirect with Stripe on the server', () => 
   assert.match(source, /order\.payment_status === 'paid'/)
 })
 
-test('welcomes a paid teacher into its roster card with reduced-motion support', () => {
-  assert.match(source, /checkout === 'success'[\s\S]*setWorkspaceSection\('teachers'\)/)
-  assert.match(source, /function TeacherArrivalAnimation/)
-  assert.match(source, /targetRef\.current/)
-  assert.match(source, /teacher-arrival-robot/)
+test('lets the user open the paid teacher from the confirmation notice', () => {
+  assert.doesNotMatch(source, /checkout === 'success'[\s\S]{0,240}setWorkspaceSection\('teachers'\)/)
   assert.match(source, /setNewlyCreatedPlatformId\(order\.platform_id\)/)
-  assert.match(styles, /teacher-card-robot-reveal/)
-  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*teacher-arrival-layer/)
+  assert.match(source, /action: 'view_teacher'/)
+  assert.match(source, /Voir le professeur/)
+  assert.match(source, /orderNotice\.action === 'view_teacher'[\s\S]*setWorkspaceSection\('teachers'\)/)
+  assert.doesNotMatch(source, /TeacherArrivalAnimation/)
 })
 
 test('stops tracking cancelled, failed, expired, or refunded payments', () => {

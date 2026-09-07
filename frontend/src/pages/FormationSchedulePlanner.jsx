@@ -504,7 +504,7 @@ export default function FormationSchedulePlanner({
   }, [activeDateKey, normalizedDates])
 
   useEffect(() => {
-    if (!applyAllDays || !bulkTemplateId || !normalizedDates.length) return
+    if (!applyAllDays || !normalizedDates.length) return
     setAssignments(assignTemplateToAll(normalizedDates, bulkTemplateId))
     setCustomDays({})
   }, [applyAllDays, bulkTemplateId, normalizedDates])

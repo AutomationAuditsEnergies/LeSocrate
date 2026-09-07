@@ -33,6 +33,8 @@ const AdminValidations = lazy(() => import('./pages/AdminValidations.jsx'))
 const ScheduleConfig = lazy(() => import('./pages/ScheduleConfig.jsx'))
 const FormationPipeline = lazy(() => import('./pages/FormationPipeline.jsx'))
 const ClassEntry = lazy(loadClassEntryPage)
+const TeacherAnimationLab = lazy(() => import('./pages/TeacherAnimationLab.jsx'))
+const SlideBrandingLab = lazy(() => import('./pages/SlideBrandingLab.jsx'))
 
 function preloadCourseRoutes() {
   return Promise.all([loadVideoPage(), loadAttentePage()])
@@ -260,6 +262,8 @@ export default function App() {
             }
           />
           <Route path="/landing" element={<Landing />} />
+          {import.meta.env.DEV && <Route path="/animation-lab" element={<TeacherAnimationLab />} />}
+          {import.meta.env.DEV && <Route path="/slide-branding-lab" element={<SlideBrandingLab />} />}
           <Route path="/attente" element={<Attente />} />
           <Route
             path="/classe/:centerSlug/:platformSlug"

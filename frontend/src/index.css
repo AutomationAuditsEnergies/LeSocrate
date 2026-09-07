@@ -128,87 +128,173 @@ canvas {
   text-wrap: balance;
 }
 
-@keyframes teacher-card-enter {
-  from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.97);
-    filter: blur(5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0);
-  }
-}
-
-.teacher-card-enter {
-  animation: teacher-card-enter 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes teacher-card-robot-reveal {
-  0%, 72% {
-    opacity: 0;
-  }
-  100% {
-    opacity: 1;
-  }
-}
-
-.teacher-card-enter .teacher-card-robot-image {
-  animation: teacher-card-robot-reveal 1120ms cubic-bezier(0.25, 1, 0.5, 1) both;
-}
-
-.teacher-arrival-layer {
+.animation-lab__toolbar {
   position: fixed;
-  inset: 0;
-  z-index: 80;
-  overflow: hidden;
+  inset: 18px 20px auto;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   pointer-events: none;
-  contain: layout paint;
 }
 
-.teacher-arrival-robot,
-.teacher-arrival-halo {
-  position: fixed;
-  left: 0;
-  top: 0;
-  opacity: 0;
-  transform-origin: center;
-  will-change: transform, opacity, filter;
+.animation-lab__toolbar button {
+  pointer-events: auto;
 }
 
-.teacher-arrival-robot {
-  z-index: 2;
-  max-width: none;
-  object-fit: contain;
-  user-select: none;
+.animation-lab__payment-page,
+.animation-lab__teachers-page {
+  min-height: 100vh;
 }
 
-.teacher-arrival-halo {
-  z-index: 1;
+.animation-lab__payment-page {
+  display: grid;
+  place-items: center;
+  padding: 96px 24px 40px;
+  background: #fafaf9;
+}
+
+.animation-lab__payment-card {
+  width: min(440px, 100%);
+  padding: 34px;
+  border: 1px solid #e4e4e7;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 4px 8px rgba(15, 23, 42, .06);
+  text-align: center;
+}
+
+.animation-lab__check {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 20px;
+  place-items: center;
   border-radius: 9999px;
-  background:
-    radial-gradient(circle at 45% 45%, rgba(255, 255, 255, .96) 0 10%, rgba(125, 211, 252, .52) 26%, rgba(139, 92, 246, .3) 48%, rgba(217, 70, 239, 0) 72%);
-  filter: blur(1px);
+  background: #18181b;
+  color: #fff;
+  font-size: 24px;
 }
 
-.teacher-arrival-ring {
-  position: absolute;
-  inset: 10%;
-  border: 1px solid rgba(129, 140, 248, .62);
+.animation-lab__payment-kicker {
+  color: #6d28d9;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .18em;
+}
+
+.animation-lab__payment-card h1 {
+  margin-top: 8px;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -.03em;
+}
+
+.animation-lab__payment-card > p:not(.animation-lab__payment-kicker) {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.animation-lab__receipt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid #e4e4e7;
+  color: #475569;
+  font-size: 12px;
+  text-align: left;
+}
+
+.animation-lab__receipt strong {
+  flex-shrink: 0;
+  color: #18181b;
+  font-size: 14px;
+}
+
+.animation-lab__payment-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+.animation-lab__payment-action button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  background: #18181b;
+  padding: 10px 14px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.animation-lab__payment-action button:hover {
+  background: #2c2c30;
+}
+
+.animation-lab__payment-action button:focus-visible {
+  outline: 2px solid rgba(24, 24, 27, .4);
+  outline-offset: 3px;
+}
+
+.animation-lab__teachers-page {
+  padding: 118px 24px 40px;
+  background: #fafaf9;
+}
+
+.animation-lab__roster-shell {
+  width: min(1040px, 100%);
+  margin: 0 auto;
+}
+
+.animation-lab__roster-heading {
+  text-align: center;
+}
+
+.animation-lab__roster-heading h1 {
+  font-size: 32px;
+  font-weight: 650;
+  letter-spacing: -.03em;
+}
+
+.animation-lab__roster-heading p {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.animation-lab__filters {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.animation-lab__filters span {
+  padding: 8px 13px;
+  border: 1px solid #e4e4e7;
   border-radius: 9999px;
+  color: #52525b;
+  font-size: 12px;
 }
 
-.teacher-arrival-ring--outer {
-  inset: 2%;
-  border-color: rgba(34, 211, 238, .4);
-  transform: rotate(-12deg) scaleY(.68);
+.animation-lab__filters span:first-child {
+  border-color: #18181b;
+  background: #18181b;
+  color: #fff;
 }
 
-.teacher-arrival-ring--inner {
-  inset: 18%;
-  border-color: rgba(217, 70, 239, .5);
-  transform: rotate(18deg) scaleX(.72);
+.animation-lab__cards {
+  display: flex;
+  justify-content: center;
+  margin-top: 24px;
 }
 
 @keyframes teacher-robot-float {
@@ -331,8 +417,6 @@ canvas {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .teacher-card-enter,
-  .teacher-card-enter .teacher-card-robot-image,
   .teacher-robot-float,
   .teacher-identity-avatar,
   .recruitment-review-enter,
@@ -341,10 +425,6 @@ canvas {
   .rncp-form-content,
   .recruitment-thinking-dot {
     animation: none;
-  }
-
-  .teacher-arrival-layer {
-    display: none;
   }
 
   .rncp-form-content {

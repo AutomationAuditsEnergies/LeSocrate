@@ -206,7 +206,7 @@ export default function HRDashboard() {
   const [selectedAiVoiceId, setSelectedAiVoiceId] = useState('')
   const creatingRef = useRef(false)
   const creationRequestRef = useRef({ fingerprint: '', id: '' })
-  const animatedTeacherOrdersRef = useRef(new Set())
+  const loadedTeacherOrdersRef = useRef(new Set())
   const [cardPage, setCardPage] = useState(0)
   const [teacherRosterFilter, setTeacherRosterFilter] = useState('all')
   const [workspaceSection, setWorkspaceSection] = useState(() => {
@@ -485,9 +485,6 @@ export default function HRDashboard() {
     setFailedTeacherOrderId(null)
     if (checkout === 'success') {
       setActiveTeacherOrderId(orderId)
-      setWorkspaceSection('teachers')
-      setTeacherRosterFilter('all')
-      setCardPage(0)
       setOrderNotice({
         tone: 'info',
         title: 'Confirmation du paiement',
@@ -599,10 +596,7 @@ export default function HRDashboard() {
           })
           setActiveTeacherOrderId(null)
         } else if (order.fulfillment_status === 'fulfilled') {
-          const shouldAnimateTeacher = Boolean(order.platform_id)
-            && !animatedTeacherOrdersRef.current.has(order.id || activeTeacherOrderId)
-          if (shouldAnimateTeacher) {
-            animatedTeacherOrdersRef.current.add(order.id || activeTeacherOrderId)
+          if (order.platform_id) {
             setNewlyCreatedPlatformId(order.platform_id)
           }
           setFailedTeacherOrderId(null)
@@ -610,11 +604,11 @@ export default function HRDashboard() {
             tone: 'success',
             title: 'Votre professeur IA se prépare',
             message: 'Il apparaît maintenant dans Mes professeurs IA. Les cours sont produits en arrière-plan.',
+            action: 'view_teacher',
           })
           setActiveTeacherOrderId(null)
           setShowCreateModal(false)
           setShowModulesModal(false)
-          setWorkspaceSection('teachers')
           setTeacherRosterFilter('all')
           setCardPage(0)
           await fetchPlatforms()
@@ -650,14 +644,14 @@ export default function HRDashboard() {
             tone: 'info',
             title: 'Paiement confirmé',
             message: 'Votre commande est payée et sa préparation est maintenant prise en charge.',
+            action: 'view_teacher',
           })
           if (
             order.platform_id
-            && !animatedTeacherOrdersRef.current.has(order.id || activeTeacherOrderId)
+            && !loadedTeacherOrdersRef.current.has(order.id || activeTeacherOrderId)
           ) {
-            animatedTeacherOrdersRef.current.add(order.id || activeTeacherOrderId)
+            loadedTeacherOrdersRef.current.add(order.id || activeTeacherOrderId)
             setNewlyCreatedPlatformId(order.platform_id)
-            setWorkspaceSection('teachers')
             setTeacherRosterFilter('all')
             setCardPage(0)
             await fetchPlatforms()
@@ -1180,12 +1174,6 @@ export default function HRDashboard() {
     }
   }, [expandedAttendancePlatform, attendanceDate])
 
-  useEffect(() => {
-    if (!newlyCreatedPlatformId) return undefined
-    const timeoutId = window.setTimeout(() => setNewlyCreatedPlatformId(null), 8000)
-    return () => window.clearTimeout(timeoutId)
-  }, [newlyCreatedPlatformId])
-
   const handleCreatePlatform = async (teacherDescription = '', schedule = null, slideBrandName = 'Le Socrate') => {
     if (creatingRef.current) return
     setCreateOrderError('')
@@ -1528,6 +1516,23 @@ export default function HRDashboard() {
                     <Icon name={retryingTeacherOrderId ? 'hourglass_top' : 'refresh'} className="text-base" />
                     {retryingTeacherOrderId ? 'Reprise en cours…' : 'Reprendre la pipeline'}
                   </button>
+                )}
+                {orderNotice.action === 'view_teacher' && (
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWorkspaceSection('teachers')
+                        setTeacherRosterFilter('all')
+                        setCardPage(0)
+                        setOrderNotice(null)
+                      }}
+                      className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-[#18181B] px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#2C2C30] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 focus-visible:ring-offset-2"
+                    >
+                      Voir le professeur
+                      <Icon name="arrow_forward" className="text-sm" />
+                    </button>
+                  </div>
                 )}
               </div>
               <button type="button" onClick={() => setOrderNotice(null)} className="rounded p-1" aria-label="Fermer">
@@ -4083,119 +4088,6 @@ const TEACHER_ROSTER_FILTERS = [
   { id: 'completed', label: 'Terminés' },
 ]
 
-function TeacherArrivalAnimation({ platform, targetRef }) {
-  const layerRef = useRef(null)
-  const haloRef = useRef(null)
-  const robotRef = useRef(null)
-
-  useEffect(() => {
-    const layer = layerRef.current
-    const halo = haloRef.current
-    const robot = robotRef.current
-    let frameId = 0
-    let retryTimer = 0
-    let attempts = 0
-    const animations = []
-
-    const playArrival = () => {
-      const target = targetRef.current
-      if (!layer || !halo || !robot || !target) {
-        attempts += 1
-        if (attempts < 20) retryTimer = window.setTimeout(playArrival, 50)
-        return
-      }
-
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        layer.hidden = true
-        return
-      }
-
-      const targetRect = target.getBoundingClientRect()
-      const robotSize = Math.min(190, Math.max(112, targetRect.width * 0.72))
-      const startLeft = Math.min(
-        window.innerWidth - robotSize - 24,
-        Math.max(24, window.innerWidth * 0.7),
-      )
-      const startTop = Math.max(72, window.innerHeight * 0.12)
-      const endLeft = targetRect.left + (targetRect.width - robotSize) / 2
-      const endTop = targetRect.top + (targetRect.height - robotSize) / 2
-      const startTransform = `translate3d(${startLeft}px, ${startTop}px, 0)`
-      const hoverTransform = `translate3d(${endLeft}px, ${endTop - 18}px, 0)`
-      const endTransform = `translate3d(${endLeft}px, ${endTop}px, 0)`
-
-      robot.style.width = `${robotSize}px`
-      robot.style.height = `${robotSize}px`
-      halo.style.width = `${robotSize * 1.24}px`
-      halo.style.height = `${robotSize * 1.24}px`
-
-      animations.push(robot.animate([
-        { opacity: 0, transform: `${startTransform} scale(.46) rotate(-7deg)`, filter: 'blur(9px) saturate(1.45)' },
-        { opacity: 1, offset: 0.18, transform: `${startTransform} scale(.88) rotate(-3deg)`, filter: 'blur(0) saturate(1.25)' },
-        { opacity: 1, offset: 0.76, transform: `${hoverTransform} scale(1.08) rotate(1deg)`, filter: 'blur(0) saturate(1.12)' },
-        { opacity: 1, transform: `${endTransform} scale(1) rotate(0)`, filter: 'blur(0) saturate(1)' },
-      ], {
-        duration: 1080,
-        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-        fill: 'forwards',
-      }))
-
-      animations.push(halo.animate([
-        { opacity: 0, transform: `${startTransform} translate(-10%, -10%) scale(.28)` },
-        { opacity: 0.82, offset: 0.2, transform: `${startTransform} translate(-10%, -10%) scale(1)` },
-        { opacity: 0.5, offset: 0.72, transform: `${hoverTransform} translate(-10%, -10%) scale(.72)` },
-        { opacity: 0, transform: `${endTransform} translate(-10%, -10%) scale(.45)` },
-      ], {
-        duration: 1080,
-        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-        fill: 'forwards',
-      }))
-
-      animations.push(target.animate([
-        { boxShadow: 'inset 0 0 0 0 rgba(108, 99, 255, 0)' },
-        { boxShadow: 'inset 0 0 0 2px rgba(108, 99, 255, .55), 0 0 30px rgba(108, 99, 255, .22)', offset: 0.55 },
-        { boxShadow: 'inset 0 0 0 0 rgba(108, 99, 255, 0)' },
-      ], {
-        delay: 720,
-        duration: 560,
-        easing: 'cubic-bezier(0.25, 1, 0.5, 1)',
-      }))
-
-      Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
-        if (layer) layer.hidden = true
-      })
-    }
-
-    frameId = window.requestAnimationFrame(playArrival)
-    return () => {
-      window.cancelAnimationFrame(frameId)
-      window.clearTimeout(retryTimer)
-      animations.forEach((animation) => animation.cancel())
-    }
-  }, [platform.id, targetRef])
-
-  const robotTheme = getRobotTheme(
-    platform.center_platform_number || platform.id,
-    platform.teacher_color,
-  )
-
-  return createPortal(
-    <div ref={layerRef} className="teacher-arrival-layer" aria-hidden="true">
-      <div ref={haloRef} className="teacher-arrival-halo">
-        <span className="teacher-arrival-ring teacher-arrival-ring--outer" />
-        <span className="teacher-arrival-ring teacher-arrival-ring--inner" />
-      </div>
-      <img
-        ref={robotRef}
-        src={robotTheme.src}
-        alt=""
-        draggable={false}
-        className="teacher-arrival-robot"
-      />
-    </div>,
-    document.body,
-  )
-}
-
 function PlatformCardsView({
   platforms,
   cardPage,
@@ -4246,7 +4138,6 @@ function PlatformCardsView({
   const [rosterSearch, setRosterSearch] = useState('')
   const [rosterSearchOpen, setRosterSearchOpen] = useState(false)
   const [selectedTeacherId, setSelectedTeacherId] = useState(null)
-  const teacherArrivalTargetRef = useRef(null)
   const [testClockOpen, setTestClockOpen] = useState(false)
   const [testClock, setTestClock] = useState(null)
   const [testClockValue, setTestClockValue] = useState('')
@@ -4617,8 +4508,6 @@ function PlatformCardsView({
             onPreviewSessionPostponement={onPreviewSessionPostponement}
             onPostponeSession={onPostponeSession}
             onAudiosPublished={() => onAudiosPublished(p.id)}
-            newlyCreated={String(newlyCreatedPlatformId) === String(p.id)}
-            arrivalTargetRef={String(newlyCreatedPlatformId) === String(p.id) ? teacherArrivalTargetRef : undefined}
             retryingPreparation={retryingPlatformId === p.id}
             onRetryPreparation={() => onRetryPreparation(p)}
             detailsOpen={selectedTeacherId === p.id}
@@ -4628,13 +4517,6 @@ function PlatformCardsView({
         ))}
         </div>
         </div>
-      )}
-      {arrivingTeacher && (
-        <TeacherArrivalAnimation
-          key={arrivingTeacher.id}
-          platform={arrivingTeacher}
-          targetRef={teacherArrivalTargetRef}
-        />
       )}
     </section>
   )
@@ -7151,8 +7033,7 @@ function PlatformCard({
   onAttendanceDateChange, onRefreshAttendance,
   onExportAttendance, onOpenCourseTimeModal, onOpenCoursFolders,
   currentCourseTime, onSetCourseTime, onRetrySessionAudio, onPreviewSessionPostponement,
-  onPostponeSession, onAudiosPublished, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
-  arrivalTargetRef,
+  onPostponeSession, onAudiosPublished, retryingPreparation = false, onRetryPreparation,
   onBeforeFlip, detailsOpen = false, onOpenDetails, onCloseDetails,
 }) {
   const [activeTool, setActiveTool] = useState(null)
@@ -7222,7 +7103,7 @@ function PlatformCard({
   return (
     <>
       {/* Carte de roster : toute la surface ouvre la fiche, comme chez Delos. */}
-      {!detailsOpen && <div className={`w-full self-start ${newlyCreated ? 'teacher-card-enter' : ''}`}>
+      {!detailsOpen && <div className="w-full self-start">
         <div
           role="button"
           tabIndex={0}
@@ -7242,7 +7123,6 @@ function PlatformCard({
           style={faceStyle}
         >
           <div
-            ref={arrivalTargetRef}
             className="relative h-[218px] w-full shrink-0 overflow-hidden rounded-xl"
             style={{ backgroundColor: `${robotTheme.glow}12` }}
             aria-hidden="true"

@@ -121,6 +121,13 @@ test('applies one template to every selected day and replaces earlier choices', 
   })
 })
 
+test('clears every template assignment when apply-to-all uses the empty choice', () => {
+  assert.deepEqual(assignTemplateToAll(
+    ['2026-09-01', '2026-09-02'],
+    '',
+  ), {})
+})
+
 test('requires 24 exact hours before the first scheduled course', () => {
   const result = validateFormationScheduleV2({
     selectedDates: ['2026-08-02'],
