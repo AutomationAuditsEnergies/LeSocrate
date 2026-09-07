@@ -599,10 +599,7 @@ export default function Video() {
 
       {/* Header */}
       <div className="flex h-[72px] flex-shrink-0 items-center justify-between border-b border-gray-200 bg-white px-5 sm:h-16 sm:px-8">
-        <div className="min-w-0">
-          <h1 className="truncate text-lg font-semibold text-gray-800 sm:text-xl">{getPlatformName()}</h1>
-          <p className="text-sm text-gray-500">{new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
-        </div>
+        <p className="text-sm text-gray-500">{new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
       </div>
 
       {/* Main content */}
