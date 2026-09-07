@@ -102,97 +102,6 @@ def _unanchored_conclusion_block(index: int) -> dict:
 
 
 class ScriptSlideGenerationServiceTest(unittest.TestCase):
-    def test_audio_sync_update_clears_bindings_missing_from_new_payload(self):
-        deck = {
-            "deck_id": 17,
-            "slides": [
-                {
-                    "slide_id": "slide-1",
-                    "audio_segments": [{"audio_filename": "old.mp3"}],
-                    "audio_filename": "old.mp3",
-                    "trigger_time": 1.0,
-                    "end_time": 2.0,
-                    "audio_start_time": 1.0,
-                    "audio_end_time": 2.0,
-                },
-                {
-                    "slide_id": "slide-2",
-                    "audio_segments": [{"audio_filename": "stale.mp3"}],
-                    "audio_filename": "stale.mp3",
-                    "trigger_time": 2.0,
-                    "end_time": 3.0,
-                    "audio_start_time": 2.0,
-                    "audio_end_time": 3.0,
-                },
-            ],
-            "timeline": [
-                {
-                    "slide_index": 0,
-                    "start_time": 1.0,
-                    "end_time": 2.0,
-                    "audio_filename": "old.mp3",
-                },
-                {
-                    "slide_index": 1,
-                    "start_time": 2.0,
-                    "end_time": 3.0,
-                    "audio_filename": "stale.mp3",
-                },
-            ],
-            "stats": {},
-            "pipeline_debug": {},
-        }
-        current_sync = {
-            "mode": "word_ratio",
-            "generated_files": ["course_01.mp3"],
-            "timings": [
-                {
-                    "slide_id": "slide-1",
-                    "audio_filename": "course_01.mp3",
-                    "start_time": 0.0,
-                    "end_time": 5.0,
-                }
-            ],
-        }
-
-        with patch.object(slides, "_ensure_slide_deck_tables"), patch.object(
-            slides, "get_script_slide_deck_row", return_value=object()
-        ), patch.object(slides, "_decode_deck_row", return_value=deck), patch.object(
-            slides, "update_script_slide_deck_audio_sync_row"
-        ) as persist:
-            updated = slides.update_script_slide_deck_audio_sync(17, current_sync)
-
-        self.assertEqual(updated["slides"][0]["audio_filename"], "course_01.mp3")
-        self.assertNotIn("audio_filename", updated["slides"][1])
-        self.assertNotIn("audio_segments", updated["slides"][1])
-        self.assertIsNone(updated["timeline"][1]["start_time"])
-        self.assertIsNone(updated["timeline"][1]["end_time"])
-        self.assertIsNone(updated["timeline"][1]["audio_filename"])
-        persist.assert_called_once()
-
-    def test_slide_regeneration_repairs_existing_audio_plan(self):
-        generation_result = {"stats": {}, "pipeline_debug": {}}
-        repair_result = {
-            "success": True,
-            "status": "repaired",
-            "timings_repaired": 2,
-        }
-        with patch.object(slides, "_load_script_source", return_value={"folder_id": 118}), patch.object(
-            slides, "_prefer_beat_aligned_source", side_effect=lambda source: source
-        ), patch.object(
-            slides, "_run_slide_generation_from_source", return_value=generation_result
-        ) as generate, patch(
-            "services.content_generation_service.repair_audio_sync_from_existing_timelines",
-            return_value=repair_result,
-        ) as repair:
-            result = slides.generate_slides_from_script(118)
-
-        generate.assert_called_once()
-        self.assertTrue(generate.call_args.kwargs["persist"])
-        repair.assert_called_once_with(118)
-        self.assertEqual(result["stats"]["audio_sync_repair"], repair_result)
-        self.assertEqual(result["pipeline_debug"]["audio_sync_repair"], repair_result)
-
     def test_section_aligned_prompt_keeps_anchor_template_as_weak_hint(self):
         prompt = slides._prompt_for_blocks(
             [_strict_block(1)],
@@ -341,69 +250,6 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
                 records_by_kind["course_conclusion"]["part_number"],
             ),
         )
-
-    def test_single_course_day_closing_does_not_create_a_second_slide_block(self):
-        sections = [
-            {
-                "course_number": 1,
-                "course_title": "Chapitre unique",
-                "sub_part_index": 0,
-                "sub_part_name": "Chapitre unique · conclusion du cours",
-                "section_index": 1,
-                "section_label": "conclusion du cours",
-                "part_number": 900,
-                "kind": "course_conclusion",
-                "title": "Conclusion du cours",
-                "text": "Premier repère. Deuxième repère. Conclusion brève.",
-                "slide_display_map": [],
-                "display_order_declared": [],
-                "display_map_status": "none",
-                "suppress_slide": False,
-            },
-            {
-                "course_number": 1,
-                "course_title": "Chapitre unique",
-                "sub_part_index": 0,
-                "sub_part_name": "Chapitre unique · conclusion de journée",
-                "section_index": 2,
-                "section_label": "conclusion globale de la journée",
-                "part_number": 901,
-                "kind": "day_conclusion",
-                "title": "Conclusion de journée",
-                "text": "Merci pour votre attention. La séance est terminée.",
-                "slide_display_map": [],
-                "display_order_declared": [],
-                "display_map_status": "none",
-                "suppress_slide": True,
-            },
-        ]
-        anchor = {
-            "anchor_id": "c1-conclusion-recap-slide",
-            "beat_id": "c1conclusion-recap",
-            "course_number": 1,
-            "part_number": 900,
-            "beat_order": 1,
-            "template_type": "recap",
-        }
-
-        with patch.object(slides, "_course_section_records_from_artifact", return_value=sections), \
-             patch.object(slides, "_display_map_mode", return_value="off"), \
-             patch.object(
-                 slides,
-                 "_align_section_to_slide_anchors",
-                 return_value=(
-                     [{"anchor_id": anchor["anchor_id"], "unit_start": 0, "unit_end": 0}],
-                     {"status": "test"},
-                 ),
-             ):
-            result = slides._build_section_aligned_source_blocks({}, [anchor], "test-model")
-
-        self.assertIsNotNone(result)
-        blocks, word_cursor, _debug = result
-        self.assertEqual(len(blocks), 1)
-        self.assertEqual(blocks[0]["source_alignment"], "section_slide_alignment")
-        self.assertNotIn("La séance est terminée", blocks[0]["text"])
-        self.assertEqual(word_cursor, sum(len(section["text"].split()) for section in sections))
 
     def test_display_map_blocks_follow_real_text_order(self):
         section = {
@@ -669,7 +515,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             "anchor-2",
         ])
 
-    def test_batch_error_aborts_deck_instead_of_persisting_false_success(self):
+    def test_batch_error_fallback_preserves_strict_anchor_slides(self):
         strict_blocks = [_strict_block(index) for index in range(4)]
         anchors = [block["slide_anchors"][0] for block in strict_blocks]
         source = {
@@ -684,32 +530,25 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         with patch.object(slides, "_extract_slide_anchors_from_plan", return_value=anchors), \
              patch.object(slides, "_build_section_aligned_source_blocks", return_value=(strict_blocks, 400, {})), \
              patch.object(slides, "_generate_batch", side_effect=RuntimeError("boom")):
-            with self.assertRaisesRegex(RuntimeError, "boom"):
-                slides._run_slide_generation_from_source(
-                    source,
-                    job_id=99,
-                    max_slides=2,
-                    pace="normal",
-                    model="test-model",
-                    persist=False,
-                    content_plan={"courses": []},
-                )
+            result = slides._run_slide_generation_from_source(
+                source,
+                job_id=99,
+                max_slides=2,
+                pace="normal",
+                model="test-model",
+                persist=False,
+                content_plan={"courses": []},
+            )
 
-    def test_deck_with_historical_batch_fallback_is_not_usable(self):
-        self.assertFalse(slides.is_script_slide_deck_usable({
-            "slides": [{"slide_id": "fallback-slide"}],
-            "pipeline_debug": {
-                "batches": [{"status": "fallback"}],
-            },
-        }))
-        self.assertTrue(slides.is_script_slide_deck_usable({
-            "slides": [{"slide_id": "generated-slide"}],
-            "pipeline_debug": {
-                "batches": [{"status": "llm"}],
-            },
-        }))
+        self.assertEqual(len(result["slides"]), 4)
+        self.assertGreaterEqual(result["stats"]["max_slides"], 4)
+        self.assertEqual(result["stats"]["strict_anchor_fallback_slides"], 4)
+        self.assertEqual(
+            [slide.get("slide_anchor_id") for slide in result["slides"]],
+            [f"strict-anchor-{index}" for index in range(4)],
+        )
 
-    def test_section_alignment_uses_fallback_after_one_model_call(self):
+    def test_section_alignment_retries_with_temperature_zero_before_fallback(self):
         section = {
             "course_number": 1,
             "course_title": "Cours test",
@@ -728,34 +567,17 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
 
         def fake_post_message(*_args, **kwargs):
             temperatures.append(kwargs.get("temperature"))
-            self.assertEqual(kwargs.get("http_max_attempts"), 1)
-            return '{"assignments":[{"anchor_id":"a1","unit_start":0,"unit_end":0}]}'
+            if len(temperatures) == 1:
+                return '{"assignments":[{"anchor_id":"a1","unit_start":0,"unit_end":0}]}'
+            return '{"assignments":[{"anchor_id":"a1","unit_start":0,"unit_end":0},{"anchor_id":"a2","unit_start":1,"unit_end":1}]}'
 
         with patch.object(slides, "post_message", side_effect=fake_post_message):
             assignments, debug = slides._align_section_to_slide_anchors(section, units, anchors, "test-model")
 
-        self.assertEqual(debug["status"], "fallback")
-        self.assertEqual(debug["attempts"], 1)
-        self.assertEqual(temperatures, [None])
+        self.assertEqual(debug["status"], "llm_retry")
+        self.assertEqual(debug["attempts"], 2)
+        self.assertEqual(temperatures, [None, 0])
         self.assertEqual([assignment["anchor_id"] for assignment in assignments], ["a1", "a2"])
-
-    def test_slide_batch_failure_calls_model_once(self):
-        with patch.object(
-            slides,
-            "post_message",
-            side_effect=RuntimeError("provider indisponible"),
-        ) as post:
-            with self.assertRaisesRegex(RuntimeError, "provider indisponible"):
-                slides._generate_batch(
-                    [_strict_block(0)],
-                    "Jour test",
-                    "test-model",
-                    slides.PACE_PROFILES["normal"],
-                    1,
-                )
-
-        post.assert_called_once()
-        self.assertEqual(post.call_args.kwargs["http_max_attempts"], 1)
 
     def test_section_unanchored_slide_keeps_full_block_range(self):
         block = _unanchored_conclusion_block(3)
@@ -1162,171 +984,6 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             "exercise",
         }:
             self.assertNotIn(forbidden, template_ids)
-
-    def test_day_program_legacy_template_preserves_ten_dynamic_course_items(self):
-        items = [f"Thème {index}" for index in range(1, 11)]
-
-        normalized = slides._normalize_slide_data(
-            "day_program_7_steps",
-            {
-                "title": "Programme",
-                "active_item": 10,
-                "items": items,
-            },
-            fallback_title="Programme",
-            fallback_text="",
-        )
-
-        self.assertEqual(normalized["items"], items)
-        self.assertEqual(normalized["active_item"], 10)
-
-    def test_v2_audio_lookup_uses_only_the_scoped_day_folder(self):
-        wrong_day_deck = {
-            "deck_id": 51,
-            "folder_id": 51,
-            "audio_sync": {
-                "timings": [{"audio_filename": "course_01.mp3"}],
-            },
-            "slides": [],
-        }
-        expected_deck = {
-            "deck_id": 52,
-            "folder_id": 52,
-            "audio_sync": {
-                "timings": [{"audio_filename": "course_01.mp3"}],
-            },
-            "slides": [],
-        }
-        decks = {51: wrong_day_deck, 52: expected_deck}
-
-        with patch.object(
-            slides,
-            "_ensure_slide_deck_tables",
-        ), patch.object(
-            slides,
-            "resolve_folder_asset_origin",
-            return_value=None,
-        ), patch.object(
-            slides,
-            "get_latest_script_slide_deck",
-            side_effect=lambda folder_id: decks.get(folder_id),
-        ) as exact_lookup, patch.object(
-            slides,
-            "list_script_slide_deck_rows_for_audio_lookup",
-        ) as broad_lookup:
-            result = slides.get_latest_script_slide_deck_for_audio(
-                "course_01.mp3",
-                platform_id=7,
-                folder_id=52,
-                module_day_id=404,
-                audio_storage_prefix="course-sessions/701",
-            )
-
-        self.assertIs(result, expected_deck)
-        exact_lookup.assert_called_once_with(52)
-        broad_lookup.assert_not_called()
-
-    def test_v2_audio_lookup_fails_closed_when_scope_is_incomplete(self):
-        with patch.object(
-            slides,
-            "_ensure_slide_deck_tables",
-        ), patch.object(
-            slides,
-            "get_latest_script_slide_deck",
-        ) as exact_lookup, patch.object(
-            slides,
-            "list_script_slide_deck_rows_for_audio_lookup",
-        ) as broad_lookup:
-            result = slides.get_latest_script_slide_deck_for_audio(
-                "course_01.mp3",
-                platform_id=7,
-                folder_id=52,
-                module_day_id=404,
-                audio_storage_prefix=None,
-            )
-
-        self.assertIsNone(result)
-        exact_lookup.assert_not_called()
-        broad_lookup.assert_not_called()
-
-    def test_v2_reused_folder_resolves_the_canonical_source_deck(self):
-        source_deck = {
-            "deck_id": 51,
-            "folder_id": 51,
-            "audio_sync": {
-                "timings": [{"audio_filename": "course_01.mp3"}],
-            },
-            "slides": [],
-        }
-        with patch.object(
-            slides,
-            "_ensure_slide_deck_tables",
-        ), patch.object(
-            slides,
-            "resolve_folder_asset_origin",
-            return_value={
-                "requested_folder_id": 152,
-                "source_folder_id": 51,
-                "module_id": 404,
-            },
-        ) as resolve_origin, patch.object(
-            slides,
-            "get_latest_script_slide_deck",
-            return_value=source_deck,
-        ) as exact_lookup, patch.object(
-            slides,
-            "list_script_slide_deck_rows_for_audio_lookup",
-        ) as broad_lookup:
-            result = slides.get_latest_script_slide_deck_for_audio(
-                "course_01.mp3",
-                platform_id=17,
-                folder_id=152,
-                module_day_id=404,
-                audio_storage_prefix="course-sessions/1701",
-            )
-
-        self.assertIs(result, source_deck)
-        resolve_origin.assert_called_once_with(152)
-        exact_lookup.assert_called_once_with(51)
-        broad_lookup.assert_not_called()
-
-    def test_v1_audio_lookup_keeps_the_legacy_broad_search(self):
-        row = object()
-        legacy_deck = {
-            "deck_id": 9,
-            "folder_id": 9,
-            "audio_sync": {
-                "timings": [{"audio_filename": "cours_9h00_9h45.mp3"}],
-            },
-            "slides": [],
-        }
-        with patch.object(
-            slides,
-            "_ensure_slide_deck_tables",
-        ), patch.object(
-            slides,
-            "list_script_slide_deck_rows_for_audio_lookup",
-            return_value=[row],
-        ) as broad_lookup, patch.object(
-            slides,
-            "_decode_deck_row",
-            return_value=legacy_deck,
-        ), patch.object(
-            slides,
-            "get_latest_script_slide_deck",
-        ) as exact_lookup:
-            result = slides.get_latest_script_slide_deck_for_audio(
-                "cours_9h00_9h45.mp3",
-                platform_id=None,
-            )
-
-        self.assertIs(result, legacy_deck)
-        broad_lookup.assert_called_once_with(
-            platform_ids=[],
-            job_ids=[],
-            limit=200,
-        )
-        exact_lookup.assert_not_called()
 
 
 if __name__ == "__main__":

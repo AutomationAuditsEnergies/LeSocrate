@@ -24,12 +24,7 @@ from typing import Tuple
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from repositories.pipeline_repository import (
-    get_content_generation_job_by_folder,
-    get_pipeline_job,
-    list_completed_content_segment_rows,
-    list_course_folder_ids_for_platform,
-)
+from database.db import get_db_connection
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -100,7 +95,7 @@ def _strip_tts_tags(text: str) -> str:
 
 def _extract_marked_audio_blocks(rows: list) -> list:
     """Si le texte a été calibré par blocs audio, restitue des sections cohérentes."""
-    full_text = "\n\n".join((row.get("text_content") or "") for row in rows)
+    full_text = "\n\n".join((row[2] or "") for row in rows)
     matches = list(_AUDIO_BLOCK_MARKER_RE.finditer(full_text))
     if not matches:
         return []
@@ -118,23 +113,40 @@ def _extract_marked_audio_blocks(rows: list) -> list:
 # ─── Accès DB ─────────────────────────────────────────────────────────────────
 
 def _get_formation_job(job_id: int) -> dict:
-    job = get_pipeline_job(job_id)
-    if not job:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT tp_name, rncp_code, total_hours, nb_days, daily_programs, platform_id
+           FROM formation_pipeline_jobs WHERE id = ?""",
+        (job_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
         raise ValueError(f"Job formation {job_id} introuvable")
     return {
-        "tp_name": job["tp_name"],
-        "rncp_code": job.get("rncp_code") or "",
-        "total_hours": job["total_hours"],
-        "nb_days": job["nb_days"],
-        "daily_programs": json.loads(job.get("daily_programs") or "[]"),
-        "platform_id": job["platform_id"],
+        "tp_name": row[0],
+        "rncp_code": row[1] or "",
+        "total_hours": row[2],
+        "nb_days": row[3],
+        "daily_programs": json.loads(row[4] or "[]"),
+        "platform_id": row[5],
     }
 
 
 def _folder_position_in_platform(folder_id: int, platform_id: int) -> int:
     """Retourne la position (0-indexed) du dossier dans la plateforme, dans l'ordre de création."""
-    folder_ids = list_course_folder_ids_for_platform(platform_id)
-    for idx, fid in enumerate(folder_ids):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT id FROM cours_folders
+           WHERE platform_id = ?
+           ORDER BY position ASC, id ASC""",
+        (platform_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    for idx, (fid,) in enumerate(rows):
         if fid == folder_id:
             return idx
     raise ValueError(f"Dossier {folder_id} introuvable pour plateforme {platform_id}")
@@ -142,15 +154,31 @@ def _folder_position_in_platform(folder_id: int, platform_id: int) -> int:
 
 def _get_segments_for_folder(folder_id: int) -> list:
     """Liste des segments content_generation_segments completed, ordonnés."""
-    content_job = get_content_generation_job_by_folder(folder_id)
-    if not content_job:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT j.id, j.sub_parts
+           FROM content_generation_jobs j
+           WHERE j.folder_id = ?""",
+        (folder_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
         raise ValueError(f"Aucun job de génération de contenu pour le dossier {folder_id}")
 
-    cg_job_id = content_job["id"]
-    sub_parts_json = content_job.get("sub_parts") or "[]"
+    cg_job_id, sub_parts_json = row
     sub_parts_names = json.loads(sub_parts_json or "[]")
 
-    rows = list_completed_content_segment_rows(cg_job_id)
+    cursor.execute(
+        """SELECT sub_part_index, passe, text_content
+           FROM content_generation_segments
+           WHERE job_id = ? AND status = 'completed'
+           ORDER BY sub_part_index ASC, passe ASC""",
+        (cg_job_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
 
     marked_blocks = _extract_marked_audio_blocks(rows)
     if marked_blocks:
@@ -158,10 +186,8 @@ def _get_segments_for_folder(folder_id: int) -> list:
 
     # Regroupement par sub_part
     grouped = {}
-    for row in rows:
-        grouped.setdefault(row["sub_part_index"], []).append(
-            (row["passe"], row.get("text_content") or "")
-        )
+    for sub_idx, passe, text in rows:
+        grouped.setdefault(sub_idx, []).append((passe, text or ""))
 
     result = []
     for idx, name in enumerate(sub_parts_names):

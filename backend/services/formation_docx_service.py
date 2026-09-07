@@ -26,11 +26,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor, Cm
 
-from repositories.pipeline_repository import (
-    get_content_generation_job_by_folder,
-    list_completed_content_segment_rows,
-)
-from services.formation_pipeline_service import get_job as get_formation_pipeline_job
+from database.db import get_db_connection
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -81,27 +77,42 @@ def _split_paragraphs(text: str) -> list:
 # ─── Accès DB ─────────────────────────────────────────────────────────────────
 
 def _get_formation_job(job_id: int) -> dict:
-    job = get_formation_pipeline_job(job_id)
-    if not job:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT tp_name, rncp_code, total_hours, nb_days, daily_programs, platform_id
+           FROM formation_pipeline_jobs WHERE id = ?""",
+        (job_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
         raise ValueError(f"Job formation {job_id} introuvable")
-    daily_programs = job.get("daily_programs") or "[]"
-    if isinstance(daily_programs, str):
-        daily_programs = json.loads(daily_programs or "[]")
     return {
-        "tp_name": job.get("tp_name"),
-        "rncp_code": job.get("rncp_code") or "",
-        "total_hours": job.get("total_hours"),
-        "nb_days": job.get("nb_days"),
-        "daily_programs": daily_programs,
-        "platform_id": job.get("platform_id"),
+        "tp_name": row[0],
+        "rncp_code": row[1] or "",
+        "total_hours": row[2],
+        "nb_days": row[3],
+        "daily_programs": json.loads(row[4] or "[]"),
+        "platform_id": row[5],
     }
 
 
-def _folder_position_for_job(folder_id: int, job_id: int) -> int:
-    row = get_content_generation_job_by_folder(folder_id)
-    if not row or int(row.get("formation_job_id") or 0) != int(job_id):
-        raise ValueError(f"Dossier {folder_id} introuvable pour job formation {job_id}")
-    return int(row.get("position") or 0)
+def _folder_position_in_platform(folder_id: int, platform_id: int) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT id FROM cours_folders
+           WHERE platform_id = ?
+           ORDER BY position ASC, id ASC""",
+        (platform_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    for idx, (fid,) in enumerate(rows):
+        if fid == folder_id:
+            return idx
+    raise ValueError(f"Dossier {folder_id} introuvable pour plateforme {platform_id}")
 
 
 def _get_segments_for_folder(folder_id: int, version: str = "current") -> list:
@@ -114,27 +125,45 @@ def _get_segments_for_folder(folder_id: int, version: str = "current") -> list:
       Si la colonne est NULL pour un segment (segment plus ancien que la
       migration), fallback sur `text_content`.
     """
-    content_job = get_content_generation_job_by_folder(folder_id)
-    if not content_job:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT j.id, j.sub_parts
+           FROM content_generation_jobs j
+           WHERE j.folder_id = ?""",
+        (folder_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
         raise ValueError(f"Aucun job de génération de contenu pour le dossier {folder_id}")
 
-    cg_job_id = int(content_job["id"])
-    sub_parts_json = content_job.get("sub_parts")
+    cg_job_id, sub_parts_json = row
     sub_parts_names = json.loads(sub_parts_json or "[]")
 
-    segment_rows = []
-    for row in list_completed_content_segment_rows(cg_job_id):
-        text = row.get("text_content")
-        if version == "pre_review":
-            text = row.get("text_content_pre_review") or text
-        segment_rows.append((row.get("sub_part_index"), row.get("passe"), text))
+    if version == "pre_review":
+        # COALESCE : si la colonne pre_review est NULL (segment antérieur à
+        # la migration), fallback sur text_content pour ne pas planter.
+        text_col = "COALESCE(text_content_pre_review, text_content)"
+    else:
+        text_col = "text_content"
 
-    marked_blocks = _extract_marked_audio_blocks(segment_rows)
+    cursor.execute(
+        f"""SELECT sub_part_index, passe, {text_col}
+           FROM content_generation_segments
+           WHERE job_id = ? AND status = 'completed'
+           ORDER BY sub_part_index ASC, passe ASC""",
+        (cg_job_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    marked_blocks = _extract_marked_audio_blocks(rows)
     if marked_blocks:
         return marked_blocks
 
     grouped = {}
-    for sub_idx, passe, text in segment_rows:
+    for sub_idx, passe, text in rows:
         grouped.setdefault(sub_idx, []).append((passe, text or ""))
 
     result = []
@@ -240,7 +269,7 @@ def build_course_docx(job_id: int, folder_id: int, version: str = "current") -> 
     Retourne (docx_bytes, suggested_filename).
     """
     job = _get_formation_job(job_id)
-    position = _folder_position_for_job(folder_id, job_id)
+    position = _folder_position_in_platform(folder_id, job["platform_id"])
     daily_programs = job["daily_programs"]
 
     if position >= len(daily_programs):
