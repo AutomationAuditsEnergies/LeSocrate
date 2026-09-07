@@ -306,6 +306,10 @@ export default function App() {
             path="/dashboard-centre"
             element={<CenterDashboardRoute />}
           />
+          <Route
+            path="/hr-dashboard"
+            element={<CenterDashboardRoute />}
+          />
 
           <Route
             path="/schedule-config"
