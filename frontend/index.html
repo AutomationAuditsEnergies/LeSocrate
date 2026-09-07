@@ -1,16 +1,87 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
-    <!-- Preconnect for Google Fonts (Inter) -->
+    <link rel="icon" type="image/svg+xml" href="/socrate-mark.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#1c2026" />
+    <meta
+      name="description"
+      content="Cadrenza transforme un référentiel RNCP en parcours synchrone, réutilisable et pilotable promotion après promotion."
+    />
+    <meta property="og:title" content="Cadrenza — Parcours RNCP synchrones" />
+    <meta
+      property="og:description"
+      content="Produisez un parcours une fois, puis orchestrez chaque promotion au bon rythme."
+    />
+    <meta property="og:type" content="website" />
+    <title>Cadrenza — Parcours RNCP synchrones</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- Inter Font -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Material Icons loaded locally via CSS for Windows compatibility -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    >
+    <!-- Material Icons Round + Symbols Rounded : self-hostés via index.css
+         (plus de dépendance Google Fonts → icônes fiables sur la landing) -->
+    <link rel="preload" as="image" href="/cadrenza-robot-fleet.webp" type="image/webp" fetchpriority="high">
+    <style>
+      /* État de chargement avant le montage de React. */
+      #root:empty {
+        position: fixed;
+        inset: 0;
+        background: #f7f8fb;
+      }
+      #root:empty::before {
+        content: "";
+        position: absolute;
+        top: calc(50% - 41px);
+        left: calc(50% - 32px);
+        width: 64px;
+        height: 64px;
+        background: url("/socrate-mark.svg") center / contain no-repeat;
+        animation: app-loader-breathe 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      #root:empty::after {
+        content: "Chargement";
+        position: absolute;
+        top: calc(50% + 41px);
+        left: 0;
+        right: 0;
+        text-align: center;
+        font-family: "Inter", system-ui, sans-serif;
+        font-size: 13px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        color: #0f172a;
+      }
+      @keyframes app-loader-breathe {
+        0%, 100% { opacity: 0.72; transform: translateY(2px) scale(0.96); }
+        50% { opacity: 1; transform: translateY(-2px) scale(1); }
+      }
+
+      /* La landing amorce directement sur le même blanc que son premier écran. */
+      html.landing-boot #root:empty {
+        background-color: #ffffff;
+      }
+      html.landing-boot #root:empty::after {
+        color: #0f172a;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #root:empty::before {
+          animation: none;
+        }
+      }
+    </style>
+    <script>
+      // Détecte la landing avant le rendu pour adapter le splash.
+      const isLanding = window.location.pathname === '/landing'
+        || (window.location.pathname === '/' && new URLSearchParams(window.location.search).get('p') === '3');
+      if (isLanding) {
+        document.documentElement.classList.add('landing-boot');
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#ffffff');
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

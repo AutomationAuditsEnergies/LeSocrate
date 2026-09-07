@@ -48,7 +48,7 @@ Détails : `memoire/01-architecture/un-rncp-un-module-durable.md` et `/Users/ame
 
 ## Stack
 
-React 19 + Vite 7 (port 5173) · Flask + SocketIO + eventlet (port 5001) · SQLite · Fish Audio S2-Pro · Claude Sonnet 4 (génération contenu) · Azure OpenAI GPT-4 (chat/RAG) · OpenAI Whisper (transcription) · Azure (App Service, Static Web Apps, Blob, FrontDoor, AI Search).
+React 19 + Vite 7 (port 5173) · Flask + Gunicorn gthread (port 5001) · PostgreSQL/Supabase · Fish Audio S2-Pro · DeepSeek V4 (génération contenu) · Azure OpenAI (chat/RAG) · Azure (App Service, Static Web Apps, Blob, FrontDoor, AI Search).
 
 Détails : `/Users/amelle/Downloads/kit-deuxieme-cerveau/wiki/Context/stack-technique.md`.
 
@@ -60,7 +60,7 @@ Détails : `/Users/amelle/Downloads/kit-deuxieme-cerveau/wiki/Context/stack-tech
 # Frontend
 cd frontend && npm install && npm run dev   # 5173
 
-# Backend (toujours run.py — eventlet requis ; jamais flask run)
+# Backend
 cd backend && pip install -r requirements.txt
 python run.py                               # 5001
 
@@ -69,7 +69,7 @@ python run.py                               # 5001
 cd backend && watchmedo auto-restart -d . -p '*.py' -R -- python run.py
 ```
 
-Proxy Vite : `/api` et `/socket.io` → `http://localhost:5001`.
+Proxy Vite : `/api` → `http://localhost:5001`.
 
 ---
 
@@ -90,14 +90,14 @@ Chemins absolus : préfixer par `/Users/amelle/Downloads/kit-deuxieme-cerveau/`.
 
 ## Règles critiques (ne jamais enfreindre)
 
-1. **Backend** : `python run.py`, jamais `flask run`. Port **5001** en dev.
+1. **Backend** : `python run.py`. Port **5001** en dev.
 2. **3 comptes Azure Storage** distincts — ne jamais mélanger les connection strings :
    - `formationdocuments` → PDFs (`AZURE_STORAGE_CONNECTION_STRING`)
    - `formationaudios` → MP3 cours (`AZURE_AUDIO_STORAGE_CONNECTION_STRING`)
    - `documentstts` → MP3 TTS Fish Audio (`AZURE_TTS_STORAGE_CONNECTION_STRING`)
 3. **Container audios TTS = `audiostts`** dans `documentstts` (pas `audiotts`, pas `formationaudios`).
 4. **SAS URLs audios** via `AZURE_TTS_STORAGE_CONNECTION_STRING` dans `hr_routes.py`.
-5. **Pas de SDK OpenAI/Fish Audio** (conflits eventlet) → `requests` HTTP direct.
+5. **Appels IA/TTS** : conserver les clients HTTP partagés et leurs limites de concurrence.
 6. **Timezone** Europe/Paris · format `YYYY-MM-DD HH:MM:SS`.
 7. **Auth** : sessions Flask + fallback `X-Auth-Token` (localStorage) + header `X-Platform-Id`.
 8. **CHANGELOG.md** : une entrée à chaque modification ou décision (cf. règle détaillée dans `.claude/CLAUDE.md`).
@@ -106,7 +106,7 @@ Chemins absolus : préfixer par `/Users/amelle/Downloads/kit-deuxieme-cerveau/`.
 
 ## Multi-tenant (rappel)
 
-4 plateformes (P1 = référence/staging, P2/P3/P4 = prod). `platform_id` dans toutes les tables et appels API. Rooms SocketIO : `platform_{platform_id}`. HR Dashboard (P1) pilote P2/P3 via `PLATFORM_{id}_BACKEND_URL`.
+4 plateformes (P1 = référence/staging, P2/P3/P4 = prod). `platform_id` dans toutes les tables et appels API. HR Dashboard (P1) pilote P2/P3 via `PLATFORM_{id}_BACKEND_URL`.
 
 Playlist mode (configurable `/schedule-config` par plateforme) :
 

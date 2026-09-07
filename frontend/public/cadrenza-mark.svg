@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Cadrenza">
+  <rect width="48" height="48" rx="10" fill="#0b1424"/>
+  <path d="M36.4 12.2C33.2 8.9 28.7 7 24 7C14.6 7 7 14.6 7 24s7.6 17 17 17c4.7 0 9.2-1.9 12.4-5.2" fill="none" stroke="#f7f8fb" stroke-width="4.6" stroke-linecap="round"/>
+  <path d="M24 15h14M24 24h10M24 33h14" fill="none" stroke="#f28a4b" stroke-width="3" stroke-linecap="round"/>
+  <g fill="#8b5cf6">
+    <circle cx="24" cy="15" r="2.7"/>
+    <circle cx="24" cy="24" r="2.7"/>
+    <circle cx="24" cy="33" r="2.7"/>
+  </g>
+</svg>

@@ -1,0 +1,149 @@
+% ======================================================================
+%  Mémoire de fin d'année — PGE ING3
+%  Conception d'une plateforme de formation autonome alimentée par l'IA
+%  Auteur : ISSAD Nassim — Entreprise : Audit Énergie
+%
+%  Compilation :
+%     pdflatex memoire
+%     bibtex   memoire
+%     pdflatex memoire
+%     pdflatex memoire
+% ======================================================================
+\documentclass[12pt,a4paper]{article}
+
+% ---- Encodage et langue --------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+
+% ---- Mise en page --------------------------------------------------
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing            % interligne proche de 1,25-1,5
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+% ---- Tableaux, figures, divers -------------------------------------
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{float}
+
+% ---- Liens et sommaire cliquable -----------------------------------
+\usepackage[dvipsnames]{xcolor}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{
+  pdftitle={Conception d'une plateforme de formation autonome alimentée par l'IA},
+  pdfauthor={ISSAD Nassim}
+}
+
+% ---- En-têtes / pieds de page --------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\itshape Plateforme de formation autonome}
+\fancyhead[R]{\small Audit Énergie}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\begin{document}
+
+% ====================================================================
+%  PAGE DE GARDE
+% ====================================================================
+\begin{titlepage}
+\thispagestyle{empty}
+\centering
+
+{\scshape\large EFREI Paris \par}
+\vspace{0.3cm}
+{\scshape Mémoire de fin d'année --- PGE ING3 --- 2025-2026 \par}
+\vspace{0.2cm}
+\rule{\linewidth}{0.5pt}
+
+\vfill
+
+{\Huge\bfseries Conception d'une plateforme de\\[0.3cm]
+formation autonome alimentée par\\[0.3cm]
+l'intelligence artificielle \par}
+
+\vspace{0.8cm}
+{\large\itshape Pipeline de génération de contenus pédagogiques et\\
+assistant conversationnel contextualisé (RAG)\par}
+
+\vfill
+
+\begin{tabular}{@{}ll@{}}
+\textbf{Auteur} & ISSAD Nassim \\[0.3cm]
+\textbf{Promotion} & ING3 --- M2-BDML \\[0.3cm]
+\textbf{Tuteur entreprise} & M. Mehdi ROUSSELLE \\[0.3cm]
+\textbf{Tuteur pédagogique} & M. Moulay AHANSAL \\[0.3cm]
+\textbf{Chargé de Mission Career Center} & \textit{à compléter} \\[0.3cm]
+\textbf{Entreprise} & Audit Énergie \\
+\end{tabular}
+
+\vfill
+
+\rule{\linewidth}{0.5pt}
+{\small Diffusion soumise à l'accord de l'entreprise --- \textit{mention de confidentialité à compléter}\par}
+\vspace{0.3cm}
+{\small Année académique 2025--2026\par}
+
+\end{titlepage}
+
+% ====================================================================
+%  RÉSUMÉ
+% ====================================================================
+\clearpage
+\pagenumbering{roman}
+\phantomsection
+\addcontentsline{toc}{section}{Résumé}
+\input{resume}
+
+% ====================================================================
+%  SOMMAIRE
+% ====================================================================
+\clearpage
+\phantomsection
+\addcontentsline{toc}{section}{Sommaire}
+\tableofcontents
+
+% ====================================================================
+%  CORPS DU MÉMOIRE
+% ====================================================================
+\clearpage
+\pagenumbering{arabic}
+
+% --- Introduction générale (non numérotée) --------------------------
+\phantomsection
+\addcontentsline{toc}{section}{Introduction générale}
+\input{introduction-generale_claude}
+
+% --- Partie 1 : Position du problème --------------------------------
+\clearpage
+\input{position-du-probleme_claude}
+
+% --- Partie 2 : État de l'art ---------------------------------------
+\clearpage
+\input{etat-de-l-art}
+
+% --- Partie 3 : Étude originale -------------------------------------
+\clearpage
+\input{etude-originale}
+
+% --- Conclusion (non numérotée) -------------------------------------
+\clearpage
+\phantomsection
+\addcontentsline{toc}{section}{Conclusion générale}
+\input{conclusion}
+
+% ====================================================================
+%  BIBLIOGRAPHIE
+% ====================================================================
+\clearpage
+\phantomsection
+\addcontentsline{toc}{section}{Bibliographie}
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,351 @@
+import sys
+import types
+import unittest
+from dataclasses import replace
+from unittest.mock import patch
+
+from services.pipeline_queue.contracts import PermanentWorkError, WorkItem
+from services.pipeline_queue.handlers import (
+    handle_auto_pilot_work_item,
+    handle_voice_reference_calibration_work_item,
+    mark_auto_pilot_dead_letter,
+    mark_pipeline_dead_letter,
+)
+from utils.deepseek_client import DeepSeekAPIError
+
+
+def _item(payload=None):
+    return WorkItem(
+        id="11111111-1111-1111-1111-111111111111",
+        pipeline_job_id=42,
+        folder_id=None,
+        resource_key="pipeline:42",
+        run_id="run-42",
+        task_type="auto_pilot_tick",
+        scope_key="pipeline",
+        dedupe_key="run-42:auto:reac",
+        payload=dict(payload or {"expected_step": "reac"}),
+        status="running",
+        priority=0,
+        attempt_count=1,
+        max_attempts=5,
+        available_at=None,
+        lease_owner="worker",
+        lease_token="22222222-2222-2222-2222-222222222222",
+        lease_version=3,
+        lease_expires_at=None,
+        last_error=None,
+        result={},
+        created_at=None,
+        updated_at=None,
+    )
+
+
+class _Lease:
+    def __init__(self):
+        self.checkpoints = 0
+
+    def checkpoint(self):
+        self.checkpoints += 1
+
+
+class PipelineQueueHandlerTest(unittest.TestCase):
+    def _modules(self, *, execute_error=None, next_steps=("reac", None)):
+        events = []
+        updates = []
+        steps = iter(next_steps)
+        job = {
+            "id": 42,
+            "auto_pilot_enabled": True,
+            "auto_pilot_model": "pro",
+            "auto_pilot_tts_mode": "gtts",
+            "auto_pilot_use_cc": False,
+            "auto_pilot_generate_audio": False,
+        }
+
+        routes_module = types.SimpleNamespace()
+        routes_module.get_job = lambda _job_id: dict(job)
+        routes_module.update_job = lambda job_id, **kwargs: updates.append((job_id, kwargs))
+        routes_module._determine_next_ap_step = lambda _job_id: next(steps)
+        routes_module.executed_steps = []
+        routes_module.execution_checkpoints = []
+
+        def execute(_job_id, _step, _job, *, checkpoint=None):
+            routes_module.executed_steps.append(_step)
+            routes_module.execution_checkpoints.append(checkpoint)
+            if execute_error:
+                raise execute_error
+
+        routes_module._execute_ap_step = execute
+        routes_package = types.ModuleType("routes")
+        routes_package.formation_routes = routes_module
+
+        observability = types.ModuleType("services.formation_observability_service")
+        observability.log_pipeline_event = (
+            lambda job_id, event_type, **kwargs: events.append((job_id, event_type, kwargs))
+        )
+        return routes_package, observability, events, updates
+
+    def test_success_preserves_step_and_pipeline_completion_events(self):
+        routes_package, observability, events, updates = self._modules()
+        lease = _Lease()
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            result = handle_auto_pilot_work_item(_item(), lease)
+
+        self.assertEqual(result.result["status"], "done")
+        self.assertEqual(lease.checkpoints, 2)
+        self.assertIs(
+            routes_package.formation_routes.execution_checkpoints[0].__self__,
+            lease,
+        )
+        self.assertEqual(
+            [event_type for _job_id, event_type, _kwargs in events],
+            ["step_started", "step_completed", "pipeline_completed"],
+        )
+        for _job_id, _event_type, kwargs in events:
+            self.assertEqual(kwargs["data"]["work_item_id"], _item().id)
+            self.assertEqual(kwargs["data"]["fence"], 3)
+        self.assertTrue(any(update[1].get("auto_pilot_step") == "done" for update in updates))
+
+    def test_paid_order_is_completed_only_at_terminal_text_step(self):
+        routes_package, observability, _events, _updates = self._modules()
+        completed = []
+        fulfillment = types.ModuleType("services.teacher_order_fulfillment_service")
+        fulfillment.complete_teacher_order_pipeline = (
+            lambda item, job: completed.append((item, job))
+        )
+        item = _item({"expected_step": "reac", "teacher_order_id": 73})
+
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+                "services.teacher_order_fulfillment_service": fulfillment,
+            },
+        ):
+            result = handle_auto_pilot_work_item(item, _Lease())
+
+        self.assertEqual(result.result["status"], "done")
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0][0], item)
+        self.assertEqual(completed[0][1]["id"], 42)
+
+    def test_failure_preserves_step_failed_event_and_reraises(self):
+        routes_package, observability, events, _updates = self._modules(
+            execute_error=RuntimeError("LLM timeout"),
+            next_steps=("reac",),
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "LLM timeout"):
+                handle_auto_pilot_work_item(_item(), _Lease())
+
+        self.assertEqual(
+            [event_type for _job_id, event_type, _kwargs in events],
+            ["step_started", "step_failed"],
+        )
+        self.assertEqual(events[-1][2]["error"], "LLM timeout")
+
+    def test_deterministic_provider_failure_becomes_permanent(self):
+        routes_package, observability, events, _updates = self._modules(
+            execute_error=DeepSeekAPIError(
+                402,
+                "unknown_error",
+                "Insufficient Balance",
+            ),
+            next_steps=("global",),
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            with self.assertRaisesRegex(
+                PermanentWorkError,
+                "Insufficient Balance",
+            ):
+                handle_auto_pilot_work_item(
+                    _item({"expected_step": "global"}),
+                    _Lease(),
+                )
+
+        self.assertEqual(
+            [event_type for _job_id, event_type, _kwargs in events],
+            ["step_started", "step_failed"],
+        )
+
+    def test_out_of_order_tick_skips_execution_and_chains_current_step(self):
+        routes_package, observability, events, updates = self._modules(
+            next_steps=("global",),
+        )
+        lease = _Lease()
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            result = handle_auto_pilot_work_item(_item(), lease)
+
+        self.assertEqual(routes_package.formation_routes.executed_steps, [])
+        self.assertEqual(lease.checkpoints, 1)
+        self.assertEqual(result.result["status"], "step_reconciled")
+        self.assertEqual(result.result["skipped_step"], "reac")
+        self.assertEqual(result.result["next_step"], "global")
+        self.assertEqual(len(result.next_items), 1)
+        next_item = result.next_items[0]
+        self.assertEqual(next_item.payload["expected_step"], "global")
+        self.assertEqual(next_item.scope_key, "pipeline")
+        self.assertIn(_item().id, next_item.dedupe_key)
+        self.assertEqual(
+            [event_type for _job_id, event_type, _kwargs in events],
+            ["step_reconciled"],
+        )
+        self.assertTrue(
+            any(update[1].get("auto_pilot_step") == "global" for update in updates)
+        )
+
+    def test_teacher_order_id_survives_normal_and_reconciled_chains(self):
+        routes_package, observability, _events, _updates = self._modules(
+            next_steps=("reac", "global"),
+        )
+        item = _item({"expected_step": "reac", "teacher_order_id": 73})
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            result = handle_auto_pilot_work_item(item, _Lease())
+        self.assertEqual(result.next_items[0].payload["teacher_order_id"], 73)
+
+        routes_package, observability, _events, _updates = self._modules(
+            next_steps=("global",),
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            result = handle_auto_pilot_work_item(item, _Lease())
+        self.assertEqual(result.next_items[0].payload["teacher_order_id"], 73)
+
+    def test_terminal_auto_pilot_failure_marks_paid_order_retryable(self):
+        calls = []
+        pipeline = types.ModuleType("services.formation_pipeline_service")
+        pipeline.update_job = lambda job_id, **fields: calls.append(
+            ("job", job_id, fields)
+        )
+        fulfillment = types.ModuleType("services.teacher_order_fulfillment_service")
+        fulfillment.fail_teacher_order_pipeline = lambda item, error: calls.append(
+            ("order", item.payload["teacher_order_id"], error)
+        )
+        item = _item({"expected_step": "content", "teacher_order_id": 73})
+
+        with patch.dict(
+            sys.modules,
+            {
+                "services.formation_pipeline_service": pipeline,
+                "services.teacher_order_fulfillment_service": fulfillment,
+            },
+        ):
+            mark_auto_pilot_dead_letter(item, "attempts exhausted")
+
+        self.assertEqual(calls[0][0], "job")
+        self.assertEqual(calls[1], ("order", 73, "attempts exhausted"))
+
+    def test_voice_reference_calibration_runs_before_first_auto_pilot_step(self):
+        updates = []
+        routes_module = types.SimpleNamespace(
+            get_job=lambda _job_id: {"id": 42, "platform_id": 120},
+            _determine_next_ap_step=lambda _job_id: "content",
+            update_job=lambda job_id, **fields: updates.append((job_id, fields)),
+        )
+        routes_package = types.ModuleType("routes")
+        routes_package.formation_routes = routes_module
+        calibration = types.ModuleType("services.voice_reference_calibration_service")
+        calibration.calibrate_platform_voice = lambda platform_id: {
+            "status": "completed",
+            "platform_id": platform_id,
+            "words_per_minute": 157.089,
+        }
+        item = replace(
+            _item({"teacher_order_id": 73}),
+            task_type="voice_reference_calibration",
+        )
+        lease = _Lease()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.voice_reference_calibration_service": calibration,
+            },
+        ):
+            result = handle_voice_reference_calibration_work_item(item, lease)
+
+        self.assertEqual(lease.checkpoints, 2)
+        self.assertEqual(result.result["words_per_minute"], 157.089)
+        self.assertEqual(result.next_items[0].task_type, "auto_pilot_tick")
+        self.assertEqual(result.next_items[0].payload["expected_step"], "content")
+        self.assertEqual(result.next_items[0].payload["teacher_order_id"], 73)
+        self.assertEqual(updates, [(42, {
+            "auto_pilot_step": "voice_calibration",
+            "auto_pilot_error": None,
+        })])
+
+    def test_voice_calibration_dead_letter_marks_the_real_pipeline_step(self):
+        calls = []
+        pipeline = types.ModuleType("services.formation_pipeline_service")
+        pipeline.update_job = lambda job_id, **fields: calls.append(
+            ("job", job_id, fields)
+        )
+        fulfillment = types.ModuleType("services.teacher_order_fulfillment_service")
+        fulfillment.fail_teacher_order_pipeline = lambda item, error: calls.append(
+            ("order", item.payload["teacher_order_id"], error)
+        )
+        item = replace(
+            _item({"teacher_order_id": 73}),
+            task_type="voice_reference_calibration",
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "services.formation_pipeline_service": pipeline,
+                "services.teacher_order_fulfillment_service": fulfillment,
+            },
+        ):
+            mark_pipeline_dead_letter(item, "datetime is not JSON serializable")
+
+        self.assertEqual(calls[0], ("job", 42, {
+            "auto_pilot_step": "voice_calibration",
+            "auto_pilot_error": "datetime is not JSON serializable",
+        }))
+        self.assertEqual(calls[1], (
+            "order",
+            73,
+            "datetime is not JSON serializable",
+        ))
+
+
+if __name__ == "__main__":
+    unittest.main()

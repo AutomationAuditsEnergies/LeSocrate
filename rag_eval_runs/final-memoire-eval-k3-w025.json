@@ -1,0 +1,4250 @@
+{
+  "summary": {
+    "global": {
+      "bm25": {
+        "recall": 0.7,
+        "precision": 0.2333333333333333,
+        "mrr": 0.5277777777777778
+      },
+      "vector": {
+        "recall": 0.8333333333333334,
+        "precision": 0.2777777777777778,
+        "mrr": 0.6111111111111112
+      },
+      "hybrid": {
+        "recall": 0.9,
+        "precision": 0.3,
+        "mrr": 0.65
+      }
+    },
+    "by_family": {
+      "lexical_metadata": {
+        "bm25": {
+          "recall": 0.8,
+          "precision": 0.26666666666666666,
+          "mrr": 0.48333333333333334
+        },
+        "vector": {
+          "recall": 0.6,
+          "precision": 0.19999999999999998,
+          "mrr": 0.36666666666666664
+        },
+        "hybrid": {
+          "recall": 0.8,
+          "precision": 0.26666666666666666,
+          "mrr": 0.6333333333333333
+        }
+      },
+      "mixed": {
+        "bm25": {
+          "recall": 0.9,
+          "precision": 0.3,
+          "mrr": 0.8
+        },
+        "vector": {
+          "recall": 1.0,
+          "precision": 0.3333333333333333,
+          "mrr": 0.95
+        },
+        "hybrid": {
+          "recall": 1.0,
+          "precision": 0.3333333333333333,
+          "mrr": 0.8833333333333333
+        }
+      },
+      "semantic_reformulation": {
+        "bm25": {
+          "recall": 0.4,
+          "precision": 0.13333333333333333,
+          "mrr": 0.3
+        },
+        "vector": {
+          "recall": 0.9,
+          "precision": 0.3,
+          "mrr": 0.5166666666666666
+        },
+        "hybrid": {
+          "recall": 0.9,
+          "precision": 0.3,
+          "mrr": 0.43333333333333335
+        }
+      }
+    }
+  },
+  "documents": [
+    {
+      "suffix": "lex-01",
+      "title": "Fiche procédure META-BQ9-QUALITE",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit transmettre une alerte qualité au responsable de plateau. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-01-distractor",
+      "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-02",
+      "title": "Fiche procédure META-AX7-PRIORITE",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit ouvrir une médiation prioritaire sous vingt-quatre heures. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-02-distractor",
+      "title": "Fiche procédure voisine NOTE-AX7-PRIORITE",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-03",
+      "title": "Fiche procédure META-CM4-SUIVI",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit programmer un rappel de suivi dans les deux jours ouvrés. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-03-distractor",
+      "title": "Fiche procédure voisine NOTE-CM4-SUIVI",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-04",
+      "title": "Fiche procédure META-DN2-CLOTURE",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit clôturer le dossier après validation explicite du client. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-04-distractor",
+      "title": "Fiche procédure voisine NOTE-DN2-CLOTURE",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-05",
+      "title": "Fiche procédure META-EP8-TRANSFERT",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit transférer la demande vers le service expert. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-05-distractor",
+      "title": "Fiche procédure voisine NOTE-EP8-TRANSFERT",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-06",
+      "title": "Fiche procédure META-FR6-RGPD",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit limiter la collecte aux seules informations nécessaires. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-06-distractor",
+      "title": "Fiche procédure voisine NOTE-FR6-RGPD",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-07",
+      "title": "Fiche procédure META-GH3-CRM",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit mettre à jour le dossier client avant la fin de l'appel. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-07-distractor",
+      "title": "Fiche procédure voisine NOTE-GH3-CRM",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-08",
+      "title": "Fiche procédure META-JK8-RECLAM",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit ouvrir une fiche de réclamation prioritaire. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-08-distractor",
+      "title": "Fiche procédure voisine NOTE-JK8-RECLAM",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-09",
+      "title": "Fiche procédure META-LM2-SUPERV",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit solliciter une validation superviseur. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-09-distractor",
+      "title": "Fiche procédure voisine NOTE-LM2-SUPERV",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "lex-10",
+      "title": "Fiche procédure META-NP5-RAPPEL",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque cette fiche est sélectionnée, le conseiller doit planifier un rappel client le lendemain matin. L'identifiant exact est volontairement porté par le titre, pas par le texte vectorisé."
+    },
+    {
+      "suffix": "lex-10-distractor",
+      "title": "Fiche procédure voisine NOTE-NP5-RAPPEL",
+      "chunk": "Cette fiche voisine décrit aussi une procédure interne de relation client, avec un vocabulaire très proche, mais elle ne correspond pas au bon identifiant."
+    },
+    {
+      "suffix": "sem-client-vulnerable",
+      "title": "Client vulnérable et compréhension",
+      "chunk": "Face à une personne en difficulté de compréhension, le conseiller ralentit le rythme, utilise des phrases courtes, vérifie chaque étape et laisse au client le temps de répondre."
+    },
+    {
+      "suffix": "sem-client-vulnerable-distractor",
+      "title": "Distracteur sémantique 1",
+      "chunk": "Comprendre difficilement les consignes peut arriver dans un manuel technique ou une notice. Ce passage répète les mots de la question mais ne parle pas d'accompagnement client."
+    },
+    {
+      "suffix": "sem-fatigue-emotionnelle",
+      "title": "Fatigue émotionnelle du conseiller",
+      "chunk": "Après plusieurs interactions difficiles, le conseiller peut ressentir une saturation relationnelle : baisse d'écoute, parole mécanique, irritabilité discrète et difficulté à rester disponible."
+    },
+    {
+      "suffix": "sem-fatigue-emotionnelle-distractor",
+      "title": "Distracteur sémantique 2",
+      "chunk": "Un échange difficile peut concerner une facture, une livraison ou un remboursement. Ce passage mentionne des signes administratifs mais pas l'épuisement émotionnel."
+    },
+    {
+      "suffix": "sem-confiance-client",
+      "title": "Construction de la confiance",
+      "chunk": "La confiance se construit lorsque le client constate que le conseiller tient ses engagements, reformule correctement la demande et annonce des délais réalistes."
+    },
+    {
+      "suffix": "sem-confiance-client-distractor",
+      "title": "Distracteur sémantique 3",
+      "chunk": "Une promesse faite au téléphone peut être une offre commerciale ou un rendez-vous. Ce passage reprend les mots promesse et téléphone sans expliquer la confiance."
+    },
+    {
+      "suffix": "sem-ecoute-active",
+      "title": "Écoute active avant solution",
+      "chunk": "L'écoute active consiste à laisser le client terminer son explication, repérer le besoin principal, reformuler sans déformer et vérifier la compréhension avant de proposer une solution."
+    },
+    {
+      "suffix": "sem-ecoute-active-distractor",
+      "title": "Distracteur sémantique 4",
+      "chunk": "Proposer une solution à un client confus peut être rapide si un catalogue standard existe. Ce passage reprend les mots mais ne décrit pas l'écoute active."
+    },
+    {
+      "suffix": "sem-hors-perimetre",
+      "title": "Orientation hors périmètre",
+      "chunk": "Quand une demande dépasse son périmètre, le conseiller explique la limite de son rôle, oriente vers le bon interlocuteur et confirme au client que le suivi sera transmis."
+    },
+    {
+      "suffix": "sem-hors-perimetre-distractor",
+      "title": "Distracteur sémantique 5",
+      "chunk": "Abandonner le client peut donner une mauvaise impression dans une demande difficile. Ce texte répète les mots sans donner de méthode d'orientation."
+    },
+    {
+      "suffix": "sem-clarte-pedagogique",
+      "title": "Clarté pédagogique",
+      "chunk": "Pour rendre une consigne compréhensible, le formateur découpe l'explication en étapes, utilise des phrases courtes, donne un exemple concret et vérifie la reformulation."
+    },
+    {
+      "suffix": "sem-clarte-pedagogique-distractor",
+      "title": "Distracteur sémantique 6",
+      "chunk": "Expliquer simplement une tâche peut vouloir dire lire plus lentement une notice. Ce passage ne parle pas de découpage pédagogique."
+    },
+    {
+      "suffix": "sem-desamorcage",
+      "title": "Désamorçage émotionnel",
+      "chunk": "Désamorcer une tension suppose de reconnaître l'émotion exprimée, recadrer calmement le problème et proposer une prochaine étape claire sans se justifier trop vite."
+    },
+    {
+      "suffix": "sem-desamorcage-distractor",
+      "title": "Distracteur sémantique 7",
+      "chunk": "Une personne énervée peut faire redescendre la tension après une pause. Ce passage reprend les mots mais ne décrit pas de méthode de désamorçage."
+    },
+    {
+      "suffix": "sem-tracabilite",
+      "title": "Trace après échange sensible",
+      "chunk": "Après un échange sensible, la note de suivi doit préciser la demande, l'engagement pris, le délai annoncé et le service responsable pour éviter une perte d'information."
+    },
+    {
+      "suffix": "sem-tracabilite-distractor",
+      "title": "Distracteur sémantique 8",
+      "chunk": "Un appel compliqué peut nécessiter d'écrire un message de politesse. Ce passage reprend appel et écrire sans traiter la traçabilité."
+    },
+    {
+      "suffix": "sem-voix-calme",
+      "title": "Voix calme et régulation",
+      "chunk": "Une voix posée, stable et lente peut aider à réguler l'interaction avec un client agité en créant un repère émotionnel plus sécurisant."
+    },
+    {
+      "suffix": "sem-voix-calme-distractor",
+      "title": "Distracteur sémantique 9",
+      "chunk": "Un ton posé au téléphone peut améliorer la lecture d'un script commercial. Ce passage contient ton posé et téléphone mais pas la régulation émotionnelle."
+    },
+    {
+      "suffix": "sem-reformulation",
+      "title": "Reformulation fiable",
+      "chunk": "Reformuler consiste à redire avec ses propres mots le besoin du client afin de vérifier que la demande a été comprise avant de poursuivre le traitement."
+    },
+    {
+      "suffix": "sem-reformulation-distractor",
+      "title": "Distracteur sémantique 10",
+      "chunk": "Répéter autrement une phrase peut être un exercice de style ou de diction. Ce passage ne parle pas de validation du besoin client."
+    },
+    {
+      "suffix": "trace-crm",
+      "title": "Cas mixte CRM",
+      "chunk": "Après une réclamation transmise entre équipes, le CRM doit contenir la demande, le service responsable et l'engagement annoncé afin de conserver une trace exploitable."
+    },
+    {
+      "suffix": "trace-crm-distractor",
+      "title": "Distracteur mixte CRM",
+      "chunk": "Ce passage contient le terme CRM, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "rgpd-minimisation",
+      "title": "Cas mixte RGPD",
+      "chunk": "Lorsqu'il applique le RGPD, le conseiller limite les données demandées à ce qui est nécessaire pour traiter le dossier et évite les détails personnels inutiles."
+    },
+    {
+      "suffix": "rgpd-minimisation-distractor",
+      "title": "Distracteur mixte RGPD",
+      "chunk": "Ce passage contient le terme RGPD, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "qsat-cloture",
+      "title": "Cas mixte QSAT-5",
+      "chunk": "La procédure QSAT-5 impose de vérifier la satisfaction du client avant la clôture : reformuler la solution, demander validation et noter le résultat."
+    },
+    {
+      "suffix": "qsat-cloture-distractor",
+      "title": "Distracteur mixte QSAT-5",
+      "chunk": "Ce passage contient le terme QSAT-5, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "roe-hors-perimetre",
+      "title": "Cas mixte ROE",
+      "chunk": "La méthode ROE aide à traiter une demande hors périmètre : refuser avec raison, orienter vers le bon interlocuteur et expliquer pourquoi ce transfert aide le client."
+    },
+    {
+      "suffix": "roe-hors-perimetre-distractor",
+      "title": "Distracteur mixte ROE",
+      "chunk": "Ce passage contient le terme ROE, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "vtrc-cloture",
+      "title": "Cas mixte VTRC",
+      "chunk": "La méthode VTRC structure la fin d'un appel difficile : vérifier, tracer, rassurer puis congédier avec une formule claire et professionnelle."
+    },
+    {
+      "suffix": "vtrc-cloture-distractor",
+      "title": "Distracteur mixte VTRC",
+      "chunk": "Ce passage contient le terme VTRC, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "sna-voix",
+      "title": "Cas mixte SNA",
+      "chunk": "La régulation du SNA influence la voix du conseiller : un état plus stable favorise un débit plus posé, un timbre plus calme et une meilleure écoute."
+    },
+    {
+      "suffix": "sna-voix-distractor",
+      "title": "Distracteur mixte SNA",
+      "chunk": "Ce passage contient le terme SNA, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "crm-trace-code",
+      "title": "Cas mixte CRM-TRACE",
+      "chunk": "Le repère CRM-TRACE indique qu'un échange sensible doit être documenté immédiatement pour éviter une perte d'information entre deux services."
+    },
+    {
+      "suffix": "crm-trace-code-distractor",
+      "title": "Distracteur mixte CRM-TRACE",
+      "chunk": "Ce passage contient le terme CRM-TRACE, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "ecalm-desamorcage",
+      "title": "Cas mixte ECALM-4",
+      "chunk": "Le repère ECALM-4 désigne quatre gestes de désamorçage : écouter, calmer, analyser la demande et lancer la prochaine étape."
+    },
+    {
+      "suffix": "ecalm-desamorcage-distractor",
+      "title": "Distracteur mixte ECALM-4",
+      "chunk": "Ce passage contient le terme ECALM-4, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "rgpd-min-code",
+      "title": "Cas mixte RGPD-MIN",
+      "chunk": "Le repère RGPD-MIN rappelle que la collecte minimale protège le client et réduit les risques liés aux données personnelles."
+    },
+    {
+      "suffix": "rgpd-min-code-distractor",
+      "title": "Distracteur mixte RGPD-MIN",
+      "chunk": "Ce passage contient le terme RGPD-MIN, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    },
+    {
+      "suffix": "ech3x-escalade",
+      "title": "Cas mixte ECH-3X",
+      "chunk": "Le repère ECH-3X structure l'escalade en trois temps : reconnaître la difficulté, transférer au bon niveau et confirmer le suivi au client."
+    },
+    {
+      "suffix": "ech3x-escalade-distractor",
+      "title": "Distracteur mixte ECH-3X",
+      "chunk": "Ce passage contient le terme ECH-3X, mais il l'emploie dans un contexte général sans répondre à l'intention précise de la question."
+    }
+  ],
+  "questions": [
+    {
+      "id": "lex_01",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "relevant_suffixes": [
+        "lex-01"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_02",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-AX7-PRIORITE ?",
+      "relevant_suffixes": [
+        "lex-02"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_03",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-CM4-SUIVI ?",
+      "relevant_suffixes": [
+        "lex-03"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_04",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-DN2-CLOTURE ?",
+      "relevant_suffixes": [
+        "lex-04"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_05",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-EP8-TRANSFERT ?",
+      "relevant_suffixes": [
+        "lex-05"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_06",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-FR6-RGPD ?",
+      "relevant_suffixes": [
+        "lex-06"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_07",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-GH3-CRM ?",
+      "relevant_suffixes": [
+        "lex-07"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_08",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-JK8-RECLAM ?",
+      "relevant_suffixes": [
+        "lex-08"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_09",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-LM2-SUPERV ?",
+      "relevant_suffixes": [
+        "lex-09"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "lex_10",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-NP5-RAPPEL ?",
+      "relevant_suffixes": [
+        "lex-10"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale."
+    },
+    {
+      "id": "sem_01",
+      "family": "semantic_reformulation",
+      "question": "Comment aider une personne qui comprend difficilement les consignes ?",
+      "relevant_suffixes": [
+        "sem-client-vulnerable"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_02",
+      "family": "semantic_reformulation",
+      "question": "Quels signes montrent qu'un conseiller commence à être épuisé par les échanges difficiles ?",
+      "relevant_suffixes": [
+        "sem-fatigue-emotionnelle"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_03",
+      "family": "semantic_reformulation",
+      "question": "Comment rassurer quelqu'un qui doute de la promesse faite au téléphone ?",
+      "relevant_suffixes": [
+        "sem-confiance-client"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_04",
+      "family": "semantic_reformulation",
+      "question": "Que doit faire un conseiller avant de proposer une solution à un client confus ?",
+      "relevant_suffixes": [
+        "sem-ecoute-active"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_05",
+      "family": "semantic_reformulation",
+      "question": "Comment éviter de donner l'impression d'abandonner le client quand on ne peut pas traiter sa demande ?",
+      "relevant_suffixes": [
+        "sem-hors-perimetre"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_06",
+      "family": "semantic_reformulation",
+      "question": "Comment expliquer simplement une tâche à quelqu'un qui n'a pas compris la première fois ?",
+      "relevant_suffixes": [
+        "sem-clarte-pedagogique"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_07",
+      "family": "semantic_reformulation",
+      "question": "Que répondre à une personne énervée pour faire redescendre la tension ?",
+      "relevant_suffixes": [
+        "sem-desamorcage"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_08",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi écrire ce qui a été promis après un appel compliqué ?",
+      "relevant_suffixes": [
+        "sem-tracabilite"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_09",
+      "family": "semantic_reformulation",
+      "question": "Comment un ton posé peut-il apaiser une personne stressée au téléphone ?",
+      "relevant_suffixes": [
+        "sem-voix-calme"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "sem_10",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi répéter autrement ce que le client vient d'expliquer ?",
+      "relevant_suffixes": [
+        "sem-reformulation"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement."
+    },
+    {
+      "id": "mix_01",
+      "family": "mixed",
+      "question": "Pourquoi garder une trace dans le CRM lorsqu'une réclamation passe entre plusieurs équipes ?",
+      "relevant_suffixes": [
+        "trace-crm"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_02",
+      "family": "mixed",
+      "question": "Pourquoi le RGPD oblige-t-il à ne demander que les informations nécessaires au client ?",
+      "relevant_suffixes": [
+        "rgpd-minimisation"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_03",
+      "family": "mixed",
+      "question": "Comment utiliser QSAT-5 pour vérifier qu'un client accepte la solution avant de fermer le dossier ?",
+      "relevant_suffixes": [
+        "qsat-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_04",
+      "family": "mixed",
+      "question": "Comment la méthode ROE évite-t-elle de laisser un client sans réponse quand la demande sort du périmètre ?",
+      "relevant_suffixes": [
+        "roe-hors-perimetre"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_05",
+      "family": "mixed",
+      "question": "Pourquoi VTRC aide-t-il à terminer correctement un appel difficile ?",
+      "relevant_suffixes": [
+        "vtrc-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_06",
+      "family": "mixed",
+      "question": "Quel lien existe entre le SNA et la voix calme du conseiller ?",
+      "relevant_suffixes": [
+        "sna-voix"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_07",
+      "family": "mixed",
+      "question": "Que signifie CRM-TRACE quand une demande sensible doit être transmise ?",
+      "relevant_suffixes": [
+        "crm-trace-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_08",
+      "family": "mixed",
+      "question": "Comment ECALM-4 aide-t-il à faire redescendre une tension client ?",
+      "relevant_suffixes": [
+        "ecalm-desamorcage"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_09",
+      "family": "mixed",
+      "question": "Pourquoi RGPD-MIN est-il utile quand on demande des informations personnelles ?",
+      "relevant_suffixes": [
+        "rgpd-min-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    },
+    {
+      "id": "mix_10",
+      "family": "mixed",
+      "question": "Comment ECH-3X organise-t-il le transfert d'une demande complexe ?",
+      "relevant_suffixes": [
+        "ech3x-escalade"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux."
+    }
+  ],
+  "rows": [
+    {
+      "id": "lex_01",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "relevant_suffixes": [
+        "lex-01"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-01-distractor",
+        "memoire-final-1781701908-20212-k3-lex-01",
+        "memoire-final-1781701908-20212-k3-lex-02-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 8.145523
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01",
+          "title": "Fiche procédure META-BQ9-QUALITE",
+          "score": 6.8048143
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02-distractor",
+          "title": "Fiche procédure voisine NOTE-AX7-PRIORITE",
+          "score": 4.0674357
+        }
+      ]
+    },
+    {
+      "id": "lex_01",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "relevant_suffixes": [
+        "lex-01"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-qsat-cloture",
+        "memoire-final-1781701908-20212-k3-qsat-cloture-distractor",
+        "memoire-final-1781701908-20212-k3-lex-01"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture",
+          "title": "Cas mixte QSAT-5",
+          "score": 0.6854918
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture-distractor",
+          "title": "Distracteur mixte QSAT-5",
+          "score": 0.65799433
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01",
+          "title": "Fiche procédure META-BQ9-QUALITE",
+          "score": 0.6575965
+        }
+      ]
+    },
+    {
+      "id": "lex_01",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "relevant_suffixes": [
+        "lex-01"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-01",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor",
+        "memoire-final-1781701908-20212-k3-lex-02-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01",
+          "title": "Fiche procédure META-BQ9-QUALITE",
+          "score": 0.020425699651241302
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 0.01666666753590107
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02-distractor",
+          "title": "Fiche procédure voisine NOTE-AX7-PRIORITE",
+          "score": 0.016129031777381897
+        }
+      ]
+    },
+    {
+      "id": "lex_02",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-AX7-PRIORITE ?",
+      "relevant_suffixes": [
+        "lex-02"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-02-distractor",
+        "memoire-final-1781701908-20212-k3-lex-02",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02-distractor",
+          "title": "Fiche procédure voisine NOTE-AX7-PRIORITE",
+          "score": 8.145523
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 6.8048143
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 4.0674357
+        }
+      ]
+    },
+    {
+      "id": "lex_02",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-AX7-PRIORITE ?",
+      "relevant_suffixes": [
+        "lex-02"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+        "memoire-final-1781701908-20212-k3-lex-02",
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+          "title": "Distracteur mixte ECH-3X",
+          "score": 0.6245303
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.6226281
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+          "title": "Distracteur mixte ECALM-4",
+          "score": 0.6223554
+        }
+      ]
+    },
+    {
+      "id": "lex_02",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-AX7-PRIORITE ?",
+      "relevant_suffixes": [
+        "lex-02"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-02",
+        "memoire-final-1781701908-20212-k3-lex-02-distractor",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02-distractor",
+          "title": "Fiche procédure voisine NOTE-AX7-PRIORITE",
+          "score": 0.01666666753590107
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 0.016129031777381897
+        }
+      ]
+    },
+    {
+      "id": "lex_03",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-CM4-SUIVI ?",
+      "relevant_suffixes": [
+        "lex-03"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-03",
+        "memoire-final-1781701908-20212-k3-lex-03-distractor",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-03",
+          "title": "Fiche procédure META-CM4-SUIVI",
+          "score": 12.215289
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-03-distractor",
+          "title": "Fiche procédure voisine NOTE-CM4-SUIVI",
+          "score": 8.145523
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 5.6059036
+        }
+      ]
+    },
+    {
+      "id": "lex_03",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-CM4-SUIVI ?",
+      "relevant_suffixes": [
+        "lex-03"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-ech3x-escalade"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 0.6812649
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+          "title": "Distracteur mixte ECALM-4",
+          "score": 0.6502504
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade",
+          "title": "Cas mixte ECH-3X",
+          "score": 0.6425893
+        }
+      ]
+    },
+    {
+      "id": "lex_03",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-CM4-SUIVI ?",
+      "relevant_suffixes": [
+        "lex-03"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ech3x-escalade",
+        "memoire-final-1781701908-20212-k3-lex-03",
+        "memoire-final-1781701908-20212-k3-lex-03-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade",
+          "title": "Cas mixte ECH-3X",
+          "score": 0.019657257944345474
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-03",
+          "title": "Fiche procédure META-CM4-SUIVI",
+          "score": 0.01666666753590107
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-03-distractor",
+          "title": "Fiche procédure voisine NOTE-CM4-SUIVI",
+          "score": 0.016393441706895828
+        }
+      ]
+    },
+    {
+      "id": "lex_04",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-DN2-CLOTURE ?",
+      "relevant_suffixes": [
+        "lex-04"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-04-distractor",
+        "memoire-final-1781701908-20212-k3-lex-04",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-04-distractor",
+          "title": "Fiche procédure voisine NOTE-DN2-CLOTURE",
+          "score": 8.145523
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-04",
+          "title": "Fiche procédure META-DN2-CLOTURE",
+          "score": 6.8048143
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 4.0674357
+        }
+      ]
+    },
+    {
+      "id": "lex_04",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-DN2-CLOTURE ?",
+      "relevant_suffixes": [
+        "lex-04"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-lex-04"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 0.62903965
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+          "title": "Distracteur mixte ECALM-4",
+          "score": 0.6216796
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-04",
+          "title": "Fiche procédure META-DN2-CLOTURE",
+          "score": 0.6183573
+        }
+      ]
+    },
+    {
+      "id": "lex_04",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-DN2-CLOTURE ?",
+      "relevant_suffixes": [
+        "lex-04"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-04",
+        "memoire-final-1781701908-20212-k3-lex-04-distractor",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-04",
+          "title": "Fiche procédure META-DN2-CLOTURE",
+          "score": 0.020425699651241302
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-04-distractor",
+          "title": "Fiche procédure voisine NOTE-DN2-CLOTURE",
+          "score": 0.01666666753590107
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 0.016129031777381897
+        }
+      ]
+    },
+    {
+      "id": "lex_05",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-EP8-TRANSFERT ?",
+      "relevant_suffixes": [
+        "lex-05"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-lex-05-distractor",
+        "memoire-final-1781701908-20212-k3-lex-05"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 8.387698
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-05-distractor",
+          "title": "Fiche procédure voisine NOTE-EP8-TRANSFERT",
+          "score": 8.145523
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-05",
+          "title": "Fiche procédure META-EP8-TRANSFERT",
+          "score": 6.8048143
+        }
+      ]
+    },
+    {
+      "id": "lex_05",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-EP8-TRANSFERT ?",
+      "relevant_suffixes": [
+        "lex-05"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-05",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-crm-trace-code"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-05",
+          "title": "Fiche procédure META-EP8-TRANSFERT",
+          "score": 0.6602512
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 0.6355884
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 0.6332878
+        }
+      ]
+    },
+    {
+      "id": "lex_05",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-EP8-TRANSFERT ?",
+      "relevant_suffixes": [
+        "lex-05"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-lex-05",
+        "memoire-final-1781701908-20212-k3-lex-05-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 0.0207650288939476
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-05",
+          "title": "Fiche procédure META-EP8-TRANSFERT",
+          "score": 0.020295698195695877
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-05-distractor",
+          "title": "Fiche procédure voisine NOTE-EP8-TRANSFERT",
+          "score": 0.016393441706895828
+        }
+      ]
+    },
+    {
+      "id": "lex_06",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-FR6-RGPD ?",
+      "relevant_suffixes": [
+        "lex-06"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+          "title": "Cas mixte RGPD",
+          "score": 9.059022
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+          "title": "Distracteur mixte RGPD",
+          "score": 9.059022
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+          "title": "Distracteur mixte RGPD-MIN",
+          "score": 9.059022
+        }
+      ]
+    },
+    {
+      "id": "lex_06",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-FR6-RGPD ?",
+      "relevant_suffixes": [
+        "lex-06"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+        "memoire-final-1781701908-20212-k3-lex-02"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+          "title": "Distracteur mixte RGPD-MIN",
+          "score": 0.67186195
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+          "title": "Distracteur mixte RGPD",
+          "score": 0.6697609
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.6330011
+        }
+      ]
+    },
+    {
+      "id": "lex_06",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-FR6-RGPD ?",
+      "relevant_suffixes": [
+        "lex-06"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+        "memoire-final-1781701908-20212-k3-lex-02"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+          "title": "Distracteur mixte RGPD",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+          "title": "Distracteur mixte RGPD-MIN",
+          "score": 0.020295698195695877
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.017019271850585938
+        }
+      ]
+    },
+    {
+      "id": "lex_07",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-GH3-CRM ?",
+      "relevant_suffixes": [
+        "lex-07"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-trace-crm-distractor",
+        "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+        "memoire-final-1781701908-20212-k3-crm-trace-code"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm-distractor",
+          "title": "Distracteur mixte CRM",
+          "score": 9.059022
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+          "title": "Distracteur mixte CRM-TRACE",
+          "score": 9.059022
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 8.692539
+        }
+      ]
+    },
+    {
+      "id": "lex_07",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-GH3-CRM ?",
+      "relevant_suffixes": [
+        "lex-07"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-trace-crm-distractor",
+        "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+        "memoire-final-1781701908-20212-k3-trace-crm"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm-distractor",
+          "title": "Distracteur mixte CRM",
+          "score": 0.6823758
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+          "title": "Distracteur mixte CRM-TRACE",
+          "score": 0.6765122
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 0.6751709
+        }
+      ]
+    },
+    {
+      "id": "lex_07",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-GH3-CRM ?",
+      "relevant_suffixes": [
+        "lex-07"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-trace-crm-distractor",
+        "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+        "memoire-final-1781701908-20212-k3-trace-crm"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm-distractor",
+          "title": "Distracteur mixte CRM",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+          "title": "Distracteur mixte CRM-TRACE",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 0.019905274733901024
+        }
+      ]
+    },
+    {
+      "id": "lex_08",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-JK8-RECLAM ?",
+      "relevant_suffixes": [
+        "lex-08"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-08-distractor",
+        "memoire-final-1781701908-20212-k3-lex-08",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-08-distractor",
+          "title": "Fiche procédure voisine NOTE-JK8-RECLAM",
+          "score": 8.145523
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-08",
+          "title": "Fiche procédure META-JK8-RECLAM",
+          "score": 6.8048143
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 4.0674357
+        }
+      ]
+    },
+    {
+      "id": "lex_08",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-JK8-RECLAM ?",
+      "relevant_suffixes": [
+        "lex-08"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-08",
+        "memoire-final-1781701908-20212-k3-trace-crm",
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-08",
+          "title": "Fiche procédure META-JK8-RECLAM",
+          "score": 0.64392936
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 0.64247316
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 0.63918704
+        }
+      ]
+    },
+    {
+      "id": "lex_08",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-JK8-RECLAM ?",
+      "relevant_suffixes": [
+        "lex-08"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-08",
+        "memoire-final-1781701908-20212-k3-lex-08-distractor",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-08",
+          "title": "Fiche procédure META-JK8-RECLAM",
+          "score": 0.02056010812520981
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-08-distractor",
+          "title": "Fiche procédure voisine NOTE-JK8-RECLAM",
+          "score": 0.01666666753590107
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 0.016129031777381897
+        }
+      ]
+    },
+    {
+      "id": "lex_09",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-LM2-SUPERV ?",
+      "relevant_suffixes": [
+        "lex-09"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-09-distractor",
+        "memoire-final-1781701908-20212-k3-lex-09",
+        "memoire-final-1781701908-20212-k3-lex-01-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-09-distractor",
+          "title": "Fiche procédure voisine NOTE-LM2-SUPERV",
+          "score": 8.145523
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-09",
+          "title": "Fiche procédure META-LM2-SUPERV",
+          "score": 6.8048143
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-01-distractor",
+          "title": "Fiche procédure voisine NOTE-BQ9-QUALITE",
+          "score": 4.0674357
+        }
+      ]
+    },
+    {
+      "id": "lex_09",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-LM2-SUPERV ?",
+      "relevant_suffixes": [
+        "lex-09"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-lex-02"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 0.62375695
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+          "title": "Distracteur mixte ECALM-4",
+          "score": 0.61764836
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.6144107
+        }
+      ]
+    },
+    {
+      "id": "lex_09",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-LM2-SUPERV ?",
+      "relevant_suffixes": [
+        "lex-09"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-02",
+        "memoire-final-1781701908-20212-k3-lex-09-distractor",
+        "memoire-final-1781701908-20212-k3-lex-09"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-02",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.017730887979269028
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-09-distractor",
+          "title": "Fiche procédure voisine NOTE-LM2-SUPERV",
+          "score": 0.01666666753590107
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-09",
+          "title": "Fiche procédure META-LM2-SUPERV",
+          "score": 0.016393441706895828
+        }
+      ]
+    },
+    {
+      "id": "lex_10",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-NP5-RAPPEL ?",
+      "relevant_suffixes": [
+        "lex-10"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-10",
+        "memoire-final-1781701908-20212-k3-lex-10-distractor",
+        "memoire-final-1781701908-20212-k3-lex-03"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-10",
+          "title": "Fiche procédure META-NP5-RAPPEL",
+          "score": 13.143372
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-10-distractor",
+          "title": "Fiche procédure voisine NOTE-NP5-RAPPEL",
+          "score": 8.145523
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-03",
+          "title": "Fiche procédure META-CM4-SUIVI",
+          "score": 8.075719
+        }
+      ]
+    },
+    {
+      "id": "lex_10",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-NP5-RAPPEL ?",
+      "relevant_suffixes": [
+        "lex-10"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+        "memoire-final-1781701908-20212-k3-lex-10",
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 0.6604679
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-10",
+          "title": "Fiche procédure META-NP5-RAPPEL",
+          "score": 0.6347471
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+          "title": "Distracteur mixte ECALM-4",
+          "score": 0.6332171
+        }
+      ]
+    },
+    {
+      "id": "lex_10",
+      "family": "lexical_metadata",
+      "question": "Quelle action correspond à META-NP5-RAPPEL ?",
+      "relevant_suffixes": [
+        "lex-10"
+      ],
+      "justification": "Le code exact est dans le titre searchable mais pas dans le texte vectorisé; cela teste la précision lexicale.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-10",
+        "memoire-final-1781701908-20212-k3-lex-10-distractor",
+        "memoire-final-1781701908-20212-k3-lex-03"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-10",
+          "title": "Fiche procédure META-NP5-RAPPEL",
+          "score": 0.0207650288939476
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-10-distractor",
+          "title": "Fiche procédure voisine NOTE-NP5-RAPPEL",
+          "score": 0.016393441706895828
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-03",
+          "title": "Fiche procédure META-CM4-SUIVI",
+          "score": 0.016129031777381897
+        }
+      ]
+    },
+    {
+      "id": "sem_01",
+      "family": "semantic_reformulation",
+      "question": "Comment aider une personne qui comprend difficilement les consignes ?",
+      "relevant_suffixes": [
+        "sem-client-vulnerable"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable-distractor",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable-distractor",
+          "title": "Distracteur sémantique 1",
+          "score": 16.386715
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 5.1764855
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 4.478764
+        }
+      ]
+    },
+    {
+      "id": "sem_01",
+      "family": "semantic_reformulation",
+      "question": "Comment aider une personne qui comprend difficilement les consignes ?",
+      "relevant_suffixes": [
+        "sem-client-vulnerable"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable-distractor",
+        "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.7370769
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable-distractor",
+          "title": "Distracteur sémantique 1",
+          "score": 0.69449395
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique",
+          "title": "Clarté pédagogique",
+          "score": 0.6805405
+        }
+      ]
+    },
+    {
+      "id": "sem_01",
+      "family": "semantic_reformulation",
+      "question": "Comment aider une personne qui comprend difficilement les consignes ?",
+      "relevant_suffixes": [
+        "sem-client-vulnerable"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable-distractor",
+          "title": "Distracteur sémantique 1",
+          "score": 0.0207650288939476
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.02003968320786953
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 0.016393441706895828
+        }
+      ]
+    },
+    {
+      "id": "sem_02",
+      "family": "semantic_reformulation",
+      "question": "Quels signes montrent qu'un conseiller commence à être épuisé par les échanges difficiles ?",
+      "relevant_suffixes": [
+        "sem-fatigue-emotionnelle"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+        "memoire-final-1781701908-20212-k3-crm-trace-code",
+        "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+          "title": "Fatigue émotionnelle du conseiller",
+          "score": 8.607471
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 7.157383
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle-distractor",
+          "title": "Distracteur sémantique 2",
+          "score": 6.1771216
+        }
+      ]
+    },
+    {
+      "id": "sem_02",
+      "family": "semantic_reformulation",
+      "question": "Quels signes montrent qu'un conseiller commence à être épuisé par les échanges difficiles ?",
+      "relevant_suffixes": [
+        "sem-fatigue-emotionnelle"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+          "title": "Fatigue émotionnelle du conseiller",
+          "score": 0.78754205
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.7049801
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 0.6791483
+        }
+      ]
+    },
+    {
+      "id": "sem_02",
+      "family": "semantic_reformulation",
+      "question": "Quels signes montrent qu'un conseiller commence à être épuisé par les échanges difficiles ?",
+      "relevant_suffixes": [
+        "sem-fatigue-emotionnelle"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+          "title": "Fatigue émotionnelle du conseiller",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.017085373401641846
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 0.016690485179424286
+        }
+      ]
+    },
+    {
+      "id": "sem_03",
+      "family": "semantic_reformulation",
+      "question": "Comment rassurer quelqu'un qui doute de la promesse faite au téléphone ?",
+      "relevant_suffixes": [
+        "sem-confiance-client"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+        "memoire-final-1781701908-20212-k3-vtrc-cloture",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 25.319407
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-vtrc-cloture",
+          "title": "Cas mixte VTRC",
+          "score": 8.292388
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor",
+          "title": "Distracteur sémantique 9",
+          "score": 8.227694
+        }
+      ]
+    },
+    {
+      "id": "sem_03",
+      "family": "semantic_reformulation",
+      "question": "Comment rassurer quelqu'un qui doute de la promesse faite au téléphone ?",
+      "relevant_suffixes": [
+        "sem-confiance-client"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 0.7557036
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client",
+          "title": "Construction de la confiance",
+          "score": 0.6996925
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.6624577
+        }
+      ]
+    },
+    {
+      "id": "sem_03",
+      "family": "semantic_reformulation",
+      "question": "Comment rassurer quelqu'un qui doute de la promesse faite au téléphone ?",
+      "relevant_suffixes": [
+        "sem-confiance-client"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client",
+          "title": "Construction de la confiance",
+          "score": 0.01997137814760208
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.019183773547410965
+        }
+      ]
+    },
+    {
+      "id": "sem_04",
+      "family": "semantic_reformulation",
+      "question": "Que doit faire un conseiller avant de proposer une solution à un client confus ?",
+      "relevant_suffixes": [
+        "sem-ecoute-active"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-ecoute-active",
+        "memoire-final-1781701908-20212-k3-sem-ecoute-active-distractor",
+        "memoire-final-1781701908-20212-k3-lex-07"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-ecoute-active",
+          "title": "Écoute active avant solution",
+          "score": 20.591192
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-ecoute-active-distractor",
+          "title": "Distracteur sémantique 4",
+          "score": 19.739872
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-07",
+          "title": "Fiche procédure META-GH3-CRM",
+          "score": 8.223386
+        }
+      ]
+    },
+    {
+      "id": "sem_04",
+      "family": "semantic_reformulation",
+      "question": "Que doit faire un conseiller avant de proposer une solution à un client confus ?",
+      "relevant_suffixes": [
+        "sem-ecoute-active"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-ecoute-active-distractor",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.7410189
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-ecoute-active-distractor",
+          "title": "Distracteur sémantique 4",
+          "score": 0.7180733
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 0.7090686
+        }
+      ]
+    },
+    {
+      "id": "sem_04",
+      "family": "semantic_reformulation",
+      "question": "Que doit faire un conseiller avant de proposer une solution à un client confus ?",
+      "relevant_suffixes": [
+        "sem-ecoute-active"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-ecoute-active-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-ecoute-active"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-ecoute-active-distractor",
+          "title": "Distracteur sémantique 4",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.01909204013645649
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-ecoute-active",
+          "title": "Écoute active avant solution",
+          "score": 0.01666666753590107
+        }
+      ]
+    },
+    {
+      "id": "sem_05",
+      "family": "semantic_reformulation",
+      "question": "Comment éviter de donner l'impression d'abandonner le client quand on ne peut pas traiter sa demande ?",
+      "relevant_suffixes": [
+        "sem-hors-perimetre"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre-distractor",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre-distractor",
+          "title": "Distracteur sémantique 5",
+          "score": 12.712165
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 10.312222
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 10.196567
+        }
+      ]
+    },
+    {
+      "id": "sem_05",
+      "family": "semantic_reformulation",
+      "question": "Comment éviter de donner l'impression d'abandonner le client quand on ne peut pas traiter sa demande ?",
+      "relevant_suffixes": [
+        "sem-hors-perimetre"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre-distractor",
+          "title": "Distracteur sémantique 5",
+          "score": 0.76615024
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.71197635
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 0.70184016
+        }
+      ]
+    },
+    {
+      "id": "sem_05",
+      "family": "semantic_reformulation",
+      "question": "Comment éviter de donner l'impression d'abandonner le client quand on ne peut pas traiter sa demande ?",
+      "relevant_suffixes": [
+        "sem-hors-perimetre"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre-distractor",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre-distractor",
+          "title": "Distracteur sémantique 5",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 0.020425699651241302
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.017431695014238358
+        }
+      ]
+    },
+    {
+      "id": "sem_06",
+      "family": "semantic_reformulation",
+      "question": "Comment expliquer simplement une tâche à quelqu'un qui n'a pas compris la première fois ?",
+      "relevant_suffixes": [
+        "sem-clarte-pedagogique"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique-distractor",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique-distractor",
+          "title": "Distracteur sémantique 6",
+          "score": 18.90476
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 7.427964
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 6.9515285
+        }
+      ]
+    },
+    {
+      "id": "sem_06",
+      "family": "semantic_reformulation",
+      "question": "Comment expliquer simplement une tâche à quelqu'un qui n'a pas compris la première fois ?",
+      "relevant_suffixes": [
+        "sem-clarte-pedagogique"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique-distractor",
+        "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique-distractor",
+          "title": "Distracteur sémantique 6",
+          "score": 0.7156394
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique",
+          "title": "Clarté pédagogique",
+          "score": 0.694396
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.6787074
+        }
+      ]
+    },
+    {
+      "id": "sem_06",
+      "family": "semantic_reformulation",
+      "question": "Comment expliquer simplement une tâche à quelqu'un qui n'a pas compris la première fois ?",
+      "relevant_suffixes": [
+        "sem-clarte-pedagogique"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique-distractor",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-clarte-pedagogique-distractor",
+          "title": "Distracteur sémantique 6",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 0.016393441706895828
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 0.016129031777381897
+        }
+      ]
+    },
+    {
+      "id": "sem_07",
+      "family": "semantic_reformulation",
+      "question": "Que répondre à une personne énervée pour faire redescendre la tension ?",
+      "relevant_suffixes": [
+        "sem-desamorcage"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-trace-crm-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 26.740843
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 8.63086
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm-distractor",
+          "title": "Distracteur mixte CRM",
+          "score": 4.7678175
+        }
+      ]
+    },
+    {
+      "id": "sem_07",
+      "family": "semantic_reformulation",
+      "question": "Que répondre à une personne énervée pour faire redescendre la tension ?",
+      "relevant_suffixes": [
+        "sem-desamorcage"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 0.7580997
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage",
+          "title": "Désamorçage émotionnel",
+          "score": 0.7263269
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.6706479
+        }
+      ]
+    },
+    {
+      "id": "sem_07",
+      "family": "semantic_reformulation",
+      "question": "Que répondre à une personne énervée pour faire redescendre la tension ?",
+      "relevant_suffixes": [
+        "sem-desamorcage"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.020425699651241302
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage",
+          "title": "Désamorçage émotionnel",
+          "score": 0.017796989530324936
+        }
+      ]
+    },
+    {
+      "id": "sem_08",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi écrire ce qui a été promis après un appel compliqué ?",
+      "relevant_suffixes": [
+        "sem-tracabilite"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-tracabilite-distractor",
+        "memoire-final-1781701908-20212-k3-sem-tracabilite",
+        "memoire-final-1781701908-20212-k3-sem-reformulation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-tracabilite-distractor",
+          "title": "Distracteur sémantique 8",
+          "score": 19.831589
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-tracabilite",
+          "title": "Trace après échange sensible",
+          "score": 7.256322
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-reformulation",
+          "title": "Reformulation fiable",
+          "score": 5.396395
+        }
+      ]
+    },
+    {
+      "id": "sem_08",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi écrire ce qui a été promis après un appel compliqué ?",
+      "relevant_suffixes": [
+        "sem-tracabilite"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-tracabilite-distractor",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+        "memoire-final-1781701908-20212-k3-sem-tracabilite"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-tracabilite-distractor",
+          "title": "Distracteur sémantique 8",
+          "score": 0.73455477
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 0.6991152
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-tracabilite",
+          "title": "Trace après échange sensible",
+          "score": 0.65104747
+        }
+      ]
+    },
+    {
+      "id": "sem_08",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi écrire ce qui a été promis après un appel compliqué ?",
+      "relevant_suffixes": [
+        "sem-tracabilite"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-tracabilite-distractor",
+        "memoire-final-1781701908-20212-k3-sem-tracabilite",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-tracabilite-distractor",
+          "title": "Distracteur sémantique 8",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-tracabilite",
+          "title": "Trace après échange sensible",
+          "score": 0.020425699651241302
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 0.017796989530324936
+        }
+      ]
+    },
+    {
+      "id": "sem_09",
+      "family": "semantic_reformulation",
+      "question": "Comment un ton posé peut-il apaiser une personne stressée au téléphone ?",
+      "relevant_suffixes": [
+        "sem-voix-calme"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+        "memoire-final-1781701908-20212-k3-sna-voix"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor",
+          "title": "Distracteur sémantique 9",
+          "score": 22.558357
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client-distractor",
+          "title": "Distracteur sémantique 3",
+          "score": 10.091181
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sna-voix",
+          "title": "Cas mixte SNA",
+          "score": 6.142512
+        }
+      ]
+    },
+    {
+      "id": "sem_09",
+      "family": "semantic_reformulation",
+      "question": "Comment un ton posé peut-il apaiser une personne stressée au téléphone ?",
+      "relevant_suffixes": [
+        "sem-voix-calme"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor",
+          "title": "Distracteur sémantique 9",
+          "score": 0.7800139
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 0.7470822
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 0.67092407
+        }
+      ]
+    },
+    {
+      "id": "sem_09",
+      "family": "semantic_reformulation",
+      "question": "Comment un ton posé peut-il apaiser une personne stressée au téléphone ?",
+      "relevant_suffixes": [
+        "sem-voix-calme"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme-distractor",
+          "title": "Distracteur sémantique 9",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 0.019905274733901024
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 0.019023733213543892
+        }
+      ]
+    },
+    {
+      "id": "sem_10",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi répéter autrement ce que le client vient d'expliquer ?",
+      "relevant_suffixes": [
+        "sem-reformulation"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-reformulation-distractor",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-reformulation-distractor",
+          "title": "Distracteur sémantique 10",
+          "score": 16.129059
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 4.6611223
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 4.101531
+        }
+      ]
+    },
+    {
+      "id": "sem_10",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi répéter autrement ce que le client vient d'expliquer ?",
+      "relevant_suffixes": [
+        "sem-reformulation"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-reformulation-distractor",
+        "memoire-final-1781701908-20212-k3-sem-reformulation",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-reformulation-distractor",
+          "title": "Distracteur sémantique 10",
+          "score": 0.73325264
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-reformulation",
+          "title": "Reformulation fiable",
+          "score": 0.71987164
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.6994522
+        }
+      ]
+    },
+    {
+      "id": "sem_10",
+      "family": "semantic_reformulation",
+      "question": "Pourquoi répéter autrement ce que le client vient d'expliquer ?",
+      "relevant_suffixes": [
+        "sem-reformulation"
+      ],
+      "justification": "La question reformule le bon passage; un distracteur reprend des mots exacts sans répondre réellement.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sem-reformulation-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+        "memoire-final-1781701908-20212-k3-sem-reformulation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-reformulation-distractor",
+          "title": "Distracteur sémantique 10",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.02016128972172737
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-reformulation",
+          "title": "Reformulation fiable",
+          "score": 0.019249875098466873
+        }
+      ]
+    },
+    {
+      "id": "mix_01",
+      "family": "mixed",
+      "question": "Pourquoi garder une trace dans le CRM lorsqu'une réclamation passe entre plusieurs équipes ?",
+      "relevant_suffixes": [
+        "trace-crm"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-trace-crm",
+        "memoire-final-1781701908-20212-k3-crm-trace-code",
+        "memoire-final-1781701908-20212-k3-crm-trace-code-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 28.102167
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 19.092388
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+          "title": "Distracteur mixte CRM-TRACE",
+          "score": 17.472767
+        }
+      ]
+    },
+    {
+      "id": "mix_01",
+      "family": "mixed",
+      "question": "Pourquoi garder une trace dans le CRM lorsqu'une réclamation passe entre plusieurs équipes ?",
+      "relevant_suffixes": [
+        "trace-crm"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-trace-crm",
+        "memoire-final-1781701908-20212-k3-crm-trace-code",
+        "memoire-final-1781701908-20212-k3-lex-08"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 0.7837279
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 0.72717243
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-08",
+          "title": "Fiche procédure META-JK8-RECLAM",
+          "score": 0.6985585
+        }
+      ]
+    },
+    {
+      "id": "mix_01",
+      "family": "mixed",
+      "question": "Pourquoi garder une trace dans le CRM lorsqu'une réclamation passe entre plusieurs équipes ?",
+      "relevant_suffixes": [
+        "trace-crm"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-trace-crm",
+        "memoire-final-1781701908-20212-k3-crm-trace-code",
+        "memoire-final-1781701908-20212-k3-lex-08"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-08",
+          "title": "Fiche procédure META-JK8-RECLAM",
+          "score": 0.019657257944345474
+        }
+      ]
+    },
+    {
+      "id": "mix_02",
+      "family": "mixed",
+      "question": "Pourquoi le RGPD oblige-t-il à ne demander que les informations nécessaires au client ?",
+      "relevant_suffixes": [
+        "rgpd-minimisation"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "mrr": 0,
+      "first_rank": null,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-06",
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-06",
+          "title": "Fiche procédure META-FR6-RGPD",
+          "score": 12.463811
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+          "title": "Distracteur mixte RGPD",
+          "score": 10.51785
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+          "title": "Distracteur mixte RGPD-MIN",
+          "score": 10.51785
+        }
+      ]
+    },
+    {
+      "id": "mix_02",
+      "family": "mixed",
+      "question": "Pourquoi le RGPD oblige-t-il à ne demander que les informations nécessaires au client ?",
+      "relevant_suffixes": [
+        "rgpd-minimisation"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code",
+        "memoire-final-1781701908-20212-k3-lex-06"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+          "title": "Cas mixte RGPD",
+          "score": 0.77878934
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code",
+          "title": "Cas mixte RGPD-MIN",
+          "score": 0.7419041
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-06",
+          "title": "Fiche procédure META-FR6-RGPD",
+          "score": 0.6848889
+        }
+      ]
+    },
+    {
+      "id": "mix_02",
+      "family": "mixed",
+      "question": "Pourquoi le RGPD oblige-t-il à ne demander que les informations nécessaires au client ?",
+      "relevant_suffixes": [
+        "rgpd-minimisation"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.3333333333333333,
+      "first_rank": 3,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-lex-06",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code",
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-06",
+          "title": "Fiche procédure META-FR6-RGPD",
+          "score": 0.020698925480246544
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code",
+          "title": "Cas mixte RGPD-MIN",
+          "score": 0.01997137814760208
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+          "title": "Cas mixte RGPD",
+          "score": 0.01979166641831398
+        }
+      ]
+    },
+    {
+      "id": "mix_03",
+      "family": "mixed",
+      "question": "Comment utiliser QSAT-5 pour vérifier qu'un client accepte la solution avant de fermer le dossier ?",
+      "relevant_suffixes": [
+        "qsat-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-qsat-cloture",
+        "memoire-final-1781701908-20212-k3-sem-ecoute-active",
+        "memoire-final-1781701908-20212-k3-qsat-cloture-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture",
+          "title": "Cas mixte QSAT-5",
+          "score": 30.779411
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-ecoute-active",
+          "title": "Écoute active avant solution",
+          "score": 19.837767
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture-distractor",
+          "title": "Distracteur mixte QSAT-5",
+          "score": 18.07041
+        }
+      ]
+    },
+    {
+      "id": "mix_03",
+      "family": "mixed",
+      "question": "Comment utiliser QSAT-5 pour vérifier qu'un client accepte la solution avant de fermer le dossier ?",
+      "relevant_suffixes": [
+        "qsat-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-qsat-cloture",
+        "memoire-final-1781701908-20212-k3-lex-04",
+        "memoire-final-1781701908-20212-k3-qsat-cloture-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture",
+          "title": "Cas mixte QSAT-5",
+          "score": 0.8081165
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-04",
+          "title": "Fiche procédure META-DN2-CLOTURE",
+          "score": 0.66504365
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture-distractor",
+          "title": "Distracteur mixte QSAT-5",
+          "score": 0.6587566
+        }
+      ]
+    },
+    {
+      "id": "mix_03",
+      "family": "mixed",
+      "question": "Comment utiliser QSAT-5 pour vérifier qu'un client accepte la solution avant de fermer le dossier ?",
+      "relevant_suffixes": [
+        "qsat-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-qsat-cloture",
+        "memoire-final-1781701908-20212-k3-qsat-cloture-distractor",
+        "memoire-final-1781701908-20212-k3-lex-04"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture",
+          "title": "Cas mixte QSAT-5",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-qsat-cloture-distractor",
+          "title": "Distracteur mixte QSAT-5",
+          "score": 0.02016128972172737
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-04",
+          "title": "Fiche procédure META-DN2-CLOTURE",
+          "score": 0.019023733213543892
+        }
+      ]
+    },
+    {
+      "id": "mix_04",
+      "family": "mixed",
+      "question": "Comment la méthode ROE évite-t-elle de laisser un client sans réponse quand la demande sort du périmètre ?",
+      "relevant_suffixes": [
+        "roe-hors-perimetre"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-sem-confiance-client"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 28.103731
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 20.93118
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-confiance-client",
+          "title": "Construction de la confiance",
+          "score": 15.632143
+        }
+      ]
+    },
+    {
+      "id": "mix_04",
+      "family": "mixed",
+      "question": "Comment la méthode ROE évite-t-elle de laisser un client sans réponse quand la demande sort du périmètre ?",
+      "relevant_suffixes": [
+        "roe-hors-perimetre"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre-distractor",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 0.8019236
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre-distractor",
+          "title": "Distracteur mixte ROE",
+          "score": 0.6916754
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 0.68936425
+        }
+      ]
+    },
+    {
+      "id": "mix_04",
+      "family": "mixed",
+      "question": "Comment la méthode ROE évite-t-elle de laisser un client sans réponse quand la demande sort du périmètre ?",
+      "relevant_suffixes": [
+        "roe-hors-perimetre"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-hors-perimetre",
+          "title": "Orientation hors périmètre",
+          "score": 0.020425699651241302
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre-distractor",
+          "title": "Distracteur mixte ROE",
+          "score": 0.01997137814760208
+        }
+      ]
+    },
+    {
+      "id": "mix_05",
+      "family": "mixed",
+      "question": "Pourquoi VTRC aide-t-il à terminer correctement un appel difficile ?",
+      "relevant_suffixes": [
+        "vtrc-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-vtrc-cloture",
+        "memoire-final-1781701908-20212-k3-vtrc-cloture-distractor",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-vtrc-cloture",
+          "title": "Cas mixte VTRC",
+          "score": 16.108662
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-vtrc-cloture-distractor",
+          "title": "Distracteur mixte VTRC",
+          "score": 12.19599
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 10.385525
+        }
+      ]
+    },
+    {
+      "id": "mix_05",
+      "family": "mixed",
+      "question": "Pourquoi VTRC aide-t-il à terminer correctement un appel difficile ?",
+      "relevant_suffixes": [
+        "vtrc-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-vtrc-cloture",
+        "memoire-final-1781701908-20212-k3-vtrc-cloture-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-vtrc-cloture",
+          "title": "Cas mixte VTRC",
+          "score": 0.7745474
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-vtrc-cloture-distractor",
+          "title": "Distracteur mixte VTRC",
+          "score": 0.6765145
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.6511476
+        }
+      ]
+    },
+    {
+      "id": "mix_05",
+      "family": "mixed",
+      "question": "Pourquoi VTRC aide-t-il à terminer correctement un appel difficile ?",
+      "relevant_suffixes": [
+        "vtrc-cloture"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-vtrc-cloture",
+        "memoire-final-1781701908-20212-k3-vtrc-cloture-distractor",
+        "memoire-final-1781701908-20212-k3-sem-client-vulnerable"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-vtrc-cloture",
+          "title": "Cas mixte VTRC",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-vtrc-cloture-distractor",
+          "title": "Distracteur mixte VTRC",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-client-vulnerable",
+          "title": "Client vulnérable et compréhension",
+          "score": 0.016690485179424286
+        }
+      ]
+    },
+    {
+      "id": "mix_06",
+      "family": "mixed",
+      "question": "Quel lien existe entre le SNA et la voix calme du conseiller ?",
+      "relevant_suffixes": [
+        "sna-voix"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sna-voix",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme",
+        "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sna-voix",
+          "title": "Cas mixte SNA",
+          "score": 11.279754
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 10.599948
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+          "title": "Fatigue émotionnelle du conseiller",
+          "score": 8.411506
+        }
+      ]
+    },
+    {
+      "id": "mix_06",
+      "family": "mixed",
+      "question": "Quel lien existe entre le SNA et la voix calme du conseiller ?",
+      "relevant_suffixes": [
+        "sna-voix"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sna-voix",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme",
+        "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sna-voix",
+          "title": "Cas mixte SNA",
+          "score": 0.79357135
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 0.68804955
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+          "title": "Fatigue émotionnelle du conseiller",
+          "score": 0.6669314
+        }
+      ]
+    },
+    {
+      "id": "mix_06",
+      "family": "mixed",
+      "question": "Quel lien existe entre le SNA et la voix calme du conseiller ?",
+      "relevant_suffixes": [
+        "sna-voix"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-sna-voix",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme",
+        "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sna-voix",
+          "title": "Cas mixte SNA",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-fatigue-emotionnelle",
+          "title": "Fatigue émotionnelle du conseiller",
+          "score": 0.02016128972172737
+        }
+      ]
+    },
+    {
+      "id": "mix_07",
+      "family": "mixed",
+      "question": "Que signifie CRM-TRACE quand une demande sensible doit être transmise ?",
+      "relevant_suffixes": [
+        "crm-trace-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-crm-trace-code",
+        "memoire-final-1781701908-20212-k3-trace-crm",
+        "memoire-final-1781701908-20212-k3-sem-tracabilite"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 30.033531
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 29.183228
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-tracabilite",
+          "title": "Trace après échange sensible",
+          "score": 21.124582
+        }
+      ]
+    },
+    {
+      "id": "mix_07",
+      "family": "mixed",
+      "question": "Que signifie CRM-TRACE quand une demande sensible doit être transmise ?",
+      "relevant_suffixes": [
+        "crm-trace-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-crm-trace-code",
+        "memoire-final-1781701908-20212-k3-trace-crm",
+        "memoire-final-1781701908-20212-k3-crm-trace-code-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 0.8086872
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 0.7347996
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+          "title": "Distracteur mixte CRM-TRACE",
+          "score": 0.73119956
+        }
+      ]
+    },
+    {
+      "id": "mix_07",
+      "family": "mixed",
+      "question": "Que signifie CRM-TRACE quand une demande sensible doit être transmise ?",
+      "relevant_suffixes": [
+        "crm-trace-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-crm-trace-code",
+        "memoire-final-1781701908-20212-k3-trace-crm",
+        "memoire-final-1781701908-20212-k3-crm-trace-code-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code",
+          "title": "Cas mixte CRM-TRACE",
+          "score": 0.02083333395421505
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-trace-crm",
+          "title": "Cas mixte CRM",
+          "score": 0.02049180120229721
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-crm-trace-code-distractor",
+          "title": "Distracteur mixte CRM-TRACE",
+          "score": 0.019905274733901024
+        }
+      ]
+    },
+    {
+      "id": "mix_08",
+      "family": "mixed",
+      "question": "Comment ECALM-4 aide-t-il à faire redescendre une tension client ?",
+      "relevant_suffixes": [
+        "ecalm-desamorcage"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage-distractor",
+          "title": "Distracteur mixte ECALM-4",
+          "score": 20.284916
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 18.772013
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 14.76145
+        }
+      ]
+    },
+    {
+      "id": "mix_08",
+      "family": "mixed",
+      "question": "Comment ECALM-4 aide-t-il à faire redescendre une tension client ?",
+      "relevant_suffixes": [
+        "ecalm-desamorcage"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 0.7196946
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 0.6796569
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 0.6679838
+        }
+      ]
+    },
+    {
+      "id": "mix_08",
+      "family": "mixed",
+      "question": "Comment ECALM-4 aide-t-il à faire redescendre une tension client ?",
+      "relevant_suffixes": [
+        "ecalm-desamorcage"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+        "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+        "memoire-final-1781701908-20212-k3-sem-voix-calme"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ecalm-desamorcage",
+          "title": "Cas mixte ECALM-4",
+          "score": 0.02056010812520981
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-desamorcage-distractor",
+          "title": "Distracteur sémantique 7",
+          "score": 0.02022739127278328
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-sem-voix-calme",
+          "title": "Voix calme et régulation",
+          "score": 0.017019271850585938
+        }
+      ]
+    },
+    {
+      "id": "mix_09",
+      "family": "mixed",
+      "question": "Pourquoi RGPD-MIN est-il utile quand on demande des informations personnelles ?",
+      "relevant_suffixes": [
+        "rgpd-min-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-rgpd-min-code",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code",
+          "title": "Cas mixte RGPD-MIN",
+          "score": 25.26271
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+          "title": "Distracteur mixte RGPD-MIN",
+          "score": 19.944231
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation-distractor",
+          "title": "Distracteur mixte RGPD",
+          "score": 9.846573
+        }
+      ]
+    },
+    {
+      "id": "mix_09",
+      "family": "mixed",
+      "question": "Pourquoi RGPD-MIN est-il utile quand on demande des informations personnelles ?",
+      "relevant_suffixes": [
+        "rgpd-min-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+          "title": "Cas mixte RGPD",
+          "score": 0.757506
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code",
+          "title": "Cas mixte RGPD-MIN",
+          "score": 0.75398934
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+          "title": "Distracteur mixte RGPD-MIN",
+          "score": 0.71258944
+        }
+      ]
+    },
+    {
+      "id": "mix_09",
+      "family": "mixed",
+      "question": "Pourquoi RGPD-MIN est-il utile quand on demande des informations personnelles ?",
+      "relevant_suffixes": [
+        "rgpd-min-code"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-rgpd-min-code",
+        "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+        "memoire-final-1781701908-20212-k3-rgpd-minimisation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code",
+          "title": "Cas mixte RGPD-MIN",
+          "score": 0.0207650288939476
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-min-code-distractor",
+          "title": "Distracteur mixte RGPD-MIN",
+          "score": 0.020425699651241302
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-rgpd-minimisation",
+          "title": "Cas mixte RGPD",
+          "score": 0.01979166641831398
+        }
+      ]
+    },
+    {
+      "id": "mix_10",
+      "family": "mixed",
+      "question": "Comment ECH-3X organise-t-il le transfert d'une demande complexe ?",
+      "relevant_suffixes": [
+        "ech3x-escalade"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "bm25",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+        "memoire-final-1781701908-20212-k3-ech3x-escalade",
+        "memoire-final-1781701908-20212-k3-roe-hors-perimetre"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+          "title": "Distracteur mixte ECH-3X",
+          "score": 21.654146
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade",
+          "title": "Cas mixte ECH-3X",
+          "score": 20.3914
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-roe-hors-perimetre",
+          "title": "Cas mixte ROE",
+          "score": 12.669873
+        }
+      ]
+    },
+    {
+      "id": "mix_10",
+      "family": "mixed",
+      "question": "Comment ECH-3X organise-t-il le transfert d'une demande complexe ?",
+      "relevant_suffixes": [
+        "ech3x-escalade"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "vector",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "first_rank": 1,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ech3x-escalade",
+        "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+        "memoire-final-1781701908-20212-k3-lex-05"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade",
+          "title": "Cas mixte ECH-3X",
+          "score": 0.68219596
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+          "title": "Distracteur mixte ECH-3X",
+          "score": 0.6647293
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-05",
+          "title": "Fiche procédure META-EP8-TRANSFERT",
+          "score": 0.6612524
+        }
+      ]
+    },
+    {
+      "id": "mix_10",
+      "family": "mixed",
+      "question": "Comment ECH-3X organise-t-il le transfert d'une demande complexe ?",
+      "relevant_suffixes": [
+        "ech3x-escalade"
+      ],
+      "justification": "La question contient un terme exact et une intention sémantique; l'hybride doit combiner les deux signaux.",
+      "mode": "hybrid",
+      "top_k": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 0.5,
+      "first_rank": 2,
+      "returned": [
+        "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+        "memoire-final-1781701908-20212-k3-ech3x-escalade",
+        "memoire-final-1781701908-20212-k3-lex-05"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade-distractor",
+          "title": "Distracteur mixte ECH-3X",
+          "score": 0.0207650288939476
+        },
+        {
+          "rank": 2,
+          "chunk_id": "memoire-final-1781701908-20212-k3-ech3x-escalade",
+          "title": "Cas mixte ECH-3X",
+          "score": 0.02056010812520981
+        },
+        {
+          "rank": 3,
+          "chunk_id": "memoire-final-1781701908-20212-k3-lex-05",
+          "title": "Fiche procédure META-EP8-TRANSFERT",
+          "score": 0.019905274733901024
+        }
+      ]
+    }
+  ]
+}

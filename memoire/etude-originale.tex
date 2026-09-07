@@ -1,0 +1,646 @@
+\section{Étude originale}
+
+\subsection{Objectif de l'approche proposée}
+
+L'état de l'art a montré que deux problèmes doivent être traités séparément pour
+construire une plateforme de formation autonome alimentée par l'intelligence
+artificielle. Le premier est un problème de contextualisation : un assistant pédagogique
+ne doit pas répondre comme un chatbot généraliste, mais à partir des contenus réellement
+disponibles dans la formation. Le second est un problème de génération contrôlée : un
+modèle de langage peut produire du texte, mais la production d'une journée complète de
+formation audio, accompagnée de supports et d'exercices, nécessite une chaîne plus
+structurée qu'un simple prompt.
+
+L'approche proposée dans ce mémoire consiste donc à combiner deux architectures
+complémentaires. D'une part, un assistant pédagogique fondé sur une logique RAG, afin
+de répondre aux questions des élèves à partir des documents indexés de la formation.
+D'autre part, une pipeline de génération de contenus pédagogiques, destinée à transformer
+un référentiel ou un programme de formation en contenus audio, supports visuels et
+artefacts contrôlables.
+
+L'originalité de l'approche ne réside pas dans l'utilisation isolée d'un modèle de langage
+ou d'un service de synthèse vocale. Ces briques sont désormais disponibles dans de
+nombreux environnements. Elle réside plutôt dans l'orchestration de ces briques dans une
+plateforme utilisable par de vrais élèves, avec une attention portée à la traçabilité, à la
+qualité pédagogique, au coût et à la capacité de réutiliser les modules générés. La solution
+ne cherche pas seulement à produire une réponse ou un texte ; elle cherche à produire un
+objet pédagogique exploitable.
+
+L'hypothèse principale est la suivante : une plateforme de formation peut remplacer une
+part significative des interventions humaines répétitives si l'IA est encadrée par une
+architecture en étapes, des contrats de données explicites, des mécanismes de contrôle
+qualité et des indicateurs d'évaluation. L'autonomie ne doit donc pas être comprise comme
+une absence totale de supervision humaine, mais comme une réduction forte du travail
+manuel récurrent grâce à une chaîne automatisée observable.
+
+\subsection{Modèle fonctionnel de la plateforme}
+
+La plateforme développée répond à quatre grands cas d'utilisation. Le premier concerne
+l'administration de la formation : créer un module, déposer ou générer les contenus,
+suivre l'avancement de la pipeline et contrôler les artefacts produits. Le deuxième
+concerne l'apprenant : accéder aux cours, écouter les audios, consulter les supports et
+poser des questions à l'assistant pédagogique. Le troisième concerne la production
+automatisée : générer les cours, les audios, les slides et les exercices. Le quatrième
+concerne la supervision : vérifier les erreurs, relancer certaines étapes, consulter les
+rapports et améliorer les règles.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.92\linewidth}
+\textbf{Diagramme de cas d'utilisation simplifié}
+
+\vspace{0.2cm}
+\begin{tabular}{p{3.5cm}p{10cm}}
+\textbf{Administrateur} &
+Créer une plateforme de formation ; lancer une pipeline RNCP ; suivre les étapes ;
+consulter les artefacts ; publier les contenus. \\
+\textbf{Apprenant} &
+Écouter les cours audio ; consulter les supports ; répondre aux QCM ; poser une
+question à l'assistant pédagogique. \\
+\textbf{Pipeline IA} &
+Générer la base de connaissances ; produire le programme ; rédiger les cours ;
+contrôler la qualité ; produire slides et audios. \\
+\textbf{Assistant RAG} &
+Rechercher les passages pertinents dans l'index documentaire ; générer une réponse
+courte et contextualisée. \\
+\end{tabular}
+\end{minipage}}
+\caption{Cas d'utilisation principaux de la plateforme autonome}
+\end{figure}
+
+Ce modèle fonctionnel traduit un choix important : la plateforme n'est pas conçue comme
+un simple LMS, ni comme un simple chatbot. Elle est conçue comme un système de
+production et de diffusion de formation. L'administration, la génération, la diffusion et
+l'accompagnement sont pensés ensemble. Cela permet d'éviter une architecture fragmentée
+où chaque outil produirait un résultat séparé sans cohérence globale.
+
+\subsection{Principe architectural : un RNCP, un module durable}
+
+Un principe structurant de la solution est le modèle « un RNCP, un module durable ».
+Lorsqu'une formation est créée, la pipeline ne produit pas un contenu jetable pour une
+promotion unique. Elle produit un module complet, associé à un titre professionnel, qui
+peut ensuite être réutilisé pour plusieurs promotions. Ce choix modifie l'économie du
+système.
+
+Dans une approche où la pipeline serait relancée pour chaque promotion, le coût de
+génération devrait être minimisé à tout prix. Dans le modèle retenu, le coût initial est
+amorti sur la durée de vie du module. Il devient donc acceptable d'investir davantage dans
+la qualité de la génération, les reviews, les artefacts et les supports, car ces éléments
+seront réutilisés. L'enjeu n'est pas de produire le contenu le moins cher possible une seule
+fois, mais de produire un module suffisamment fiable pour être exploité dans le temps.
+
+Ce principe a également une conséquence sur l'architecture multi-tenant. Chaque pipeline
+crée ou alimente une plateforme dédiée, avec ses contenus, ses fichiers audio et ses
+documents. Cette isolation évite de mélanger plusieurs formations, réduit les risques
+d'écrasement et facilite la traçabilité. La relation logique devient :
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.88\linewidth}
+\centering
+\texttt{RNCP} $\rightarrow$ \texttt{Pipeline de génération} $\rightarrow$
+\texttt{Plateforme dédiée} $\rightarrow$ \texttt{Module durable} $\rightarrow$
+\texttt{Promotions successives}
+\end{minipage}}
+\caption{Principe d'amortissement : une génération produit un module réutilisable}
+\end{figure}
+
+Cette décision répond directement à la problématique économique d'Audit Énergie. La
+réduction des coûts ne vient pas seulement du remplacement de certaines tâches humaines
+par de l'IA, mais aussi de la réutilisation des productions. Un cours généré, contrôlé,
+transformé en audio et enrichi de supports devient un actif pédagogique.
+
+\subsection{Architecture technique générale}
+
+La solution repose sur une architecture web classique complétée par des services IA. Le
+backend orchestre les pipelines, stocke l'état des jobs, déclenche les appels aux modèles,
+gère les fichiers et expose les routes nécessaires au frontend. Le frontend permet à
+l'administrateur de suivre la génération et aux élèves d'accéder aux contenus. Les fichiers
+audio et documents sont stockés dans Azure Blob Storage. Le chatbot s'appuie sur Azure
+OpenAI et Azure AI Search pour la recherche documentaire.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.94\linewidth}
+\textbf{Architecture logique simplifiée}
+
+\vspace{0.2cm}
+\begin{tabular}{p{3.2cm}p{10.2cm}}
+\textbf{Frontend React} &
+Interface apprenant, dashboard RH, suivi de pipeline, modales d'audit. \\
+\textbf{Backend Flask} &
+Routes API, orchestration des jobs, contrôle d'accès, stockage des états,
+appels aux services IA. \\
+\textbf{Base SQLite} &
+Configuration des plateformes, jobs de génération, dossiers de cours,
+événements et métadonnées. \\
+\textbf{Azure Blob Storage} &
+Stockage des PDF, audios, documents générés et exports. \\
+\textbf{Azure AI Search} &
+Indexation documentaire et recherche hybride pour l'assistant pédagogique. \\
+\textbf{Modèles IA} &
+Génération de contenus, reviews, synthèse vocale, réponses RAG. \\
+\end{tabular}
+\end{minipage}}
+\caption{Architecture technique de la plateforme}
+\end{figure}
+
+Ce découpage répond à une contrainte importante : les étapes de génération peuvent être
+longues, coûteuses et sujettes à des erreurs réseau ou API. Le backend ne peut donc pas
+traiter la pipeline comme une simple requête synchrone. Les jobs doivent être persistés,
+leurs statuts doivent être visibles, et certaines étapes doivent pouvoir être relancées sans
+reprendre tout le processus.
+
+\subsection{Assistant pédagogique : choix du RAG Azure}
+
+Pour l'assistant pédagogique, le choix retenu est une architecture RAG fondée sur Azure
+OpenAI et Azure AI Search. Les documents de formation sont déposés dans un stockage
+Azure, indexés par Azure AI Search, puis utilisés comme source documentaire lors des
+questions posées par les élèves. Le modèle reçoit la question, l'historique court de la
+conversation et les passages récupérés, puis produit une réponse courte.
+
+Ce choix s'inscrit directement dans l'état de l'art. Un prompt seul aurait été insuffisant,
+car il ne permet pas de garantir que la réponse vient du cours réellement diffusé. Le
+fine-tuning aurait pu adapter le style de l'assistant, mais il n'aurait pas résolu le problème
+de mise à jour des documents. Le RAG est donc le choix le plus adapté pour un assistant
+dont la connaissance doit suivre les supports de formation.
+
+Le choix d'Azure AI Search est motivé par plusieurs raisons. La première est la recherche
+hybride. Les questions des élèves peuvent utiliser un vocabulaire approximatif, tandis que
+les documents contiennent des termes métier précis. Une recherche vectorielle simple
+risque de négliger certains mots importants ; une recherche par mots-clés seule risque de
+manquer les reformulations. La recherche hybride répond à cette double contrainte.
+
+La deuxième raison est l'industrialisation. Azure AI Search fournit un mécanisme d'index,
+d'indexer, de stockage documentaire et de séparation par plateforme. Cela correspond
+mieux à une plateforme utilisée par de vrais élèves qu'une base vectorielle locale
+prototypale. La troisième raison est l'intégration avec Azure OpenAI, qui simplifie
+l'utilisation des documents récupérés comme sources de réponse.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.88\linewidth}
+\centering
+\texttt{Question élève} $\rightarrow$
+\texttt{Azure AI Search} $\rightarrow$
+\texttt{Passages pertinents} $\rightarrow$
+\texttt{Azure OpenAI} $\rightarrow$
+\texttt{Réponse pédagogique courte}
+\end{minipage}}
+\caption{Chaîne RAG utilisée par l'assistant pédagogique}
+\end{figure}
+
+Le prompt système de l'assistant impose plusieurs contraintes : répondre en quelques
+phrases, se baser sur le contenu du cours, ne pas inventer d'information présentée comme
+issue du cours et adopter un ton pédagogique clair. Cette contrainte de concision est
+importante. Dans le contexte d'une formation audio, l'élève pose souvent une question
+pour lever un blocage immédiat ; une réponse trop longue peut nuire à l'usage réel.
+
+Le RAG n'est cependant pas utilisé partout. Une décision importante a été de ne pas
+l'utiliser pour analyser le REAC lorsque le document entier tient dans la fenêtre de
+contexte du modèle. Dans ce cas, le problème n'est pas de retrouver un passage dans un
+corpus trop volumineux, mais d'enrichir une source relativement courte pour produire un
+contenu pédagogique dense. Cette distinction entre problème de récupération et problème
+de densité est un apport méthodologique important du projet.
+
+\subsection{Pipeline de formation : de la source au module}
+
+La deuxième brique centrale est la pipeline de génération. Son rôle est de transformer un
+référentiel ou un ensemble de sources en une formation structurée. Les premières versions
+reposaient sur une logique plus directe : extraction du contenu, découpage en journées,
+génération de textes longs, puis transformation audio. Cette approche a permis de valider
+la faisabilité, mais elle a montré ses limites pour la traçabilité, la cohérence et la qualité.
+
+La pipeline actuelle est organisée comme une succession d'étapes spécialisées :
+initialisation du module, récupération ou dépôt des sources, enrichissement de la base de
+connaissances, génération du programme, découpage journalier, génération structurée des
+cours, reviews, création des supports, préparation audio et publication. Chaque étape
+produit un état ou un artefact exploitable.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.94\linewidth}
+\centering
+\texttt{RNCP / REAC}
+$\rightarrow$ \texttt{Knowledge base enrichie}
+$\rightarrow$ \texttt{Programme global}
+$\rightarrow$ \texttt{Journées}
+$\rightarrow$ \texttt{Plan JSON}
+$\rightarrow$ \texttt{Sections}
+$\rightarrow$ \texttt{Reviews}
+$\rightarrow$ \texttt{Slides + audio}
+$\rightarrow$ \texttt{Module publié}
+\end{minipage}}
+\caption{Pipeline générale de production d'un module de formation}
+\end{figure}
+
+Cette architecture se distingue d'une génération directe par prompt unique. Le modèle ne
+porte pas toute la responsabilité en une seule sortie. Il intervient dans des tâches plus
+restreintes : extraire, enrichir, planifier, rédiger, corriger, vérifier, reformuler ou produire
+un support. Cette décomposition réduit les dérives et rend les erreurs plus localisables.
+
+\subsection{Enrichissement de la source pédagogique}
+
+Le REAC constitue une source officielle, mais il n'est pas toujours suffisant pour produire
+des heures de cours exploitables. Il décrit les compétences, les attendus, les savoir-faire
+et les conditions d'exercice, mais il ne fournit pas nécessairement assez d'exemples, de
+cas pratiques, de vocabulaire métier ou de situations pédagogiques pour alimenter une
+formation audio longue.
+
+La pipeline introduit donc une étape d'enrichissement. À partir des compétences extraites
+du REAC, le système génère une base de connaissances pédagogique : définitions, études
+de cas, pièges fréquents, vocabulaire, contexte terrain et liens entre compétences. Cette
+base n'est pas destinée directement à l'élève ; elle sert de matière première pour la
+génération des cours.
+
+Cette étape répond à une limite importante des approches naïves. Demander au modèle
+de produire plusieurs centaines de milliers de mots de formation à partir d'un référentiel
+relativement court crée un risque de dilution. Le modèle risque de répéter les mêmes
+idées ou de combler les vides avec des généralités. L'enrichissement vise donc à augmenter
+la densité pédagogique avant la génération finale.
+
+Le choix retenu n'est pas un RAG sur le REAC, car le REAC tient dans la fenêtre de
+contexte du modèle. Le problème n'est pas la recherche d'information, mais la production
+de matière pédagogique structurée. Le RAG reste pertinent pour l'assistant élève ou pour
+de futurs corpus externes volumineux ; il ne constitue pas la bonne réponse à ce stade de
+la pipeline.
+
+\subsection{Plan JSON comme contrat pédagogique}
+
+Le cœur de l'approche originale est le passage d'une génération directe à une génération
+fondée sur un plan JSON. Ce plan joue le rôle de contrat pédagogique. Il décrit les cours
+de la journée, les sections, les objectifs, les budgets de mots, les transitions, les moments
+visualisables et les ancrages de slides. Le texte final n'est plus le premier objet produit :
+il est la conséquence d'un plan explicite.
+
+Ce choix répond à plusieurs problèmes identifiés dans les versions précédentes. D'abord,
+il améliore la cohérence. Une journée de formation longue doit suivre une progression.
+Sans plan explicite, les introductions peuvent se répéter, les transitions devenir
+artificielles et les conclusions fermer le mauvais sujet. Ensuite, il améliore la traçabilité :
+si une section dévie, on peut comparer le texte au plan prévu. Enfin, il rend possible la
+génération de supports alignés, car les moments pédagogiques importants sont identifiés
+avant la création des slides.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.88\linewidth}
+\textbf{Structure logique du plan JSON}
+
+\vspace{0.2cm}
+\texttt{Journée}
+$\rightarrow$ \texttt{Cours 1..7}
+$\rightarrow$ \texttt{Opening / Parts / Conclusion}
+$\rightarrow$ \texttt{Teaching beats}
+$\rightarrow$ \texttt{Slide anchors}
+\end{minipage}}
+\caption{Le plan JSON comme contrat pédagogique et visuel}
+\end{figure}
+
+Le plan JSON permet également de séparer le langage interne de la parole du formateur.
+Le code peut manipuler des notions de cours, sections, budgets, blocs audio ou anchors.
+Mais l'élève ne doit pas entendre ces contraintes techniques. Le texte final doit rester
+naturel : parler de thème, de point, de partie, de reprise après pause ou de fil conducteur.
+Cette séparation est essentielle pour éviter que la mécanique de la pipeline apparaisse
+dans le discours pédagogique.
+
+\subsection{Génération par sections et contrôle des budgets}
+
+Une fois le plan établi, la génération se fait section par section. Chaque section dispose
+d'un rôle, d'un objectif, d'un budget et d'un périmètre. Cette décision réduit la charge
+cognitive imposée au modèle. Au lieu de générer plusieurs heures de cours en conservant
+toutes les contraintes en mémoire, le modèle rédige une unité limitée.
+
+Le budget de mots est une contrainte centrale, car le texte doit ensuite être transformé
+en audio. Une génération trop courte donne une formation pauvre ou déséquilibrée. Une
+génération trop longue dépasse les créneaux prévus, complique le découpage et peut
+produire des audios inutilisables. La pipeline donne donc au serveur un rôle d'autorité sur
+les budgets. Les budgets ne sont pas seulement des consignes textuelles données au
+modèle ; ils sont contrôlés et recalibrés par le système.
+
+Cette approche se distingue d'un simple prompt qui demanderait au modèle de respecter
+une durée. Les modèles de langage ne maîtrisent pas précisément la correspondance entre
+mots, durée audio et rythme de synthèse vocale. Il faut donc traiter le budget comme un
+invariant logiciel, avec des étapes de vérification et de correction. Cette décision rend la
+pipeline plus robuste, même si elle introduit un coût supplémentaire en appels modèle et
+en logique d'orchestration.
+
+\subsection{Reviews ciblées et auditabilité}
+
+La qualité de la génération est contrôlée par plusieurs reviews spécialisées. L'objectif
+n'est pas de demander à un modèle de « rendre le texte meilleur » de manière générale,
+mais d'isoler les risques. Une review vérifie l'adhérence au plan ; une autre ajuste le
+volume ; une micro-review éthique traite localement les formulations sensibles ; une
+review d'humanisation améliore l'oralité ; une conformité finale vérifie les règles les plus
+critiques.
+
+Cette séparation est un apport important de l'approche. Dans les versions plus anciennes,
+les reviews globales mélangeaient plusieurs dimensions : structure, style, conformité,
+oralité et parfois budget. Une correction pouvait alors résoudre un problème tout en en
+créant un autre. En spécialisant les reviews, chaque étape dispose d'une responsabilité
+plus claire.
+
+L'auditabilité repose sur la persistance d'artefacts intermédiaires. La pipeline conserve
+notamment le plan, les sections brutes, les scripts assemblés, les rapports de review, les
+versions corrigées, le plan audio et les artefacts de slides. Ces éléments transforment la
+génération IA en processus vérifiable. Si une erreur apparaît dans le cours final, on peut
+chercher à quelle étape elle a été introduite.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.92\linewidth}
+\textbf{Séquence simplifiée de génération d'un cours}
+
+\vspace{0.2cm}
+\texttt{Plan JSON}
+$\rightarrow$ \texttt{Sections brutes}
+$\rightarrow$ \texttt{Audit adhérence}
+$\rightarrow$ \texttt{Budget}
+$\rightarrow$ \texttt{Micro-conformité}
+$\rightarrow$ \texttt{Humanisation}
+$\rightarrow$ \texttt{Conformité finale}
+$\rightarrow$ \texttt{Audio-plan}
+\end{minipage}}
+\caption{Séquence de contrôle appliquée aux contenus générés}
+\end{figure}
+
+L'interface d'administration rend ces artefacts consultables. Les étapes de la roadmap
+peuvent être ouvertes dans des modales d'audit. Lorsqu'une micro-conformité éthique
+modifie un passage, l'interface peut afficher le texte original, le texte corrigé, la règle
+concernée et la justification. Cette fonctionnalité est importante : l'auditabilité ne doit
+pas exister seulement dans les logs techniques, elle doit être accessible à l'utilisateur qui
+pilote la formation.
+
+\subsection{Slides anchor-first et cohérence pédagogique}
+
+La génération des supports visuels pose un problème spécifique. Une solution simple
+consisterait à générer le texte du cours, puis à demander au modèle d'en extraire les
+points principaux pour créer des slides. Cette approche est facile à mettre en place, mais
+elle produit souvent des supports génériques. Les éléments les plus fréquents dans un
+texte ne sont pas toujours les plus importants à visualiser.
+
+L'approche retenue est une génération anchor-first. Les moments pédagogiques à
+visualiser sont décidés dès le plan JSON sous forme de teaching beats et de slide anchors.
+Une slide peut correspondre à une définition, une checklist, un piège, un exemple, une
+comparaison, une méthode ou un cas pratique. Le texte couvre ensuite ces moments
+naturellement, sans verbaliser la présence des slides ou des templates.
+
+Cette stratégie présente deux avantages. D'abord, elle aligne les supports sur l'intention
+pédagogique plutôt que sur une analyse opportuniste du texte final. Ensuite, elle rend les
+slides traçables : chaque support peut être rattaché à un anchor prévu dans le plan et à
+un passage du script. La slide n'est donc pas une décoration ajoutée après coup, mais une
+partie du dispositif pédagogique.
+
+\subsection{Audio et transformation TTS}
+
+La sortie principale de la formation reste l'audio. Les textes générés doivent donc être
+compatibles avec une synthèse vocale. Cette contrainte influence toute la pipeline. Le
+style doit être oral, les phrases doivent être prononçables, les transitions doivent être
+naturelles et la durée doit correspondre aux blocs prévus.
+
+Les premières expérimentations avec des outils de synthèse vocale, comme ElevenLabs,
+ont montré que la qualité de la voix ne suffit pas. Un bon moteur TTS peut rendre un
+texte agréable à écouter, mais il ne corrige pas un mauvais script. La pipeline traite donc
+la qualité audio en amont, par la rédaction TTS-ready, le contrôle du budget, l'humanisation
+orale et le plan audio.
+
+La génération audio reste toutefois une zone à évaluer finement. La correspondance entre
+nombre de mots et durée réelle dépend de la voix, du rythme, des pauses et du moteur
+utilisé. Les ratios de mots par minute employés dans la pipeline doivent donc être
+considérés comme des paramètres de calibration, non comme des résultats validés. Une
+évaluation plus rigoureuse doit mesurer l'écart entre durée prévue et durée réelle sur un
+échantillon d'audios générés.
+
+\subsection{Résultats obtenus}
+
+Les résultats du projet peuvent être analysés selon plusieurs dimensions. Sur le plan
+fonctionnel, la plateforme permet de diffuser des contenus de formation à de vrais élèves,
+de gérer des modules de cours, de déposer des documents et d'interagir avec un assistant
+pédagogique. Le projet dépasse donc le stade d'une expérimentation isolée : il est intégré
+à un environnement applicatif utilisé.
+
+Sur le plan de la génération, la pipeline a évolué d'une génération directe ou slotée vers
+une architecture structurée. La présence d'un plan JSON, de sections, de reviews et
+d'artefacts intermédiaires améliore la capacité à contrôler le résultat. L'amélioration la
+plus importante n'est pas seulement qualitative ; elle est méthodologique. Le système ne
+produit plus uniquement un texte final, il produit une chaîne de preuves.
+
+Sur le plan de l'accompagnement, l'assistant RAG permet de répondre aux questions à
+partir des documents indexés, ce qui réduit les limites d'un cours audio préenregistré. Il
+ne remplace pas toutes les formes d'interaction humaine, mais il fournit un premier niveau
+de réponse contextualisée, disponible pendant la formation.
+
+Sur le plan organisationnel, le modèle « un RNCP, un module durable » transforme la
+production en investissement réutilisable. La pipeline peut coûter plus cher qu'une
+génération ponctuelle, mais ce coût est amorti sur les promotions successives. Cette
+logique est cohérente avec les contraintes économiques d'une petite structure.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{|p{3.3cm}|p{4.4cm}|p{4.4cm}|}
+\hline
+\textbf{Dimension} & \textbf{Avant la refonte structurée} & \textbf{Après l'approche proposée} \\
+\hline
+Structure du cours &
+Texte long généré par créneaux ou blocs, avec contrôle limité de la progression. &
+Plan JSON explicite, sections, objectifs, budgets et anchors pédagogiques. \\
+\hline
+Qualité &
+Reviews plus globales, erreurs détectées tardivement. &
+Reviews ciblées : adhérence au plan, budget, micro-conformité, humanisation, conformité finale. \\
+\hline
+Traçabilité &
+Sortie principalement textuelle, difficile à auditer. &
+Artefacts intermédiaires, rapports, diff avant/après et modales d'audit. \\
+\hline
+Slides &
+Risque de génération après coup par analyse du texte final. &
+Approche anchor-first pilotée par le plan pédagogique. \\
+\hline
+Assistant élève &
+Cours audio peu interactif. &
+Assistant RAG contextualisé sur les documents de formation. \\
+\hline
+Modèle économique &
+Production fortement dépendante d'interventions humaines répétées. &
+Module durable réutilisable, coût de génération amorti sur plusieurs promotions. \\
+\hline
+\end{tabular}
+\caption{Comparaison synthétique avant/après l'approche proposée}
+\end{table}
+
+\subsection{Comparaison avec les approches de l'état de l'art}
+
+Par rapport au prompt engineering simple, l'approche proposée ajoute une architecture
+autour du modèle. Les prompts restent nécessaires, mais ils ne portent plus seuls la
+qualité du système. Ils sont spécialisés par rôle et intégrés dans une pipeline qui conserve
+des artefacts et impose des invariants.
+
+Par rapport au fine-tuning, la solution privilégie la flexibilité documentaire. Les contenus
+de formation peuvent changer, être indexés, enrichis ou régénérés sans réentraîner un
+modèle. Le fine-tuning pourrait éventuellement être utile plus tard pour stabiliser le style
+de l'assistant ou certaines reviews, mais il n'est pas le mécanisme principal.
+
+Par rapport à un RAG simple, le choix d'Azure AI Search permet une approche plus
+industrialisée : indexation, recherche hybride, séparation des corpus par plateforme et
+intégration avec Azure OpenAI. Cette solution reste dépendante de la qualité des documents
+indexés, mais elle correspond mieux à un usage multi-modules qu'un prototype local.
+
+Par rapport à une génération directe de cours, la pipeline structurée apporte une meilleure
+maîtrise des contenus longs. Le plan JSON, les sections et les reviews permettent de
+localiser les erreurs et de discuter la qualité de manière plus objective. Cette approche
+est plus complexe et plus coûteuse, mais elle est cohérente avec le modèle de module
+durable.
+
+Par rapport à une solution human-in-the-loop classique, l'approche réduit l'intervention
+humaine récurrente sans supprimer toute supervision. L'humain intervient davantage pour
+piloter, valider, auditer et améliorer le système. Cette position est importante : la solution
+vise l'autonomie opérationnelle, pas l'absence de responsabilité.
+
+\subsection{Évaluations à consolider}
+
+Pour rendre l'étude pleinement scientifique, plusieurs évaluations doivent être réalisées
+ou complétées. Certaines peuvent être menées à partir des logs et artefacts existants ;
+d'autres nécessitent de construire un protocole dédié.
+
+La première évaluation concerne le RAG. Il faut constituer un jeu de questions
+représentatives des élèves, identifier pour chaque question les passages sources attendus,
+puis mesurer la récupération et la réponse. Les métriques pertinentes sont la précision@k,
+le rappel@k, le rang du premier passage pertinent, le taux de réponses supportées par les
+sources et le taux d'hallucinations. Une comparaison entre prompt seul et RAG permettrait
+de démontrer l'apport réel de l'ancrage documentaire.
+
+La deuxième évaluation concerne les variantes de recherche. Lorsque la configuration le
+permet, il faut comparer recherche vectorielle simple, recherche hybride et recherche
+hybride avec reclassement sémantique. Cette comparaison est importante pour justifier
+le choix d'Azure AI Search autrement que par des arguments d'intégration.
+
+La troisième évaluation concerne la pipeline de génération. Il faut comparer un contenu
+produit par génération directe et un contenu produit par la pipeline structurée. Les critères
+peuvent être le respect du plan, le nombre de répétitions, le respect du budget de mots,
+la qualité orale, le nombre de corrections nécessaires et la cohérence entre cours, slides
+et QCM.
+
+La quatrième évaluation concerne les reviews. Il faut mesurer combien de problèmes sont
+détectés par chaque review, combien de corrections sont appliquées, combien sont
+rejetées et combien produisent un effet indésirable. Cela permettrait de savoir quelles
+reviews apportent réellement de la valeur et lesquelles doivent être améliorées.
+
+La cinquième évaluation concerne l'impact économique et organisationnel. Il faut mesurer
+le temps nécessaire pour produire une journée ou un module avant et après automatisation,
+le nombre d'interventions humaines restantes, le coût API et TTS, ainsi que la capacité à
+réutiliser le module sur plusieurs promotions. Ces mesures sont nécessaires pour relier la
+solution à la problématique initiale.
+
+\subsection{Conditions d'application}
+
+L'approche proposée est adaptée à des formations structurées, répétables et fondées sur
+un référentiel relativement stable. Elle est particulièrement pertinente lorsque le contenu
+peut être préparé en amont, transformé en audio et réutilisé pour plusieurs promotions.
+Elle convient donc bien aux titres professionnels ou aux formations standardisées.
+
+Elle est moins adaptée à des formations très interactives, fortement dépendantes du débat,
+de la pratique immédiate ou de l'improvisation pédagogique. Dans ces cas, un formateur
+humain reste difficile à remplacer. La plateforme peut alors servir de support ou de
+complément, mais pas nécessairement de substitut principal.
+
+L'approche suppose également un corpus de départ de qualité. Si le référentiel est trop
+pauvre, incomplet ou ambigu, la génération risque de produire des contenus génériques.
+L'enrichissement de la base de connaissances réduit ce risque, mais ne peut pas inventer
+une expertise métier absente des sources ou de la supervision.
+
+Enfin, l'approche nécessite une infrastructure capable de gérer des traitements longs :
+stockage durable, jobs persistés, reprise après erreur, logs, suivi des coûts et supervision
+des services externes. Une pipeline IA longue ne peut pas être traitée comme une simple
+fonction appelée à la demande.
+
+\subsection{Limites de la contribution}
+
+La première limite concerne l'évaluation quantitative. La plateforme fonctionne avec de
+vrais élèves et la pipeline produit des artefacts exploitables, mais certaines métriques
+doivent encore être consolidées : temps gagné, coût complet, satisfaction des élèves,
+fidélité du RAG, précision de la durée audio et impact sur les résultats pédagogiques.
+Ces métriques sont identifiées, mais elles doivent faire l'objet d'un protocole plus
+systématique.
+
+La deuxième limite concerne la dépendance aux services externes. La solution s'appuie
+sur des modèles de langage, des services Azure, des outils de synthèse vocale et des API.
+Ces services peuvent évoluer, changer de coût ou rencontrer des limites de débit. La
+robustesse du système dépend donc aussi de la gestion des erreurs, des retries, de la
+surveillance et de la possibilité de remplacer certaines briques.
+
+La troisième limite concerne la qualité pédagogique profonde. Les reviews automatiques
+peuvent détecter certaines erreurs, mais elles ne remplacent pas entièrement le jugement
+d'un expert pédagogique. Elles améliorent l'observabilité et réduisent certains risques,
+mais elles doivent être évaluées et supervisées.
+
+La quatrième limite concerne la rigidité du modèle. La pipeline est adaptée à un format
+de journée structuré, avec des blocs audio et une logique de module durable. Cette
+structure est cohérente avec le besoin actuel, mais elle peut être moins adaptée à des
+formations plus courtes, plus libres ou plus interactives. Une évolution future devra
+permettre de paramétrer davantage les formats.
+
+\subsection{Pistes d'amélioration}
+
+Plusieurs pistes d'amélioration se dégagent. La première est la mise en place d'un banc
+d'évaluation RAG. Il faudrait créer un jeu de questions annotées, comparer plusieurs
+configurations de recherche et conserver des métriques dans le temps. Cela permettrait
+de détecter les régressions lorsque les documents, les prompts ou les modèles changent.
+
+La deuxième piste est l'évaluation automatique et humaine des contenus générés. Une
+grille de relecture pourrait mesurer la fidélité au programme, la clarté, l'oralité, la
+cohérence des slides et la qualité des QCM. Un échantillon de cours pourrait être évalué
+par un humain, puis comparé aux reviews automatiques.
+
+La troisième piste est l'amélioration de la calibration audio. Il faudrait mesurer
+systématiquement les durées réelles des fichiers générés, comparer ces durées aux
+budgets prévus et ajuster les ratios par voix ou par moteur TTS. Cela permettrait de
+remplacer une calibration empirique par une calibration mesurée.
+
+La quatrième piste est l'automatisation complète du provisionnement multi-tenant.
+Aujourd'hui, certains éléments d'infrastructure peuvent encore nécessiter une intervention
+manuelle. À terme, la création d'un module devrait provisionner automatiquement les
+ressources nécessaires : containers, index, configuration de recherche et droits associés.
+
+La cinquième piste est l'amélioration du rôle humain. Plutôt que de relire tout le contenu,
+l'interface pourrait proposer une validation ciblée : sections signalées comme risquées,
+corrections importantes, slides sans source forte, réponses RAG à faible confiance ou
+écarts de durée audio. L'humain interviendrait alors sur les points réellement incertains.
+
+\subsection{Apports professionnels et montée en compétences}
+
+Ce projet a permis de développer des compétences qui dépassent la simple utilisation
+d'outils d'intelligence artificielle. La première compétence est l'analyse d'un besoin métier.
+Le problème initial était économique et organisationnel : rendre viable une activité de
+formation pour une petite structure. La solution technique n'a de sens que parce qu'elle
+répond à cette contrainte.
+
+La deuxième compétence est l'architecture logicielle. Il a fallu concevoir une plateforme
+capable de gérer des traitements longs, des fichiers, des jobs, des statuts, des services
+externes et plusieurs modules de formation. La persistance, la reprise après erreur et la
+séparation des responsabilités sont devenues des sujets centraux.
+
+La troisième compétence est l'ingénierie des systèmes IA. Le projet a demandé de choisir
+quand utiliser un prompt, quand utiliser un RAG, quand enrichir une source, quand
+structurer une génération et quand ajouter une review. L'enjeu était de ne pas appliquer
+l'IA comme une solution générique, mais de choisir la bonne technique pour le bon
+problème.
+
+La quatrième compétence est la prise de recul. Les premières solutions ont fonctionné
+partiellement, mais elles ont révélé de nouvelles limites. Le passage à une pipeline
+auditable est le résultat de ces itérations. Cette évolution montre l'importance de mesurer,
+de comparer et de remettre en question une architecture lorsqu'elle devient difficile à
+contrôler.
+
+Enfin, le projet a renforcé une compétence de pilotage produit. Une plateforme autonome
+ne se juge pas seulement par son code. Elle doit être utilisable, compréhensible, maintenable
+et économiquement pertinente. L'étude originale montre ainsi comment un besoin
+d'entreprise a conduit à une solution technique structurée, puis à une réflexion plus large
+sur l'évaluation et les limites de l'automatisation par IA.

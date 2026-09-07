@@ -1,0 +1,386 @@
+{
+  "documents": [
+    {
+      "suffix": "voice-regulation",
+      "title": "Module contrôlé - Régulation vocale",
+      "chunk": "Lorsqu'un conseiller parle avec une prosodie stable, un rythme lent et une voix posée, il favorise la co-régulation émotionnelle. Cette présence vocale aide le client tendu à retrouver un état plus calme pendant l'appel, même si le texte n'utilise pas les mots stressé, apaiser ou ton calme."
+    },
+    {
+      "suffix": "written-tone-distractor",
+      "title": "Module contrôlé - Ton écrit",
+      "chunk": "Le ton posé dans un courriel marketing améliore la lisibilité d'une newsletter. Ce passage parle de style rédactionnel, de ponctuation, de paragraphes courts et de formules commerciales, pas de gestion émotionnelle d'un client au téléphone."
+    },
+    {
+      "suffix": "traceability",
+      "title": "Module contrôlé - Traçabilité CRM",
+      "chunk": "Après chaque échange sensible, le conseiller doit documenter l'action dans le CRM. La note doit préciser la demande, l'engagement pris, le délai annoncé et le service responsable. Cette trace évite qu'une réclamation soit perdue entre plusieurs équipes."
+    },
+    {
+      "suffix": "generic-crm-distractor",
+      "title": "Module contrôlé - CRM commercial",
+      "chunk": "Le CRM peut servir à suivre des campagnes promotionnelles, segmenter des prospects, mesurer le taux de conversion et organiser des relances commerciales. Ce passage contient le terme CRM mais ne traite pas de traçabilité d'une réclamation."
+    },
+    {
+      "suffix": "rare-code",
+      "title": "Module contrôlé - Code procédure",
+      "chunk": "La procédure QSAT-5 impose de vérifier la satisfaction du client avant la clôture. Le conseiller reformule la solution, demande une validation explicite, puis note le résultat dans le dossier."
+    },
+    {
+      "suffix": "rare-code-rgpd",
+      "title": "Module contrôlé - Code RGPD",
+      "chunk": "La règle RGPD-MIN-12 impose de ne collecter que les informations strictement nécessaires au traitement de la demande. Le conseiller ne doit pas demander de justificatif ou de détail personnel sans lien direct avec le dossier."
+    },
+    {
+      "suffix": "privacy-distractor",
+      "title": "Module contrôlé - Vie privée générale",
+      "chunk": "La protection de la vie privée demande une attitude prudente, une information claire du client et une conservation limitée des données. Ce passage parle de confidentialité en général mais ne décrit pas la règle RGPD-MIN-12."
+    },
+    {
+      "suffix": "rare-code-escalation",
+      "title": "Module contrôlé - Code escalade",
+      "chunk": "Le repère ECH-3X-45 désigne une escalade en trois temps : reconnaître la difficulté, orienter vers le bon interlocuteur, puis confirmer au client le suivi prévu. Ce code est utilisé uniquement pour les situations qui dépassent le périmètre du conseiller."
+    },
+    {
+      "suffix": "escalation-distractor",
+      "title": "Module contrôlé - Escalade générique",
+      "chunk": "Une escalade peut être nécessaire lorsqu'un conseiller n'a pas la réponse. Il peut transférer l'appel, solliciter un superviseur ou créer une tâche interne. Ce passage est proche du thème mais ne contient pas le repère ECH-3X-45."
+    },
+    {
+      "suffix": "satisfaction-distractor",
+      "title": "Module contrôlé - Satisfaction générale",
+      "chunk": "La satisfaction client peut être mesurée avec des enquêtes, des étoiles, des verbatims et des tableaux de bord. Ce passage parle de pilotage qualité global sans décrire la procédure QSAT-5."
+    },
+    {
+      "suffix": "vulnerability",
+      "title": "Module contrôlé - Client vulnérable",
+      "chunk": "Face à une personne en difficulté de compréhension, le conseiller ralentit le rythme, emploie des phrases courtes, vérifie chaque étape et laisse au client le temps de répondre. L'objectif est de rendre l'échange accessible sans infantiliser l'interlocuteur."
+    },
+    {
+      "suffix": "slow-pace-distractor",
+      "title": "Module contrôlé - Rythme lent hors sujet",
+      "chunk": "Un rythme lent est utile dans une vidéo de méditation, dans un podcast de relaxation ou dans une ambiance sonore. Ce passage ne concerne ni la relation client ni l'adaptation à une personne vulnérable."
+    },
+    {
+      "suffix": "code-zxq-914-beta",
+      "title": "Module contrôlé - Procédure ZXQ-914-BETA",
+      "chunk": "La procédure interne ZXQ-914-BETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir un dossier de médiation prioritaire sous vingt-quatre heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-delta",
+      "title": "Module contrôlé - Procédure ZXQ-914-DELTA",
+      "chunk": "La procédure interne ZXQ-914-DELTA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit envoyer une synthèse commerciale au responsable de secteur. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-gamma",
+      "title": "Module contrôlé - Procédure ZXQ-914-GAMMA",
+      "chunk": "La procédure interne ZXQ-914-GAMMA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit mettre la demande en attente jusqu'à réception du justificatif. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-omega",
+      "title": "Module contrôlé - Procédure ZXQ-914-OMEGA",
+      "chunk": "La procédure interne ZXQ-914-OMEGA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit clôturer le ticket sans relance si le client ne répond pas. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-sigma",
+      "title": "Module contrôlé - Procédure ZXQ-914-SIGMA",
+      "chunk": "La procédure interne ZXQ-914-SIGMA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit transférer le dossier vers le support technique niveau deux. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-alpha",
+      "title": "Module contrôlé - Procédure ZXQ-914-ALPHA",
+      "chunk": "La procédure interne ZXQ-914-ALPHA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit déclencher une enquête de satisfaction automatisée. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-kappa",
+      "title": "Module contrôlé - Procédure ZXQ-914-KAPPA",
+      "chunk": "La procédure interne ZXQ-914-KAPPA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit planifier un rappel simple dans les quarante-huit heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-theta",
+      "title": "Module contrôlé - Procédure ZXQ-914-THETA",
+      "chunk": "La procédure interne ZXQ-914-THETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit classer la demande comme information générale. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-lambda",
+      "title": "Module contrôlé - Procédure ZXQ-914-LAMBDA",
+      "chunk": "La procédure interne ZXQ-914-LAMBDA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit demander une confirmation écrite avant toute action. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-zxq-914-pi",
+      "title": "Module contrôlé - Procédure ZXQ-914-PI",
+      "chunk": "La procédure interne ZXQ-914-PI concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit archiver la conversation dans le dossier administratif. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-mnd-772-rouge",
+      "title": "Module contrôlé - Procédure MND-772-ROUGE",
+      "chunk": "La procédure interne MND-772-ROUGE concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit appliquer la remise exceptionnelle après validation superviseur. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-mnd-772-bleu",
+      "title": "Module contrôlé - Procédure MND-772-BLEU",
+      "chunk": "La procédure interne MND-772-BLEU concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit refuser la remise et proposer une alternative standard. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-mnd-772-vert",
+      "title": "Module contrôlé - Procédure MND-772-VERT",
+      "chunk": "La procédure interne MND-772-VERT concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit convertir la demande en opportunité commerciale. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-mnd-772-noir",
+      "title": "Module contrôlé - Procédure MND-772-NOIR",
+      "chunk": "La procédure interne MND-772-NOIR concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit envoyer un message de clôture sans enquête complémentaire. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "code-mnd-772-orange",
+      "title": "Module contrôlé - Procédure MND-772-ORANGE",
+      "chunk": "La procédure interne MND-772-ORANGE concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir une alerte qualité auprès de l'équipe formation. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+    },
+    {
+      "suffix": "semantic-fatigue",
+      "title": "Module contrôlé - Fatigue émotionnelle en appel",
+      "chunk": "Après plusieurs interactions difficiles, le conseiller peut ressentir une saturation relationnelle. Les signes sont une baisse d'écoute, une parole plus mécanique, une irritabilité discrète et une difficulté à rester disponible pour le client suivant."
+    },
+    {
+      "suffix": "semantic-fatigue-bm25-distractor",
+      "title": "Distracteur lexical 1",
+      "chunk": "Un échange difficile peut concerner une facture, une livraison ou un remboursement. Ce passage répète les mots conseiller, échanges difficiles et signes, mais il décrit seulement des catégories administratives sans parler de fatigue émotionnelle."
+    },
+    {
+      "suffix": "semantic-trust",
+      "title": "Module contrôlé - Confiance client",
+      "chunk": "La confiance se construit lorsque le client constate que le conseiller tient ses engagements, reformule correctement la demande et annonce des délais réalistes. Cette cohérence rend l'échange crédible."
+    },
+    {
+      "suffix": "semantic-trust-bm25-distractor",
+      "title": "Distracteur lexical 2",
+      "chunk": "Une promesse faite au téléphone peut être une offre commerciale, un rendez-vous ou une phrase de politesse. Ce passage contient les mots rassurer, promesse et téléphone, mais ne traite pas de construction de confiance."
+    },
+    {
+      "suffix": "semantic-active-listening",
+      "title": "Module contrôlé - Écoute active",
+      "chunk": "L'écoute active consiste à laisser le client terminer son explication, repérer le besoin principal, reformuler sans déformer et vérifier que la compréhension est partagée avant de proposer une solution."
+    },
+    {
+      "suffix": "semantic-active-listening-bm25-distractor",
+      "title": "Distracteur lexical 3",
+      "chunk": "Proposer une solution à un client confus peut être rapide si le conseiller dispose d'un catalogue standard. Ce passage reprend les mots de la question mais parle d'automatisation, pas d'écoute active."
+    },
+    {
+      "suffix": "semantic-escalation",
+      "title": "Module contrôlé - Orientation hors périmètre",
+      "chunk": "Quand une demande dépasse son périmètre, le conseiller ne se défausse pas. Il explique la limite de son rôle, oriente vers le bon interlocuteur et confirme au client que le suivi sera transmis."
+    },
+    {
+      "suffix": "semantic-escalation-bm25-distractor",
+      "title": "Distracteur lexical 4",
+      "chunk": "Abandonner le client peut donner une mauvaise impression dans une demande difficile. Ce passage répète abandonner, client, traiter et demande, mais il ne donne aucune méthode d'orientation hors périmètre."
+    },
+    {
+      "suffix": "semantic-clarity",
+      "title": "Module contrôlé - Clarté pédagogique",
+      "chunk": "Pour rendre une consigne compréhensible, le formateur découpe l'explication en étapes, utilise des phrases courtes, donne un exemple concret et vérifie que l'apprenant peut reformuler l'action attendue."
+    },
+    {
+      "suffix": "semantic-clarity-bm25-distractor",
+      "title": "Distracteur lexical 5",
+      "chunk": "Expliquer simplement une tâche peut vouloir dire lire plus lentement une notice. Ce passage contient les mots expliquer, tâche et compris, mais ne parle pas de découpage pédagogique ni de reformulation."
+    },
+    {
+      "suffix": "semantic-deescalation",
+      "title": "Module contrôlé - Désamorçage émotionnel",
+      "chunk": "Désamorcer une tension suppose d'abord de reconnaître l'émotion exprimée, puis de recadrer calmement le problème et de proposer une prochaine étape claire. Le conseiller évite de se justifier trop vite."
+    },
+    {
+      "suffix": "semantic-deescalation-bm25-distractor",
+      "title": "Distracteur lexical 6",
+      "chunk": "Une personne énervée peut faire redescendre la tension après une pause ou un changement de sujet. Ce passage reprend les mots personne, énervée et tension, mais ne décrit pas la méthode de désamorçage."
+    },
+    {
+      "suffix": "meta-meta-ax7-priorite",
+      "title": "Fiche procédure META-AX7-PRIORITE",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit ouvrir une médiation prioritaire sous vingt-quatre heures. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+    },
+    {
+      "suffix": "meta-meta-bq9-qualite",
+      "title": "Fiche procédure META-BQ9-QUALITE",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit transmettre une alerte qualité au responsable de plateau. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+    },
+    {
+      "suffix": "meta-meta-cm4-suivi",
+      "title": "Fiche procédure META-CM4-SUIVI",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit programmer un rappel de suivi dans les deux jours ouvrés. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+    },
+    {
+      "suffix": "meta-meta-dn2-cloture",
+      "title": "Fiche procédure META-DN2-CLOTURE",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit clôturer le dossier après validation explicite du client. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+    },
+    {
+      "suffix": "meta-meta-ep8-transfert",
+      "title": "Fiche procédure META-EP8-TRANSFERT",
+      "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit transférer la demande vers le service expert. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+    }
+  ],
+  "questions": [
+    {
+      "id": "q_sem_1",
+      "question": "Comment un ton calme peut-il apaiser un client stressé pendant un appel ?",
+      "relevant_suffixes": [
+        "voice-regulation"
+      ],
+      "context": "Question reformulée: le chunk pertinent parle de prosodie stable et de co-régulation, tandis qu'un distracteur contient les mots exacts ton posé."
+    },
+    {
+      "id": "q_sem_2",
+      "question": "Que faire pour aider une personne qui comprend difficilement les consignes ?",
+      "relevant_suffixes": [
+        "vulnerability"
+      ],
+      "context": "Question reformulée: le chunk pertinent traite du client vulnérable sans reprendre exactement tous les mots de la question."
+    },
+    {
+      "id": "q_lex_1",
+      "question": "Que signifie la procédure QSAT-5 avant la clôture ?",
+      "relevant_suffixes": [
+        "rare-code"
+      ],
+      "context": "Question lexicale: le code rare QSAT-5 doit favoriser la recherche textuelle et l'hybride."
+    },
+    {
+      "id": "q_lex_2",
+      "question": "Que demande exactement la règle RGPD-MIN-12 ?",
+      "relevant_suffixes": [
+        "rare-code-rgpd"
+      ],
+      "context": "Question lexicale avec code rare: la recherche hybride doit bénéficier du signal BM25 sur RGPD-MIN-12."
+    },
+    {
+      "id": "q_code_only_1",
+      "question": "RGPD-MIN-12",
+      "relevant_suffixes": [
+        "rare-code-rgpd"
+      ],
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal lexical exact devrait avantager l'hybride par rapport au vectoriel seul."
+    },
+    {
+      "id": "q_lex_3",
+      "question": "À quoi correspond le repère ECH-3X-45 dans une situation hors périmètre ?",
+      "relevant_suffixes": [
+        "rare-code-escalation"
+      ],
+      "context": "Question lexicale avec code rare: le code exact ECH-3X-45 doit aider l'hybride lorsque le vectoriel hésite entre passages d'escalade."
+    },
+    {
+      "id": "q_code_only_2",
+      "question": "ECH-3X-45",
+      "relevant_suffixes": [
+        "rare-code-escalation"
+      ],
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal BM25 exact devrait être utile."
+    },
+    {
+      "id": "q_mix_1",
+      "question": "Pourquoi faut-il garder une trace dans le CRM quand une réclamation passe entre plusieurs équipes ?",
+      "relevant_suffixes": [
+        "traceability"
+      ],
+      "context": "Question mixte: CRM est lexical, mais le sens attendu porte sur la traçabilité d'une réclamation."
+    },
+    {
+      "id": "q_adversarial_code_1",
+      "question": "Que faut-il faire pour la procédure ZXQ-914-BETA ?",
+      "relevant_suffixes": [
+        "code-zxq-914-beta"
+      ],
+      "context": "Cas adversarial: de nombreux chunks sont quasi identiques et ne diffèrent que par le code. Le signal lexical exact devrait avantager l'hybride."
+    },
+    {
+      "id": "q_adversarial_code_2",
+      "question": "Quelle action est associée au repère MND-772-ORANGE ?",
+      "relevant_suffixes": [
+        "code-mnd-772-orange"
+      ],
+      "context": "Cas adversarial: le sens général est commun à tous les chunks, seul le code exact identifie le bon passage."
+    },
+    {
+      "id": "q_adversarial_code_only",
+      "question": "ZXQ-914-BETA",
+      "relevant_suffixes": [
+        "code-zxq-914-beta"
+      ],
+      "context": "Requête composée uniquement d'un identifiant arbitraire: le vectoriel seul peut perdre le signal exact, l'hybride conserve BM25."
+    },
+    {
+      "id": "q_metadata_code_1",
+      "question": "Que prévoit la fiche META-AX7-PRIORITE ?",
+      "relevant_suffixes": [
+        "meta-meta-ax7-priorite"
+      ],
+      "context": "Cas métadonnée: l'identifiant exact est dans le titre searchable, mais pas dans le chunk vectorisé. L'hybride peut exploiter BM25 sur le titre."
+    },
+    {
+      "id": "q_metadata_code_2",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "relevant_suffixes": [
+        "meta-meta-bq9-qualite"
+      ],
+      "context": "Cas métadonnée: le vector-only ne voit pas l'identifiant dans text_vector, l'hybride le retrouve via la recherche textuelle."
+    },
+    {
+      "id": "q_metadata_code_only",
+      "question": "META-EP8-TRANSFERT",
+      "relevant_suffixes": [
+        "meta-meta-ep8-transfert"
+      ],
+      "context": "Requête identifiant seul, présent uniquement dans le titre du document."
+    },
+    {
+      "id": "q_semantic_bm25_trap_1",
+      "question": "Quels signes montrent qu'un conseiller commence à être épuisé par les échanges difficiles ?",
+      "relevant_suffixes": [
+        "semantic-fatigue"
+      ],
+      "context": "Cas de reformulation: le bon chunk partage le sens de la question, tandis qu'un distracteur reprend davantage de mots exacts sans répondre réellement."
+    },
+    {
+      "id": "q_semantic_bm25_trap_2",
+      "question": "Comment rassurer quelqu'un qui doute de la promesse faite au téléphone ?",
+      "relevant_suffixes": [
+        "semantic-trust"
+      ],
+      "context": "Cas de reformulation: le bon chunk partage le sens de la question, tandis qu'un distracteur reprend davantage de mots exacts sans répondre réellement."
+    },
+    {
+      "id": "q_semantic_bm25_trap_3",
+      "question": "Que doit faire un conseiller avant de proposer une solution à un client confus ?",
+      "relevant_suffixes": [
+        "semantic-active-listening"
+      ],
+      "context": "Cas de reformulation: le bon chunk partage le sens de la question, tandis qu'un distracteur reprend davantage de mots exacts sans répondre réellement."
+    },
+    {
+      "id": "q_semantic_bm25_trap_4",
+      "question": "Comment éviter de donner l'impression d'abandonner le client quand on ne peut pas traiter sa demande ?",
+      "relevant_suffixes": [
+        "semantic-escalation"
+      ],
+      "context": "Cas de reformulation: le bon chunk partage le sens de la question, tandis qu'un distracteur reprend davantage de mots exacts sans répondre réellement."
+    },
+    {
+      "id": "q_semantic_bm25_trap_5",
+      "question": "Comment expliquer simplement une tâche à quelqu'un qui n'a pas compris la première fois ?",
+      "relevant_suffixes": [
+        "semantic-clarity"
+      ],
+      "context": "Cas de reformulation: le bon chunk partage le sens de la question, tandis qu'un distracteur reprend davantage de mots exacts sans répondre réellement."
+    },
+    {
+      "id": "q_semantic_bm25_trap_6",
+      "question": "Que répondre à une personne énervée pour faire redescendre la tension ?",
+      "relevant_suffixes": [
+        "semantic-deescalation"
+      ],
+      "context": "Cas de reformulation: le bon chunk partage le sens de la question, tandis qu'un distracteur reprend davantage de mots exacts sans répondre réellement."
+    }
+  ]
+}

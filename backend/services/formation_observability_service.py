@@ -10,62 +10,21 @@ Deux responsabilités :
 import json
 from datetime import datetime
 
-from database.db import get_db_connection
+from repositories.pipeline_repository import (
+    delete_pipeline_events,
+    ensure_pipeline_observability_tables,
+    get_latest_review_report_row,
+    insert_pipeline_event,
+    insert_review_report,
+    list_pipeline_event_rows,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-
 def ensure_observability_tables() -> None:
     """Crée les tables d'observabilité si l'app n'a pas encore redémarré."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS content_review_reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id INTEGER NOT NULL,
-            folder_id INTEGER NOT NULL,
-            source TEXT DEFAULT 'api',
-            generated_via TEXT,
-            summary_json TEXT DEFAULT '{}',
-            report_json TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_content_review_reports_job_folder
-        ON content_review_reports(job_id, folder_id, created_at)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS formation_pipeline_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id INTEGER NOT NULL,
-            folder_id INTEGER,
-            step TEXT,
-            event_type TEXT NOT NULL,
-            status TEXT DEFAULT 'info',
-            message TEXT,
-            model TEXT,
-            duration_ms INTEGER,
-            data_json TEXT DEFAULT '{}',
-            error TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_formation_pipeline_events_job
-        ON formation_pipeline_events(job_id, created_at)
-        """
-    )
-    conn.commit()
-    conn.close()
+    ensure_pipeline_observability_tables()
 
 
 def _dumps(value) -> str:
@@ -129,28 +88,15 @@ def persist_review_report(
     generated_via: str | None = None,
 ) -> int:
     """Ajoute un snapshot durable du rapport de conformité."""
-    ensure_observability_tables()
     summary = report.get("summary") or {}
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO content_review_reports
-        (job_id, folder_id, source, generated_via, summary_json, report_json)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            job_id,
-            folder_id,
-            source,
-            generated_via or report.get("generated_via"),
-            _dumps(summary),
-            _dumps(report),
-        ),
+    report_id = insert_review_report(
+        job_id=job_id,
+        folder_id=folder_id,
+        source=source,
+        generated_via=generated_via or report.get("generated_via"),
+        summary_json=_dumps(summary),
+        report_json=_dumps(report),
     )
-    report_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
     logger.info(
         "PIPELINE_REVIEW_REPORT %s",
         _compact_for_log(
@@ -167,53 +113,22 @@ def persist_review_report(
     return int(report_id)
 
 
-def get_latest_review_report(job_id: int, folder_id: int, kind: str = "compliance") -> dict | None:
-    """Retourne le dernier rapport persisté pour une journée.
-
-    `kind` : "compliance" (défaut) → source IN ('api', 'review_api', ...)
-             "humanization"        → source LIKE '%humanization%'
-    """
-    ensure_observability_tables()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if kind == "humanization":
-        cursor.execute(
-            """
-            SELECT id, source, generated_via, report_json, created_at
-            FROM content_review_reports
-            WHERE job_id = ? AND folder_id = ? AND source LIKE '%humanization%'
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            (job_id, folder_id),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id, source, generated_via, report_json, created_at
-            FROM content_review_reports
-            WHERE job_id = ? AND folder_id = ? AND source NOT LIKE '%humanization%'
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            (job_id, folder_id),
-        )
-    row = cursor.fetchone()
-    conn.close()
+def get_latest_review_report(job_id: int, folder_id: int) -> dict | None:
+    """Retourne le dernier rapport de conformité persisté pour une journée."""
+    row = get_latest_review_report_row(job_id=job_id, folder_id=folder_id)
     if not row:
         return None
-    report_id, source, generated_via, report_json, created_at = row
     try:
-        report = json.loads(report_json or "{}")
+        report = json.loads(row.get("report_json") or "{}")
     except Exception as exc:
         logger.warning(
             f"⚠️ Rapport conformité DB illisible job={job_id} folder={folder_id}: {exc}"
         )
         return None
-    report.setdefault("generated_via", generated_via)
-    report["persisted_report_id"] = report_id
-    report["persisted_source"] = source
-    report["persisted_at"] = created_at
+    report.setdefault("generated_via", row.get("generated_via"))
+    report["persisted_report_id"] = row.get("id")
+    report["persisted_source"] = row.get("source")
+    report["persisted_at"] = row.get("created_at")
     return report
 
 
@@ -232,32 +147,18 @@ def log_pipeline_event(
 ) -> int | None:
     """Journalise un événement pipeline sans faire échouer la pipeline."""
     try:
-        ensure_observability_tables()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO formation_pipeline_events
-            (job_id, folder_id, step, event_type, status, message, model,
-             duration_ms, data_json, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                job_id,
-                folder_id,
-                step,
-                event_type,
-                status,
-                message,
-                model,
-                duration_ms,
-                _dumps(data),
-                error,
-            ),
+        event_id = insert_pipeline_event(
+            job_id=job_id,
+            event_type=event_type,
+            step=step,
+            status=status,
+            folder_id=folder_id,
+            message=message,
+            model=model,
+            duration_ms=duration_ms,
+            data_json=_dumps(data),
+            error=error,
         )
-        event_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
         _emit_pipeline_event_log(
             int(event_id),
             job_id,
@@ -279,57 +180,32 @@ def log_pipeline_event(
 
 def list_pipeline_events(job_id: int, *, limit: int = 200) -> list[dict]:
     """Liste les événements récents d'un job, du plus ancien au plus récent."""
-    ensure_observability_tables()
-    limit = max(1, min(int(limit or 200), 500))
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, job_id, folder_id, step, event_type, status, message, model,
-               duration_ms, data_json, error, created_at
-        FROM formation_pipeline_events
-        WHERE job_id = ?
-        ORDER BY created_at DESC, id DESC
-        LIMIT ?
-        """,
-        (job_id, limit),
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_pipeline_event_rows(job_id, limit=limit)
     events = []
     for row in reversed(rows):
-        (
-            event_id,
-            row_job_id,
-            folder_id,
-            step,
-            event_type,
-            status,
-            message,
-            model,
-            duration_ms,
-            data_json,
-            error,
-            created_at,
-        ) = row
         try:
-            data = json.loads(data_json or "{}")
+            data = json.loads(row.get("data_json") or "{}")
         except Exception:
             data = {}
+        if "output_text" in data:
+            # Ne renvoie jamais un texte LLM complet dans le flux d'événements
+            # pollé par le dashboard, y compris pour les anciennes traces.
+            data = dict(data)
+            data.pop("output_text", None)
         events.append(
             {
-                "id": event_id,
-                "job_id": row_job_id,
-                "folder_id": folder_id,
-                "step": step,
-                "event_type": event_type,
-                "status": status,
-                "message": message,
-                "model": model,
-                "duration_ms": duration_ms,
+                "id": row.get("id"),
+                "job_id": row.get("job_id"),
+                "folder_id": row.get("folder_id"),
+                "step": row.get("step"),
+                "event_type": row.get("event_type"),
+                "status": row.get("status"),
+                "message": row.get("message"),
+                "model": row.get("model"),
+                "duration_ms": row.get("duration_ms"),
                 "data": data,
-                "error": error,
-                "created_at": created_at,
+                "error": row.get("error"),
+                "created_at": row.get("created_at"),
             }
         )
     return events
@@ -347,30 +223,11 @@ def clear_pipeline_events(
     comportement attendu pour une relance "continuer après le texte" : le texte
     reste en DB, mais les traces aval précédentes ne polluent plus l'UI.
     """
-    ensure_observability_tables()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if folder_id is None:
-        cursor.execute(
-            "DELETE FROM formation_pipeline_events WHERE job_id = ?",
-            (job_id,),
-        )
-    elif include_global_events:
-        cursor.execute(
-            """
-            DELETE FROM formation_pipeline_events
-            WHERE job_id = ? AND (folder_id = ? OR folder_id IS NULL)
-            """,
-            (job_id, folder_id),
-        )
-    else:
-        cursor.execute(
-            "DELETE FROM formation_pipeline_events WHERE job_id = ? AND folder_id = ?",
-            (job_id, folder_id),
-        )
-    deleted = cursor.rowcount or 0
-    conn.commit()
-    conn.close()
+    deleted = delete_pipeline_events(
+        job_id=job_id,
+        folder_id=folder_id,
+        include_global_events=include_global_events,
+    )
     logger.info(
         "PIPELINE_EVENTS_CLEARED %s",
         _compact_for_log(

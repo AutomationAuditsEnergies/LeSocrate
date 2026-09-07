@@ -1,0 +1,46 @@
+{
+  "version": "2026-05-31-compliance-v2-minimal",
+  "source": "minimal review rules: 14, 15, 17, 18, 22",
+  "rules": [
+    {
+      "id": 14,
+      "name": "RESPECT DES TIERS ",
+      "scope": "ethics_compliance",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #14 — RESPECT DES TIERS :\nNe pas dénigrer une entreprise, une marque, une personne nommée ou\nun concurrent. Les comparaisons doivent rester factuelles et\nrespectueuses. Pas de \"telle marque est nulle\", \"tel concurrent\narnaque ses clients\"."
+    },
+    {
+      "id": 15,
+      "name": "PUBLICS VULNÉRABLES ",
+      "scope": "ethics_compliance",
+      "severity": "high",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #15 — PUBLICS VULNÉRABLES :\nNe jamais utiliser comme exemples des personnes en situation de\ndétresse (surendettement, solitude pathologique, maladie grave,\naddiction, chômage de longue durée) pour illustrer des techniques\ncommerciales ou de persuasion. Si la vulnérabilité doit être\nmentionnée, c'est toujours sous l'angle de la protection et du\nrespect."
+    },
+    {
+      "id": 17,
+      "name": "ANTI-HALLUCINATION GÉNÉRALE ",
+      "scope": "anti_hallucination",
+      "severity": "high",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #17 — ANTI-HALLUCINATION GÉNÉRALE :\nNe jamais présenter comme réel un fait, chiffre, source, témoignage, nom propre,\nlieu, date ou anecdote qui n'est pas certain et vérifiable.\n\nExemples et cas :\n- Si le cas est inventé ou seulement plausible, il doit être marqué comme fictif\n  ou hypothétique de façon naturelle.\n- Sont suffisants : \"Imaginons...\", \"Imaginez qu'un client...\", \"Prenons un\n  exemple fictif...\", \"Supposons que...\", \"Dans une situation fictive...\".\n- Ne force pas une formule solennelle si le texte marque déjà l'hypothèse.\n\nChiffres, dates et sources :\n- Pas de chiffre précis non sourcé.\n- Pas d'étude, rapport, institution ou expert cité si la source n'est pas réelle\n  et vérifiable.\n- En cas d'incertitude utile au propos, rester vague : \"environ\", \"autour de\",\n  \"dans les années 2010\", \"beaucoup d'entreprises constatent que\".\n- Si l'information n'apporte rien d'indispensable, la supprimer plutôt que la\n  maquiller.\n\nRègle pratique : si tu hésites entre réel et fictif, c'est fictif. Si tu hésites\nsur un chiffre ou une source, tu ne le présentes pas comme un fait."
+    },
+    {
+      "id": 18,
+      "name": "PATTERNS INTERDITS (signaux d'hallucination) ",
+      "scope": "anti_hallucination",
+      "severity": "high",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #18 — PATTERNS INTERDITS (signaux d'hallucination) :\nLes formulations suivantes sont des signaux classiques d'invention\ndéguisée. Elles sont STRICTEMENT INTERDITES :\n\n- Noms d'entreprises inventés qui \"sonnent vrai\" :\n  TechNova, GreenLeaf, InnovateCorp, StartSmart, et tous leurs\n  équivalents. Si tu cites une entreprise : soit elle est RÉELLE\n  et connue, soit tu dis \"une entreprise du secteur X\".\n\n- Chiffres précis non sourcés :\n  \"+37 % de croissance\", \"41 % d'acceptation\", \"23 % de CA\n  supplémentaire\", \"62 % de retour client\". Ces précisions\n  sentent l'invention. → SUPPRIMER ENTIÈREMENT. Ne pas\n  remplacer par un ordre de grandeur — si la source n'est pas\n  certaine, ne pas mentionner de chiffre du tout. Développer\n  le propos sans s'appuyer sur un nombre inventé.\n\n- Études non vérifiables citées comme autorité :\n  \"une étude de Harvard montre que...\", \"des recherches en\n  psycholinguistique ont démontré que...\", \"selon le modèle\n  de Mehrabian...\", \"des études en communication indiquent...\".\n  → SUPPRIMER ENTIÈREMENT. Ne pas citer une étude si elle\n  n'est pas réelle et vérifiable. Développer le propos sans\n  s'appuyer sur une autorité scientifique inventée. Aucun\n  remplacement par \"on observe que\" — simplement ne pas\n  mentionner l'étude.\n\n- Anecdotes localisées présentées comme vraies sans disclaimer :\n  \"une entreprise à Bordeaux a fait...\", \"à Lyon en 2021,\n  il s'est passé que...\". Ces formulations paraissent vraies.\n  Si le fait n'est pas vérifiable → annoncer explicitement\n  la fiction avant : \"prenons un cas fictif à Bordeaux où...\"\n\n- Témoignages avec prénoms présentés comme réels :\n  \"Sophie, cliente chez nous, a dit que...\". Remplacer par :\n  \"imaginez une cliente qui vous dit que...\""
+    },
+    {
+      "id": 22,
+      "name": "ZÉRO GUILLEMET DE DISCOURS DIRECT RAPPORTÉ ",
+      "scope": "oral_tts_and_pedagogy",
+      "severity": "medium",
+      "repair_mode": "targeted_patch",
+      "body": "RÈGLE #22 — ZÉRO GUILLEMET DE DISCOURS DIRECT RAPPORTÉ :\nLe TTS Fish Audio NE PRONONCE PAS les guillemets « ». Tout ce qui\nserait écrit entre guillemets comme parole rapportée disparaît à\nl'oreille et la citation devient indistinguable de la narration.\nTout discours direct doit basculer en discours indirect ou en\ndescription qualifiante.\n\n❌ INTERDIT :\n  Une voix qui dit : « Bonjour, service client, numéro de commande ? »\n  La cliente pense : « Je ne suis qu'un numéro. »\n  Le manager répond : « On verra ça demain. »\n\n✅ OBLIGATOIRE :\n  \"On vous demande directement votre numéro de commande, d'un ton\n   administratif, sans accueil, sans chaleur.\"\n  \"La cliente se dit qu'elle n'est qu'un numéro, que personne ne\n   l'écoute vraiment.\"\n  \"Le manager répond qu'il verra ça plus tard — sans plus\n   d'explication, sans une once d'engagement.\"\n\nFormules utiles pour évoquer une parole sans la citer :\n  \"d'un ton sec/chaleureux/administratif/pressé\"\n  \"sur un ton qui...\"\n  \"avec des mots qui trahissent [l'impatience / l'écoute / ...]\"\n  \"comme une procédure, sans aucun relief humain\"\n  \"il/elle vous dit en substance que...\"\n  \"la phrase qui tombe, c'est quelque chose comme : [paraphrase\n   sans guillemets]\""
+    }
+  ]
+}

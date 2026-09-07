@@ -1,0 +1,1712 @@
+% ======================================================================
+%  Mémoire de fin d'année — PGE ING3
+%  Conception d'une plateforme de formation autonome alimentée par l'IA
+%  Auteur : ISSAD Nassim — Entreprise : Audit Énergie
+%
+%  FICHIER UNIQUE ET AUTONOME (bibliographie incluse).
+%  Compilation : pdflatex memoire-complet  (x2 pour le sommaire)
+% ======================================================================
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{float}
+
+\usepackage[dvipsnames]{xcolor}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{
+  pdftitle={Conception d'une plateforme de formation autonome alimentée par l'IA},
+  pdfauthor={ISSAD Nassim}
+}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\itshape Plateforme de formation autonome}
+\fancyhead[R]{\small Audit Énergie}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\begin{document}
+
+% ====================== PAGE DE GARDE ===============================
+\begin{titlepage}
+\thispagestyle{empty}
+\centering
+
+{\scshape\large EFREI Paris \par}
+\vspace{0.3cm}
+{\scshape Mémoire de fin d'année --- PGE ING3 --- 2025-2026 \par}
+\vspace{0.2cm}
+\rule{\linewidth}{0.5pt}
+
+\vfill
+
+{\Huge\bfseries Conception d'une plateforme de\\[0.3cm]
+formation autonome alimentée par\\[0.3cm]
+l'intelligence artificielle \par}
+
+\vspace{0.8cm}
+{\large\itshape Pipeline de génération de contenus pédagogiques et\\
+assistant conversationnel contextualisé (RAG)\par}
+
+\vfill
+
+\begin{tabular}{@{}ll@{}}
+\textbf{Auteur} & ISSAD Nassim \\[0.3cm]
+\textbf{Promotion} & ING3 --- M2-BDML \\[0.3cm]
+\textbf{Tuteur entreprise} & M. Mehdi ROUSSELLE \\[0.3cm]
+\textbf{Tuteur pédagogique} & M. Moulay AHANSAL \\[0.3cm]
+\textbf{Chargé de Mission Career Center} & \textit{à compléter} \\[0.3cm]
+\textbf{Entreprise} & Audit Énergie \\
+\end{tabular}
+
+\vfill
+
+\rule{\linewidth}{0.5pt}
+{\small Diffusion soumise à l'accord de l'entreprise --- \textit{mention de confidentialité à compléter}\par}
+\vspace{0.3cm}
+{\small Année académique 2025--2026\par}
+
+\end{titlepage}
+
+% ====================== RÉSUMÉ ======================================
+\clearpage
+\pagenumbering{roman}
+\phantomsection
+\addcontentsline{toc}{section}{Résumé}
+\section*{Résumé}
+
+Ce mémoire présente la conception d'une plateforme de formation autonome alimentée par
+l'intelligence artificielle, développée au sein de l'entreprise Audit Énergie. Initialement
+positionnée sur le courtage en énergie, l'entreprise s'est récemment structurée comme un
+organisme de formation externe préparant des apprenants à des titres professionnels. Pour
+une petite structure, ce développement se heurte à une contrainte forte : le coût d'un
+formateur en direct rend le modèle difficilement viable, tandis que les cours simplement
+préenregistrés appauvrissent l'accompagnement pédagogique.
+
+Le travail propose de répondre à ce problème par une plateforme capable d'automatiser la
+production, la diffusion et l'accompagnement des cours. Deux contributions principales sont
+étudiées. La première est une \emph{pipeline} de génération de contenus pédagogiques, qui
+transforme un référentiel officiel en cours structurés, oralisables et calibrés en durée. Plutôt
+qu'une génération directe par un prompt unique, cette pipeline s'appuie sur un plan
+intermédiaire explicite, une génération section par section, des contrôles qualité ciblés et la
+conservation d'artefacts intermédiaires garantissant la traçabilité. La seconde contribution est
+un assistant pédagogique de type RAG (\emph{Retrieval-Augmented Generation}), fondé sur
+Azure AI Search et Azure OpenAI, qui répond aux questions des élèves à partir du contenu réel
+de la formation plutôt que d'une connaissance générale non contrôlée.
+
+Le mémoire situe ces choix dans l'état de l'art (prompt engineering, fine-tuning, RAG,
+génération structurée, reviews automatiques) et discute leurs limites. Il insiste sur une
+exigence centrale : encadrer l'IA générative pour la rendre fiable, auditable et mesurable dans
+un usage réel de production. Sont enfin présentées les conditions d'application de l'approche,
+ses limites et les indicateurs d'évaluation associés, qu'il s'agisse de l'efficacité opérationnelle,
+de la qualité pédagogique ou de la pertinence des réponses de l'assistant.
+
+\vspace{0.4cm}
+\noindent\textbf{Mots-clés :} intelligence artificielle générative, formation à distance,
+pipeline de génération de contenus, synthèse vocale, RAG, Azure AI Search, traçabilité,
+automatisation pédagogique.
+
+% ====================== SOMMAIRE ====================================
+\clearpage
+\phantomsection
+\addcontentsline{toc}{section}{Sommaire}
+\tableofcontents
+
+% ====================== CORPS DU MÉMOIRE ============================
+\clearpage
+\pagenumbering{arabic}
+
+\phantomsection
+\addcontentsline{toc}{section}{Introduction générale}
+\section*{Introduction générale}
+
+\subsection*{Contexte}
+
+Audit Énergie est une entreprise initialement positionnée sur le courtage en énergie, dont
+le métier consiste à accompagner des professionnels dans la renégociation de leurs contrats.
+Cette activité lui a donné une connaissance fine des métiers de la vente à distance. C'est
+cette expertise qui l'a conduite, plus récemment, vers la formation professionnelle :
+d'abord pour ses propres téléprospecteurs, puis, depuis environ un an, sous la forme d'un
+organisme de formation externe préparant des apprenants à des titres professionnels reconnus
+par l'État, comme le titre de Conseiller Relation Client à Distance ou celui d'Employé
+Commercial. C'est cette activité de formation qui constitue le cœur de ce mémoire.
+
+Ce changement d'échelle a fait apparaître une contrainte forte. Pour une petite structure,
+faire appel à des formateurs en direct pour assurer les cours en ligne pèse lourdement sur
+des marges déjà limitées. Une première réponse a consisté à diffuser des cours audio préparés
+à l'avance plutôt qu'animés en direct ; mais ce modèle restait dépendant d'un travail humain
+important, et un cours préenregistré ne permet pas de répondre aux questions des élèves.
+L'idée s'est donc imposée de concevoir une plateforme de formation réellement autonome,
+capable à la fois de produire et de diffuser les contenus, et d'accompagner les apprenants.
+
+\subsection*{Problématique, objectifs et contributions}
+
+Le projet étudié dans ce mémoire est précisément cette plateforme de formation autonome
+alimentée par l'intelligence artificielle. Elle ne doit pas seulement diffuser des fichiers
+audio, mais générer les contenus, les transformer en audio, produire des supports et des
+exercices, et accompagner les élèves grâce à un assistant s'appuyant sur les documents réels
+de la formation. La problématique peut alors être formulée ainsi :
+
+\begin{quote}
+\emph{Comment concevoir une plateforme de formation autonome alimentée par
+l'intelligence artificielle, capable de produire, diffuser et accompagner des contenus
+pédagogiques, tout en garantissant leur qualité, leur traçabilité et leur pertinence pour
+les apprenants ?}
+\end{quote}
+
+Cette problématique se décline en quatre objectifs : automatiser la production des cours, en
+passant d'un référentiel officiel à des journées pédagogiques complètes ; transformer ces
+contenus en audios exploitables, à un coût inférieur à une production humaine répétée ;
+enrichir la formation par des supports visuels et des exercices générés automatiquement ;
+et permettre aux apprenants d'interroger un assistant capable de répondre à partir du contenu
+réel du cours, et non comme un chatbot généraliste.
+
+Pour y répondre, le travail apporte deux contributions principales. La première est une
+\emph{pipeline} de génération de contenus pédagogiques, qui a évolué d'une génération
+directe de texte vers une chaîne structurée, fondée sur un plan pédagogique explicite, une
+génération section par section, des contrôles qualité ciblés et la conservation d'artefacts
+intermédiaires garantissant la traçabilité. La seconde est un assistant pédagogique de type
+RAG (\emph{Retrieval-Augmented Generation}), qui ancre ses réponses dans les documents
+indexés de la formation pour dépasser les limites d'un modèle de langage utilisé seul.
+
+La méthode suivie est itérative : chaque solution essayée (intervention humaine,
+enregistrement différé, synthèse vocale, génération directe par modèle de langage, puis
+pipeline structurée) a révélé une nouvelle contrainte — coût, qualité audio, longueur des
+textes, cohérence pédagogique, conformité, accompagnement, évaluation. L'enjeu n'est pas
+seulement d'ajouter de l'intelligence artificielle à une plateforme existante, mais de
+l'encadrer pour la rendre fiable, contrôlable et mesurable. Les résultats sont donc discutés à
+l'aide d'indicateurs concrets : réduction des interventions humaines, coût et temps de
+production des contenus, et, pour l'assistant, pertinence des passages retrouvés et fidélité des
+réponses produites.
+
+\subsection*{Structure du mémoire}
+
+Ce mémoire est structuré en trois parties. La première, \emph{Position du problème}, présente
+le contexte de l'entreprise, les limites du fonctionnement initial et la problématique de la
+formation autonome. La deuxième, \emph{État de l'art}, étudie les approches existantes :
+plateformes de formation en ligne, synthèse vocale, génération de contenus par IA et systèmes
+de questions-réponses augmentés par récupération d'information. La troisième, \emph{Étude
+originale}, présente la solution développée, ses choix d'architecture, les difficultés
+rencontrées, les arbitrages réalisés et les méthodes retenues pour en évaluer les apports.
+
+% ====================== PARTIE 1 — POSITION DU PROBLÈME ======================
+\clearpage
+\section{Position du problème}
+
+\subsection{D'un courtier en énergie à un organisme de formation}
+
+Audit Énergie s'est d'abord construite autour du courtage en énergie. Son métier consiste
+à accompagner des clients professionnels dans la compréhension, la comparaison et la
+renégociation de leurs contrats, sur un marché devenu progressivement plus complexe. Au
+fil des années, cette activité a forgé une expertise concrète des métiers de la vente à
+distance : la prospection, la relation client par téléphone, l'analyse d'un besoin
+commercial, l'argumentation et le suivi d'un dossier dans la durée.
+
+Ce positionnement initial éclaire le sujet du mémoire, mais il n'en constitue pas le cœur.
+Le projet étudié s'inscrit dans une évolution plus récente : la transformation d'Audit
+Énergie en organisme de formation. Cette évolution s'est faite en deux temps. D'abord en
+interne, pour former ses propres téléprospecteurs aux fondamentaux de la relation client
+et aux spécificités du secteur. Puis, depuis environ un an, de manière beaucoup plus
+structurée, avec le développement d'une offre de formation externe. L'entreprise prépare
+désormais des apprenants à des titres professionnels reconnus par l'État, notamment le
+titre de Conseiller Relation Client à Distance ou celui d'Employé Commercial.
+
+Ce changement d'échelle modifie en profondeur les contraintes de l'entreprise. Former
+quelques collaborateurs en interne et faire fonctionner un organisme de formation externe
+ne relèvent pas de la même organisation. Dans le premier cas, la transmission peut
+s'appuyer sur l'expérience des salariés, des échanges directs et des supports peu
+formalisés. Dans le second, il faut produire des parcours reproductibles, préparer des
+contenus, assurer une continuité pédagogique, suivre la présence des élèves, proposer des
+exercices, répondre aux questions et garantir une qualité suffisante pour que la formation
+soit réellement exploitable.
+
+Le sujet du mémoire naît précisément de cette transition. Il ne s'agit pas seulement
+d'ajouter une fonctionnalité technique à une plateforme, mais de répondre à une question
+d'organisation plus large : comment une petite structure peut-elle développer une activité
+de formation à distance sans disposer des moyens humains et financiers d'un organisme de
+formation déjà établi ?
+
+\subsection{La formation à distance : une opportunité freinée par son coût}
+
+La formation à distance représente, sur le papier, une opportunité idéale pour une petite
+entreprise. Elle permet de toucher des apprenants sans salle physique, de mutualiser des
+contenus, de planifier des sessions souples et de réutiliser des supports d'une promotion à
+l'autre. Elle semble donc parfaitement compatible avec les contraintes d'une structure
+légère.
+
+Cette impression est pourtant incomplète. Une formation à distance n'est rentable que si
+ses coûts de production et d'animation restent maîtrisés. Or elle ne se résume pas à
+déposer des documents en ligne : il faut concevoir un déroulé pédagogique, produire les
+cours, les rendre accessibles, accompagner les apprenants, suivre leur participation et
+vérifier leur compréhension. Ces tâches sont répétitives, mais indispensables.
+
+Le modèle le plus naturel aurait été de faire appel à des formateurs freelance pour
+assurer les cours en ligne. Ce modèle a des avantages évidents : un formateur humain
+adapte son discours, répond aux questions, reformule une notion difficile, donne des
+exemples et entretient une dynamique de groupe. Surtout, il incarne une responsabilité
+pédagogique immédiate : si un élève ne comprend pas, il intervient sur-le-champ.
+
+Mais ce modèle se heurte à un obstacle économique fort. Pour une petite structure, le coût
+récurrent d'un formateur absorbe une part importante de la valeur produite par la
+formation, et cette part croît avec le nombre d'heures dispensées. Dans un marché où les
+marges doivent financer l'organisation, le suivi administratif, les outils et le
+développement commercial, dépendre fortement d'un intervenant externe rend le modèle
+difficile à industrialiser. Le problème initial peut donc se formuler simplement :
+l'entreprise voulait développer une activité de formation externe, mais le modèle
+classique du formateur en direct n'était compatible ni avec ses objectifs de coût, ni avec
+son besoin de passage à l'échelle.
+
+\subsection{Première réponse : séparer la production du cours de sa diffusion}
+
+La première réponse a consisté à ne plus raisonner en cours en direct, mais en cours
+préparé à l'avance. L'idée était de construire une plateforme capable d'héberger des
+contenus audio et de les diffuser automatiquement le jour prévu de la formation. Plutôt
+que de rémunérer un formateur pour animer plusieurs heures de cours, le travail était
+scindé en deux étapes : la préparation du contenu, puis sa lecture sous forme d'audio.
+
+Concrètement, les cours étaient rédigés pendant la semaine, éventuellement avec l'aide
+d'outils d'intelligence artificielle, puis enregistrés et déposés dans la plateforme. Le jour
+de la session, la diffusion se déclenchait selon un calendrier horodaté. Pour l'élève, le
+cours se présentait comme une séance organisée dans le temps ; pour l'entreprise, la
+production devenait plus facilement planifiable qu'un cours en direct. En répartissant
+l'effort entre une personne qui écrit et une personne qui lit, le coût total devenait
+nettement inférieur à celui d'un formateur freelance.
+
+Cette organisation a validé plusieurs hypothèses importantes : les apprenants pouvaient
+suivre une formation à partir de contenus audio diffusés à distance, l'entreprise pouvait
+internaliser une partie de la production pédagogique, et la plateforme devenait l'outil
+central d'orchestration de la formation, et non un simple espace de dépôt.
+
+Elle ne résolvait toutefois qu'une partie du problème. La dépendance au formateur en
+direct diminuait, mais la dépendance au travail humain demeurait. Les cours devaient
+toujours être rédigés, relus, découpés, enregistrés, déposés et vérifiés. À chaque nouvelle
+formation, voire à chaque mise à jour, une chaîne de production manuelle devait être
+relancée. Le gain existait, mais il restait limité par le caractère artisanal du processus :
+l'entreprise avait déplacé le coût humain plus qu'elle ne l'avait supprimé.
+
+\subsection{De l'IA d'assistance à l'ambition d'une plateforme autonome}
+
+L'arrivée des outils d'intelligence artificielle générative a déplacé la manière même de
+poser le problème. Dans un premier temps, l'IA pouvait servir d'aide à la rédaction : un
+collaborateur produisait une première version d'un cours, reformulait un passage,
+structurait une séquence. L'humain gardait le contrôle et utilisait l'IA pour accélérer
+certaines tâches.
+
+Mais le contexte technologique a vite ouvert une hypothèse plus ambitieuse. Si un modèle
+de langage peut rédiger un contenu, si un outil de synthèse vocale peut le lire, si un
+système peut générer des supports visuels et si un assistant peut répondre aux questions
+des élèves, alors il devient envisageable de concevoir une plateforme bien plus autonome.
+Dans cette perspective, l'IA cesse d'être une aide ponctuelle pour devenir une composante
+centrale de la chaîne de production et d'accompagnement.
+
+Cet objectif doit être formulé sans détour : il s'agissait bien de remplacer une part
+importante des interventions humaines initialement nécessaires à la formation. Dans une
+petite entreprise, ce choix n'est pas seulement technologique, il est économique et
+stratégique. L'enjeu est de rendre possible une activité qui serait trop coûteuse si elle
+reposait entièrement sur des ressources humaines mobilisées en continu.
+
+Remplacer une fonction humaine ne revient cependant pas à remplacer une personne par
+un appel d'API. Un formateur ne se contente pas de lire un texte : il structure un cours,
+choisit des exemples, respecte un programme, s'adapte au niveau des élèves, répond aux
+questions, évalue la compréhension et maintient une cohérence entre les supports.
+Automatiser cette fonction suppose donc d'automatiser une chaîne complète de tâches, et
+non un geste isolé. C'est cette prise de conscience qui donne au sujet sa véritable
+dimension d'ingénierie. La question n'est plus « quel outil d'IA utiliser ? », mais «
+comment organiser une chaîne logicielle capable de produire, contrôler, diffuser et
+exploiter des contenus pédagogiques générés par IA dans un contexte réel de formation ? »
+
+\subsection{Les essais de synthèse vocale et leurs limites}
+
+La première brique d'automatisation envisagée après la rédaction assistée a été la synthèse
+vocale. L'idée était directe : si le cours est écrit à l'avance, une voix artificielle peut le
+lire. Les outils récents produisent des voix bien plus naturelles que les anciens systèmes
+de lecture automatique, ce qui rend la solution séduisante pour une plateforme audio.
+
+Les premiers essais ont montré que le problème était plus subtil que prévu. Produire
+plusieurs heures d'audio n'a rien d'une courte démonstration vocale. Les textes devaient
+être découpés en portions compatibles avec l'outil, envoyés successivement, puis les
+fragments audio obtenus devaient être réassemblés pour reconstituer un cours continu. Ce
+procédé cumulait trois difficultés. Le temps de manipulation, d'abord : même générée par
+IA, la voix exigeait un découpage et un assemblage largement manuels. Le coût, ensuite :
+les meilleurs outils deviennent onéreux dès qu'on produit des journées complètes de
+formation. La qualité pédagogique, enfin : une voix naturelle ne suffit pas si le texte lu
+n'est pas pensé pour l'oral, s'il est répétitif ou s'il ne respecte pas le rythme d'un cours.
+
+Ces essais ont clarifié un point essentiel : la synthèse vocale n'automatise que la lecture,
+pas la conception du cours. Or un audio n'est exploitable que si le texte d'origine est clair,
+progressif, calibré en durée, fidèle au programme et rédigé dans un style oral. La synthèse
+vocale a donc déplacé le centre du problème vers l'amont. La vraie question n'était plus de
+savoir comment générer une voix, mais comment générer un script pédagogique
+suffisamment fiable pour être confié à une voix automatique et diffusé à de vrais élèves.
+
+\subsection{Le cours préenregistré ne remplace pas le formateur}
+
+Même avec un texte et une voix satisfaisants, le cours audio préenregistré bute sur une
+limite structurelle : il ne peut pas interagir. Dans un cours en direct, l'élève pose une
+question, demande une reformulation, signale une incompréhension, obtient un exemple
+supplémentaire. Cette interaction fait partie intégrante de la valeur d'un formateur.
+
+Dans un modèle purement audio, elle disparaît. Les élèves écoutent, mais ne disposent
+d'aucun interlocuteur pour répondre à leurs questions. La limite est d'autant plus sensible
+dans une formation professionnalisante, où les profils sont variés et les besoins de
+clarification fréquents : un passage limpide pour l'un peut rester obscur pour l'autre.
+
+Cette difficulté révèle une seconde dimension du problème. Il ne suffit pas d'automatiser
+la production des cours ; il faut aussi automatiser une partie de l'accompagnement. Sans
+cela, la plateforme reste un simple diffuseur d'audios, capable de réduire des coûts mais
+incapable de remplacer les fonctions d'échange et de clarification d'un formateur. C'est
+précisément le rôle d'un assistant conversationnel fondé sur la récupération d'information
+(RAG) : non pas discuter librement comme un chatbot généraliste, mais répondre aux
+questions des élèves à partir du contenu réel de la formation. La distinction est
+fondamentale. Un assistant pédagogique ne doit pas produire une réponse simplement
+plausible ; il doit s'appuyer sur les cours et les supports disponibles. Il doit être
+contextualisé.
+
+\subsection{Une classe de problèmes au-delà d'Audit Énergie}
+
+Le cas d'Audit Énergie est singulier par son histoire et ses contraintes, mais le problème
+qu'il pose dépasse largement cette entreprise. De nombreuses petites structures connaissent
+aujourd'hui la même tension : elles veulent proposer des services plus riches, plus
+personnalisés et plus accessibles, sans disposer des moyens humains pour les produire
+manuellement. L'intelligence artificielle générative apparaît alors comme une issue : elle
+sait rédiger, reformuler, résumer, produire de l'audio, générer des supports ou répondre à
+des questions.
+
+Mais son intégration dans un contexte professionnel ne peut reposer sur des usages
+ponctuels. Un collaborateur qui demande à un modèle de rédiger un cours obtient parfois
+un résultat utile, sans qu'il soit pour autant traçable, reproductible, contrôlé ni
+directement exploitable en production. La classe de problèmes étudiée peut donc se
+formuler ainsi : comment transformer des capacités d'IA générative, le plus souvent
+utilisées de façon ponctuelle, en une chaîne logicielle fiable, auditable et intégrée à un
+processus métier réel ?
+
+Dans le cas de la formation, cette question prend une forme particulièrement exigeante. Il
+ne s'agit pas seulement de produire du texte, mais un objet pédagogique complet : un cours
+qui respecte un programme, s'adapte au niveau des apprenants, reste compréhensible,
+tient dans une durée, peut être transformé en audio, donne lieu à des supports visuels,
+permet une évaluation et s'inscrit dans un parcours plus large. L'IA générative peut ici
+donner une illusion de simplicité : un premier résultat convaincant masque les difficultés
+réelles de répétabilité, de contrôle qualité, de coût et d'évaluation. Pour un prototype, il
+suffit qu'un texte semble correct ; pour une plateforme utilisée avec de vrais élèves, il faut
+pouvoir expliquer comment le contenu a été produit, quelles règles ont été appliquées et
+comment sa qualité est mesurée.
+
+\subsection{Les exigences qui encadrent le problème}
+
+Trois exigences encadrent ce problème et orientent toute la suite du mémoire.
+
+La première est la \emph{qualité pédagogique}. Dans une formation professionnelle, un
+contenu n'est pas jugé sur sa fluidité ou son apparence, mais sur sa capacité à faire
+progresser l'apprenant vers un objectif précis. Or les modèles de langage produisent des
+textes très convaincants, qui peuvent pourtant contenir des imprécisions, des répétitions,
+des exemples mal choisis ou des informations non vérifiées. Le risque est concret : un
+élève peut retenir une explication inexacte ou perdre du temps sur un contenu hors
+programme. Cet enjeu se double d'un problème de \emph{densité}. Lorsqu'on demande à
+la chaîne de produire un long volume de cours à partir d'une source documentaire limitée,
+le modèle, contraint de remplir le temps, tend à broder, à répéter et à digresser. La qualité
+ne peut donc pas être traitée par une simple relecture finale : elle doit être intégrée à la
+chaîne de production elle-même.
+
+La deuxième exigence est la \emph{traçabilité}. Lorsqu'un humain produit un cours, il
+peut expliquer ses choix et justifier sa progression. Lorsqu'une IA génère un contenu, cette
+justification n'existe pas spontanément. Si la plateforme se contente de stocker le texte
+final, il devient très difficile de savoir d'où vient une erreur : du programme de départ, du
+plan généré, de la rédaction d'une section, d'une étape de réécriture ou de la calibration
+audio. Sans artefacts intermédiaires, ni la correction, ni la confiance, ni l'amélioration
+continue ne sont possibles. La traçabilité n'est pas un confort : c'est une condition de
+l'évaluation.
+
+La troisième exigence est d'ordre \emph{économique et organisationnel}. L'objectif n'est
+pas de construire une plateforme techniquement impressionnante, mais de rendre viable un
+modèle de formation compatible avec les moyens d'une petite entreprise. L'automatisation
+ne supprime pas tous les coûts : les services d'IA ont un prix, les erreurs doivent être
+contrôlées, les prompts maintenus, la plateforme supervisée et les contenus validés.
+Évaluer le projet ne reviendra donc pas à comparer un formateur humain à un modèle
+d'IA, mais à comparer deux organisations : l'une centrée sur l'intervention humaine
+continue, l'autre sur une plateforme automatisée supervisée.
+
+\subsection{Formulation de la problématique}
+
+Le problème posé par ce mémoire se lit à deux niveaux. Au niveau d'Audit Énergie,
+l'entreprise veut développer une formation externe avec des moyens humains limités : le
+formateur en direct coûte trop cher, le cours préenregistré appauvrit l'interaction
+pédagogique. Elle a donc besoin d'une plateforme capable d'automatiser la production, la
+diffusion et une partie de l'accompagnement. À un niveau plus général, le même problème
+concerne toutes les petites structures qui cherchent à industrialiser un service grâce à
+l'IA : l'enjeu n'est pas tant d'utiliser ces outils que de les encadrer dans une architecture
+permettant un usage fiable en production.
+
+La problématique peut alors être formulée ainsi :
+
+\begin{quote}
+\emph{Comment concevoir une plateforme de formation autonome alimentée par
+l'intelligence artificielle, capable de remplacer une part significative des interventions
+humaines nécessaires à la production, à la diffusion et à l'accompagnement des cours,
+tout en garantissant la qualité pédagogique, la traçabilité des contenus et la pertinence
+des réponses apportées aux apprenants ?}
+\end{quote}
+
+Cette formulation met en évidence la tension centrale du projet. D'un côté, l'entreprise
+cherche à automatiser fortement son modèle pour le rendre économiquement viable. De
+l'autre, cette automatisation ne peut se faire au prix d'une perte de qualité, d'une absence
+de contrôle ou d'une expérience dégradée pour les élèves. Le travail d'ingénierie consiste
+donc à concilier autonomie et maîtrise.
+
+\subsection{Objectifs de la solution attendue}
+
+La problématique se décline en objectifs concrets, qui structureront l'étude de la solution :
+
+\begin{itemize}
+\item \textbf{Automatiser la génération des cours} à partir d'un cadre pédagogique donné,
+en respectant une progression et un niveau attendus. Cette génération ne doit pas être une
+rédaction libre, mais un processus structuré et contrôlable.
+\item \textbf{Automatiser la transformation audio}, en calibrant les contenus pour la
+lecture orale et en évitant tout montage manuel lourd, là où chaque fichier exigeait
+auparavant une manipulation individuelle.
+\item \textbf{Produire des supports complémentaires} (slides, exercices) cohérents avec le
+cours, et non ajoutés après coup comme des éléments indépendants.
+\item \textbf{Accompagner les apprenants} via un assistant conversationnel qui répond à
+partir du contenu réel de la formation, plutôt que d'une connaissance générale non
+contrôlée.
+\item \textbf{Rendre le système auditable}, en associant à chaque contenu ses traces :
+plan, sections, corrections, sources et indicateurs.
+\item \textbf{Définir des indicateurs d'évaluation} : temps de production, nombre
+d'interventions humaines, coût, respect des durées, qualité des contenus, résultats aux
+exercices et pertinence des réponses de l'assistant.
+\end{itemize}
+
+Ces objectifs ne sont pas seulement des résultats à présenter en fin de mémoire : ils
+orientent la conception. Pour mesurer le respect d'un plan, il faut un plan explicite ; pour
+mesurer les corrections, il faut conserver les versions intermédiaires ; pour mesurer la
+pertinence du RAG, il faut pouvoir identifier les sources utilisées. L'évaluation
+influence donc directement l'architecture.
+
+\subsection{Motivation, périmètre et transition}
+
+Ce sujet présente un intérêt particulier pour un mémoire d'ingénieur, car il se situe à la
+frontière d'un besoin métier concret et de problématiques techniques actuelles. Il ne s'agit
+pas d'étudier l'intelligence artificielle de manière abstraite, mais de l'intégrer dans un
+système réellement utilisé, avec de vrais élèves, des contraintes de coût et des exigences de
+qualité. Sa valeur tient aussi à sa progression : la plateforme n'est pas née sous sa forme
+actuelle, elle a évolué par étapes — diffusion d'audios, préparation manuelle, essais de
+synthèse vocale, puis structuration d'une pipeline de génération et ajout d'un assistant
+RAG. Chaque étape a fait surgir une nouvelle limite et obligé à reformuler le problème.
+Prendre du recul sur cette trajectoire permet d'expliquer non seulement ce qui a été
+développé, mais pourquoi ces choix ont été faits et quels compromis ont été acceptés.
+
+Le périmètre du mémoire reste délimité. Il porte sur la conception d'une plateforme
+autonome pour la production, la diffusion et l'accompagnement de cours à distance ; les
+aspects administratifs, commerciaux ou réglementaires de l'organisme de formation ne sont
+abordés que lorsqu'ils éclairent les contraintes du projet. Le travail ne prétend pas non
+plus démontrer que l'IA peut remplacer toute forme d'enseignement humain : la
+supervision humaine demeure nécessaire, mais elle change de rôle, davantage tournée vers
+la validation, le pilotage et le traitement des cas qui dépassent le cadre prévu.
+
+Cette position du problème fait apparaître plusieurs familles de solutions à examiner :
+les plateformes de formation en ligne, qui diffusent et suivent mais ne produisent pas les
+cours ; les outils de synthèse vocale, qui automatisent la lecture mais pas la conception ;
+les modèles de langage, qui génèrent du texte mais doivent être encadrés ; les systèmes
+RAG, qui contextualisent les réponses mais dépendent de la qualité de la recherche
+documentaire. L'état de l'art, présenté dans la partie suivante, analysera ces approches
+pour mieux situer, ensuite, la solution développée et en montrer l'originalité.
+
+% ====================== PARTIE 2 — ÉTAT DE L'ART ======================
+\clearpage
+\section{État de l'art}
+
+\subsection{Positionnement de l'état de l'art}
+
+Le problème posé par ce mémoire n'est pas seulement celui de l'utilisation d'un chatbot
+ou d'un générateur de texte. Il concerne la conception d'une plateforme de formation
+autonome alimentée par l'intelligence artificielle. Deux dimensions doivent donc être
+étudiées conjointement. La première concerne l'assistant pédagogique : comment permettre
+à un modèle de langage de répondre aux questions des apprenants à partir des contenus
+réels de la formation ? La seconde concerne la production de contenus : comment générer
+des cours longs, structurés, oralisables et contrôlables sans se limiter à une simple sortie
+textuelle produite par un prompt ?
+
+L'état de l'art est volontairement centré sur les techniques plutôt que sur un catalogue
+d'outils commerciaux. Les plateformes d'apprentissage en ligne permettent déjà de
+diffuser des cours, de suivre des élèves ou de proposer des évaluations, mais elles ne
+répondent pas directement à la question de recherche de ce mémoire : rendre une chaîne
+de formation suffisamment autonome tout en conservant une qualité pédagogique, une
+traçabilité et une capacité d'évaluation. Les approches étudiées ici sont donc celles qui
+permettent d'adapter ou d'encadrer les modèles de langage dans un contexte métier.
+
+La progression adoptée est la suivante. On étudie d'abord les approches permettant de
+donner un contexte à un modèle de langage : prompt engineering, fine-tuning et RAG. On
+analyse ensuite les variantes du RAG, notamment la recherche vectorielle, la recherche
+hybride, le reclassement sémantique, les métadonnées et l'évaluation. Enfin, on étudie
+les méthodes de génération contrôlée de contenus longs : décomposition de tâche,
+génération structurée, schémas intermédiaires, auto-évaluation et validation humaine. Ce
+cheminement prépare l'étude originale, sans encore détailler la solution développée.
+
+\subsection{Modèles de langage et adaptation au contexte}
+
+Les grands modèles de langage ont montré qu'ils peuvent réaliser de nombreuses tâches
+à partir d'instructions en langage naturel et de quelques exemples fournis dans le
+prompt. Les travaux sur le few-shot learning ont mis en évidence cette capacité à adapter
+le comportement du modèle sans modifier ses poids \cite{brown2020language}. Pour une
+plateforme de formation, cette propriété est importante : un modèle généraliste peut être
+orienté vers un rôle d'assistant pédagogique, de rédacteur de cours ou de correcteur de
+contenu simplement à partir d'instructions.
+
+Cette flexibilité explique l'intérêt du prompt engineering. Dans sa forme la plus simple,
+il consiste à fournir au modèle une consigne, un rôle, des contraintes de style, un format
+de sortie et parfois des exemples. Dans le cas d'un chatbot pédagogique, le prompt peut
+indiquer que le modèle doit répondre clairement, ne pas inventer d'information et rester
+dans le périmètre du cours. Dans le cas d'une génération de contenu, il peut préciser le
+niveau de l'apprenant, le ton attendu, la structure du cours ou les règles de conformité.
+
+Le prompt engineering présente trois avantages. Il est rapide à mettre en place, peu
+coûteux à modifier et compatible avec des modèles propriétaires accessibles par API. Il
+est donc très utile en phase de prototypage. Cependant, il a aussi des limites fortes. Le
+contexte disponible dans le prompt reste limité ; les consignes peuvent entrer en
+concurrence ; et le modèle peut suivre certaines instructions tout en en négligeant
+d'autres. Lorsque le volume documentaire augmente ou lorsque les règles métier deviennent
+nombreuses, le prompt devient difficile à maintenir.
+
+Surtout, le prompt ne constitue pas une mémoire documentaire fiable. Il permet de
+fournir ponctuellement des informations, mais il ne garantit pas que le modèle réponde
+à partir d'une source précise. Dans une formation, cette limite est critique : l'assistant
+doit répondre à partir des contenus réellement enseignés, pas à partir d'une connaissance
+générale ou approximative. De même, un générateur de cours doit respecter un programme
+et ne pas produire une progression plausible mais non conforme.
+
+\subsection{Fine-tuning et spécialisation du modèle}
+
+Une autre approche consiste à adapter le modèle par fine-tuning. Au lieu de fournir toutes
+les règles dans le prompt, on entraîne le modèle sur des exemples représentatifs de la
+tâche attendue. Cette approche peut améliorer le style, le format de sortie ou la
+répétabilité d'un comportement. Elle est particulièrement utile lorsque l'on souhaite
+spécialiser un modèle sur un type de réponse ou un domaine récurrent.
+
+Le fine-tuning classique peut cependant être coûteux, car il nécessite de modifier un
+grand nombre de paramètres. Des méthodes plus légères, comme LoRA, cherchent à
+réduire ce coût en gelant les poids du modèle et en ajoutant des matrices de bas rang
+entraînables \cite{hu2021lora}. Ces approches rendent la spécialisation plus accessible,
+mais elles ne suppriment pas les contraintes fondamentales du fine-tuning : il faut
+constituer un jeu de données de qualité, entraîner ou adapter un modèle, évaluer le
+résultat et maintenir cette adaptation dans le temps.
+
+Dans le contexte d'un assistant pédagogique, le fine-tuning n'est pas toujours la meilleure
+réponse au problème de connaissance. Il permet d'apprendre un style ou une procédure,
+mais il est moins adapté pour intégrer des documents qui changent souvent. Si un cours,
+un référentiel ou un support est modifié, il n'est pas souhaitable de réentraîner le modèle
+à chaque mise à jour. En outre, le fine-tuning ne garantit pas que la réponse produite soit
+fidèle à un document précis. Un modèle fine-tuné peut continuer à halluciner ou à
+mélanger des informations apprises avec des informations plausibles.
+
+Pour une plateforme de formation, le fine-tuning est donc pertinent pour stabiliser un
+comportement, mais insuffisant comme mécanisme principal de contextualisation
+documentaire. Il peut apprendre au modèle à répondre comme un assistant pédagogique,
+mais il ne suffit pas à lui donner une mémoire fiable, actualisable et traçable des cours.
+
+\subsection{RAG : ancrer la génération dans des documents}
+
+Le Retrieval-Augmented Generation, ou RAG, répond à cette limite en séparant deux
+fonctions : la récupération d'information et la génération de réponse. Le principe est de
+ne pas modifier directement le modèle, mais de rechercher au moment de la question des
+passages pertinents dans une base documentaire, puis de fournir ces passages au modèle
+comme contexte. Le modèle génère alors une réponse à partir des documents récupérés.
+Cette approche a été formalisée dans les travaux de Lewis et al. sur les tâches de NLP
+intensives en connaissances \cite{lewis2020retrieval}.
+
+Le RAG présente plusieurs avantages pour un assistant pédagogique. D'abord, les contenus
+peuvent être mis à jour sans réentraîner le modèle. Il suffit de réindexer les documents.
+Ensuite, la réponse peut être rattachée à des passages sources, ce qui améliore la
+traçabilité. Enfin, le modèle est moins dépendant de sa mémoire paramétrique : il peut
+répondre à partir du cours réellement fourni, même si ce contenu est spécifique à une
+formation ou à une promotion.
+
+Cette architecture est particulièrement adaptée au contexte de ce mémoire. Les élèves ne
+doivent pas recevoir une réponse générique sur un métier ou une notion ; ils doivent
+recevoir une réponse cohérente avec le cours diffusé, le référentiel utilisé et les supports
+mis à disposition. Le RAG permet donc de transformer un modèle généraliste en assistant
+contextualisé.
+
+Cependant, le RAG ne supprime pas tous les risques. Il déplace une partie du problème
+vers la qualité de la récupération. Si les passages récupérés sont incomplets, trop larges,
+hors sujet ou mal classés, le modèle peut produire une réponse faible. De plus, même
+avec un bon contexte, le modèle peut reformuler de manière imprécise ou ajouter une
+information non supportée par les documents. Les travaux sur les hallucinations montrent
+que les modèles de langage peuvent générer des informations plausibles mais non fondées,
+ce qui impose des mécanismes d'évaluation et de contrôle \cite{ji2023hallucination}.
+
+\subsection{Techniques de recherche dans les architectures RAG}
+
+Un système RAG n'est pas une technique unique. Il regroupe plusieurs choix d'architecture
+qui influencent directement la qualité des réponses. Le premier choix concerne le
+découpage documentaire. Les documents sont rarement injectés entiers dans le modèle :
+ils sont découpés en segments, ou chunks, qui seront indexés puis récupérés. Des chunks
+trop petits peuvent perdre le contexte nécessaire à la compréhension ; des chunks trop
+grands peuvent diluer l'information pertinente. Le choix de la taille, du chevauchement
+et des métadonnées est donc déterminant.
+
+Le deuxième choix concerne la représentation des documents. Une recherche par mots-clés
+fonctionne bien lorsque la question reprend le vocabulaire exact du document, mais elle
+peut échouer lorsque l'élève reformule avec d'autres termes. La recherche vectorielle
+répond à cette limite en représentant les questions et les passages dans un espace
+sémantique. Elle permet de retrouver des passages proches par le sens, même si les mots
+ne sont pas identiques.
+
+La recherche vectorielle a elle aussi des limites. Elle peut retrouver des passages
+sémantiquement proches mais pas exactement pertinents, ou négliger des mots clés
+importants comme une référence, un code, une notion réglementaire ou un terme métier.
+C'est pourquoi de nombreuses architectures combinent recherche lexicale et recherche
+vectorielle. On parle alors de recherche hybride. Les travaux récents sur le RAG décrivent
+cette évolution d'un RAG naïf vers des architectures plus avancées ou modulaires
+\cite{gao2023retrieval}.
+
+Le troisième choix concerne le reclassement des résultats. Après une première recherche,
+un système peut reranker les passages candidats pour privilégier ceux qui correspondent
+le mieux à l'intention de la question. Ce reclassement peut s'appuyer sur des modèles de
+langage ou des systèmes spécialisés. Dans un contexte pédagogique, il est utile car les
+questions des élèves sont souvent courtes, imprécises ou formulées avec des termes non
+experts.
+
+Le quatrième choix concerne les métadonnées. Un même corpus peut contenir plusieurs
+formations, plusieurs jours, plusieurs modules ou plusieurs types de documents. Sans
+filtrage, l'assistant risque de récupérer un passage provenant d'un mauvais cours. Les
+métadonnées permettent de restreindre la recherche à un périmètre pertinent : formation,
+jour, module, type de support ou version du document.
+
+\subsection{Azure AI Search comme approche industrielle du RAG}
+
+Plusieurs solutions peuvent être utilisées pour construire un RAG : base vectorielle locale,
+index spécialisé, moteur de recherche hybride ou service cloud managé. Dans un prototype,
+une bibliothèque locale comme FAISS peut suffire pour tester la recherche vectorielle.
+Dans une plateforme destinée à être utilisée par de vrais élèves, d'autres critères
+deviennent importants : indexation automatique, recherche hybride, filtrage, supervision,
+sécurité, intégration avec le stockage documentaire et capacité à maintenir plusieurs
+corpus.
+
+Azure AI Search s'inscrit dans cette logique industrielle. La documentation Microsoft
+présente Azure AI Search comme un service d'indexation et de recherche pouvant être
+utilisé dans des architectures RAG avec des données textuelles et vectorielles
+\cite{microsoft2026foundryrag}. Le service permet de combiner recherche par mots-clés
+et recherche vectorielle dans une requête hybride ; les résultats sont fusionnés avant
+d'être exploités par l'application \cite{microsoft2026hybridsearch}. Il propose également
+un semantic ranker, qui reclasse les résultats textuels ou hybrides à partir de modèles de
+compréhension du langage \cite{microsoft2026semanticranker}.
+
+Dans le contexte d'un chatbot pédagogique, ces fonctionnalités répondent à plusieurs
+besoins. La recherche hybride permet de traiter à la fois les formulations approximatives
+des élèves et les termes précis présents dans les supports. Le semantic ranking permet
+d'améliorer la pertinence des passages présentés au modèle. Les index et métadonnées
+permettent de séparer les formations ou les plateformes. Enfin, l'intégration avec Azure
+OpenAI simplifie la construction d'une chaîne de question-réponse où les documents
+indexés sont fournis comme source au modèle.
+
+Cette approche a toutefois des limites. Un service managé réduit la complexité
+d'infrastructure, mais il ne dispense pas de concevoir correctement le corpus. La qualité
+du RAG dépend encore du découpage, des métadonnées, des documents indexés, de la
+formulation des requêtes et du prompt final. Le semantic ranker reclasse des résultats
+déjà récupérés ; il ne peut pas compenser entièrement une mauvaise indexation ou un
+corpus incomplet. Le choix d'Azure AI Search doit donc être compris comme un choix
+d'architecture robuste, pas comme une garantie automatique de qualité.
+
+\subsection{Évaluation des systèmes RAG}
+
+L'évaluation d'un RAG doit distinguer la qualité de la récupération et la qualité de la
+réponse. Une réponse peut être bien formulée mais fondée sur de mauvais passages ; à
+l'inverse, les bons passages peuvent être récupérés mais mal exploités par le modèle.
+Plusieurs cadres d'évaluation récents proposent donc de mesurer séparément la pertinence
+du contexte, la fidélité de la réponse aux sources et la pertinence de la réponse finale.
+C'est le cas de RAGAS \cite{es2023ragas} et d'ARES \cite{saadfalcon2023ares}.
+
+Dans un contexte pédagogique, les métriques utiles peuvent être regroupées en quatre
+familles. La première concerne la récupération : précision@k, rappel@k, rang moyen du
+bon passage, taux de questions pour lesquelles au moins une source pertinente est
+retrouvée. La deuxième concerne la fidélité : la réponse est-elle supportée par les passages
+fournis ? Ajoute-t-elle une information non présente dans les documents ? La troisième
+concerne l'utilité pédagogique : la réponse est-elle claire, adaptée au niveau de l'élève et
+suffisamment concise ? La quatrième concerne l'expérience réelle : les élèves reposent-ils
+la même question, utilisent-ils l'assistant et jugent-ils les réponses utiles ?
+
+La citation des sources est également un enjeu. Les travaux sur la vérifiabilité dans les
+moteurs génératifs montrent que les systèmes doivent citer de manière complète et
+précise les éléments qui soutiennent leurs réponses \cite{liu2023evaluating}. Pour une
+formation, cette exigence est moins formelle que dans une recherche documentaire
+académique, mais elle reste importante : un responsable pédagogique doit pouvoir
+vérifier d'où vient une réponse.
+
+Ces considérations conduisent à une conclusion claire : un RAG ne doit pas être évalué
+uniquement par impression subjective. Il faut construire un jeu de questions représentatif,
+identifier les passages attendus, comparer plusieurs configurations de recherche et
+mesurer la fidélité des réponses. Sans cette évaluation, il est impossible de justifier
+scientifiquement le choix d'une architecture RAG plutôt qu'une autre.
+
+\subsection{Génération de contenus longs par prompt unique}
+
+La deuxième dimension du mémoire concerne la génération automatique des contenus de
+formation. La première approche possible consiste à demander directement à un modèle
+de langage de produire un cours complet à partir d'un programme, d'un référentiel et de
+quelques consignes. Cette approche est séduisante parce qu'elle exploite la capacité des
+modèles à rédiger des textes cohérents et à suivre un format général.
+
+Dans un contexte simple, la génération directe peut donner des résultats acceptables. Elle
+est utile pour produire un premier brouillon, un résumé, un plan de cours ou une
+explication courte. Elle montre rapidement que l'IA peut réduire le temps de rédaction.
+Cependant, elle devient fragile lorsque la sortie attendue est longue, structurée,
+oralisable et destinée à être utilisée sans réécriture complète.
+
+Plusieurs problèmes apparaissent alors. Le modèle peut répéter des idées, perdre le fil de
+la progression, produire des transitions artificielles, dépasser la longueur attendue ou
+oublier certaines contraintes. Il peut aussi mélanger le langage interne du système avec
+le langage destiné à l'apprenant, par exemple en verbalisant des contraintes techniques
+qui ne devraient pas apparaître dans le cours. Enfin, si le résultat final est mauvais, il est
+difficile de savoir quelle partie du prompt ou de la génération est responsable.
+
+Ces limites ne signifient pas que le prompt engineering est inutile. Elles montrent plutôt
+que le prompt unique atteint rapidement ses limites lorsqu'il doit porter toutes les
+responsabilités : structure pédagogique, style oral, durée, conformité, exemples,
+supports, exercices et qualité. Un prompt trop chargé devient un artefact fragile, difficile
+à faire évoluer et difficile à évaluer.
+
+\subsection{Décomposition de tâches et génération structurée}
+
+Pour dépasser ces limites, de nombreux travaux sur les modèles de langage insistent sur
+la décomposition des tâches complexes. Le chain-of-thought a montré que faire produire
+des étapes intermédiaires peut améliorer certaines tâches de raisonnement
+\cite{wei2022chain}. Le least-to-most prompting va plus loin en demandant au modèle de
+décomposer un problème en sous-problèmes plus simples avant de les résoudre
+\cite{zhou2022least}. Les approches de type Tree of Thoughts proposent d'explorer
+plusieurs pistes intermédiaires avant de choisir une solution \cite{yao2023tree}.
+
+Ces travaux portent principalement sur le raisonnement, mais leur logique est applicable
+à la génération de contenus pédagogiques longs. Un cours complet est une tâche complexe
+qui peut être décomposée : analyser le programme, construire un plan, détailler les
+sections, rédiger les transitions, adapter le texte à l'oral, générer des supports, produire
+des questions, puis vérifier la conformité. La qualité peut alors être contrôlée à chaque
+étape plutôt qu'uniquement à la fin.
+
+La génération structurée repose sur la même idée. Au lieu de produire directement un
+texte final, le modèle produit d'abord une représentation intermédiaire : plan, JSON,
+liste d'objectifs, sections, contraintes de durée ou points clés. Cette représentation sert
+de contrat entre les étapes. Elle permet d'auditer la structure avant de rédiger, de répartir
+les budgets, de générer section par section et de rattacher les supports à des intentions
+pédagogiques explicites.
+
+Cette approche présente des avantages importants. Elle réduit la charge imposée au
+modèle à chaque appel, rend les erreurs plus localisables et facilite l'intégration logicielle.
+Elle introduit aussi une forme de traçabilité : on peut comparer le plan prévu, le texte
+généré et les corrections appliquées. En revanche, elle augmente la complexité de
+l'orchestration. Il faut gérer plusieurs appels au modèle, valider les formats, traiter les
+erreurs JSON, conserver les artefacts et maîtriser le coût.
+
+\subsection{Auto-évaluation, reviews automatiques et validation humaine}
+
+Une autre famille d'approches consiste à utiliser les modèles de langage non seulement
+pour générer, mais aussi pour critiquer ou améliorer leurs propres sorties. Des travaux
+comme Reflexion explorent l'idée d'agents capables d'utiliser un retour verbal pour
+améliorer leurs actions \cite{shinn2023reflexion}. Dans les applications de génération de
+contenu, cette idée se traduit souvent par des passes de review : un modèle relit le texte,
+identifie des problèmes, propose des corrections ou vérifie le respect de règles.
+
+Les reviews automatiques sont intéressantes pour une plateforme de formation, car elles
+permettent de contrôler plusieurs dimensions : cohérence avec le plan, ton pédagogique,
+adaptation à l'oral, conformité éthique, absence de formulations sensibles, respect de la
+durée ou qualité des QCM. Elles peuvent réduire la charge de validation humaine en
+signalant les passages problématiques.
+
+Elles ne doivent toutefois pas être considérées comme infaillibles. Un modèle peut ne pas
+détecter une erreur, proposer une correction qui dégrade le contenu ou valider une
+réponse insuffisamment sourcée. L'évaluation par LLM-as-a-judge peut être utile, mais
+elle possède des biais et doit être encadrée par des critères explicites \cite{zheng2023judging}.
+Dans un système rigoureux, les reviews automatiques doivent donc être combinées avec
+des règles déterministes, des métriques et, lorsque le risque le justifie, une validation
+humaine.
+
+La validation humaine garde une place importante dans les systèmes pédagogiques. Elle
+peut intervenir à plusieurs niveaux : validation du programme, relecture d'échantillons,
+contrôle des sorties à risque, analyse des retours élèves et amélioration des règles. Le
+but n'est pas nécessairement de relire chaque phrase produite, mais de déplacer
+l'intervention humaine vers les points où elle apporte le plus de valeur.
+
+\subsection{Évaluation des contenus pédagogiques générés}
+
+L'évaluation des contenus générés est plus difficile que l'évaluation d'une tâche fermée.
+Un cours n'a pas une seule bonne réponse. Il faut donc combiner plusieurs indicateurs.
+Le premier est la fidélité au programme : les compétences prévues sont-elles couvertes ?
+Les notions importantes sont-elles présentes ? Le cours évite-t-il les informations hors
+périmètre ?
+
+Le deuxième indicateur est la cohérence pédagogique. Un cours doit suivre une progression
+compréhensible, éviter les répétitions inutiles, introduire les notions avant de les utiliser
+et proposer des exemples adaptés. Cette dimension peut être évaluée par relecture humaine,
+par grille critériée ou par comparaison entre le plan et le texte généré.
+
+Le troisième indicateur est l'adaptation à l'oral. Un texte destiné à la synthèse vocale ne
+doit pas être écrit comme un support PDF. Il doit contenir des phrases prononçables, des
+transitions, un rythme d'écoute et des formulations naturelles. La durée est également
+un critère : si le texte dépasse le créneau audio prévu, la formation devient difficile à
+diffuser.
+
+Le quatrième indicateur concerne les supports associés. Les slides doivent correspondre
+aux moments pédagogiques importants, et les QCM doivent vérifier des notions réellement
+enseignées. Un QCM généré indépendamment du cours peut donner une illusion
+d'évaluation sans mesurer la compréhension du contenu diffusé.
+
+Enfin, il faut mesurer l'impact opérationnel. Une pipeline de génération n'a d'intérêt que
+si elle réduit effectivement le temps de production, les manipulations manuelles ou le
+coût, tout en maintenant une qualité acceptable. Les métriques doivent donc combiner
+qualité pédagogique et efficacité industrielle.
+
+\subsection{Synthèse critique}
+
+Les approches étudiées montrent que les modèles de langage ne suffisent pas, à eux
+seuls, à construire une plateforme de formation autonome. Le prompt engineering est
+utile pour orienter le comportement du modèle, mais il devient fragile lorsque les règles
+et les documents se multiplient. Le fine-tuning permet d'adapter un style ou une tâche,
+mais il n'est pas idéal pour injecter des connaissances documentaires souvent mises à
+jour. Le RAG apporte une solution plus adaptée pour l'assistant pédagogique, car il
+ancre les réponses dans les contenus de formation et permet une mise à jour des sources.
+
+De la même manière, la génération directe d'un cours par prompt unique est insuffisante
+pour produire des contenus longs, oralisables et contrôlables. Les approches de
+décomposition, de génération structurée et de review automatique offrent une meilleure
+base pour construire une pipeline fiable. Elles transforment la génération en processus,
+avec des étapes, des artefacts et des points de contrôle.
+
+Le point commun entre ces deux axes est la nécessité d'encadrer l'IA. Dans un assistant
+RAG, l'encadrement passe par la récupération, les sources et l'évaluation de la fidélité.
+Dans une pipeline de génération, il passe par le plan, les formats structurés, les reviews
+et les métriques. L'originalité de l'approche étudiée dans la suite du mémoire devra donc
+être évaluée à partir de cette double exigence : contextualiser les réponses du chatbot et
+structurer la génération des contenus.
+
+\subsection{Tableau récapitulatif des approches}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{|p{3cm}|p{3.4cm}|p{4.2cm}|p{3.4cm}|}
+\hline
+\textbf{Approche} & \textbf{Apport principal} & \textbf{Limites} & \textbf{Intérêt pour le projet} \\
+\hline
+Prompt engineering &
+Orientation rapide du modèle par consignes, rôles, exemples et contraintes. &
+Contexte limité, maintenance difficile, faible traçabilité, risque d'oubli de consignes. &
+Utile pour le style et les règles locales, insuffisant seul pour une plateforme autonome. \\
+\hline
+Fine-tuning &
+Adaptation du comportement ou du style du modèle sur des exemples. &
+Coût de constitution des données, maintenance lourde, pas idéal pour documents changeants. &
+Pertinent pour stabiliser un comportement, moins adapté à la connaissance pédagogique actualisable. \\
+\hline
+RAG simple &
+Recherche de passages pertinents puis génération ancrée dans les documents. &
+Dépend du chunking, de la qualité du corpus et de la pertinence de la récupération. &
+Base pertinente pour répondre aux élèves à partir des contenus de cours. \\
+\hline
+RAG avancé &
+Recherche hybride, reranking, métadonnées, citations et évaluation. &
+Architecture plus complexe, coûts supplémentaires, besoin de jeux de tests. &
+Approche la plus adaptée pour un assistant pédagogique traçable et maintenable. \\
+\hline
+Azure AI Search &
+Service managé combinant indexation, recherche vectorielle, recherche hybride et semantic ranker. &
+Ne compense pas un mauvais corpus ; dépend de la configuration, des filtres et de l'évaluation. &
+Choix cohérent pour industrialiser le RAG dans une plateforme utilisée par de vrais élèves. \\
+\hline
+Génération directe de cours &
+Production rapide de brouillons ou de contenus courts. &
+Dérive sur contenus longs, répétitions, contrôle faible de la durée et de la structure. &
+Approche utile au prototypage, mais insuffisante comme chaîne de production. \\
+\hline
+Génération structurée &
+Plan, sections, schémas et artefacts intermédiaires. &
+Orchestration plus complexe, validation JSON et coût d'appels multiples. &
+Approche adaptée à la production de cours longs, audios, slides et QCM. \\
+\hline
+Reviews automatiques &
+Contrôle du style, de la conformité, de l'adhérence au plan et de la qualité. &
+Risque de faux positifs ou faux négatifs ; nécessite métriques et supervision. &
+Permet de réduire la relecture humaine tout en rendant la qualité plus observable. \\
+\hline
+Human-in-the-loop &
+Validation humaine sur les points critiques. &
+Réintroduit du coût humain et limite l'autonomie complète. &
+Nécessaire pour superviser le système, surtout en production pédagogique. \\
+\hline
+\end{tabular}
+\caption{Synthèse des approches existantes et de leur intérêt pour une plateforme de formation autonome}
+\end{table}
+
+\subsection{Comparaisons et évaluations à réaliser}
+
+Pour rendre le mémoire scientifiquement rigoureux, plusieurs comparaisons doivent être
+réalisées ou, à défaut, présentées comme des évaluations à consolider. La première
+comparaison concerne le chatbot : prompt seul contre RAG. Il s'agit de construire un
+jeu de questions d'élèves, de définir les passages sources attendus, puis de comparer la
+fidélité, la pertinence et le taux d'hallucination des réponses.
+
+La deuxième comparaison concerne les variantes de RAG. Il serait pertinent de comparer
+une recherche vectorielle simple, une recherche hybride et une recherche hybride avec
+reclassement sémantique lorsque la configuration le permet. Les métriques attendues
+sont la précision@k, le rappel@k, le rang du premier passage pertinent et la fidélité de
+la réponse finale.
+
+La troisième comparaison concerne la génération de contenus. Une génération directe par
+prompt unique peut être comparée à une génération structurée par plan et sections. Les
+critères peuvent porter sur le respect du programme, la répétition, la longueur, la
+cohérence de la progression, la qualité orale et le nombre de corrections nécessaires.
+
+La quatrième comparaison concerne les reviews automatiques. Il faut mesurer ce qu'elles
+détectent réellement : nombre de problèmes signalés, taux de corrections acceptées,
+effets indésirables sur le texte et réduction de la charge de relecture humaine. Cette
+évaluation est importante pour éviter de présenter les reviews comme une garantie de
+qualité sans preuve.
+
+La cinquième comparaison concerne l'impact opérationnel. Il faut comparer le temps de
+production et le nombre d'interventions humaines avant et après automatisation. Même si
+les chiffres restent partiels, cette mesure est indispensable pour relier la solution à la
+problématique économique de l'entreprise.
+
+% ====================== PARTIE 3 — ÉTUDE ORIGINALE ======================
+\clearpage
+\section{Étude originale}
+
+\subsection{Objectif de l'approche proposée}
+
+L'état de l'art a montré que deux problèmes doivent être traités séparément pour
+construire une plateforme de formation autonome alimentée par l'intelligence
+artificielle. Le premier est un problème de contextualisation : un assistant pédagogique
+ne doit pas répondre comme un chatbot généraliste, mais à partir des contenus réellement
+disponibles dans la formation. Le second est un problème de génération contrôlée : un
+modèle de langage peut produire du texte, mais la production d'une journée complète de
+formation audio, accompagnée de supports et d'exercices, nécessite une chaîne plus
+structurée qu'un simple prompt.
+
+L'approche proposée dans ce mémoire consiste donc à combiner deux architectures
+complémentaires. D'une part, un assistant pédagogique fondé sur une logique RAG, afin
+de répondre aux questions des élèves à partir des documents indexés de la formation.
+D'autre part, une pipeline de génération de contenus pédagogiques, destinée à transformer
+un référentiel ou un programme de formation en contenus audio, supports visuels et
+artefacts contrôlables.
+
+L'originalité de l'approche ne réside pas dans l'utilisation isolée d'un modèle de langage
+ou d'un service de synthèse vocale. Ces briques sont désormais disponibles dans de
+nombreux environnements. Elle réside plutôt dans l'orchestration de ces briques dans une
+plateforme utilisable par de vrais élèves, avec une attention portée à la traçabilité, à la
+qualité pédagogique, au coût et à la capacité de réutiliser les modules générés. La solution
+ne cherche pas seulement à produire une réponse ou un texte ; elle cherche à produire un
+objet pédagogique exploitable.
+
+L'hypothèse principale est la suivante : une plateforme de formation peut remplacer une
+part significative des interventions humaines répétitives si l'IA est encadrée par une
+architecture en étapes, des contrats de données explicites, des mécanismes de contrôle
+qualité et des indicateurs d'évaluation. L'autonomie ne doit donc pas être comprise comme
+une absence totale de supervision humaine, mais comme une réduction forte du travail
+manuel récurrent grâce à une chaîne automatisée observable.
+
+\subsection{Modèle fonctionnel de la plateforme}
+
+La plateforme développée répond à quatre grands cas d'utilisation. Le premier concerne
+l'administration de la formation : créer un module, déposer ou générer les contenus,
+suivre l'avancement de la pipeline et contrôler les artefacts produits. Le deuxième
+concerne l'apprenant : accéder aux cours, écouter les audios, consulter les supports et
+poser des questions à l'assistant pédagogique. Le troisième concerne la production
+automatisée : générer les cours, les audios, les slides et les exercices. Le quatrième
+concerne la supervision : vérifier les erreurs, relancer certaines étapes, consulter les
+rapports et améliorer les règles.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.92\linewidth}
+\textbf{Diagramme de cas d'utilisation simplifié}
+
+\vspace{0.2cm}
+\begin{tabular}{p{3.5cm}p{10cm}}
+\textbf{Administrateur} &
+Créer une plateforme de formation ; lancer une pipeline RNCP ; suivre les étapes ;
+consulter les artefacts ; publier les contenus. \\
+\textbf{Apprenant} &
+Écouter les cours audio ; consulter les supports ; répondre aux QCM ; poser une
+question à l'assistant pédagogique. \\
+\textbf{Pipeline IA} &
+Générer la base de connaissances ; produire le programme ; rédiger les cours ;
+contrôler la qualité ; produire slides et audios. \\
+\textbf{Assistant RAG} &
+Rechercher les passages pertinents dans l'index documentaire ; générer une réponse
+courte et contextualisée. \\
+\end{tabular}
+\end{minipage}}
+\caption{Cas d'utilisation principaux de la plateforme autonome}
+\end{figure}
+
+Ce modèle fonctionnel traduit un choix important : la plateforme n'est pas conçue comme
+un simple LMS, ni comme un simple chatbot. Elle est conçue comme un système de
+production et de diffusion de formation. L'administration, la génération, la diffusion et
+l'accompagnement sont pensés ensemble. Cela permet d'éviter une architecture fragmentée
+où chaque outil produirait un résultat séparé sans cohérence globale.
+
+\subsection{Principe architectural : un RNCP, un module durable}
+
+Un principe structurant de la solution est le modèle « un RNCP, un module durable ».
+Lorsqu'une formation est créée, la pipeline ne produit pas un contenu jetable pour une
+promotion unique. Elle produit un module complet, associé à un titre professionnel, qui
+peut ensuite être réutilisé pour plusieurs promotions. Ce choix modifie l'économie du
+système.
+
+Dans une approche où la pipeline serait relancée pour chaque promotion, le coût de
+génération devrait être minimisé à tout prix. Dans le modèle retenu, le coût initial est
+amorti sur la durée de vie du module. Il devient donc acceptable d'investir davantage dans
+la qualité de la génération, les reviews, les artefacts et les supports, car ces éléments
+seront réutilisés. L'enjeu n'est pas de produire le contenu le moins cher possible une seule
+fois, mais de produire un module suffisamment fiable pour être exploité dans le temps.
+
+Ce principe a également une conséquence sur l'architecture multi-tenant. Chaque pipeline
+crée ou alimente une plateforme dédiée, avec ses contenus, ses fichiers audio et ses
+documents. Cette isolation évite de mélanger plusieurs formations, réduit les risques
+d'écrasement et facilite la traçabilité. La relation logique devient :
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.88\linewidth}
+\centering
+\texttt{RNCP} $\rightarrow$ \texttt{Pipeline de génération} $\rightarrow$
+\texttt{Plateforme dédiée} $\rightarrow$ \texttt{Module durable} $\rightarrow$
+\texttt{Promotions successives}
+\end{minipage}}
+\caption{Principe d'amortissement : une génération produit un module réutilisable}
+\end{figure}
+
+Cette décision répond directement à la problématique économique d'Audit Énergie. La
+réduction des coûts ne vient pas seulement du remplacement de certaines tâches humaines
+par de l'IA, mais aussi de la réutilisation des productions. Un cours généré, contrôlé,
+transformé en audio et enrichi de supports devient un actif pédagogique.
+
+\subsection{Architecture technique générale}
+
+La solution repose sur une architecture web classique complétée par des services IA. Le
+backend orchestre les pipelines, stocke l'état des jobs, déclenche les appels aux modèles,
+gère les fichiers et expose les routes nécessaires au frontend. Le frontend permet à
+l'administrateur de suivre la génération et aux élèves d'accéder aux contenus. Les fichiers
+audio et documents sont stockés dans Azure Blob Storage. Le chatbot s'appuie sur Azure
+OpenAI et Azure AI Search pour la recherche documentaire.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.94\linewidth}
+\textbf{Architecture logique simplifiée}
+
+\vspace{0.2cm}
+\begin{tabular}{p{3.2cm}p{10.2cm}}
+\textbf{Frontend React} &
+Interface apprenant, dashboard RH, suivi de pipeline, modales d'audit. \\
+\textbf{Backend Flask} &
+Routes API, orchestration des jobs, contrôle d'accès, stockage des états,
+appels aux services IA. \\
+\textbf{Base SQLite} &
+Configuration des plateformes, jobs de génération, dossiers de cours,
+événements et métadonnées. \\
+\textbf{Azure Blob Storage} &
+Stockage des PDF, audios, documents générés et exports. \\
+\textbf{Azure AI Search} &
+Indexation documentaire et recherche hybride pour l'assistant pédagogique. \\
+\textbf{Modèles IA} &
+Génération de contenus, reviews, synthèse vocale, réponses RAG. \\
+\end{tabular}
+\end{minipage}}
+\caption{Architecture technique de la plateforme}
+\end{figure}
+
+Ce découpage répond à une contrainte importante : les étapes de génération peuvent être
+longues, coûteuses et sujettes à des erreurs réseau ou API. Le backend ne peut donc pas
+traiter la pipeline comme une simple requête synchrone. Les jobs doivent être persistés,
+leurs statuts doivent être visibles, et certaines étapes doivent pouvoir être relancées sans
+reprendre tout le processus.
+
+\subsection{Assistant pédagogique : choix du RAG Azure}
+
+Pour l'assistant pédagogique, le choix retenu est une architecture RAG fondée sur Azure
+OpenAI et Azure AI Search. Les documents de formation sont déposés dans un stockage
+Azure, indexés par Azure AI Search, puis utilisés comme source documentaire lors des
+questions posées par les élèves. Le modèle reçoit la question, l'historique court de la
+conversation et les passages récupérés, puis produit une réponse courte.
+
+Ce choix s'inscrit directement dans l'état de l'art. Un prompt seul aurait été insuffisant,
+car il ne permet pas de garantir que la réponse vient du cours réellement diffusé. Le
+fine-tuning aurait pu adapter le style de l'assistant, mais il n'aurait pas résolu le problème
+de mise à jour des documents. Le RAG est donc le choix le plus adapté pour un assistant
+dont la connaissance doit suivre les supports de formation.
+
+Le choix d'Azure AI Search est motivé par plusieurs raisons. La première est la recherche
+hybride. Les questions des élèves peuvent utiliser un vocabulaire approximatif, tandis que
+les documents contiennent des termes métier précis. Une recherche vectorielle simple
+risque de négliger certains mots importants ; une recherche par mots-clés seule risque de
+manquer les reformulations. La recherche hybride répond à cette double contrainte.
+
+La deuxième raison est l'industrialisation. Azure AI Search fournit un mécanisme d'index,
+d'indexer, de stockage documentaire et de séparation par plateforme. Cela correspond
+mieux à une plateforme utilisée par de vrais élèves qu'une base vectorielle locale
+prototypale. La troisième raison est l'intégration avec Azure OpenAI, qui simplifie
+l'utilisation des documents récupérés comme sources de réponse.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.88\linewidth}
+\centering
+\texttt{Question élève} $\rightarrow$
+\texttt{Azure AI Search} $\rightarrow$
+\texttt{Passages pertinents} $\rightarrow$
+\texttt{Azure OpenAI} $\rightarrow$
+\texttt{Réponse pédagogique courte}
+\end{minipage}}
+\caption{Chaîne RAG utilisée par l'assistant pédagogique}
+\end{figure}
+
+Le prompt système de l'assistant impose plusieurs contraintes : répondre en quelques
+phrases, se baser sur le contenu du cours, ne pas inventer d'information présentée comme
+issue du cours et adopter un ton pédagogique clair. Cette contrainte de concision est
+importante. Dans le contexte d'une formation audio, l'élève pose souvent une question
+pour lever un blocage immédiat ; une réponse trop longue peut nuire à l'usage réel.
+
+Le RAG n'est cependant pas utilisé partout. Une décision importante a été de ne pas
+l'utiliser pour analyser le REAC lorsque le document entier tient dans la fenêtre de
+contexte du modèle. Dans ce cas, le problème n'est pas de retrouver un passage dans un
+corpus trop volumineux, mais d'enrichir une source relativement courte pour produire un
+contenu pédagogique dense. Cette distinction entre problème de récupération et problème
+de densité est un apport méthodologique important du projet.
+
+\subsection{Pipeline de formation : de la source au module}
+
+La deuxième brique centrale est la pipeline de génération. Son rôle est de transformer un
+référentiel ou un ensemble de sources en une formation structurée. Les premières versions
+reposaient sur une logique plus directe : extraction du contenu, découpage en journées,
+génération de textes longs, puis transformation audio. Cette approche a permis de valider
+la faisabilité, mais elle a montré ses limites pour la traçabilité, la cohérence et la qualité.
+
+La pipeline actuelle est organisée comme une succession d'étapes spécialisées :
+initialisation du module, récupération ou dépôt des sources, enrichissement de la base de
+connaissances, génération du programme, découpage journalier, génération structurée des
+cours, reviews, création des supports, préparation audio et publication. Chaque étape
+produit un état ou un artefact exploitable.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.94\linewidth}
+\centering
+\texttt{RNCP / REAC}
+$\rightarrow$ \texttt{Knowledge base enrichie}
+$\rightarrow$ \texttt{Programme global}
+$\rightarrow$ \texttt{Journées}
+$\rightarrow$ \texttt{Plan JSON}
+$\rightarrow$ \texttt{Sections}
+$\rightarrow$ \texttt{Reviews}
+$\rightarrow$ \texttt{Slides + audio}
+$\rightarrow$ \texttt{Module publié}
+\end{minipage}}
+\caption{Pipeline générale de production d'un module de formation}
+\end{figure}
+
+Cette architecture se distingue d'une génération directe par prompt unique. Le modèle ne
+porte pas toute la responsabilité en une seule sortie. Il intervient dans des tâches plus
+restreintes : extraire, enrichir, planifier, rédiger, corriger, vérifier, reformuler ou produire
+un support. Cette décomposition réduit les dérives et rend les erreurs plus localisables.
+
+\subsection{Enrichissement de la source pédagogique}
+
+Le REAC constitue une source officielle, mais il n'est pas toujours suffisant pour produire
+des heures de cours exploitables. Il décrit les compétences, les attendus, les savoir-faire
+et les conditions d'exercice, mais il ne fournit pas nécessairement assez d'exemples, de
+cas pratiques, de vocabulaire métier ou de situations pédagogiques pour alimenter une
+formation audio longue.
+
+La pipeline introduit donc une étape d'enrichissement. À partir des compétences extraites
+du REAC, le système génère une base de connaissances pédagogique : définitions, études
+de cas, pièges fréquents, vocabulaire, contexte terrain et liens entre compétences. Cette
+base n'est pas destinée directement à l'élève ; elle sert de matière première pour la
+génération des cours.
+
+Cette étape répond à une limite importante des approches naïves. Demander au modèle
+de produire plusieurs centaines de milliers de mots de formation à partir d'un référentiel
+relativement court crée un risque de dilution. Le modèle risque de répéter les mêmes
+idées ou de combler les vides avec des généralités. L'enrichissement vise donc à augmenter
+la densité pédagogique avant la génération finale.
+
+Le choix retenu n'est pas un RAG sur le REAC, car le REAC tient dans la fenêtre de
+contexte du modèle. Le problème n'est pas la recherche d'information, mais la production
+de matière pédagogique structurée. Le RAG reste pertinent pour l'assistant élève ou pour
+de futurs corpus externes volumineux ; il ne constitue pas la bonne réponse à ce stade de
+la pipeline.
+
+\subsection{Plan JSON comme contrat pédagogique}
+
+Le cœur de l'approche originale est le passage d'une génération directe à une génération
+fondée sur un plan JSON. Ce plan joue le rôle de contrat pédagogique. Il décrit les cours
+de la journée, les sections, les objectifs, les budgets de mots, les transitions, les moments
+visualisables et les ancrages de slides. Le texte final n'est plus le premier objet produit :
+il est la conséquence d'un plan explicite.
+
+Ce choix répond à plusieurs problèmes identifiés dans les versions précédentes. D'abord,
+il améliore la cohérence. Une journée de formation longue doit suivre une progression.
+Sans plan explicite, les introductions peuvent se répéter, les transitions devenir
+artificielles et les conclusions fermer le mauvais sujet. Ensuite, il améliore la traçabilité :
+si une section dévie, on peut comparer le texte au plan prévu. Enfin, il rend possible la
+génération de supports alignés, car les moments pédagogiques importants sont identifiés
+avant la création des slides.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.88\linewidth}
+\textbf{Structure logique du plan JSON}
+
+\vspace{0.2cm}
+\texttt{Journée}
+$\rightarrow$ \texttt{Cours 1..7}
+$\rightarrow$ \texttt{Opening / Parts / Conclusion}
+$\rightarrow$ \texttt{Teaching beats}
+$\rightarrow$ \texttt{Slide anchors}
+\end{minipage}}
+\caption{Le plan JSON comme contrat pédagogique et visuel}
+\end{figure}
+
+Le plan JSON permet également de séparer le langage interne de la parole du formateur.
+Le code peut manipuler des notions de cours, sections, budgets, blocs audio ou anchors.
+Mais l'élève ne doit pas entendre ces contraintes techniques. Le texte final doit rester
+naturel : parler de thème, de point, de partie, de reprise après pause ou de fil conducteur.
+Cette séparation est essentielle pour éviter que la mécanique de la pipeline apparaisse
+dans le discours pédagogique.
+
+\subsection{Génération par sections et contrôle des budgets}
+
+Une fois le plan établi, la génération se fait section par section. Chaque section dispose
+d'un rôle, d'un objectif, d'un budget et d'un périmètre. Cette décision réduit la charge
+cognitive imposée au modèle. Au lieu de générer plusieurs heures de cours en conservant
+toutes les contraintes en mémoire, le modèle rédige une unité limitée.
+
+Le budget de mots est une contrainte centrale, car le texte doit ensuite être transformé
+en audio. Une génération trop courte donne une formation pauvre ou déséquilibrée. Une
+génération trop longue dépasse les créneaux prévus, complique le découpage et peut
+produire des audios inutilisables. La pipeline donne donc au serveur un rôle d'autorité sur
+les budgets. Les budgets ne sont pas seulement des consignes textuelles données au
+modèle ; ils sont contrôlés et recalibrés par le système.
+
+Cette approche se distingue d'un simple prompt qui demanderait au modèle de respecter
+une durée. Les modèles de langage ne maîtrisent pas précisément la correspondance entre
+mots, durée audio et rythme de synthèse vocale. Il faut donc traiter le budget comme un
+invariant logiciel, avec des étapes de vérification et de correction. Cette décision rend la
+pipeline plus robuste, même si elle introduit un coût supplémentaire en appels modèle et
+en logique d'orchestration.
+
+\subsection{Reviews ciblées et auditabilité}
+
+La qualité de la génération est contrôlée par plusieurs reviews spécialisées. L'objectif
+n'est pas de demander à un modèle de « rendre le texte meilleur » de manière générale,
+mais d'isoler les risques. Une review vérifie l'adhérence au plan ; une autre ajuste le
+volume ; une micro-review éthique traite localement les formulations sensibles ; une
+review d'humanisation améliore l'oralité ; une conformité finale vérifie les règles les plus
+critiques.
+
+Cette séparation est un apport important de l'approche. Dans les versions plus anciennes,
+les reviews globales mélangeaient plusieurs dimensions : structure, style, conformité,
+oralité et parfois budget. Une correction pouvait alors résoudre un problème tout en en
+créant un autre. En spécialisant les reviews, chaque étape dispose d'une responsabilité
+plus claire.
+
+L'auditabilité repose sur la persistance d'artefacts intermédiaires. La pipeline conserve
+notamment le plan, les sections brutes, les scripts assemblés, les rapports de review, les
+versions corrigées, le plan audio et les artefacts de slides. Ces éléments transforment la
+génération IA en processus vérifiable. Si une erreur apparaît dans le cours final, on peut
+chercher à quelle étape elle a été introduite.
+
+\begin{figure}[h]
+\centering
+\fbox{
+\begin{minipage}{0.92\linewidth}
+\textbf{Séquence simplifiée de génération d'un cours}
+
+\vspace{0.2cm}
+\texttt{Plan JSON}
+$\rightarrow$ \texttt{Sections brutes}
+$\rightarrow$ \texttt{Audit adhérence}
+$\rightarrow$ \texttt{Budget}
+$\rightarrow$ \texttt{Micro-conformité}
+$\rightarrow$ \texttt{Humanisation}
+$\rightarrow$ \texttt{Conformité finale}
+$\rightarrow$ \texttt{Audio-plan}
+\end{minipage}}
+\caption{Séquence de contrôle appliquée aux contenus générés}
+\end{figure}
+
+L'interface d'administration rend ces artefacts consultables. Les étapes de la roadmap
+peuvent être ouvertes dans des modales d'audit. Lorsqu'une micro-conformité éthique
+modifie un passage, l'interface peut afficher le texte original, le texte corrigé, la règle
+concernée et la justification. Cette fonctionnalité est importante : l'auditabilité ne doit
+pas exister seulement dans les logs techniques, elle doit être accessible à l'utilisateur qui
+pilote la formation.
+
+\subsection{Slides anchor-first et cohérence pédagogique}
+
+La génération des supports visuels pose un problème spécifique. Une solution simple
+consisterait à générer le texte du cours, puis à demander au modèle d'en extraire les
+points principaux pour créer des slides. Cette approche est facile à mettre en place, mais
+elle produit souvent des supports génériques. Les éléments les plus fréquents dans un
+texte ne sont pas toujours les plus importants à visualiser.
+
+L'approche retenue est une génération anchor-first. Les moments pédagogiques à
+visualiser sont décidés dès le plan JSON sous forme de teaching beats et de slide anchors.
+Une slide peut correspondre à une définition, une checklist, un piège, un exemple, une
+comparaison, une méthode ou un cas pratique. Le texte couvre ensuite ces moments
+naturellement, sans verbaliser la présence des slides ou des templates.
+
+Cette stratégie présente deux avantages. D'abord, elle aligne les supports sur l'intention
+pédagogique plutôt que sur une analyse opportuniste du texte final. Ensuite, elle rend les
+slides traçables : chaque support peut être rattaché à un anchor prévu dans le plan et à
+un passage du script. La slide n'est donc pas une décoration ajoutée après coup, mais une
+partie du dispositif pédagogique.
+
+\subsection{Audio et transformation TTS}
+
+La sortie principale de la formation reste l'audio. Les textes générés doivent donc être
+compatibles avec une synthèse vocale. Cette contrainte influence toute la pipeline. Le
+style doit être oral, les phrases doivent être prononçables, les transitions doivent être
+naturelles et la durée doit correspondre aux blocs prévus.
+
+Les premières expérimentations avec des outils de synthèse vocale, comme ElevenLabs,
+ont montré que la qualité de la voix ne suffit pas. Un bon moteur TTS peut rendre un
+texte agréable à écouter, mais il ne corrige pas un mauvais script. La pipeline traite donc
+la qualité audio en amont, par la rédaction TTS-ready, le contrôle du budget, l'humanisation
+orale et le plan audio.
+
+La génération audio reste toutefois une zone à évaluer finement. La correspondance entre
+nombre de mots et durée réelle dépend de la voix, du rythme, des pauses et du moteur
+utilisé. Les ratios de mots par minute employés dans la pipeline doivent donc être
+considérés comme des paramètres de calibration, non comme des résultats validés. Une
+évaluation plus rigoureuse doit mesurer l'écart entre durée prévue et durée réelle sur un
+échantillon d'audios générés.
+
+\subsection{Résultats obtenus}
+
+Les résultats du projet peuvent être analysés selon plusieurs dimensions. Sur le plan
+fonctionnel, la plateforme permet de diffuser des contenus de formation à de vrais élèves,
+de gérer des modules de cours, de déposer des documents et d'interagir avec un assistant
+pédagogique. Le projet dépasse donc le stade d'une expérimentation isolée : il est intégré
+à un environnement applicatif utilisé.
+
+Sur le plan de la génération, la pipeline a évolué d'une génération directe ou slotée vers
+une architecture structurée. La présence d'un plan JSON, de sections, de reviews et
+d'artefacts intermédiaires améliore la capacité à contrôler le résultat. L'amélioration la
+plus importante n'est pas seulement qualitative ; elle est méthodologique. Le système ne
+produit plus uniquement un texte final, il produit une chaîne de preuves.
+
+Sur le plan de l'accompagnement, l'assistant RAG permet de répondre aux questions à
+partir des documents indexés, ce qui réduit les limites d'un cours audio préenregistré. Il
+ne remplace pas toutes les formes d'interaction humaine, mais il fournit un premier niveau
+de réponse contextualisée, disponible pendant la formation.
+
+Sur le plan organisationnel, le modèle « un RNCP, un module durable » transforme la
+production en investissement réutilisable. La pipeline peut coûter plus cher qu'une
+génération ponctuelle, mais ce coût est amorti sur les promotions successives. Cette
+logique est cohérente avec les contraintes économiques d'une petite structure.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{|p{3.3cm}|p{4.4cm}|p{4.4cm}|}
+\hline
+\textbf{Dimension} & \textbf{Avant la refonte structurée} & \textbf{Après l'approche proposée} \\
+\hline
+Structure du cours &
+Texte long généré par créneaux ou blocs, avec contrôle limité de la progression. &
+Plan JSON explicite, sections, objectifs, budgets et anchors pédagogiques. \\
+\hline
+Qualité &
+Reviews plus globales, erreurs détectées tardivement. &
+Reviews ciblées : adhérence au plan, budget, micro-conformité, humanisation, conformité finale. \\
+\hline
+Traçabilité &
+Sortie principalement textuelle, difficile à auditer. &
+Artefacts intermédiaires, rapports, diff avant/après et modales d'audit. \\
+\hline
+Slides &
+Risque de génération après coup par analyse du texte final. &
+Approche anchor-first pilotée par le plan pédagogique. \\
+\hline
+Assistant élève &
+Cours audio peu interactif. &
+Assistant RAG contextualisé sur les documents de formation. \\
+\hline
+Modèle économique &
+Production fortement dépendante d'interventions humaines répétées. &
+Module durable réutilisable, coût de génération amorti sur plusieurs promotions. \\
+\hline
+\end{tabular}
+\caption{Comparaison synthétique avant/après l'approche proposée}
+\end{table}
+
+\subsection{Comparaison avec les approches de l'état de l'art}
+
+Par rapport au prompt engineering simple, l'approche proposée ajoute une architecture
+autour du modèle. Les prompts restent nécessaires, mais ils ne portent plus seuls la
+qualité du système. Ils sont spécialisés par rôle et intégrés dans une pipeline qui conserve
+des artefacts et impose des invariants.
+
+Par rapport au fine-tuning, la solution privilégie la flexibilité documentaire. Les contenus
+de formation peuvent changer, être indexés, enrichis ou régénérés sans réentraîner un
+modèle. Le fine-tuning pourrait éventuellement être utile plus tard pour stabiliser le style
+de l'assistant ou certaines reviews, mais il n'est pas le mécanisme principal.
+
+Par rapport à un RAG simple, le choix d'Azure AI Search permet une approche plus
+industrialisée : indexation, recherche hybride, séparation des corpus par plateforme et
+intégration avec Azure OpenAI. Cette solution reste dépendante de la qualité des documents
+indexés, mais elle correspond mieux à un usage multi-modules qu'un prototype local.
+
+Par rapport à une génération directe de cours, la pipeline structurée apporte une meilleure
+maîtrise des contenus longs. Le plan JSON, les sections et les reviews permettent de
+localiser les erreurs et de discuter la qualité de manière plus objective. Cette approche
+est plus complexe et plus coûteuse, mais elle est cohérente avec le modèle de module
+durable.
+
+Par rapport à une solution human-in-the-loop classique, l'approche réduit l'intervention
+humaine récurrente sans supprimer toute supervision. L'humain intervient davantage pour
+piloter, valider, auditer et améliorer le système. Cette position est importante : la solution
+vise l'autonomie opérationnelle, pas l'absence de responsabilité.
+
+\subsection{Évaluations à consolider}
+
+Pour rendre l'étude pleinement scientifique, plusieurs évaluations doivent être réalisées
+ou complétées. Certaines peuvent être menées à partir des logs et artefacts existants ;
+d'autres nécessitent de construire un protocole dédié.
+
+La première évaluation concerne le RAG. Il faut constituer un jeu de questions
+représentatives des élèves, identifier pour chaque question les passages sources attendus,
+puis mesurer la récupération et la réponse. Les métriques pertinentes sont la précision@k,
+le rappel@k, le rang du premier passage pertinent, le taux de réponses supportées par les
+sources et le taux d'hallucinations. Une comparaison entre prompt seul et RAG permettrait
+de démontrer l'apport réel de l'ancrage documentaire.
+
+La deuxième évaluation concerne les variantes de recherche. Lorsque la configuration le
+permet, il faut comparer recherche vectorielle simple, recherche hybride et recherche
+hybride avec reclassement sémantique. Cette comparaison est importante pour justifier
+le choix d'Azure AI Search autrement que par des arguments d'intégration.
+
+La troisième évaluation concerne la pipeline de génération. Il faut comparer un contenu
+produit par génération directe et un contenu produit par la pipeline structurée. Les critères
+peuvent être le respect du plan, le nombre de répétitions, le respect du budget de mots,
+la qualité orale, le nombre de corrections nécessaires et la cohérence entre cours, slides
+et QCM.
+
+La quatrième évaluation concerne les reviews. Il faut mesurer combien de problèmes sont
+détectés par chaque review, combien de corrections sont appliquées, combien sont
+rejetées et combien produisent un effet indésirable. Cela permettrait de savoir quelles
+reviews apportent réellement de la valeur et lesquelles doivent être améliorées.
+
+La cinquième évaluation concerne l'impact économique et organisationnel. Il faut mesurer
+le temps nécessaire pour produire une journée ou un module avant et après automatisation,
+le nombre d'interventions humaines restantes, le coût API et TTS, ainsi que la capacité à
+réutiliser le module sur plusieurs promotions. Ces mesures sont nécessaires pour relier la
+solution à la problématique initiale.
+
+\subsection{Conditions d'application}
+
+L'approche proposée est adaptée à des formations structurées, répétables et fondées sur
+un référentiel relativement stable. Elle est particulièrement pertinente lorsque le contenu
+peut être préparé en amont, transformé en audio et réutilisé pour plusieurs promotions.
+Elle convient donc bien aux titres professionnels ou aux formations standardisées.
+
+Elle est moins adaptée à des formations très interactives, fortement dépendantes du débat,
+de la pratique immédiate ou de l'improvisation pédagogique. Dans ces cas, un formateur
+humain reste difficile à remplacer. La plateforme peut alors servir de support ou de
+complément, mais pas nécessairement de substitut principal.
+
+L'approche suppose également un corpus de départ de qualité. Si le référentiel est trop
+pauvre, incomplet ou ambigu, la génération risque de produire des contenus génériques.
+L'enrichissement de la base de connaissances réduit ce risque, mais ne peut pas inventer
+une expertise métier absente des sources ou de la supervision.
+
+Enfin, l'approche nécessite une infrastructure capable de gérer des traitements longs :
+stockage durable, jobs persistés, reprise après erreur, logs, suivi des coûts et supervision
+des services externes. Une pipeline IA longue ne peut pas être traitée comme une simple
+fonction appelée à la demande.
+
+\subsection{Limites de la contribution}
+
+La première limite concerne l'évaluation quantitative. La plateforme fonctionne avec de
+vrais élèves et la pipeline produit des artefacts exploitables, mais certaines métriques
+doivent encore être consolidées : temps gagné, coût complet, satisfaction des élèves,
+fidélité du RAG, précision de la durée audio et impact sur les résultats pédagogiques.
+Ces métriques sont identifiées, mais elles doivent faire l'objet d'un protocole plus
+systématique.
+
+La deuxième limite concerne la dépendance aux services externes. La solution s'appuie
+sur des modèles de langage, des services Azure, des outils de synthèse vocale et des API.
+Ces services peuvent évoluer, changer de coût ou rencontrer des limites de débit. La
+robustesse du système dépend donc aussi de la gestion des erreurs, des retries, de la
+surveillance et de la possibilité de remplacer certaines briques.
+
+La troisième limite concerne la qualité pédagogique profonde. Les reviews automatiques
+peuvent détecter certaines erreurs, mais elles ne remplacent pas entièrement le jugement
+d'un expert pédagogique. Elles améliorent l'observabilité et réduisent certains risques,
+mais elles doivent être évaluées et supervisées.
+
+La quatrième limite concerne la rigidité du modèle. La pipeline est adaptée à un format
+de journée structuré, avec des blocs audio et une logique de module durable. Cette
+structure est cohérente avec le besoin actuel, mais elle peut être moins adaptée à des
+formations plus courtes, plus libres ou plus interactives. Une évolution future devra
+permettre de paramétrer davantage les formats.
+
+\subsection{Pistes d'amélioration}
+
+Plusieurs pistes d'amélioration se dégagent. La première est la mise en place d'un banc
+d'évaluation RAG. Il faudrait créer un jeu de questions annotées, comparer plusieurs
+configurations de recherche et conserver des métriques dans le temps. Cela permettrait
+de détecter les régressions lorsque les documents, les prompts ou les modèles changent.
+
+La deuxième piste est l'évaluation automatique et humaine des contenus générés. Une
+grille de relecture pourrait mesurer la fidélité au programme, la clarté, l'oralité, la
+cohérence des slides et la qualité des QCM. Un échantillon de cours pourrait être évalué
+par un humain, puis comparé aux reviews automatiques.
+
+La troisième piste est l'amélioration de la calibration audio. Il faudrait mesurer
+systématiquement les durées réelles des fichiers générés, comparer ces durées aux
+budgets prévus et ajuster les ratios par voix ou par moteur TTS. Cela permettrait de
+remplacer une calibration empirique par une calibration mesurée.
+
+La quatrième piste est l'automatisation complète du provisionnement multi-tenant.
+Aujourd'hui, certains éléments d'infrastructure peuvent encore nécessiter une intervention
+manuelle. À terme, la création d'un module devrait provisionner automatiquement les
+ressources nécessaires : containers, index, configuration de recherche et droits associés.
+
+La cinquième piste est l'amélioration du rôle humain. Plutôt que de relire tout le contenu,
+l'interface pourrait proposer une validation ciblée : sections signalées comme risquées,
+corrections importantes, slides sans source forte, réponses RAG à faible confiance ou
+écarts de durée audio. L'humain interviendrait alors sur les points réellement incertains.
+
+\subsection{Apports professionnels et montée en compétences}
+
+Ce projet a permis de développer des compétences qui dépassent la simple utilisation
+d'outils d'intelligence artificielle. La première compétence est l'analyse d'un besoin métier.
+Le problème initial était économique et organisationnel : rendre viable une activité de
+formation pour une petite structure. La solution technique n'a de sens que parce qu'elle
+répond à cette contrainte.
+
+La deuxième compétence est l'architecture logicielle. Il a fallu concevoir une plateforme
+capable de gérer des traitements longs, des fichiers, des jobs, des statuts, des services
+externes et plusieurs modules de formation. La persistance, la reprise après erreur et la
+séparation des responsabilités sont devenues des sujets centraux.
+
+La troisième compétence est l'ingénierie des systèmes IA. Le projet a demandé de choisir
+quand utiliser un prompt, quand utiliser un RAG, quand enrichir une source, quand
+structurer une génération et quand ajouter une review. L'enjeu était de ne pas appliquer
+l'IA comme une solution générique, mais de choisir la bonne technique pour le bon
+problème.
+
+La quatrième compétence est la prise de recul. Les premières solutions ont fonctionné
+partiellement, mais elles ont révélé de nouvelles limites. Le passage à une pipeline
+auditable est le résultat de ces itérations. Cette évolution montre l'importance de mesurer,
+de comparer et de remettre en question une architecture lorsqu'elle devient difficile à
+contrôler.
+
+Enfin, le projet a renforcé une compétence de pilotage produit. Une plateforme autonome
+ne se juge pas seulement par son code. Elle doit être utilisable, compréhensible, maintenable
+et économiquement pertinente. L'étude originale montre ainsi comment un besoin
+d'entreprise a conduit à une solution technique structurée, puis à une réflexion plus large
+sur l'évaluation et les limites de l'automatisation par IA.
+
+% ====================== CONCLUSION ======================
+\clearpage
+\phantomsection
+\addcontentsline{toc}{section}{Conclusion générale}
+\section*{Conclusion générale}
+
+Ce mémoire est parti d'un besoin concret et profondément économique : permettre à une
+petite structure, Audit Énergie, de développer une activité de formation externe sans dépendre
+du coût récurrent d'un formateur en direct. Cette contrainte initiale a guidé l'ensemble du
+travail. À chaque étape, une solution a été essayée, ses limites ont été observées, puis une
+réponse plus complète a été conçue : du cours en direct au cours audio préparé à l'avance, puis
+aux essais de synthèse vocale, et enfin à une plateforme autonome combinant une pipeline de
+génération de contenus et un assistant pédagogique contextualisé.
+
+L'apport central du travail n'est pas l'utilisation isolée d'un modèle de langage ou d'un service
+de synthèse vocale, mais leur \emph{orchestration} dans une chaîne fiable et observable. La
+pipeline structurée, fondée sur un plan explicite, une génération section par section, des
+reviews ciblées et des artefacts intermédiaires, transforme une sortie d'IA opaque en un
+processus auditable. L'assistant RAG, ancré sur les documents réels de la formation, prolonge
+l'expérience du cours en répondant aux questions des élèves sans tomber dans les dérives d'un
+chatbot généraliste. Ensemble, ces deux briques répondent à la problématique posée :
+automatiser fortement le modèle de formation tout en préservant la qualité pédagogique, la
+traçabilité des contenus et la pertinence des réponses.
+
+Ce travail comporte des limites assumées. Plusieurs indicateurs — temps réellement gagné,
+coût complet, fidélité du RAG, précision de la calibration audio, satisfaction des élèves —
+restent à consolider par un protocole d'évaluation plus systématique. La solution dépend par
+ailleurs de services externes dont le coût et la disponibilité peuvent évoluer, et la supervision
+humaine demeure nécessaire sur les points les plus sensibles. Ces limites ne remettent pas en
+cause l'approche : elles tracent les pistes d'évolution, notamment la mise en place d'un banc
+d'évaluation RAG, l'évaluation croisée automatique et humaine des contenus générés, et une
+calibration audio mesurée plutôt qu'empirique.
+
+Sur le plan professionnel, ce projet a permis une véritable montée en compétences :
+l'analyse d'un besoin métier, la conception d'une architecture logicielle capable de gérer des
+traitements longs et reprenables, l'ingénierie des systèmes d'IA (savoir quand recourir à un
+prompt, à un RAG, à un enrichissement de source ou à une génération structurée) et, surtout,
+la prise de recul nécessaire pour remettre en question une solution lorsqu'elle devient
+difficile à contrôler. Au-delà de la plateforme elle-même, ce mémoire illustre une conviction
+construite tout au long du travail : la valeur de l'intelligence artificielle générative en
+entreprise ne tient pas à la puissance brute des modèles, mais à la rigueur de l'architecture
+qui les encadre.
+
+% ====================== BIBLIOGRAPHIE ===============================
+\clearpage
+\phantomsection
+\addcontentsline{toc}{section}{Bibliographie}
+\begin{thebibliography}{99}
+
+\bibitem{brown2020language} T. B. Brown, B. Mann, N. Ryder \emph{et al.}, \emph{Language Models are Few-Shot Learners}, Advances in Neural Information Processing Systems (NeurIPS), 2020.
+
+\bibitem{hu2021lora} E. J. Hu, Y. Shen, P. Wallis \emph{et al.}, \emph{LoRA: Low-Rank Adaptation of Large Language Models}, arXiv:2106.09685, 2021.
+
+\bibitem{lewis2020retrieval} P. Lewis, E. Perez, A. Piktus \emph{et al.}, \emph{Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks}, Advances in Neural Information Processing Systems (NeurIPS), 2020.
+
+\bibitem{ji2023hallucination} Z. Ji, N. Lee, R. Frieske \emph{et al.}, \emph{Survey of Hallucination in Natural Language Generation}, ACM Computing Surveys, vol.~55, n\textsuperscript{o}~12, 2023.
+
+\bibitem{gao2023retrieval} Y. Gao, Y. Xiong, X. Gao \emph{et al.}, \emph{Retrieval-Augmented Generation for Large Language Models: A Survey}, arXiv:2312.10997, 2023.
+
+\bibitem{microsoft2026foundryrag} Microsoft, \emph{Retrieval Augmented Generation (RAG) in Azure AI Search}, Microsoft Learn, documentation Azure AI Search, 2026.
+
+\bibitem{microsoft2026hybridsearch} Microsoft, \emph{Hybrid search in Azure AI Search}, Microsoft Learn, documentation Azure AI Search, 2026.
+
+\bibitem{microsoft2026semanticranker} Microsoft, \emph{Semantic ranking in Azure AI Search}, Microsoft Learn, documentation Azure AI Search, 2026.
+
+\bibitem{es2023ragas} S. Es, J. James, L. Espinosa-Anke, S. Schockaert, \emph{RAGAS: Automated Evaluation of Retrieval Augmented Generation}, arXiv:2309.15217, 2023.
+
+\bibitem{saadfalcon2023ares} J. Saad-Falcon, O. Khattab, C. Potts, M. Zaharia, \emph{ARES: An Automated Evaluation Framework for Retrieval-Augmented Generation Systems}, arXiv:2311.09476, 2023.
+
+\bibitem{liu2023evaluating} N. F. Liu, T. Zhang, P. Liang, \emph{Evaluating Verifiability in Generative Search Engines}, Findings of EMNLP, 2023.
+
+\bibitem{wei2022chain} J. Wei, X. Wang, D. Schuurmans \emph{et al.}, \emph{Chain-of-Thought Prompting Elicits Reasoning in Large Language Models}, Advances in Neural Information Processing Systems (NeurIPS), 2022.
+
+\bibitem{zhou2022least} D. Zhou, N. Schärli, L. Hou \emph{et al.}, \emph{Least-to-Most Prompting Enables Complex Reasoning in Large Language Models}, arXiv:2205.10625, 2022.
+
+\bibitem{yao2023tree} S. Yao, D. Yu, J. Zhao \emph{et al.}, \emph{Tree of Thoughts: Deliberate Problem Solving with Large Language Models}, Advances in Neural Information Processing Systems (NeurIPS), 2023.
+
+\bibitem{shinn2023reflexion} N. Shinn, F. Cassano, A. Gopinath, K. Narasimhan, S. Yao, \emph{Reflexion: Language Agents with Verbal Reinforcement Learning}, Advances in Neural Information Processing Systems (NeurIPS), 2023.
+
+\bibitem{zheng2023judging} L. Zheng, W.-L. Chiang, Y. Sheng \emph{et al.}, \emph{Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena}, Advances in Neural Information Processing Systems (NeurIPS), 2023.
+
+\end{thebibliography}
+
+\end{document}

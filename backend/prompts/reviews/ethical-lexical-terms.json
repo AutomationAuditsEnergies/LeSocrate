@@ -1,0 +1,319 @@
+{
+  "version": "2026-05-30-ethical-lexical-v1",
+  "mode": "categorical_rewrite",
+  "description": "Termes et expressions à éliminer du texte oral après la micro-conformité éthique IA. Chaque détection déclenche une reformulation contextuelle du passage, pas une suppression brute du mot.",
+  "exceptions": [
+    {
+      "term": "assurance",
+      "allow_when": "Le mot désigne clairement la confiance personnelle, par exemple prendre de l'assurance, gagner en assurance ou parler avec assurance."
+    }
+  ],
+  "rules": [
+    {
+      "rule_id": 1,
+      "label": "Spiritualité, religion, ésotérisme et développement personnel",
+      "terms": [
+        "religion",
+        "religieux",
+        "spirituel",
+        "spiritualité",
+        "ésotérique",
+        "ésotérisme",
+        "métaphysique",
+        "philosophie de vie",
+        "quête de sens",
+        "sagesse ancestrale",
+        "développement personnel",
+        "coaching de vie",
+        "karma",
+        "providence",
+        "énergie universelle",
+        "vibration",
+        "alignement intérieur",
+        "mission de vie",
+        "âme",
+        "aura",
+        "chakra",
+        "astrologie",
+        "horoscope"
+      ]
+    },
+    {
+      "rule_id": 2,
+      "label": "Alcool, musique, banques, assurances, intérêts, jeux de hasard et serments",
+      "terms": [
+        "alcool",
+        "vin",
+        "bière",
+        "champagne",
+        "apéritif",
+        "bar",
+        "vignoble",
+        "dégustation",
+        "trinquer",
+        "musique",
+        "musical",
+        "chanson",
+        "concert",
+        "playlist",
+        "mélodie",
+        "orchestre",
+        "partition",
+        "guitare",
+        "piano",
+        "violon",
+        "batterie",
+        "saxophone",
+        "flûte",
+        "trompette",
+        "harpe",
+        "banque",
+        "bancaire",
+        "banquier",
+        "compte bancaire",
+        "assurance",
+        "assureur",
+        "assuré",
+        "assurantiel",
+        "crédit",
+        "emprunt",
+        "prêt bancaire",
+        "taux d'intérêt",
+        "intérêts bancaires",
+        "usure",
+        "pari",
+        "casino",
+        "loterie",
+        "jackpot",
+        "grattage",
+        "tirage au sort",
+        "serment",
+        "jurer",
+        "promettre sur l'honneur"
+      ]
+    },
+    {
+      "rule_id": 3,
+      "label": "Fêtes et célébrations sensibles",
+      "terms": [
+        "anniversaire",
+        "saint-valentin",
+        "halloween",
+        "noël",
+        "réveillon",
+        "nouvel an",
+        "fête de famille",
+        "gâteau d'anniversaire",
+        "bougies d'anniversaire",
+        "cadeau de fête"
+      ]
+    },
+    {
+      "rule_id": 4,
+      "label": "Manipulation, tromperie et pression abusive",
+      "terms": [
+        "manipulation",
+        "manipuler",
+        "tromperie",
+        "tromper",
+        "arnaque",
+        "piéger",
+        "pression psychologique",
+        "pression abusive",
+        "forcer la main",
+        "culpabiliser",
+        "mensonge commercial",
+        "fausse urgence"
+      ]
+    },
+    {
+      "rule_id": 5,
+      "label": "Persuasion agressive et exploitation émotionnelle",
+      "terms": [
+        "pnl",
+        "closing agressif",
+        "technique de manipulation",
+        "jouer sur la peur",
+        "jouer sur la culpabilité",
+        "exploiter la peur",
+        "exploiter la solitude",
+        "exploiter la détresse",
+        "faire craquer le client",
+        "appuyer là où ça fait mal",
+        "levier de peur",
+        "levier de culpabilité"
+      ]
+    },
+    {
+      "rule_id": 6,
+      "label": "Flirt, séduction et ambiguïté relationnelle",
+      "terms": [
+        "flirt",
+        "flirter",
+        "séduction",
+        "séduire",
+        "charme",
+        "charmer",
+        "drague",
+        "draguer",
+        "attirance physique",
+        "relation ambiguë",
+        "compliment physique",
+        "jeu de séduction"
+      ]
+    },
+    {
+      "rule_id": 7,
+      "label": "Chance, destin, hasard et causalité magique",
+      "terms": [
+        "chance",
+        "destin",
+        "destinée",
+        "hasard",
+        "coup de chance",
+        "bonne étoile",
+        "signe du destin",
+        "l'univers",
+        "énergie positive",
+        "mauvais présage",
+        "superstition",
+        "porte-bonheur"
+      ]
+    },
+    {
+      "rule_id": 8,
+      "label": "Secteurs ou univers d'exemples à éviter",
+      "terms": [
+        "divertissement adulte",
+        "nightlife",
+        "boîte de nuit",
+        "casino",
+        "influenceur",
+        "influenceuse",
+        "télé-réalité",
+        "célébrité",
+        "starlette",
+        "showbiz",
+        "pari sportif"
+      ]
+    },
+    {
+      "rule_id": 9,
+      "label": "Humour dégradant ou moquerie",
+      "terms": [
+        "moquerie",
+        "se moquer",
+        "ridiculiser",
+        "humilier",
+        "blague sur",
+        "sarcasme",
+        "rire aux dépens",
+        "petite pique",
+        "se payer la tête"
+      ]
+    },
+    {
+      "rule_id": 10,
+      "label": "Contradiction éthique explicite",
+      "terms": [
+        "contourner la règle",
+        "fermer les yeux",
+        "ne pas respecter la règle",
+        "passer outre",
+        "arranger la réalité"
+      ]
+    },
+    {
+      "rule_id": 11,
+      "label": "Stéréotypes et discrimination",
+      "terms": [
+        "stéréotype",
+        "préjugé",
+        "discriminatoire",
+        "profil type ethnique",
+        "accent suspect",
+        "client difficile par nature",
+        "population à problème",
+        "gens comme ça"
+      ]
+    },
+    {
+      "rule_id": 12,
+      "label": "Données personnelles et contournement RGPD",
+      "terms": [
+        "contourner le rgpd",
+        "sans consentement",
+        "aspirer les données",
+        "revendre les données",
+        "fichier client sauvage",
+        "données sensibles",
+        "données médicales",
+        "numéro de sécurité sociale",
+        "collecte discrète"
+      ]
+    },
+    {
+      "rule_id": 13,
+      "label": "Promesses irréalistes et garantie de résultat",
+      "terms": [
+        "succès garanti",
+        "résultat garanti",
+        "garantie de résultat",
+        "méthode infaillible",
+        "devenir riche",
+        "gagner à coup sûr",
+        "100% de réussite",
+        "solution miracle",
+        "résultat assuré",
+        "promesse de gain"
+      ]
+    },
+    {
+      "rule_id": 14,
+      "label": "Dénigrement et irrespect des tiers",
+      "terms": [
+        "concurrent nul",
+        "concurrent incompétent",
+        "dénigrer",
+        "descendre un concurrent",
+        "client idiot",
+        "client stupide",
+        "fournisseur malhonnête",
+        "écraser la concurrence"
+      ]
+    },
+    {
+      "rule_id": 15,
+      "label": "Exploitation de vulnérabilités personnelles",
+      "terms": [
+        "surendettement",
+        "détresse psychologique",
+        "maladie grave",
+        "addiction",
+        "personne vulnérable",
+        "faiblesse émotionnelle",
+        "chômage de longue durée",
+        "isolement social",
+        "situation désespérée"
+      ]
+    },
+    {
+      "rule_id": 16,
+      "label": "Conseils médicaux, juridiques, fiscaux ou psychologiques précis",
+      "terms": [
+        "diagnostic médical",
+        "traitement médical",
+        "prescription",
+        "posologie",
+        "conseil juridique",
+        "stratégie fiscale",
+        "optimisation fiscale",
+        "montage fiscal",
+        "consultation psychologique",
+        "thérapie",
+        "avis médical",
+        "avis juridique"
+      ]
+    }
+  ]
+}

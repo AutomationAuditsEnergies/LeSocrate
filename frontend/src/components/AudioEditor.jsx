@@ -1,7 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
-import { apiUrl, getPlatformId } from '../api'
+import { apiFetch } from '../api'
+import {
+  breakDurationLabel,
+  buildAudioSlideTimings,
+  isCourseAudioFilename,
+} from './slides/audioSlideSync'
+import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
+import { stopMediaPlayback, stopWaveSurferPlayback } from './audioPlaybackLifecycle'
 
 const Icon = ({ name, style, className = '' }) => (
   <span className={`material-icons ${className}`} style={style}>{name}</span>
@@ -14,21 +21,253 @@ function formatTime(ms) {
   return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
+function waitForMediaReadyAfterSeek(media, targetSeconds, timeoutMs = 1200) {
+  return new Promise(resolve => {
+    if (!media) {
+      resolve()
+      return
+    }
+    const target = Number(targetSeconds)
+    const closeEnough = Number.isFinite(target) && Math.abs((media.currentTime || 0) - target) < 0.08
+    if (!media.seeking && (closeEnough || media.readyState >= 3)) {
+      resolve()
+      return
+    }
+
+    let done = false
+    let timeoutId = null
+    const cleanup = () => {
+      media.removeEventListener('seeked', finish)
+      media.removeEventListener('canplay', finish)
+      media.removeEventListener('canplaythrough', finish)
+      if (timeoutId) window.clearTimeout(timeoutId)
+    }
+    const finish = () => {
+      if (done) return
+      done = true
+      cleanup()
+      resolve()
+    }
+
+    media.addEventListener('seeked', finish, { once: true })
+    media.addEventListener('canplay', finish, { once: true })
+    media.addEventListener('canplaythrough', finish, { once: true })
+    timeoutId = window.setTimeout(finish, timeoutMs)
+  })
+}
+
+function waitBeforeRetry(delayMs) {
+  return new Promise(resolve => window.setTimeout(resolve, delayMs))
+}
+
+function playMediaSegment(media, startSeconds, endSeconds, playbackId, activePlaybackIdRef) {
+  return new Promise((resolve, reject) => {
+    const start = Math.max(0, Number(startSeconds) || 0)
+    const end = Math.max(start, Number(endSeconds) || start)
+    if (!media || end - start < 0.02) {
+      resolve()
+      return
+    }
+
+    let settled = false
+    const timeoutMs = Math.max(3000, (end - start + 8) * 1000)
+    let timeoutId = null
+    const cleanup = () => {
+      media.removeEventListener('timeupdate', checkPosition)
+      media.removeEventListener('error', fail)
+      media.removeEventListener('ended', finish)
+      if (timeoutId) window.clearTimeout(timeoutId)
+    }
+    const finish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      media.pause()
+      resolve()
+    }
+    const fail = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error('Le flux audio de prévisualisation est indisponible'))
+    }
+    const checkPosition = () => {
+      if (activePlaybackIdRef.current !== playbackId || media.currentTime >= end - 0.03) {
+        finish()
+      }
+    }
+
+    media.addEventListener('timeupdate', checkPosition)
+    media.addEventListener('error', fail, { once: true })
+    media.addEventListener('ended', finish, { once: true })
+    timeoutId = window.setTimeout(finish, timeoutMs)
+    media.currentTime = start
+    waitForMediaReadyAfterSeek(media, start, 3000)
+      .then(() => media.play())
+      .catch(fail)
+  })
+}
+
+// Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
+// (pause_*.mp3 et pause_midi_*.mp3 → pause, qa_*.mp3 → qa).
+function breakSlideTemplateForFilename(filename) {
+  const name = String(filename || '').toLowerCase()
+  if (name.startsWith('qa_')) return 'qa'
+  if (name.startsWith('pause_')) return 'pause'
+  return null
+}
+
+// Durée déduite de la plage horaire du nom (pause_9h55_10h05.mp3 → 600 s).
+function breakDurationLabelForFilename(filename) {
+  const match = String(filename || '').match(/(\d{1,2})h(\d{2})_(\d{1,2})h(\d{2})/)
+  if (!match) return null
+  const start = parseInt(match[1], 10) * 60 + parseInt(match[2], 10)
+  const end = parseInt(match[3], 10) * 60 + parseInt(match[4], 10)
+  return end > start ? breakDurationLabel((end - start) * 60) : null
+}
+
 // ─── AudioEditor ─────────────────────────────────────────────────────────────
 // Props:
 //   folderId      — ID du dossier
 //   filename      — nom du fichier MP3 (ex: cours_9h00_9h45.mp3)
 //   darkMode      — bool
 //   colors        — objet colors du parent
-//   onClose       — callback fermeture
-export default function AudioEditor({ folderId, filename, darkMode, colors, onClose }) {
+function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timings, activeTiming, breakTemplate, breakDuration }) {
+  const previewBg = darkMode ? '#0f172a' : '#f8fafc'
+  const headerBg = darkMode ? '#111827' : '#ffffff'
+  const title = activeTiming?.slide?.data?.title
+    || activeTiming?.slide?.data?.formation_name
+    || activeTiming?.slide?.data?.chapter
+    || activeTiming?.slide?.template_type
+    || 'Slide'
+
+  const showBreakSlide = Boolean(breakTemplate) && !timings.length
+
+  let body = null
+  if (showBreakSlide) {
+    body = (
+      <SlidePreviewFrame
+        slide={{ template_type: breakTemplate, data: { duration_label: breakDuration } }}
+        maxWidth={740}
+        padding={0}
+        style={{ width: '100%' }}
+      />
+    )
+  } else if (loading) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textMuted }}>
+        <div className="flex items-center gap-2 text-sm">
+          <Icon name="hourglass_empty" style={{ fontSize: '18px' }} />
+          Chargement des slides...
+        </div>
+      </div>
+    )
+  } else if (error) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#1f1720' : '#fff1f2', color: '#dc2626' }}>
+        <div className="max-w-[52ch] text-sm font-medium">{error}</div>
+      </div>
+    )
+  } else if (!slides.length) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textSecondary }}>
+        <div className="max-w-[56ch] text-sm font-medium">Aucun deck slide disponible pour ce cours.</div>
+      </div>
+    )
+  } else if (!timings.length) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textSecondary }}>
+        <div className="max-w-[62ch] text-sm font-medium">Aucune synchro trouvée pour cet audio. Relance la génération audio synchronisée.</div>
+      </div>
+    )
+  } else {
+    body = (
+      <SlidePreviewFrame
+        slide={activeTiming?.slide}
+        maxWidth={740}
+        padding={0}
+        style={{ width: '100%' }}
+      />
+    )
+  }
+
+  return (
+    <section
+      className="overflow-hidden rounded-xl"
+      style={{ backgroundColor: previewBg, border: `1px solid ${colors.border}` }}
+    >
+      <div
+        className="flex items-center justify-between gap-3 border-b px-4 py-3"
+        style={{ backgroundColor: headerBg, borderColor: colors.border }}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <Icon name="slideshow" style={{ fontSize: '18px', color: colors.textMuted, flexShrink: 0 }} />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>
+              PowerPoint synchronisé
+            </p>
+            {activeTiming && (
+              <p className="truncate text-xs" style={{ color: colors.textMuted }}>
+                {title}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>
+          {activeTiming ? (
+            <>
+              <span>Slide {activeTiming.slideIndex + 1}/{slides.length}</span>
+              <span style={{ color: colors.textMuted }}>
+                {formatTime(activeTiming.start * 1000)} → {formatTime(activeTiming.end * 1000)}
+              </span>
+            </>
+          ) : (
+            <span>
+              {showBreakSlide
+                ? `Slide dédié ${breakTemplate === 'qa' ? 'Q&A' : 'pause'}`
+                : timings.length ? `${timings.length} repères` : 'Non synchronisé'}
+            </span>
+          )}
+        </div>
+      </div>
+      <div
+        className="p-3"
+        style={{ backgroundColor: darkMode ? '#0b1220' : '#f6f8fb' }}
+      >
+        <div
+          className="min-w-0 rounded-lg border bg-white p-2"
+          style={{
+            borderColor: colors.border,
+            backgroundColor: darkMode ? '#020617' : '#ffffff',
+          }}
+        >
+          {body}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+export default function AudioEditor({ folderId, filename, darkMode, colors }) {
   const waveRef = useRef(null)       // div DOM pour WaveSurfer
   const wsRef = useRef(null)         // instance WaveSurfer
   const regionsRef = useRef(null)    // plugin Regions
   const activeRegionRef = useRef(null)
+  const pendingSeekRef = useRef(null)
+  const syncRepairAttemptRef = useRef(new Set())
+  const mountedRef = useRef(false)
+  const playbackEpochRef = useRef(0)
+  const playingRef = useRef(false)
+  const streamLoadSequenceRef = useRef(0)
+  const streamLoadInProgressRef = useRef(false)
+  const streamRecoveryInProgressRef = useRef(false)
 
-  const audioCtxRef = useRef(null)      // Web Audio API context pour écoute splicée
-  const stitchedSourcesRef = useRef([]) // sources planifiées (pour pouvoir stopper)
+  const audioCtxRef = useRef(null)      // Web Audio API pour le clip TTS de remplacement
+  const stitchedSourcesRef = useRef([]) // sources TTS planifiées (pour pouvoir stopper)
+  const stitchedMediaRef = useRef([])   // flux original joué autour du remplacement
+  const stitchedPlaybackIdRef = useRef(0)
+  const previewAudioRef = useRef(null)  // lecteur TTS temporaire
+  const previewAudioUrlRef = useRef(null)
 
   const [mode, setMode] = useState('cut')          // 'cut' | 'replace'
   const [playing, setPlaying] = useState(false)
@@ -38,7 +277,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [replaceText, setReplaceText] = useState('')
   const [previewId, setPreviewId] = useState(null)
   const [previewB64, setPreviewB64] = useState(null)   // base64 du TTS preview
-  const [previewAudio, setPreviewAudio] = useState(null)
   const [stitchedPlaying, setStitchedPlaying] = useState(false)
   const [loadingStitch, setLoadingStitch] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -46,51 +284,257 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState(null)
-  const [analyzing, setAnalyzing] = useState(false)
-  const [bugRegions, setBugRegions] = useState([])    // [{start, end, severity}] en secondes
-  const bugRegionRefsRef = useRef([])                 // instances WaveSurfer Region pour cleanup
+  const [slides, setSlides] = useState([])
+  const [audioSync, setAudioSync] = useState({})
+  const [slidesLoading, setSlidesLoading] = useState(false)
+  const [slidesError, setSlidesError] = useState(null)
 
   const audioUrlRef = useRef(null)   // URL audio courante (mise à jour après cut/replace)
 
-  const revokeAudioObjectUrl = useCallback(() => {
-    if (audioUrlRef.current?.startsWith('blob:')) {
-      URL.revokeObjectURL(audioUrlRef.current)
-    }
+  const clearAudioUrl = useCallback(() => {
     audioUrlRef.current = null
   }, [])
 
-  // Charge l'audio via un fetch authentifié explicite. Sur Azure SWA, le player
-  // ne renvoie pas toujours les cookies/headers attendus, ce qui remonte en
-  // "Failed to fetch" sans message utile.
-  const loadAudioObjectUrl = useCallback(async () => {
-    revokeAudioObjectUrl()
-    const token = localStorage.getItem('auth_token')
-    const platformId = getPlatformId()
-    const resp = await fetch(
-      apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${filename}?v=${Date.now()}`),
-      {
-        credentials: 'include',
-        headers: {
-          ...(token ? { 'X-Auth-Token': token } : {}),
-          'X-Platform-Id': platformId,
-        },
-      }
-    )
-    if (!resp.ok) {
-      let detail = `HTTP ${resp.status}`
-      try {
-        const data = await resp.json()
-        detail = data?.error || detail
-      } catch (_) {
-        // ignore: réponse non-JSON
-      }
-      throw new Error(detail)
+  const stopPreviewPlayback = useCallback(() => {
+    stopMediaPlayback(previewAudioRef.current, { unload: true })
+    previewAudioRef.current = null
+    if (previewAudioUrlRef.current) {
+      URL.revokeObjectURL(previewAudioUrlRef.current)
+      previewAudioUrlRef.current = null
     }
-    const blob = await resp.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    audioUrlRef.current = objectUrl
-    return objectUrl
+  }, [])
+
+  const clearPreview = useCallback(() => {
+    stopPreviewPlayback()
+    setPreviewId(null)
+    setPreviewB64(null)
+  }, [stopPreviewPlayback])
+
+  const buildAudioStreamUrl = useCallback(async () => {
+    clearAudioUrl()
+    const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/audio-url/${encodeURIComponent(filename)}?v=${Date.now()}`)
+    const data = await resp.json().catch(() => ({}))
+    if (!resp.ok || !data.success || !data.url) {
+      throw new Error(data.error || 'URL audio indisponible')
+    }
+    const url = data.url
+    audioUrlRef.current = url
+    return url
+  }, [clearAudioUrl, folderId, filename])
+
+  const loadAudioIntoWaveSurfer = useCallback(async (
+    ws,
+    { resumeAt = 0, resumePlayback = false } = {},
+  ) => {
+    const loadSequence = ++streamLoadSequenceRef.current
+    streamLoadInProgressRef.current = true
+    let lastError = null
+
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          if (attempt > 0) {
+            setStatus(`Reconnexion au flux audio… tentative ${attempt + 1}/3`)
+            await waitBeforeRetry(attempt * 500)
+          }
+
+          const response = await apiFetch(
+            `/api/hr/cours-folders/${folderId}/audio-playback-manifest/${encodeURIComponent(filename)}?v=${Date.now()}`,
+            { cache: 'no-store', timeoutMs: 110000 },
+          )
+          const manifest = await response.json().catch(() => ({}))
+          if (!response.ok || !manifest.success || !manifest.url) {
+            throw new Error(manifest.error || `Manifeste audio indisponible (${response.status})`)
+          }
+
+          const manifestDuration = Number(manifest.duration)
+          const peaks = Array.isArray(manifest.peaks)
+            ? manifest.peaks.map(value => Number(value) || 0)
+            : []
+          if (!Number.isFinite(manifestDuration) || manifestDuration <= 0 || !peaks.length) {
+            throw new Error('Forme d’onde audio invalide')
+          }
+          if (
+            !mountedRef.current
+            || wsRef.current !== ws
+            || streamLoadSequenceRef.current !== loadSequence
+          ) return undefined
+
+          audioUrlRef.current = manifest.url
+          await ws.load(manifest.url, [peaks], manifestDuration)
+          if (
+            !mountedRef.current
+            || wsRef.current !== ws
+            || streamLoadSequenceRef.current !== loadSequence
+          ) return undefined
+
+          const safeResumeAt = Math.max(0, Math.min(Number(resumeAt) || 0, manifestDuration - 0.05))
+          if (safeResumeAt > 0) ws.setTime(safeResumeAt)
+          if (resumePlayback) await ws.play()
+          setError(null)
+          if (attempt > 0) setStatus(null)
+          return manifest
+        } catch (loadError) {
+          if (loadError?.name === 'AbortError') throw loadError
+          lastError = loadError
+          if (streamLoadSequenceRef.current !== loadSequence) return undefined
+        }
+      }
+
+      throw new Error(
+        `Le flux audio reste indisponible après 3 tentatives : ${lastError?.message || 'erreur réseau'}`,
+      )
+    } finally {
+      if (streamLoadSequenceRef.current === loadSequence) {
+        streamLoadInProgressRef.current = false
+      }
+    }
   }, [folderId, filename])
+
+  // ── Écoute splicée côté client (Web Audio API) ──
+  const stopStitchedPlayback = useCallback(({ updateState = true } = {}) => {
+    stitchedPlaybackIdRef.current += 1
+    stitchedSourcesRef.current.forEach(src => {
+      try {
+        src.stop()
+      } catch {
+        // Source déjà arrêtée.
+      }
+    })
+    stitchedSourcesRef.current = []
+    stitchedMediaRef.current.forEach(media => stopMediaPlayback(media, { unload: true }))
+    stitchedMediaRef.current = []
+    try {
+      audioCtxRef.current?.close()
+    } catch {
+      // Contexte déjà fermé.
+    }
+    audioCtxRef.current = null
+    if (updateState) setStitchedPlaying(false)
+  }, [])
+
+  const stopAllPlayback = useCallback(({ destroyWaveSurfer = false, updateState = true } = {}) => {
+    playbackEpochRef.current += 1
+    pendingSeekRef.current = null
+    stopPreviewPlayback()
+    stopStitchedPlayback({ updateState })
+
+    const ws = wsRef.current
+    stopWaveSurferPlayback(ws)
+    if (destroyWaveSurfer && ws) {
+      try {
+        ws.destroy()
+      } catch {
+        // Destruction idempotente pendant les changements de vue rapides.
+      }
+      if (wsRef.current === ws) wsRef.current = null
+    }
+    playingRef.current = false
+    if (updateState) setPlaying(false)
+  }, [stopPreviewPlayback, stopStitchedPlayback])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      playbackEpochRef.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
+    const stopForNavigation = () => stopAllPlayback()
+    window.addEventListener('pagehide', stopForNavigation)
+    window.addEventListener('popstate', stopForNavigation)
+    return () => {
+      window.removeEventListener('pagehide', stopForNavigation)
+      window.removeEventListener('popstate', stopForNavigation)
+    }
+  }, [stopAllPlayback])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!folderId) {
+      window.queueMicrotask(() => {
+        if (cancelled) return
+        setSlides([])
+        setAudioSync({})
+      })
+      return () => { cancelled = true }
+    }
+
+    const loadSlides = async ({ allowRepair = true } = {}) => {
+      const resp = await apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folderId)}`)
+      const data = await resp.json().catch(() => ({}))
+      if (data.status === 'no_data') {
+        if (cancelled) return
+        setSlides([])
+        setAudioSync({})
+        return
+      }
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.message || data.error || 'Deck slides indisponible')
+      }
+      if (cancelled) return
+
+      const nextSlides = Array.isArray(data.slides) ? data.slides : []
+      const nextSync = data.audio_sync || data.pipeline_debug?.audio_sync || {}
+      setSlides(nextSlides)
+      setAudioSync(nextSync)
+
+      const repairKey = `${folderId}:${filename}`
+      const isCourseAudio = isCourseAudioFilename(filename)
+      const needsRepair = isCourseAudio
+        && nextSlides.length
+        && !buildAudioSlideTimings(nextSlides, nextSync, filename).length
+        && !syncRepairAttemptRef.current.has(repairKey)
+
+      if (!allowRepair || !needsRepair) return
+
+      syncRepairAttemptRef.current.add(repairKey)
+      const repairResp = await apiFetch(`/api/hr/cours-folders/${folderId}/repair-audio-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: false }),
+      })
+      const repairData = await repairResp.json().catch(() => ({}))
+      if (!repairResp.ok || repairData.success === false) return
+      if (cancelled) return
+
+      await loadSlides({ allowRepair: false })
+    }
+
+    window.queueMicrotask(() => {
+      if (cancelled) return
+      setSlidesLoading(true)
+      setSlidesError(null)
+      setSlides([])
+      setAudioSync({})
+
+      loadSlides()
+        .catch((e) => {
+          if (cancelled) return
+          setSlidesError(e.message || 'Impossible de charger les slides')
+        })
+        .finally(() => {
+          if (!cancelled) setSlidesLoading(false)
+        })
+    })
+
+    return () => { cancelled = true }
+  }, [folderId, filename])
+
+  const slideTimings = useMemo(
+    () => buildAudioSlideTimings(slides, audioSync, filename),
+    [slides, audioSync, filename]
+  )
+
+  const activeSlideTiming = useMemo(() => {
+    if (!slideTimings.length) return null
+    const seconds = currentTime / 1000
+    return slideTimings.find(item => seconds >= item.start && seconds < item.end)
+      || [...slideTimings].reverse().find(item => seconds >= item.start)
+      || slideTimings[0]
+  }, [currentTime, slideTimings])
 
   // ── Init WaveSurfer ──
   useEffect(() => {
@@ -105,8 +549,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
     const ws = WaveSurfer.create({
       container: waveRef.current,
-      waveColor: darkMode ? '#6d28d9' : '#a78bfa',
-      progressColor: darkMode ? '#c4b5fd' : '#7c3aed',
+      waveColor: darkMode ? '#475569' : '#cbd5e1',
+      progressColor: darkMode ? '#cbd5e1' : '#334155',
       cursorColor: '#f59e0b',
       barWidth: 2,
       barGap: 1,
@@ -116,7 +560,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       minPxPerSec: 0, // auto-fit au chargement
       autoScroll: true,
       fillParent: true,
-      blobMimeType: 'audio/mpeg',
       plugins: [regions],
     })
     wsRef.current = ws
@@ -127,9 +570,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     const ZOOM_STEP = 1.15
     let currentZoom = 0
     const handleWheel = (e) => {
-      if (!wsRef.current || !duration) {
-        // fallback si duration pas encore dispo : utiliser getDuration
-      }
       e.preventDefault()
       const dur = wsRef.current?.getDuration() || 0
       if (!dur) return
@@ -145,73 +585,159 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       }
       try {
         wsRef.current.zoom(currentZoom)
-      } catch (err) {
+      } catch {
         // zoom peut échouer si pas prêt
       }
     }
     const waveEl = waveRef.current
     waveEl?.addEventListener('wheel', handleWheel, { passive: false })
 
-    // Charger via le backend : le Blob Azure direct peut répondre 200 tout en
-    // échouant côté JS si CORS n'est pas configuré sur le compte Storage.
-    Promise.resolve(loadAudioObjectUrl())
-      .then(url => { if (!cancelled) return ws.load(url) })
+    Promise.resolve()
+      .then(async () => {
+        if (cancelled) return undefined
+        return loadAudioIntoWaveSurfer(ws)
+      })
       .catch(e => {
         if (cancelled) return
         // ws.destroy() pendant un fetch en cours déclenche un AbortError que
         // Chrome propage souvent en "TypeError: Failed to fetch" — bruit qui
         // collait un faux message d'erreur sur la 2e tentative réussie.
         if (e?.name === 'AbortError') return
+        setLoading(false)
         setError('Impossible de charger l\'audio : ' + e.message)
       })
 
+    const syncCurrentTime = (time) => {
+      const seconds = Number.isFinite(time) ? time : (ws.getCurrentTime?.() || 0)
+      setCurrentTime(seconds * 1000)
+    }
+
+    const seekToSeconds = async (seconds, { resumePlayback = false } = {}) => {
+      const target = Math.max(0, Math.min(Number(seconds) || 0, ws.getDuration?.() || Infinity))
+      const media = ws.getMediaElement?.()
+      pendingSeekRef.current = target
+
+      if (ws.isPlaying?.()) ws.pause()
+
+      try {
+        if (typeof ws.setTime === 'function') {
+          ws.setTime(target)
+        } else {
+          ws.seekTo((ws.getDuration?.() || 0) ? target / ws.getDuration() : 0)
+        }
+        if (media && Math.abs((media.currentTime || 0) - target) > 0.05) {
+          media.currentTime = target
+        }
+        syncCurrentTime(target)
+        await waitForMediaReadyAfterSeek(media, target)
+        if (pendingSeekRef.current === target) {
+          pendingSeekRef.current = null
+        }
+        if (
+          resumePlayback
+          && !cancelled
+          && mountedRef.current
+          && wsRef.current === ws
+        ) {
+          await ws.play()
+        }
+      } catch {
+        pendingSeekRef.current = null
+      }
+    }
+
     ws.on('ready', () => {
       setDuration(ws.getDuration() * 1000)
+      syncCurrentTime()
       setLoading(false)
     })
-    ws.on('timeupdate', (t) => setCurrentTime(t * 1000))
-    ws.on('play', () => setPlaying(true))
-    ws.on('pause', () => setPlaying(false))
-    ws.on('finish', () => setPlaying(false))
+    ws.on('timeupdate', syncCurrentTime)
+    ws.on('audioprocess', syncCurrentTime)
+    ws.on('seeking', syncCurrentTime)
+    ws.on('click', (percent) => {
+      const durationSeconds = ws.getDuration?.() || 0
+      if (!durationSeconds) return
+      const nextTime = Math.max(0, Math.min(Number(percent) || 0, 1)) * durationSeconds
+      seekToSeconds(nextTime, { resumePlayback: true })
+    })
+    ws.on('play', () => {
+      playingRef.current = true
+      setPlaying(true)
+    })
+    ws.on('pause', () => {
+      playingRef.current = false
+      setPlaying(false)
+    })
+    ws.on('finish', () => {
+      playingRef.current = false
+      setPlaying(false)
+    })
+    ws.on('error', (e) => {
+      if (cancelled) return
+      if (e?.name === 'AbortError') return
+      // ws.load() emits this event before rejecting its promise. The retry
+      // loop above owns those failures and only exposes the final result.
+      if (streamLoadInProgressRef.current) return
+      if (streamRecoveryInProgressRef.current) return
+
+      const message = typeof e === 'string' ? e : (e?.message || 'stream audio indisponible')
+      const resumeAt = ws.getCurrentTime?.() || 0
+      const resumePlayback = ws.isPlaying?.() || playingRef.current
+      streamRecoveryInProgressRef.current = true
+      setStatus('Connexion au flux audio interrompue, reprise automatique…')
+      loadAudioIntoWaveSurfer(ws, { resumeAt, resumePlayback })
+        .then(() => {
+          if (!cancelled) setStatus(null)
+        })
+        .catch(recoveryError => {
+          if (cancelled || recoveryError?.name === 'AbortError') return
+          setLoading(false)
+          setStatus(null)
+          setError(
+            `Impossible de reprendre l'audio : ${recoveryError?.message || message}`,
+          )
+        })
+        .finally(() => {
+          streamRecoveryInProgressRef.current = false
+        })
+    })
 
     // Permettre la création de régions par drag
-    regions.enableDragSelection({ color: 'rgba(124, 58, 237, 0.25)' })
+    regions.enableDragSelection({ color: darkMode ? 'rgba(203, 213, 225, 0.25)' : 'rgba(51, 65, 85, 0.18)' })
 
     regions.on('region-created', (r) => {
-      // Supprimer seulement la région utilisateur précédente (pas les régions bugs)
       if (activeRegionRef.current) {
         activeRegionRef.current.remove()
       }
       activeRegionRef.current = r
       setRegion({ start: r.start * 1000, end: r.end * 1000 })
-      setPreviewId(null)
-      setPreviewAudio(null)
+      clearPreview()
     })
 
     regions.on('region-updated', (r) => {
       setRegion({ start: r.start * 1000, end: r.end * 1000 })
-      setPreviewId(null)
-      setPreviewAudio(null)
+      clearPreview()
     })
 
     return () => {
       cancelled = true
       waveEl?.removeEventListener('wheel', handleWheel)
-      ws.destroy()
-      stopStitchedPlayback()
-      revokeAudioObjectUrl()
-      bugRegionRefsRef.current = []
+      stopAllPlayback({ destroyWaveSurfer: true, updateState: false })
+      streamLoadSequenceRef.current += 1
+      streamLoadInProgressRef.current = false
+      streamRecoveryInProgressRef.current = false
+      clearAudioUrl()
     }
-  }, [darkMode, loadAudioObjectUrl, revokeAudioObjectUrl])
+  }, [clearAudioUrl, clearPreview, darkMode, loadAudioIntoWaveSurfer, stopAllPlayback])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {
     activeRegionRef.current?.setOptions({
       color: mode === 'cut'
         ? 'rgba(239, 68, 68, 0.25)'
-        : 'rgba(124, 58, 237, 0.25)',
+        : darkMode ? 'rgba(203, 213, 225, 0.25)' : 'rgba(51, 65, 85, 0.18)',
     })
-  }, [mode])
+  }, [mode, darkMode])
 
   const togglePlay = async () => {
     const ws = wsRef.current
@@ -226,93 +752,43 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     // après un clic sur la waveform), on attend la fin avant de lancer la lecture.
     // Sinon media.play() est appelé pendant le seeking et produit du silence.
     const media = ws.getMediaElement?.()
+    const playbackEpoch = playbackEpochRef.current
     if (media?.seeking) {
-      await new Promise(resolve => {
-        const onSeeked = () => { media.removeEventListener('seeked', onSeeked); resolve() }
-        media.addEventListener('seeked', onSeeked)
-      })
+      await waitForMediaReadyAfterSeek(media, ws.getCurrentTime?.())
     }
+
+    if (
+      !mountedRef.current
+      || playbackEpochRef.current !== playbackEpoch
+      || wsRef.current !== ws
+    ) return
 
     try {
       await ws.play()
-    } catch (_) {
+    } catch {
       // Autoplay policy du navigateur — ignoré silencieusement
     }
   }
 
+  const restartFromBeginning = async () => {
+    const ws = wsRef.current
+    if (!ws) return
+    try {
+      ws.seekTo(0)
+      setCurrentTime(0)
+      await ws.play()
+    } catch {
+      setCurrentTime(0)
+    }
+  }
+
   const clearRegion = () => {
-    // Ne supprimer que la région utilisateur, pas les régions bugs
     if (activeRegionRef.current) {
       activeRegionRef.current.remove()
       activeRegionRef.current = null
     }
     setRegion(null)
-    setPreviewId(null)
-    setPreviewAudio(null)
-  }
-
-  const clearBugRegions = () => {
-    bugRegionRefsRef.current.forEach(r => { try { r.remove() } catch (e) {} })
-    bugRegionRefsRef.current = []
-    setBugRegions([])
-  }
-
-  const handleDetectBugs = async () => {
-    setAnalyzing(true)
-    setError(null)
-    clearBugRegions()
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/detect-bugs`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ seuil: 3.0, duree_min: 0.3 }),
-          credentials: 'include',
-        }
-      )
-      const data = await resp.json()
-      if (!data.success) {
-        setError(data.error || 'Erreur lors de l\'analyse')
-        return
-      }
-      setBugRegions(data.bugs)
-      // Ajouter les régions colorées sur la waveform
-      const refs = []
-      data.bugs.forEach(bug => {
-        const color = bug.severity >= 3
-          ? 'rgba(239, 68, 68, 0.30)'    // rouge vif → bug sévère
-          : bug.severity === 2
-          ? 'rgba(251, 146, 60, 0.30)'   // orange → bug modéré
-          : 'rgba(250, 204, 21, 0.25)'   // jaune → anomalie légère
-        const r = regionsRef.current?.addRegion({
-          start: bug.start,
-          end: bug.end,
-          color,
-          drag: false,
-          resize: false,
-        })
-        if (r) refs.push(r)
-      })
-      bugRegionRefsRef.current = refs
-      if (data.bugs.length === 0) {
-        setStatus('✅ Aucune anomalie détectée dans cet audio.')
-        setTimeout(() => setStatus(null), 4000)
-      }
-    } catch (e) {
-      setError('Erreur réseau lors de l\'analyse')
-    } finally {
-      setAnalyzing(false)
-    }
-  }
-
-  // ── Écoute splicée côté client (Web Audio API) ──
-  const stopStitchedPlayback = () => {
-    stitchedSourcesRef.current.forEach(src => { try { src.stop() } catch (e) {} })
-    stitchedSourcesRef.current = []
-    try { audioCtxRef.current?.close() } catch (e) {}
-    audioCtxRef.current = null
-    setStitchedPlaying(false)
+    clearPreview()
   }
 
   const handleListenWithReplacement = async () => {
@@ -323,65 +799,64 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     try {
       const audioCtx = new AudioContext()
       audioCtxRef.current = audioCtx
-
-      // Récupérer le buffer décodé depuis WaveSurfer (déjà en mémoire, 0 réseau)
-      const wsBuffer = wsRef.current?.getDecodedData()
-      if (!wsBuffer) throw new Error('Audio non chargé')
-
-      // Copier dans notre AudioContext (les buffers sont liés à leur context)
-      const origBuffer = audioCtx.createBuffer(
-        wsBuffer.numberOfChannels, wsBuffer.length, wsBuffer.sampleRate
-      )
-      for (let ch = 0; ch < wsBuffer.numberOfChannels; ch++) {
-        origBuffer.copyToChannel(wsBuffer.getChannelData(ch), ch)
-      }
+      await audioCtx.resume()
 
       // Décoder le TTS preview depuis le base64
       const previewBytes = Uint8Array.from(atob(previewB64), c => c.charCodeAt(0))
       const previewBuffer = await audioCtx.decodeAudioData(previewBytes.buffer)
 
-      const sr = origBuffer.sampleRate
       const startSec = region.start / 1000
       const endSec = region.end / 1000
 
       // Jouer 8s avant la région (ou depuis le début)
       const listenFrom = Math.max(0, startSec - 8)
+      const originalDuration = (duration || wsRef.current?.getDuration?.() * 1000 || 0) / 1000
+      const listenUntil = Math.min(originalDuration, endSec + 8)
+      const streamUrl = audioUrlRef.current || await buildAudioStreamUrl()
+      const originalMedia = new Audio(streamUrl)
+      originalMedia.preload = 'auto'
+      stitchedMediaRef.current = [originalMedia]
+      const playbackId = ++stitchedPlaybackIdRef.current
 
-      const now = audioCtx.currentTime + 0.05
-
-      // Part 1 : original de listenFrom jusqu'au début de la région
-      const src1 = audioCtx.createBufferSource()
-      src1.buffer = origBuffer
-      const part1Duration = startSec - listenFrom
-      src1.connect(audioCtx.destination)
-      src1.start(now, listenFrom, part1Duration)
-
-      // Part 2 : TTS preview
-      const src2 = audioCtx.createBufferSource()
-      src2.buffer = previewBuffer
-      src2.connect(audioCtx.destination)
-      src2.start(now + part1Duration)
-
-      // Part 3 : original à partir de la fin de la région, pendant 8s max
-      const src3 = audioCtx.createBufferSource()
-      src3.buffer = origBuffer
-      const part3Duration = Math.min(8, origBuffer.duration - endSec)
-      src3.connect(audioCtx.destination)
-      src3.start(now + part1Duration + previewBuffer.duration, endSec, part3Duration)
-
-      stitchedSourcesRef.current = [src1, src2, src3]
-
-      const totalDuration = part1Duration + previewBuffer.duration + part3Duration
       setStitchedPlaying(true)
       setLoadingStitch(false)
 
-      setTimeout(() => {
-        if (audioCtxRef.current === audioCtx) {
-          stopStitchedPlayback()
+      // Le MP3 original reste streamé. Seul le petit clip TTS temporaire est
+      // décodé, puis inséré entre les deux segments de contexte.
+      await playMediaSegment(
+        originalMedia,
+        listenFrom,
+        startSec,
+        playbackId,
+        stitchedPlaybackIdRef,
+      )
+      if (stitchedPlaybackIdRef.current !== playbackId) return
+
+      await new Promise((resolve, reject) => {
+        const previewSource = audioCtx.createBufferSource()
+        previewSource.buffer = previewBuffer
+        previewSource.connect(audioCtx.destination)
+        previewSource.addEventListener('ended', resolve, { once: true })
+        stitchedSourcesRef.current = [previewSource]
+        try {
+          previewSource.start()
+        } catch (previewError) {
+          reject(previewError)
         }
-      }, (totalDuration + 0.5) * 1000)
+      })
+      if (stitchedPlaybackIdRef.current !== playbackId) return
+
+      await playMediaSegment(
+        originalMedia,
+        endSec,
+        listenUntil,
+        playbackId,
+        stitchedPlaybackIdRef,
+      )
+      if (stitchedPlaybackIdRef.current === playbackId) stopStitchedPlayback()
 
     } catch (e) {
+      stopStitchedPlayback()
       setError('Erreur lors de la lecture splicée : ' + e.message)
       setLoadingStitch(false)
     }
@@ -393,13 +868,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setSaving(true)
     setError(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/cut`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/cut`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ start_ms: Math.round(region.start), end_ms: Math.round(region.end) }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -409,17 +883,18 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         // Recharger depuis une nouvelle SAS URL (le blob a changé)
         setTimeout(async () => {
           try {
-            const freshUrl = await loadAudioObjectUrl()
             setLoading(true)
-            wsRef.current?.load(freshUrl)
-          } catch (e) { /* ignore */ }
+            if (wsRef.current) await loadAudioIntoWaveSurfer(wsRef.current)
+          } catch {
+            // Le message d'état restera visible si le reload échoue.
+          }
           setStatus(null)
         }, 1500)
       } else {
         setError(data.error || 'Erreur lors du cut')
       }
     } catch (e) {
-      setError('Erreur réseau')
+      setError(`Erreur réseau : ${e.message || 'requête échouée'}`)
     } finally {
       setSaving(false)
     }
@@ -428,21 +903,20 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   // ── Prévisualiser le TTS ──
   const handlePreviewTTS = async () => {
     if (!replaceText.trim()) return
+    clearPreview()
     setGenerating(true)
     setError(null)
-    setPreviewId(null)
-    setPreviewAudio(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/replace-preview`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-preview`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: replaceText }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
+      if (!mountedRef.current) return
       if (data.success) {
         setPreviewId(data.preview_id)
         setPreviewB64(data.audio_b64)
@@ -454,13 +928,15 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         )
         const url = URL.createObjectURL(blob)
         const audio = new Audio(url)
-        setPreviewAudio(audio)
-        audio.play()
+        previewAudioRef.current = audio
+        previewAudioUrlRef.current = url
+        audio.addEventListener('ended', stopPreviewPlayback, { once: true })
+        audio.play().catch(() => {})
       } else {
         setError(data.error || 'Erreur lors de la génération TTS')
       }
     } catch (e) {
-      setError('Erreur réseau')
+      setError(`Erreur réseau : ${e.message || 'requête échouée'}`)
     } finally {
       setGenerating(false)
     }
@@ -472,8 +948,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setSaving(true)
     setError(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/replace-confirm`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-confirm`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -482,7 +958,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             start_ms: Math.round(region.start),
             end_ms: Math.round(region.end),
           }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -492,68 +967,53 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setReplaceText('')
         setTimeout(async () => {
           try {
-            const freshUrl = await loadAudioObjectUrl()
             setLoading(true)
-            wsRef.current?.load(freshUrl)
-          } catch (e) { /* ignore */ }
+            if (wsRef.current) await loadAudioIntoWaveSurfer(wsRef.current)
+          } catch {
+            // Le message d'état restera visible si le reload échoue.
+          }
           setStatus(null)
         }, 1500)
       } else {
         setError(data.error || 'Erreur lors du remplacement')
       }
     } catch (e) {
-      setError('Erreur réseau')
+      setError(`Erreur réseau : ${e.message || 'requête échouée'}`)
     } finally {
       setSaving(false)
     }
   }
 
-  const bg = darkMode ? '#0f0a1f' : '#faf5ff'
-  const border = darkMode ? '#2d1b69' : '#ede9fe'
-  const textPrimary = darkMode ? '#e9d5ff' : '#1e1b4b'
-  const textMuted = darkMode ? '#7c3aed' : '#9333ea'
-  const headerBg = '#6d28d9'
+  const border = colors.border
+  const textPrimary = colors.text
+  const textMuted = colors.textMuted
+  const actionBg = colors.text
+  const actionText = colors.cardBg
 
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}
-      onClick={onClose}
-    >
-      <div
-        className="w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ maxWidth: '820px', maxHeight: '90vh', backgroundColor: bg }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-5 py-3 flex-shrink-0"
-          style={{ backgroundColor: headerBg }}
-        >
-          <div className="flex items-center gap-3 text-white">
-            <Icon name="cut" style={{ fontSize: '20px' }} />
-            <div>
-              <p className="text-sm font-bold">{filename}</p>
-              <p className="text-xs" style={{ color: '#ddd6fe' }}>
-                Éditeur audio · {formatTime(duration)}
-              </p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-white hover:bg-white/20 rounded-full p-1">
-            <Icon name="close" style={{ fontSize: '22px' }} />
-          </button>
-        </div>
-
+    <div className="flex min-h-0 flex-col" style={{ backgroundColor: colors.cardBg }}>
         {/* Corps */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="max-h-[calc(92vh-58px)] flex-1 overflow-y-auto p-5 space-y-4">
+
+          <AudioSlideSyncPreview
+            colors={colors}
+            darkMode={darkMode}
+            loading={slidesLoading}
+            error={slidesError}
+            slides={slides}
+            timings={slideTimings}
+            activeTiming={activeSlideTiming}
+            breakTemplate={breakSlideTemplateForFilename(filename)}
+            breakDuration={breakDurationLabelForFilename(filename)}
+          />
 
           {/* Waveform */}
           <div
             className="rounded-xl p-3 relative"
-            style={{ backgroundColor: darkMode ? '#1a0a3a' : '#f3e8ff', border: `1px solid ${border}` }}
+            style={{ backgroundColor: colors.innerBg, border: `1px solid ${border}` }}
           >
             {loading && (
-              <div className="absolute inset-0 flex items-center justify-center rounded-xl" style={{ backgroundColor: darkMode ? '#1a0a3a' : '#f3e8ff' }}>
+              <div className="absolute inset-0 flex items-center justify-center rounded-xl" style={{ backgroundColor: colors.innerBg }}>
                 <div className="flex items-center gap-2" style={{ color: textMuted }}>
                   <Icon name="hourglass_empty" style={{ fontSize: '20px' }} />
                   <span className="text-sm">Chargement de l'audio...</span>
@@ -568,20 +1028,46 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             </div>
           </div>
 
-          {/* Contrôles lecture */}
-          <div className="flex items-center gap-3">
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={togglePlay}
               disabled={loading}
               className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              style={{ backgroundColor: '#7c3aed' }}
+              style={{ backgroundColor: actionBg, color: actionText }}
             >
               <Icon name={playing ? 'pause' : 'play_arrow'} style={{ fontSize: '18px' }} />
               {playing ? 'Pause' : 'Écouter'}
             </button>
 
+            <button
+              onClick={restartFromBeginning}
+              disabled={loading}
+              className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+            >
+              <Icon name="replay" style={{ fontSize: '16px' }} />
+              Depuis le début
+            </button>
+
+            {['cut', 'replace'].map(m => (
+              <button
+                key={m}
+                onClick={() => { setMode(m); setError(null) }}
+                className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-all"
+                style={{
+                  backgroundColor: mode === m ? actionBg : colors.innerBg,
+                  color: mode === m ? actionText : colors.textSecondary,
+                  border: `1px solid ${mode === m ? actionBg : border}`,
+                }}
+              >
+                <Icon name={m === 'cut' ? 'content_cut' : 'edit'} style={{ fontSize: '16px' }} />
+                {m === 'cut' ? 'Couper' : 'Remplacer'}
+              </button>
+            ))}
+
             {region && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium" style={{ backgroundColor: darkMode ? '#2d1b69' : '#ede9fe', color: '#7c3aed' }}>
+              <div className="ml-auto flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
                 <Icon name="crop_free" style={{ fontSize: '14px' }} />
                 Sélection : {formatTime(region.start)} → {formatTime(region.end)}
                 <span style={{ color: textMuted }}>({formatTime(region.end - region.start)})</span>
@@ -592,61 +1078,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             )}
 
             {!region && !loading && (
-              <p className="text-xs" style={{ color: textMuted }}>
+              <p className="ml-auto text-xs" style={{ color: textMuted }}>
                 Faites glisser sur la forme d'onde pour sélectionner une région
               </p>
             )}
-          </div>
-
-          {/* Détection bugs */}
-          <div className="flex items-center gap-3 flex-wrap">
-            <button
-              onClick={handleDetectBugs}
-              disabled={loading || analyzing}
-              className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 transition-all"
-              style={{ backgroundColor: analyzing ? '#78350f' : '#92400e', color: '#fef3c7', border: '1px solid #d97706' }}
-            >
-              <Icon name={analyzing ? 'hourglass_empty' : 'troubleshoot'} style={{ fontSize: '16px' }} />
-              {analyzing ? 'Analyse en cours...' : 'Détecter les bugs vocaux'}
-            </button>
-
-            {bugRegions.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
-                  {bugRegions.length} anomalie{bugRegions.length > 1 ? 's' : ''} détectée{bugRegions.length > 1 ? 's' : ''}
-                  {' '}·{' '}
-                  <span style={{ color: '#ef4444' }}>■</span> sévère{' '}
-                  <span style={{ color: '#fb923c' }}>■</span> modéré{' '}
-                  <span style={{ color: '#facc15' }}>■</span> léger
-                </span>
-                <button
-                  onClick={clearBugRegions}
-                  className="text-xs px-2 py-1 rounded-lg hover:opacity-70"
-                  style={{ color: textMuted }}
-                >
-                  <Icon name="close" style={{ fontSize: '13px' }} /> Effacer
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Mode toggle */}
-          <div className="flex gap-2">
-            {['cut', 'replace'].map(m => (
-              <button
-                key={m}
-                onClick={() => { setMode(m); setError(null) }}
-                className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-all"
-                style={{
-                  backgroundColor: mode === m ? '#7c3aed' : (darkMode ? '#1a0a3a' : '#f3e8ff'),
-                  color: mode === m ? 'white' : textMuted,
-                  border: `1px solid ${mode === m ? '#7c3aed' : border}`,
-                }}
-              >
-                <Icon name={m === 'cut' ? 'content_cut' : 'edit'} style={{ fontSize: '16px' }} />
-                {m === 'cut' ? 'Couper' : 'Remplacer'}
-              </button>
-            ))}
           </div>
 
           {/* Panel Cut */}
@@ -678,12 +1113,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
               </p>
               <textarea
                 value={replaceText}
-                onChange={e => { setReplaceText(e.target.value); setPreviewId(null) }}
+                onChange={e => { setReplaceText(e.target.value); clearPreview() }}
                 rows={4}
                 placeholder="Écrivez ici le texte qui sera lu par la voix TTS à la place de la région sélectionnée..."
                 className="w-full rounded-xl p-3 text-sm resize-y outline-none"
                 style={{
-                  backgroundColor: darkMode ? '#0f0a1f' : '#fff',
+                  backgroundColor: colors.innerBg,
                   color: textPrimary,
                   border: `1px solid ${border}`,
                 }}
@@ -693,7 +1128,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
                   onClick={handlePreviewTTS}
                   disabled={!replaceText.trim() || generating}
                   className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
-                  style={{ backgroundColor: darkMode ? '#2d1b69' : '#ede9fe', color: '#7c3aed' }}
+                  style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
                 >
                   <Icon name={generating ? 'hourglass_empty' : 'hearing'} style={{ fontSize: '16px' }} />
                   {generating ? 'Génération TTS...' : previewId ? 'Réécouter le clip' : 'Prévisualiser la voix'}
@@ -716,7 +1151,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
                       onClick={handleReplaceConfirm}
                       disabled={saving}
                       className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
-                      style={{ backgroundColor: '#7c3aed' }}
+                      style={{ backgroundColor: actionBg, color: actionText }}
                     >
                       <Icon name="check" style={{ fontSize: '16px' }} />
                       {saving ? 'Application...' : 'Confirmer le remplacement'}
@@ -745,7 +1180,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             </div>
           )}
         </div>
-      </div>
     </div>
   )
 }

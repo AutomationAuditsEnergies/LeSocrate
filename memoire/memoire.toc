@@ -1,0 +1,53 @@
+\babel@toc {french}{}\relax 
+\contentsline {section}{Résumé}{i}{section*.1}%
+\contentsline {section}{Sommaire}{ii}{section*.3}%
+\contentsline {section}{Introduction générale}{1}{section*.5}%
+\contentsline {section}{\numberline {1}Position du problème}{3}{section.1}%
+\contentsline {subsection}{\numberline {1.1}D'un courtier en énergie à un organisme de formation}{3}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}La formation à distance : une opportunité freinée par son coût}{3}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Première réponse : séparer la production du cours de sa diffusion}{4}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}De l'IA d'assistance à l'ambition d'une plateforme autonome}{5}{subsection.1.4}%
+\contentsline {subsection}{\numberline {1.5}Les essais de synthèse vocale et leurs limites}{6}{subsection.1.5}%
+\contentsline {subsection}{\numberline {1.6}Le cours préenregistré ne remplace pas le formateur}{6}{subsection.1.6}%
+\contentsline {subsection}{\numberline {1.7}Une classe de problèmes au-delà d'Audit Énergie}{7}{subsection.1.7}%
+\contentsline {subsection}{\numberline {1.8}Les exigences qui encadrent le problème}{8}{subsection.1.8}%
+\contentsline {subsection}{\numberline {1.9}Formulation de la problématique}{8}{subsection.1.9}%
+\contentsline {subsection}{\numberline {1.10}Objectifs de la solution attendue}{9}{subsection.1.10}%
+\contentsline {subsection}{\numberline {1.11}Motivation, périmètre et transition}{10}{subsection.1.11}%
+\contentsline {section}{\numberline {2}État de l'art}{11}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Positionnement de l'état de l'art}{11}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Modèles de langage et adaptation au contexte}{11}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Fine-tuning et spécialisation du modèle}{12}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}RAG : ancrer la génération dans des documents}{13}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Techniques de recherche dans les architectures RAG}{14}{subsection.2.5}%
+\contentsline {subsection}{\numberline {2.6}Azure AI Search comme approche industrielle du RAG}{14}{subsection.2.6}%
+\contentsline {subsection}{\numberline {2.7}Évaluation des systèmes RAG}{15}{subsection.2.7}%
+\contentsline {subsection}{\numberline {2.8}Génération de contenus longs par prompt unique}{16}{subsection.2.8}%
+\contentsline {subsection}{\numberline {2.9}Décomposition de tâches et génération structurée}{17}{subsection.2.9}%
+\contentsline {subsection}{\numberline {2.10}Auto-évaluation, reviews automatiques et validation humaine}{17}{subsection.2.10}%
+\contentsline {subsection}{\numberline {2.11}Évaluation des contenus pédagogiques générés}{18}{subsection.2.11}%
+\contentsline {subsection}{\numberline {2.12}Synthèse critique}{19}{subsection.2.12}%
+\contentsline {subsection}{\numberline {2.13}Tableau récapitulatif des approches}{19}{subsection.2.13}%
+\contentsline {subsection}{\numberline {2.14}Comparaisons et évaluations à réaliser}{19}{subsection.2.14}%
+\contentsline {section}{\numberline {3}Étude originale}{22}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Objectif de l'approche proposée}{22}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Modèle fonctionnel de la plateforme}{22}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Principe architectural : un RNCP, un module durable}{23}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Architecture technique générale}{24}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Assistant pédagogique : choix du RAG Azure}{25}{subsection.3.5}%
+\contentsline {subsection}{\numberline {3.6}Pipeline de formation : de la source au module}{26}{subsection.3.6}%
+\contentsline {subsection}{\numberline {3.7}Enrichissement de la source pédagogique}{26}{subsection.3.7}%
+\contentsline {subsection}{\numberline {3.8}Plan JSON comme contrat pédagogique}{27}{subsection.3.8}%
+\contentsline {subsection}{\numberline {3.9}Génération par sections et contrôle des budgets}{27}{subsection.3.9}%
+\contentsline {subsection}{\numberline {3.10}Reviews ciblées et auditabilité}{28}{subsection.3.10}%
+\contentsline {subsection}{\numberline {3.11}Slides anchor-first et cohérence pédagogique}{29}{subsection.3.11}%
+\contentsline {subsection}{\numberline {3.12}Audio et transformation TTS}{29}{subsection.3.12}%
+\contentsline {subsection}{\numberline {3.13}Résultats obtenus}{30}{subsection.3.13}%
+\contentsline {subsection}{\numberline {3.14}Comparaison avec les approches de l'état de l'art}{30}{subsection.3.14}%
+\contentsline {subsection}{\numberline {3.15}Évaluations à consolider}{31}{subsection.3.15}%
+\contentsline {subsection}{\numberline {3.16}Conditions d'application}{32}{subsection.3.16}%
+\contentsline {subsection}{\numberline {3.17}Limites de la contribution}{33}{subsection.3.17}%
+\contentsline {subsection}{\numberline {3.18}Pistes d'amélioration}{33}{subsection.3.18}%
+\contentsline {subsection}{\numberline {3.19}Apports professionnels et montée en compétences}{34}{subsection.3.19}%
+\contentsline {section}{Conclusion générale}{36}{section*.10}%
+\contentsline {section}{Bibliographie}{37}{section*.12}%

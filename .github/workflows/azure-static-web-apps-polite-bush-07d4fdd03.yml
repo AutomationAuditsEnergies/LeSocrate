@@ -1,13 +1,18 @@
-name: Azure Static Web Apps CI/CD
+name: Deploy Frontend - SaaS Postgres Copy
 
 on:
   push:
     branches:
-      - staging
+      - codex/current-saas-postgres-20260705
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches:
-      - staging
+      - codex/current-saas-postgres-20260705
+  workflow_dispatch:
+
+concurrency:
+  group: polite-bush-saas-postgres-copy
+  cancel-in-progress: true
 
 jobs:
   build_and_deploy_job:
@@ -29,9 +34,12 @@ jobs:
           app_location: "./frontend"
           api_location: ""
           output_location: "dist"
+          production_branch: "codex/current-saas-postgres-20260705"
         env:
           VITE_API_URL: https://formation3-cpdhezh4cdcqecfy.francecentral-01.azurewebsites.net
-          VITE_FORMATION_NAME: "TP EC"
+          VITE_FORMATION_NAME: "Le Socrate"
+          VITE_SUPABASE_URL: ${{ secrets.SAAS_SUPABASE_URL || secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SAAS_SUPABASE_ANON_KEY || secrets.SUPABASE_ANON_KEY }}
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'

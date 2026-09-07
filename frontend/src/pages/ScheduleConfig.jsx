@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { apiUrl } from '../api'
+import { apiFetch } from '../api'
+import AppLoader from '../components/AppLoader.jsx'
 
 const Icon = ({ name, className = '' }) => (
   <span className={`material-icons ${className}`}>{name}</span>
@@ -27,7 +28,7 @@ export default function ScheduleConfig() {
 
   const fetchPrompt = async () => {
     try {
-      const resp = await fetch(apiUrl('/api/hr/tts-prompt'), { credentials: 'include' })
+      const resp = await apiFetch('/api/hr/tts-prompt')
       const data = await resp.json()
       if (data.success) setPromptContent(data.content || '')
     } catch (e) {
@@ -41,10 +42,9 @@ export default function ScheduleConfig() {
     setPromptSaving(true)
     setPromptSaved(false)
     try {
-      const resp = await fetch(apiUrl('/api/hr/tts-prompt'), {
+      const resp = await apiFetch('/api/hr/tts-prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ content: promptContent }),
       })
       const data = await resp.json()
@@ -61,7 +61,7 @@ export default function ScheduleConfig() {
 
   const fetchConfig = async () => {
     try {
-      const resp = await fetch(apiUrl('/api/hr/schedule-config'), { credentials: 'include' })
+      const resp = await apiFetch('/api/hr/schedule-config')
       const data = await resp.json()
       if (data.success) {
         setPlatforms(data.platforms)
@@ -89,10 +89,9 @@ export default function ScheduleConfig() {
     setSaving(true)
     setSaved(false)
     try {
-      const resp = await fetch(apiUrl('/api/hr/schedule-config'), {
+      const resp = await apiFetch('/api/hr/schedule-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ mode, platform_ids: selectedIds }),
       })
       const data = await resp.json()
@@ -108,23 +107,7 @@ export default function ScheduleConfig() {
   }
 
   if (loading) {
-    return (
-      <div style={{
-        minHeight: '100vh',
-        backgroundColor: '#0f172a',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}>
-        <div style={{
-          width: 32, height: 32,
-          border: '3px solid #334155',
-          borderTopColor: '#8B5CF6',
-          borderRadius: '50%',
-          animation: 'spin 0.8s linear infinite',
-        }} />
-      </div>
-    )
+    return <AppLoader label="Chargement de la configuration" surface="dark" />
   }
 
   return (
@@ -135,14 +118,10 @@ export default function ScheduleConfig() {
       padding: '40px 20px',
       fontFamily: "'Poppins', sans-serif",
     }}>
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg) } }
-      `}</style>
-
       <div style={{ maxWidth: 600, margin: '0 auto' }}>
         {/* Header */}
         <a
-          href="/hr-dashboard"
+          href="/dashboard-centre"
           style={{
             display: 'inline-flex',
             alignItems: 'center',

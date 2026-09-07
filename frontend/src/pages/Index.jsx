@@ -1,152 +1,192 @@
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useState, useEffect } from 'react'
-import Spline from '@splinetool/react-spline'
-import { apiUrl, setPlatformId, setPlatformName } from '../api'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
+import './Auth.css'
 
-export default function Index() {
+export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloadVideoRoute }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
-  const [splineLoaded, setSplineLoaded] = useState(false)
+  const invitationToken = searchParams.get('invite') || ''
+  const [submitting, setSubmitting] = useState(false)
+  const [formMessage, setFormMessage] = useState(null)
+  const [showPassword, setShowPassword] = useState(false)
+  const invitationStartedRef = useRef(false)
 
   useEffect(() => {
-    document.body.style.overflow = 'hidden'
-
-    // Lire le platform_id depuis l'URL (?p=2) et le stocker
     const pParam = searchParams.get('p')
     if (pParam) {
       setPlatformId(pParam)
-      // Récupérer le nom de la plateforme depuis le backend
+      setStudentLoginPath(`/?p=${pParam}`)
       fetch(apiUrl(`/api/platform-info?id=${pParam}`))
         .then(r => r.json())
-        .then(data => { if (data.name) setPlatformName(data.name) })
+        .then(data => {
+          if (data.name) {
+            setPlatformName(data.name)
+          }
+        })
         .catch(() => {})
+    } else if (location.pathname === '/') {
+      setStudentLoginPath('/')
     }
 
-    return () => {
-      document.body.style.overflow = ''
+  }, [location.pathname, searchParams])
+
+  useEffect(() => {
+    const preload = () => {
+      preloadCourseRoutes?.().catch(() => {})
     }
-  }, [searchParams])
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(preload, { timeout: 1500 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timeoutId = window.setTimeout(preload, 800)
+    return () => window.clearTimeout(timeoutId)
+  }, [preloadCourseRoutes])
 
-  const handleFormSubmit = async (event) => {
-    event.preventDefault()
-
-    const formData = new FormData(event.target)
-    const nom = formData.get('nom')
-    const prenom = formData.get('prenom')
+  const openStudentSession = async (credentials) => {
+    if (submitting) return
+    setSubmitting(true)
+    setFormMessage(null)
 
     try {
       const response = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ nom, prenom, platform_id: parseInt(localStorage.getItem('platform_id') || '1') }),
+        body: JSON.stringify({
+          ...credentials,
+          platform_id: parseInt(localStorage.getItem('platform_id') || '1'),
+        }),
       })
 
       const data = await response.json()
 
       if (data.success) {
-        // Stocker le token pour les navigateurs bloquant les cookies tiers
         if (data.token) localStorage.setItem('auth_token', data.token)
-        // Transmettre le platform_id dans l'URL pour que /video sache quelle plateforme utiliser
         const pId = localStorage.getItem('platform_id')
-        navigate(pId && pId !== '1' ? `/video?p=${pId}` : '/video')
+        const withPlatform = (path) => {
+          if (getStudentLoginPath().startsWith('/classe/')) return path
+          return pId && pId !== '1' ? `${path}?p=${pId}` : path
+        }
+
+        try {
+          const statusResponse = await apiFetch('/api/video/status')
+          const statusData = await statusResponse.json().catch(() => ({}))
+          if (statusData.status === 'waiting') {
+            await preloadAttenteRoute?.().catch(() => {})
+            navigate(withPlatform('/attente'), { replace: true })
+            return
+          }
+          if (statusData.status === 'playing' || statusData.status === 'finished') {
+            await preloadVideoRoute?.().catch(() => {})
+            navigate(withPlatform('/video'), { replace: true })
+            return
+          }
+        } catch (statusError) {
+          console.warn('Statut cours indisponible après login:', statusError)
+        }
+
+        await preloadVideoRoute?.().catch(() => {})
+        navigate(withPlatform('/video'), { replace: true })
       } else {
-        alert(data.error || 'Erreur lors de la connexion')
+        setFormMessage({ type: 'error', text: data.error || 'Erreur lors de la connexion.' })
       }
     } catch (error) {
       console.error('Erreur connexion:', error)
-      alert('Impossible de se connecter au serveur')
+      setFormMessage({ type: 'error', text: 'Impossible de se connecter au serveur.' })
+    } finally {
+      setSubmitting(false)
     }
   }
 
+  const handleFormSubmit = async (event) => {
+    event.preventDefault()
+    const formData = new FormData(event.target)
+    const personalCode = String(formData.get('personal_code') || '').trim()
+    if (!personalCode) {
+      setFormMessage({ type: 'error', text: 'Votre code personnel est requis.' })
+      return
+    }
+    await openStudentSession({ personal_code: personalCode })
+  }
+
+  useEffect(() => {
+    if (!invitationToken || invitationStartedRef.current) return
+    invitationStartedRef.current = true
+    openStudentSession({ invitation_token: invitationToken })
+  }, [invitationToken])
 
   return (
-    <div
-      className="min-h-screen px-4 lg:px-8 relative flex flex-col overflow-hidden"
-      style={{
-        backgroundImage: 'url("/static/images/rocket.jpg")',
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        fontFamily: 'Poppins, sans-serif',
-      }}
-    >
-      <header className="fixed top-0 left-0 w-full h-16 bg-gradient-to-b from-black/20 to-transparent z-50" />
+    <main className="cadrenza-auth">
+      <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
+      <div className="auth-layout">
+        <aside className="auth-visual auth-visual--learner-login" aria-label="Bureau d’étude">
+          <img
+            className="auth-study-image"
+            src="/student-learning-login-unsplash-yen-vu.jpg"
+            alt="Un bureau d’étude avec des livres, des cahiers et un ordinateur"
+            draggable={false}
+          />
+        </aside>
 
-      <main className="relative isolate flex-1 flex items-center justify-end pr-6 md:pr-12 lg:pr-20">
-        {/* Calque Spline en arrière-plan, n'affecte pas le layout */}
-        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
-          <div
-            style={{
-              position: 'absolute',
-              top: '10%',
-              left: '5%',
-              width: '50%',
-              height: '80%',
-              opacity: splineLoaded ? 0.8 : 0,
-              transform: splineLoaded ? 'scale(1)' : 'scale(0.95)',
-              transition: 'opacity 1.5s ease-out, transform 1.5s ease-out',
-              willChange: 'opacity, transform'
-            }}
-          >
-            <Spline
-              scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
-              style={{ width: '100%', height: '100%' }}
-              onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
-            />
+        <section className="auth-panel" id="auth-main">
+          <div className="auth-panel__inner">
+            <header className="auth-heading">
+              <h2>Rejoindre le cours</h2>
+            </header>
+
+            {formMessage && (
+              <div
+                className={`auth-alert ${formMessage.type === 'success' ? 'auth-alert--success' : 'auth-alert--error'}`}
+                role={formMessage.type === 'error' ? 'alert' : 'status'}
+                aria-live={formMessage.type === 'error' ? 'assertive' : 'polite'}
+              >
+                {formMessage.text}
+              </div>
+            )}
+
+            {invitationToken ? (
+              <div className="auth-assurance" role="status" aria-live="polite">
+                {submitting ? 'Identification automatique en cours…' : 'Invitation personnelle vérifiée'}
+              </div>
+            ) : (
+              <form className="auth-form" onSubmit={handleFormSubmit}>
+                <div className="auth-field">
+                  <label htmlFor="personal_code">Code personnel</label>
+                  <div className="auth-password-wrap">
+                    <input
+                      id="personal_code"
+                      name="personal_code"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="one-time-code"
+                      placeholder="Code personnel reçu par e-mail"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="auth-password-toggle"
+                      onClick={() => setShowPassword((visible) => !visible)}
+                      aria-label={showPassword ? 'Masquer le code personnel' : 'Afficher le code personnel'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? 'Masquer' : 'Afficher'}
+                    </button>
+                  </div>
+                </div>
+
+                <button type="submit" disabled={submitting} className="auth-submit">
+                  {submitting ? 'Identification…' : 'Rejoindre le cours'}
+                </button>
+              </form>
+            )}
+
+            <p className="auth-assurance">
+              {invitationToken ? 'Aucune information personnelle à saisir' : 'Utilisez le code personnel contenu dans votre e-mail'}
+            </p>
           </div>
-        </div>
-
-        <div className="relative z-10 bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl p-10 w-full max-w-md text-left ring-1 ring-white/30">
-          <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-pink-500 rounded-full w-20 h-20 flex items-center justify-center shadow-md">
-            <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
-              <circle cx="12" cy="8" r="4" />
-              <path d="M4 20c0-4 4-6 8-6s8 2 8 6v1H4z" />
-            </svg>
-          </div>
-          <h2 className="text-2xl mt-12 font-bold text-pink-600 mb-6">Démarrez votre ascension</h2>
-          <form className="space-y-5 text-left" onSubmit={handleFormSubmit}>
-            <div>
-              <label className="block text-gray-700 font-semibold mb-1" htmlFor="nom">
-                Nom :
-              </label>
-              <input
-                id="nom"
-                name="nom"
-                type="text"
-                required
-                className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-pink-400"
-              />
-            </div>
-            <div>
-              <label className="block text-gray-700 font-semibold mb-1" htmlFor="prenom">
-                Prénom :
-              </label>
-              <input
-                id="prenom"
-                name="prenom"
-                type="text"
-                required
-                className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-pink-400"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full bg-gradient-to-r from-pink-500 to-fuchsia-600 text-white font-semibold py-2 rounded-full hover:opacity-90 transition duration-200"
-            >
-              Entrer au cours
-            </button>
-          </form>
-          <p className="mt-6 text-center text-sm text-gray-500">
-            Bon apprentissage et bonne participation !
-          </p>
-        </div>
-      </main>
-
-      <footer className="w-full text-center text-white py-4 mt-10 border-t border-white/20">
-        <p className="text-sm">&copy; 2025 Sales Hacking. Tous droits réservés.</p>
-      </footer>
-    </div>
+        </section>
+      </div>
+    </main>
   )
 }

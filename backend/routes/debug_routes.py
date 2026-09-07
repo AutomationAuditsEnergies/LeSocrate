@@ -1,14 +1,35 @@
 # debug_routes.py - Routes de debug pour le développement (API JSON)
-from flask import Blueprint, session, jsonify
+from flask import Blueprint, request, session, jsonify
 import state
-from config import COURS_PLAYLIST
-from services.audio_service import get_current_audio_info
-from services.time_service import get_heure_debut_cours, get_current_simulated_time
+from services.audio_service import get_current_playback_context
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 debug_bp = Blueprint("debug", __name__)
+
+
+def _get_platform_id():
+    """Resolve the current platform for debug calls.
+
+    The debug page is opened directly from tenant-specific admin URLs, so query
+    and header values must override an older admin session.
+    """
+    raw = request.headers.get("X-Platform-Id")
+    if raw and raw.isdigit():
+        return int(raw)
+    for key in ("platform_id", "p"):
+        arg = request.args.get(key)
+        if arg and str(arg).isdigit():
+            return int(arg)
+    pid = session.get("platform_id")
+    if pid:
+        try:
+            return int(pid)
+        except (TypeError, ValueError):
+            pass
+    logger.warning("⚠️ platform_id introuvable pour debug — fallback P1")
+    return 1
 
 
 @debug_bp.route("/api/debug/cours-info")
@@ -19,12 +40,16 @@ def debug_cours_info():
             logger.warning("⚠️ Tentative accès debug sans authentification admin")
             return jsonify({"authenticated": False, "error": "Accès refusé"}), 403
 
-        logger.info("🐛 Accès API debug cours-info")
+        platform_id = _get_platform_id()
+        logger.info(f"🐛 Accès API debug cours-info P{platform_id}")
 
-        # Récupérer toutes les infos
-        heure_debut_cours = get_heure_debut_cours()
-        heure_actuelle_simulee = get_current_simulated_time()
-        audio_info, offset, temps_restant = get_current_audio_info()
+        playback = get_current_playback_context(platform_id)
+        playlist = playback["playlist"]
+        heure_debut_cours = playback["course_start"]
+        heure_actuelle_simulee = playback["now"]
+        audio_info = playback["audio_info"]
+        offset = playback["offset"]
+        temps_restant = playback["time_remaining"]
 
         # Calculer le temps écoulé
         temps_ecoule_total = 0
@@ -34,18 +59,29 @@ def debug_cours_info():
             )
 
         # Informations sur la playlist
-        duree_totale_cours = sum(audio["duration"] for audio in COURS_PLAYLIST)
+        duree_totale_cours = sum(audio["duration"] for audio in playlist)
 
         debug_info = {
+            "platform_id": platform_id,
             "heure_debut_cours": heure_debut_cours.strftime("%Y-%m-%d %H:%M:%S"),
             "heure_actuelle": heure_actuelle_simulee.strftime("%Y-%m-%d %H:%M:%S"),
-            "simulation_active": state.simulated_time_offset is not None,
+            "simulation_active": state.simulated_time_offsets.get(platform_id) is not None or state.simulated_time_offset is not None,
             "temps_ecoule_secondes": temps_ecoule_total,
             "temps_ecoule_minutes": temps_ecoule_total // 60,
             "duree_totale_cours_secondes": duree_totale_cours,
             "duree_totale_cours_minutes": duree_totale_cours // 60,
-            "nombre_audios": len(COURS_PLAYLIST),
+            "nombre_audios": len(playlist),
         }
+        if playback["schedule_schema_version"] == 2:
+            occurrence = playback["occurrence"] or {}
+            debug_info.update(
+                {
+                    "schedule_schema_version": 2,
+                    "course_session_id": occurrence.get("id"),
+                    "module_day_id": occurrence.get("module_day_id"),
+                    "folder_id": playlist[0].get("folder_id") if playlist else None,
+                }
+            )
 
         if audio_info:
             debug_info.update(
@@ -89,12 +125,25 @@ def debug_playlist():
             logger.warning("⚠️ Tentative accès debug playlist sans auth admin")
             return jsonify({"authenticated": False, "error": "Accès refusé"}), 403
 
-        logger.info("🐛 Accès API debug playlist")
+        platform_id = _get_platform_id()
+        logger.info(f"🐛 Accès API debug playlist P{platform_id}")
 
-        return jsonify({
+        playback = get_current_playback_context(platform_id)
+        payload = {
             "success": True,
-            "playlist": COURS_PLAYLIST
-        }), 200
+            "platform_id": platform_id,
+            "playlist": playback["playlist"],
+        }
+        if playback["schedule_schema_version"] == 2:
+            occurrence = playback["occurrence"] or {}
+            payload.update(
+                {
+                    "schedule_schema_version": 2,
+                    "course_session_id": occurrence.get("id"),
+                    "module_day_id": occurrence.get("module_day_id"),
+                }
+            )
+        return jsonify(payload), 200
 
     except Exception as e:
         logger.error(f"❌ Erreur API debug playlist: {e}")

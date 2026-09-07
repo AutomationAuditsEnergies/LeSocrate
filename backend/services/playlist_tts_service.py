@@ -1,9 +1,12 @@
-"""
-Pipeline TTS complète : PDFs d'un dossier → 19 fichiers MP3 conformes à la playlist.
+"""Pipeline TTS historique V1 : PDFs d'un dossier → 19 fichiers MP3.
 
-Étapes :
+Les dossiers V2 n'empruntent jamais ce générateur : ils passent par
+``content_generation_service.generate_audio_from_script`` avec leur manifeste
+immuable. Ce module reste volontairement fixe pour relire les formations V1.
+
+Étapes V1 :
 1. Télécharger et concaténer tous les PDFs du dossier
-2. Appeler Claude pour reformuler en 7 blocs cours (calibration 165,7 mots/min)
+2. Appeler DeepSeek pour reformuler en 7 blocs cours (calibration 165,7 mots/min)
 3. Générer les textes Q&A et pauses
 4. TTS fish.audio pour chaque fichier
 5. Ajuster la durée avec pydub (silence padding)
@@ -15,7 +18,7 @@ import io
 import re
 from pydub import AudioSegment
 from utils.logger import get_logger
-from utils.anthropic_client import default_model, post_message as _llm_post
+from utils.deepseek_client import default_model, post_message as _llm_post
 from services.tts_service import convert_to_speech, extract_text_from_pdf, extract_text_from_file
 from services.azure_blob_service import (
     upload_blob, download_blob, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS,
@@ -29,7 +32,7 @@ LLM_MODEL = default_model()
 
 WORDS_PER_MINUTE = 165.7  # Fish Audio mesuré : 11 959 mots = 72,2 min à speed=0.90
 
-# Les 19 fichiers de la playlist avec leurs durées en secondes
+# Les 19 fichiers immuables du contrat historique V1
 PLAYLIST_SPEC = [
     # (filename, duration_seconds, type, bloc_number)
     # === BLOC 1 ===
@@ -127,10 +130,19 @@ def _pad_audio_to_duration(audio_bytes, target_duration_seconds, truncate_overfl
     return output.getvalue()
 
 
-def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_func=None):
+def _build_pause_audio(
+    intro_text,
+    outro_text,
+    target_duration_seconds,
+    convert_func=None,
+    *,
+    lead_in_seconds=17,
+):
     """
     Construit un audio de pause/Q&A :
-    intro TTS optionnelle + silence + outro TTS, le tout padded à la durée cible.
+    intro TTS optionnelle + silence + outro TTS + 2s de silence final.
+    Si l'intro est vide, le fichier commence par un vrai silence numérique :
+    aucune syllabe ni tonalité d'amorce n'est ajoutée.
     """
     tts = convert_func or convert_to_speech
     intro_text = (intro_text or "").strip()
@@ -146,16 +158,19 @@ def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_
     if outro_text:
         outro_audio = AudioSegment.from_mp3(io.BytesIO(tts(outro_text)))
 
-    target_ms = target_duration_seconds * 1000
-    silence_ms = target_ms - len(intro_audio) - len(outro_audio) - 17000  # 17s début
+    target_ms = int(target_duration_seconds * 1000)
+    lead_in_ms = max(0, int(float(lead_in_seconds or 0) * 1000))
+    outro_tail_ms = 2000
+    silence_ms = target_ms - len(intro_audio) - len(outro_audio) - lead_in_ms - outro_tail_ms
 
-    if silence_ms < 1000:
-        silence_ms = 1000
+    if silence_ms < 0:
+        silence_ms = 0
 
-    start_silence = AudioSegment.silent(duration=17000)
+    start_silence = AudioSegment.silent(duration=lead_in_ms)
     mid_silence = AudioSegment.silent(duration=silence_ms)
+    trailing_silence = AudioSegment.silent(duration=outro_tail_ms)
 
-    full_audio = start_silence + intro_audio + mid_silence + outro_audio
+    full_audio = start_silence + intro_audio + mid_silence + outro_audio + trailing_silence
 
     # Si encore trop court, on pad
     if len(full_audio) < target_ms:
@@ -166,7 +181,7 @@ def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_
     return output.getvalue()
 
 
-# ─── Claude API : reformulation bloc par bloc ───────────────────────────────
+# ─── DeepSeek API : reformulation bloc par bloc ─────────────────────────────
 
 def _count_words_excluding_tags(text):
     """Compte les mots en excluant les tags [entre crochets] du décompte."""
@@ -174,13 +189,13 @@ def _count_words_excluding_tags(text):
     return len(cleaned.split())
 
 
-def _call_claude_reformulate(course_text, progress_callback=None):
+def _call_deepseek_reformulate(course_text, progress_callback=None):
     """
-    Appelle Claude pour reformuler le cours en 7 blocs.
+    Appelle DeepSeek pour reformuler le cours en 7 blocs.
 
     Logique :
     - On avance dans le texte source séquentiellement
-    - Claude reformule fidèlement le contenu, il ne DOIT PAS inventer ou étirer
+    - DeepSeek reformule fidèlement le contenu, sans inventer ni étirer
     - Si le contenu s'épuise avant le bloc 7, les blocs restants sont vides
     - Si du contenu reste après le bloc 7, on le signale dans le résultat
     """
@@ -191,7 +206,7 @@ def _call_claude_reformulate(course_text, progress_callback=None):
     logger.info(f"📝 Texte source: {total_source_words} mots")
 
     # On découpe le source en 7 parts proportionnelles aux durées
-    # Mais c'est juste une SUGGESTION — Claude utilise ce qu'il y a, pas plus
+    # C'est une suggestion : DeepSeek utilise le contenu disponible, pas plus.
     total_duration = sum(COURS_DURATIONS_MIN.values())
     cursor = 0  # position dans le texte source
 
@@ -223,22 +238,24 @@ def _call_claude_reformulate(course_text, progress_callback=None):
             })
             continue
 
-        # Contexte des blocs précédents
+        # Contexte des cours précédents
         context_prev = ""
         if blocs and blocs[-1].get("content"):
             last_content = blocs[-1]["content"]
             last_sentences = re.sub(r'\[.*?\]', '', last_content).split(".")[-3:]
-            context_prev = f"\nLe bloc précédent se terminait par : \"{'. '.join(s.strip() for s in last_sentences if s.strip())}\"\nFais une reprise naturelle."
+            context_prev = f"\nLe cours précédent se terminait par : \"{'. '.join(s.strip() for s in last_sentences if s.strip())}\"\nFais une reprise naturelle."
 
         bloc_prompt = f"""Tu es un professeur passionné qui donne un cours en présentiel à ses élèves.
 Reformule le contenu ci-dessous en un script oral pour TTS (fish.audio S2-Pro).
 
-BLOC {bloc_num}/7 — durée max : {duration} minutes — vise environ {target} mots (hors tags entre crochets).
+COURS INTERNE {bloc_num}/7 — contrainte audio interne : {duration} minutes, environ {target} mots (hors tags entre crochets).
 {context_prev}
 
 RÈGLE ABSOLUE : REFORMULE FIDÈLEMENT LE CONTENU SOURCE CI-DESSOUS.
 - N'invente RIEN. Ne rajoute RIEN qui ne soit pas dans le contenu source.
-- Si le contenu source est court, le bloc sera court. C'est NORMAL. Ne rallonge pas artificiellement.
+- Si le contenu source est court, le cours sera court. C'est NORMAL. Ne rallonge pas artificiellement.
+- Ne mentionne jamais côté apprenant le mot "bloc", les horaires, les créneaux,
+  le planning, la durée du fichier ou le budget mots.
 - Tu peux reformuler, illustrer avec des exemples issus du texte, expliquer autrement, mais
   le fond doit rester fidèle au contenu fourni.
 
@@ -442,6 +459,21 @@ def _build_contextual_break_audio(
     blocs_by_number,
 ):
     from services.break_transition_service import build_break_transition_texts
+    from services.fixed_break_scripts import get_fixed_break_script
+
+    dynamic_asset = bool(re.fullmatch(r"(?:qa|pause)_\d{2}\.mp3", filename or ""))
+    fixed = get_fixed_break_script(filename, intro_owned_by_previous=False)
+    if fixed:
+        try:
+            return _build_pause_audio(
+                fixed["intro"],
+                fixed["outro"],
+                duration_sec,
+                lead_in_seconds=0 if dynamic_asset else 17,
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Q&A/Pause fixe échoué pour {filename}: {e}; fallback audioqapause")
+            return _get_recycled_qa_pause(filename)
 
     intro, outro = build_break_transition_texts(
         filename=filename,
@@ -453,10 +485,22 @@ def _build_contextual_break_audio(
         get_bloc_text=lambda n: blocs_by_number.get(n, ""),
     )
     try:
-        return _build_pause_audio(intro, outro, duration_sec)
+        return _build_pause_audio(
+            intro,
+            outro,
+            duration_sec,
+            lead_in_seconds=0 if dynamic_asset else 17,
+        )
     except Exception as e:
         logger.warning(f"⚠️ Q&A/Pause contextuel échoué pour {filename}: {e}; fallback audioqapause")
         return _get_recycled_qa_pause(filename)
+
+
+def _fetch_effective_cours_documents(folder_id):
+    """Retourne les documents depuis le stockage pipeline autoritaire."""
+    from repositories.pipeline_repository import list_effective_course_documents
+
+    return list_effective_course_documents(folder_id)
 
 
 def count_words_in_folder(platform_id, folder_id):
@@ -464,15 +508,7 @@ def count_words_in_folder(platform_id, folder_id):
     Compte les mots de tous les PDFs d'un dossier.
     Retourne un dict avec total_words, days_coverable, sufficient, words_missing.
     """
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, filename, original_name FROM cours_documents WHERE folder_id = ? ORDER BY id",
-        (folder_id,)
-    )
-    documents = cursor.fetchall()
-    conn.close()
+    documents = _fetch_effective_cours_documents(folder_id)
 
     if not documents:
         return {"total_words": 0, "days_coverable": 0, "sufficient": False, "words_missing": WORDS_NEEDED_PER_DAY, "documents": []}
@@ -509,7 +545,7 @@ def count_words_in_folder(platform_id, folder_id):
 # ─── Pipeline principale ────────────────────────────────────────────────────
 
 def _generate_mock_blocs():
-    """Retourne 7 blocs courts factices (aucun appel Claude) pour les tests."""
+    """Retourne 7 blocs courts factices, sans appel DeepSeek, pour les tests."""
     mock_topics = [
         "l'introduction du cours", "les fondamentaux", "les méthodes pratiques",
         "les études de cas", "la réglementation", "l'évaluation", "la conclusion",
@@ -562,7 +598,7 @@ def _generate_silence_mp3(duration_sec=1):
 
 def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None, mock=False):
     """
-    Pipeline complète : génère les 19 fichiers MP3 pour un dossier de cours.
+    Pipeline V1 : génère les 19 fichiers MP3 historiques d'un dossier.
 
     Args:
         platform_id: ID de la plateforme
@@ -583,15 +619,7 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
     # ── Étape 1 : récupérer les documents du dossier ──
     progress(1, total_steps, "Récupération des documents du dossier...")
 
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, filename, original_name FROM cours_documents WHERE folder_id = ? ORDER BY id",
-        (folder_id,)
-    )
-    documents = cursor.fetchall()
-    conn.close()
+    documents = _fetch_effective_cours_documents(folder_id)
 
     if not documents:
         raise ValueError("Aucun document dans ce dossier")
@@ -621,20 +649,23 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
     total_words = len(course_text.split())
     logger.info(f"📝 Texte total: {total_words} mots")
 
-    # ── Étape 3 : reformulation via Claude (ou mock) ──
+    # ── Étape 3 : reformulation via DeepSeek (ou mock) ──
     if mock:
-        progress(3, total_steps, "[MOCK] Génération de blocs factices (0 appel Claude)...")
+        progress(3, total_steps, "[MOCK] Génération de blocs factices (0 appel DeepSeek)...")
         blocs = _generate_mock_blocs()
         remaining_source_words = 0
         logger.info("🧪 MODE MOCK playlist — blocs factices générés")
     else:
-        progress(3, total_steps, f"Reformulation du cours en 7 blocs via Claude ({total_words} mots source)...")
+        progress(3, total_steps, f"Reformulation du cours en 7 blocs via DeepSeek ({total_words} mots source)...")
 
-        def claude_progress(msg):
+        def deepseek_progress(msg):
             # Reformatter le message pour ne pas afficher "(45min)" qui prête à confusion
             progress(3, total_steps, msg)
 
-        blocs, remaining_source_words = _call_claude_reformulate(course_text, progress_callback=claude_progress)
+        blocs, remaining_source_words = _call_deepseek_reformulate(
+            course_text,
+            progress_callback=deepseek_progress,
+        )
 
     # Mapper les blocs par numéro (exclure les blocs vides)
     blocs_by_number = {b["bloc_number"]: b["content"] for b in blocs if b.get("content")}
@@ -716,7 +747,7 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
                     logger.info(f"   ⏭️ {filename}: bloc {bloc_num} vide, skip")
                     continue
 
-                audio_bytes = convert_to_speech(bloc_text)
+                audio_bytes = convert_to_speech(bloc_text, platform_id=platform_id)
                 duration_ms = _measure_duration_ms(audio_bytes)
                 logger.info(f"   TTS brut: {duration_ms/1000:.1f}s (cible: {duration_sec}s)")
                 final_bytes = _pad_audio_to_duration(audio_bytes, duration_sec)
@@ -751,6 +782,16 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
                     playlist_items, blocs_by_number,
                 )
                 logger.info(f"   🧩 {filename}: pause midi contextuelle générée")
+
+            elif file_type == "jointure":
+                final_bytes = _build_pause_audio(
+                    "Nous allons maintenant poursuivre avec la partie suivante, "
+                    "dans le prolongement direct de ce que nous venons de voir.",
+                    "",
+                    min(10, max(1, int(duration_sec))),
+                    lead_in_seconds=0,
+                )
+                logger.info(f"   🧩 {filename}: jointure de cours générée")
 
             else:
                 raise ValueError(f"Type inconnu: {file_type}")

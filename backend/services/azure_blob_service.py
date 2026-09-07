@@ -1,11 +1,15 @@
 import os
+import hashlib
+from functools import lru_cache
 from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.core.exceptions import ResourceExistsError
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-CONTAINER_DOCUMENTS = "documenttts"
-CONTAINER_AUDIOS = "audiostts"
+CONTAINER_DOCUMENTS = os.getenv("AZURE_TTS_DOCUMENT_CONTAINER", "documenttts")
+CONTAINER_AUDIOS = os.getenv("AZURE_TTS_AUDIO_CONTAINER", "audiostts")
+CONTAINER_ARTIFACTS = os.getenv("AZURE_PIPELINE_ARTIFACT_CONTAINER", "pipeline-artifacts")
 
 
 def _content_settings_for_blob(blob_path):
@@ -20,15 +24,39 @@ def _content_settings_for_blob(blob_path):
         return ContentSettings(content_type="application/json; charset=utf-8")
     if lower.endswith(".txt"):
         return ContentSettings(content_type="text/plain; charset=utf-8")
+    if lower.endswith(".md"):
+        return ContentSettings(content_type="text/markdown; charset=utf-8")
     if lower.endswith(".pdf"):
         return ContentSettings(content_type="application/pdf")
     return None
 
 
+@lru_cache(maxsize=1)
 def _get_blob_service_client():
-    conn_str = os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+    """Reuse the SDK transport/pool and prefer Azure Managed Identity.
+
+    A connection string remains a local/legacy fallback. Production can set
+    ``AZURE_TTS_STORAGE_ACCOUNT_URL`` and optionally
+    ``AZURE_MANAGED_IDENTITY_CLIENT_ID`` without storing an account key.
+    """
+    account_url = (
+        os.getenv("AZURE_TTS_STORAGE_ACCOUNT_URL")
+        or os.getenv("AZURE_STORAGE_ACCOUNT_URL")
+    )
+    if account_url:
+        from azure.identity import DefaultAzureCredential
+
+        client_id = (os.getenv("AZURE_MANAGED_IDENTITY_CLIENT_ID") or "").strip() or None
+        credential = DefaultAzureCredential(managed_identity_client_id=client_id)
+        return BlobServiceClient(account_url=account_url.rstrip("/"), credential=credential)
+    conn_str = (
+        os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+        or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    )
     if not conn_str:
-        raise ValueError("AZURE_TTS_STORAGE_CONNECTION_STRING non définie dans .env")
+        raise ValueError(
+            "AZURE_TTS_STORAGE_CONNECTION_STRING/AZURE_STORAGE_CONNECTION_STRING non définie"
+        )
     return BlobServiceClient.from_connection_string(conn_str)
 
 
@@ -37,15 +65,56 @@ def build_blob_path(platform_id, folder_id, filename):
     return f"platform-{platform_id}/folder-{folder_id}/{filename}"
 
 
-def upload_blob(container_name, blob_path, data):
+@lru_cache(maxsize=32)
+def ensure_private_container(container_name):
+    """Create a private container once; never enable anonymous access."""
+    client = _get_blob_service_client()
+    try:
+        client.create_container(container_name)
+        logger.info("✅ Container Blob privé créé: %s", container_name)
+    except ResourceExistsError:
+        pass
+    return container_name
+
+
+def upload_blob(container_name, blob_path, data, *, metadata=None):
     """Upload des bytes ou un file-like vers Azure Blob Storage"""
     client = _get_blob_service_client()
     blob_client = client.get_blob_client(container=container_name, blob=blob_path)
+    effective_metadata = dict(metadata or {})
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        effective_metadata["sha256"] = hashlib.sha256(bytes(data)).hexdigest()
     blob_client.upload_blob(
         data,
         overwrite=True,
         content_settings=_content_settings_for_blob(blob_path),
+        metadata=effective_metadata or None,
     )
+    if (
+        container_name == CONTAINER_AUDIOS
+        and str(blob_path or "").lower().endswith(".mp3")
+        and isinstance(data, (bytes, bytearray, memoryview))
+    ):
+        try:
+            from services.audio_waveform_service import (
+                create_waveform_for_uploaded_bytes,
+                waveform_cache_blob_path,
+            )
+
+            cache_client = client.get_blob_client(
+                container=container_name,
+                blob=waveform_cache_blob_path(blob_path),
+            )
+            create_waveform_for_uploaded_bytes(
+                blob_client,
+                cache_client,
+                bytes(data),
+                audio_properties=blob_client.get_blob_properties(),
+            )
+        except Exception as exc:
+            # Audio publication must remain available even if peak extraction
+            # is unsupported for an unusual codec.
+            logger.warning("⚠️ Forme d'onde non générée pour %s: %s", blob_path, exc)
     logger.info(f"✅ Blob uploadé: {container_name}/{blob_path}")
     return blob_path
 
@@ -55,6 +124,13 @@ def download_blob(container_name, blob_path):
     client = _get_blob_service_client()
     blob_client = client.get_blob_client(container=container_name, blob=blob_path)
     return blob_client.download_blob().readall()
+
+
+def blob_exists(container_name, blob_path):
+    """Retourne True si le blob existe dans Azure Storage."""
+    client = _get_blob_service_client()
+    blob_client = client.get_blob_client(container=container_name, blob=blob_path)
+    return blob_client.exists()
 
 
 def delete_blob(container_name, blob_path):

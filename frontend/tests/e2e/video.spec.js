@@ -6,6 +6,7 @@ import { test, expect } from '@playwright/test'
  */
 async function loginAndGetState(page) {
   await page.goto('/')
+  await page.locator('summary').click()
   await page.fill('#nom', 'Test')
   await page.fill('#prenom', 'Playwright')
   await page.click('button[type=submit]')
@@ -49,6 +50,7 @@ async function loginAndGetState(page) {
 test.describe('Page vidéo — Affichage général', () => {
   test('après login, arrive sur /video ou /attente selon le statut du cours', async ({ page }) => {
     await page.goto('/')
+    await page.locator('summary').click()
     await page.fill('#nom', 'Test')
     await page.fill('#prenom', 'Playwright')
     await page.click('button[type=submit]')
