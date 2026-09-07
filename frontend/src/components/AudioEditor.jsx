@@ -1,9 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
-import { apiFetch, apiUrl, getPlatformId } from '../api'
-import { breakDurationLabel, buildAudioSlideTimings } from './slides/audioSlideSync'
+import { apiFetch } from '../api'
+import {
+  breakDurationLabel,
+  buildAudioSlideTimings,
+  isCourseAudioFilename,
+} from './slides/audioSlideSync'
 import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
+import { stopMediaPlayback, stopWaveSurferPlayback } from './audioPlaybackLifecycle'
 
 const Icon = ({ name, style, className = '' }) => (
   <span className={`material-icons ${className}`} style={style}>{name}</span>
@@ -51,126 +56,56 @@ function waitForMediaReadyAfterSeek(media, targetSeconds, timeoutMs = 1200) {
   })
 }
 
-async function fetchAudioBlob(
-  url,
-  {
-    credentials = 'omit',
-    headers = {},
-    label = 'audio',
-    signal,
-  } = {},
-) {
-  let resp
-  try {
-    resp = await fetch(url, {
-      method: 'GET',
-      credentials,
-      cache: 'no-store',
-      headers,
-      signal,
-    })
-  } catch (e) {
-    if (e?.name === 'AbortError') throw e
-    throw new Error(
-      e?.message === 'Failed to fetch'
-        ? `${label} inaccessible`
-        : (e?.message || `${label} indisponible`),
-    )
-  }
-
-  if (!resp.ok) {
-    const contentType = resp.headers.get('content-type') || ''
-    let detail = ''
-    if (contentType.includes('application/json')) {
-      const data = await resp.json().catch(() => ({}))
-      detail = data.error || data.message || ''
-    } else {
-      detail = (await resp.text().catch(() => '')).slice(0, 200)
-    }
-    throw new Error(
-      detail
-        ? `${label} indisponible : HTTP ${resp.status} (${detail})`
-        : `${label} indisponible : HTTP ${resp.status}`,
-    )
-  }
-
-  const rawBlob = await resp.blob()
-  if (!rawBlob.size) throw new Error(`${label} vide`)
-  return rawBlob.type === 'audio/mpeg'
-    ? rawBlob
-    : new Blob([rawBlob], { type: 'audio/mpeg' })
+function waitBeforeRetry(delayMs) {
+  return new Promise(resolve => window.setTimeout(resolve, delayMs))
 }
 
-async function fetchAudioBlobByRanges(
-  url,
-  totalSize,
-  {
-    credentials = 'include',
-    headers = {},
-    label = 'audio',
-    signal,
-    chunkSize = 4 * 1024 * 1024,
-  } = {},
-) {
-  const expectedSize = Number(totalSize)
-  if (!Number.isSafeInteger(expectedSize) || expectedSize <= 0) {
-    return fetchAudioBlob(url, {
-      credentials,
-      headers,
-      label,
-      signal,
-    })
-  }
+function playMediaSegment(media, startSeconds, endSeconds, playbackId, activePlaybackIdRef) {
+  return new Promise((resolve, reject) => {
+    const start = Math.max(0, Number(startSeconds) || 0)
+    const end = Math.max(start, Number(endSeconds) || start)
+    if (!media || end - start < 0.02) {
+      resolve()
+      return
+    }
 
-  const parts = []
-  for (let start = 0; start < expectedSize; start += chunkSize) {
-    const end = Math.min(expectedSize - 1, start + chunkSize - 1)
-    const expectedChunkSize = end - start + 1
-    let chunk = null
-    let lastError = null
-
-    for (let attempt = 1; attempt <= 2 && !chunk; attempt += 1) {
-      let resp
-      try {
-        resp = await fetch(url, {
-          method: 'GET',
-          credentials,
-          cache: 'no-store',
-          headers: {
-            ...headers,
-            Range: `bytes=${start}-${end}`,
-          },
-          signal,
-        })
-        if (resp.status !== 206) {
-          throw new Error(`HTTP ${resp.status} au lieu de 206`)
-        }
-        const received = await resp.blob()
-        if (received.size !== expectedChunkSize) {
-          throw new Error(
-            `plage ${start}-${end} incomplète (${received.size}/${expectedChunkSize} octets)`,
-          )
-        }
-        chunk = received
-      } catch (e) {
-        if (e?.name === 'AbortError') throw e
-        lastError = e
-        if (attempt === 1) {
-          console.warn(`${label} : nouvelle tentative pour la plage ${start}-${end}`, e)
-        }
+    let settled = false
+    const timeoutMs = Math.max(3000, (end - start + 8) * 1000)
+    let timeoutId = null
+    const cleanup = () => {
+      media.removeEventListener('timeupdate', checkPosition)
+      media.removeEventListener('error', fail)
+      media.removeEventListener('ended', finish)
+      if (timeoutId) window.clearTimeout(timeoutId)
+    }
+    const finish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      media.pause()
+      resolve()
+    }
+    const fail = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error('Le flux audio de prévisualisation est indisponible'))
+    }
+    const checkPosition = () => {
+      if (activePlaybackIdRef.current !== playbackId || media.currentTime >= end - 0.03) {
+        finish()
       }
     }
 
-    if (!chunk) {
-      throw new Error(
-        `${label} interrompu à ${Math.round((start / expectedSize) * 100)} %`
-        + `${lastError?.message ? ` (${lastError.message})` : ''}`,
-      )
-    }
-    parts.push(chunk)
-  }
-
-  return new Blob(parts, { type: 'audio/mpeg' })
+    media.addEventListener('timeupdate', checkPosition)
+    media.addEventListener('error', fail, { once: true })
+    media.addEventListener('ended', finish, { once: true })
+    timeoutId = window.setTimeout(finish, timeoutMs)
+    media.currentTime = start
+    waitForMediaReadyAfterSeek(media, start, 3000)
+      .then(() => media.play())
+      .catch(fail)
+  })
 }
 
 // Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
@@ -197,7 +132,6 @@ function breakDurationLabelForFilename(filename) {
 //   filename      — nom du fichier MP3 (ex: cours_9h00_9h45.mp3)
 //   darkMode      — bool
 //   colors        — objet colors du parent
-//   onClose       — callback fermeture
 function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timings, activeTiming, breakTemplate, breakDuration }) {
   const previewBg = darkMode ? '#0f172a' : '#f8fafc'
   const headerBg = darkMode ? '#111827' : '#ffffff'
@@ -314,15 +248,26 @@ function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timin
   )
 }
 
-export default function AudioEditor({ folderId, filename, darkMode, colors, onClose }) {
+export default function AudioEditor({ folderId, filename, darkMode, colors }) {
   const waveRef = useRef(null)       // div DOM pour WaveSurfer
   const wsRef = useRef(null)         // instance WaveSurfer
   const regionsRef = useRef(null)    // plugin Regions
   const activeRegionRef = useRef(null)
   const pendingSeekRef = useRef(null)
+  const syncRepairAttemptRef = useRef(new Set())
+  const mountedRef = useRef(false)
+  const playbackEpochRef = useRef(0)
+  const playingRef = useRef(false)
+  const streamLoadSequenceRef = useRef(0)
+  const streamLoadInProgressRef = useRef(false)
+  const streamRecoveryInProgressRef = useRef(false)
 
-  const audioCtxRef = useRef(null)      // Web Audio API context pour écoute splicée
-  const stitchedSourcesRef = useRef([]) // sources planifiées (pour pouvoir stopper)
+  const audioCtxRef = useRef(null)      // Web Audio API pour le clip TTS de remplacement
+  const stitchedSourcesRef = useRef([]) // sources TTS planifiées (pour pouvoir stopper)
+  const stitchedMediaRef = useRef([])   // flux original joué autour du remplacement
+  const stitchedPlaybackIdRef = useRef(0)
+  const previewAudioRef = useRef(null)  // lecteur TTS temporaire
+  const previewAudioUrlRef = useRef(null)
 
   const [mode, setMode] = useState('cut')          // 'cut' | 'replace'
   const [playing, setPlaying] = useState(false)
@@ -332,7 +277,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [replaceText, setReplaceText] = useState('')
   const [previewId, setPreviewId] = useState(null)
   const [previewB64, setPreviewB64] = useState(null)   // base64 du TTS preview
-  const [, setPreviewAudio] = useState(null)
   const [stitchedPlaying, setStitchedPlaying] = useState(false)
   const [loadingStitch, setLoadingStitch] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -351,115 +295,230 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     audioUrlRef.current = null
   }, [])
 
-  const audioFetchHeaders = useCallback(() => {
-    const adminToken = localStorage.getItem('admin_auth_token')
-    const userToken = localStorage.getItem('auth_token')
-    const token = adminToken || userToken
-    const platformId = getPlatformId()
-    return {
-      ...(token ? { 'X-Auth-Token': token } : {}),
-      'X-Platform-Id': platformId,
+  const stopPreviewPlayback = useCallback(() => {
+    stopMediaPlayback(previewAudioRef.current, { unload: true })
+    previewAudioRef.current = null
+    if (previewAudioUrlRef.current) {
+      URL.revokeObjectURL(previewAudioUrlRef.current)
+      previewAudioUrlRef.current = null
     }
   }, [])
 
-  const buildAudioSasUrl = useCallback(async ({ signal } = {}) => {
+  const clearPreview = useCallback(() => {
+    stopPreviewPlayback()
+    setPreviewId(null)
+    setPreviewB64(null)
+  }, [stopPreviewPlayback])
+
+  const buildAudioStreamUrl = useCallback(async () => {
     clearAudioUrl()
-    const resp = await apiFetch(
-      `/api/hr/cours-folders/${folderId}/audio-url/${encodeURIComponent(filename)}?v=${Date.now()}`,
-      { signal },
-    )
+    const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/audio-url/${encodeURIComponent(filename)}?v=${Date.now()}`)
     const data = await resp.json().catch(() => ({}))
     if (!resp.ok || !data.success || !data.url) {
-      const audioUrlError = new Error(data.error || 'URL audio indisponible')
-      audioUrlError.status = resp.status
-      throw audioUrlError
+      throw new Error(data.error || 'URL audio indisponible')
     }
-    audioUrlRef.current = data.url
-    return {
-      url: data.url,
-      size: Number(data.size) || 0,
-    }
+    const url = data.url
+    audioUrlRef.current = url
+    return url
   }, [clearAudioUrl, folderId, filename])
 
-  const buildBackendAudioStreamUrl = useCallback(() => (
-    apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`)
-  ), [folderId, filename])
-
-  const loadWaveformAudio = useCallback(async (ws, { signal } = {}) => {
-    let directError = null
-    let audioSize = 0
-    try {
-      const directAudio = await buildAudioSasUrl({ signal })
-      audioSize = directAudio.size
-      const directBlob = await fetchAudioBlob(directAudio.url, {
-        credentials: 'omit',
-        label: 'stockage audio',
-        signal,
-      })
-      return ws.loadBlob(directBlob)
-    } catch (e) {
-      if (e?.name === 'AbortError') throw e
-      if (e?.status === 422) throw e
-      directError = e
-      console.warn('Chargement audio Azure direct échoué, fallback backend:', e)
-    }
+  const loadAudioIntoWaveSurfer = useCallback(async (
+    ws,
+    { resumeAt = 0, resumePlayback = false } = {},
+  ) => {
+    const loadSequence = ++streamLoadSequenceRef.current
+    streamLoadInProgressRef.current = true
+    let lastError = null
 
     try {
-      const backendBlob = await fetchAudioBlobByRanges(
-        buildBackendAudioStreamUrl(),
-        audioSize,
-        {
-          credentials: 'include',
-          headers: audioFetchHeaders(),
-          label: 'proxy audio backend',
-          signal,
-        },
-      )
-      return ws.loadBlob(backendBlob)
-    } catch (backendError) {
-      if (backendError?.name === 'AbortError') throw backendError
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          if (attempt > 0) {
+            setStatus(`Reconnexion au flux audio… tentative ${attempt + 1}/3`)
+            await waitBeforeRetry(attempt * 500)
+          }
+
+          const response = await apiFetch(
+            `/api/hr/cours-folders/${folderId}/audio-playback-manifest/${encodeURIComponent(filename)}?v=${Date.now()}`,
+            { cache: 'no-store', timeoutMs: 110000 },
+          )
+          const manifest = await response.json().catch(() => ({}))
+          if (!response.ok || !manifest.success || !manifest.url) {
+            throw new Error(manifest.error || `Manifeste audio indisponible (${response.status})`)
+          }
+
+          const manifestDuration = Number(manifest.duration)
+          const peaks = Array.isArray(manifest.peaks)
+            ? manifest.peaks.map(value => Number(value) || 0)
+            : []
+          if (!Number.isFinite(manifestDuration) || manifestDuration <= 0 || !peaks.length) {
+            throw new Error('Forme d’onde audio invalide')
+          }
+          if (
+            !mountedRef.current
+            || wsRef.current !== ws
+            || streamLoadSequenceRef.current !== loadSequence
+          ) return undefined
+
+          audioUrlRef.current = manifest.url
+          await ws.load(manifest.url, [peaks], manifestDuration)
+          if (
+            !mountedRef.current
+            || wsRef.current !== ws
+            || streamLoadSequenceRef.current !== loadSequence
+          ) return undefined
+
+          const safeResumeAt = Math.max(0, Math.min(Number(resumeAt) || 0, manifestDuration - 0.05))
+          if (safeResumeAt > 0) ws.setTime(safeResumeAt)
+          if (resumePlayback) await ws.play()
+          setError(null)
+          if (attempt > 0) setStatus(null)
+          return manifest
+        } catch (loadError) {
+          if (loadError?.name === 'AbortError') throw loadError
+          lastError = loadError
+          if (streamLoadSequenceRef.current !== loadSequence) return undefined
+        }
+      }
+
       throw new Error(
-        `${backendError.message}${directError ? ` (Azure direct : ${directError.message})` : ''}`,
+        `Le flux audio reste indisponible après 3 tentatives : ${lastError?.message || 'erreur réseau'}`,
       )
+    } finally {
+      if (streamLoadSequenceRef.current === loadSequence) {
+        streamLoadInProgressRef.current = false
+      }
     }
-  }, [audioFetchHeaders, buildAudioSasUrl, buildBackendAudioStreamUrl])
+  }, [folderId, filename])
+
+  // ── Écoute splicée côté client (Web Audio API) ──
+  const stopStitchedPlayback = useCallback(({ updateState = true } = {}) => {
+    stitchedPlaybackIdRef.current += 1
+    stitchedSourcesRef.current.forEach(src => {
+      try {
+        src.stop()
+      } catch {
+        // Source déjà arrêtée.
+      }
+    })
+    stitchedSourcesRef.current = []
+    stitchedMediaRef.current.forEach(media => stopMediaPlayback(media, { unload: true }))
+    stitchedMediaRef.current = []
+    try {
+      audioCtxRef.current?.close()
+    } catch {
+      // Contexte déjà fermé.
+    }
+    audioCtxRef.current = null
+    if (updateState) setStitchedPlaying(false)
+  }, [])
+
+  const stopAllPlayback = useCallback(({ destroyWaveSurfer = false, updateState = true } = {}) => {
+    playbackEpochRef.current += 1
+    pendingSeekRef.current = null
+    stopPreviewPlayback()
+    stopStitchedPlayback({ updateState })
+
+    const ws = wsRef.current
+    stopWaveSurferPlayback(ws)
+    if (destroyWaveSurfer && ws) {
+      try {
+        ws.destroy()
+      } catch {
+        // Destruction idempotente pendant les changements de vue rapides.
+      }
+      if (wsRef.current === ws) wsRef.current = null
+    }
+    playingRef.current = false
+    if (updateState) setPlaying(false)
+  }, [stopPreviewPlayback, stopStitchedPlayback])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      playbackEpochRef.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
+    const stopForNavigation = () => stopAllPlayback()
+    window.addEventListener('pagehide', stopForNavigation)
+    window.addEventListener('popstate', stopForNavigation)
+    return () => {
+      window.removeEventListener('pagehide', stopForNavigation)
+      window.removeEventListener('popstate', stopForNavigation)
+    }
+  }, [stopAllPlayback])
 
   useEffect(() => {
     let cancelled = false
     if (!folderId) {
-      setSlides([])
-      setAudioSync({})
-      return undefined
+      window.queueMicrotask(() => {
+        if (cancelled) return
+        setSlides([])
+        setAudioSync({})
+      })
+      return () => { cancelled = true }
     }
 
-    setSlidesLoading(true)
-    setSlidesError(null)
-    setSlides([])
-    setAudioSync({})
+    const loadSlides = async ({ allowRepair = true } = {}) => {
+      const resp = await apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folderId)}`)
+      const data = await resp.json().catch(() => ({}))
+      if (data.status === 'no_data') {
+        if (cancelled) return
+        setSlides([])
+        setAudioSync({})
+        return
+      }
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.message || data.error || 'Deck slides indisponible')
+      }
+      if (cancelled) return
 
-    apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folderId)}`)
-      .then(async (resp) => {
-        const data = await resp.json().catch(() => ({}))
-        if (data.status === 'no_data') {
+      const nextSlides = Array.isArray(data.slides) ? data.slides : []
+      const nextSync = data.audio_sync || data.pipeline_debug?.audio_sync || {}
+      setSlides(nextSlides)
+      setAudioSync(nextSync)
+
+      const repairKey = `${folderId}:${filename}`
+      const isCourseAudio = isCourseAudioFilename(filename)
+      const needsRepair = isCourseAudio
+        && nextSlides.length
+        && !buildAudioSlideTimings(nextSlides, nextSync, filename).length
+        && !syncRepairAttemptRef.current.has(repairKey)
+
+      if (!allowRepair || !needsRepair) return
+
+      syncRepairAttemptRef.current.add(repairKey)
+      const repairResp = await apiFetch(`/api/hr/cours-folders/${folderId}/repair-audio-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: false }),
+      })
+      const repairData = await repairResp.json().catch(() => ({}))
+      if (!repairResp.ok || repairData.success === false) return
+      if (cancelled) return
+
+      await loadSlides({ allowRepair: false })
+    }
+
+    window.queueMicrotask(() => {
+      if (cancelled) return
+      setSlidesLoading(true)
+      setSlidesError(null)
+      setSlides([])
+      setAudioSync({})
+
+      loadSlides()
+        .catch((e) => {
           if (cancelled) return
-          setSlides([])
-          setAudioSync({})
-          return
-        }
-        if (!resp.ok || data.status !== 'success') {
-          throw new Error(data.message || data.error || 'Deck slides indisponible')
-        }
-        if (cancelled) return
-        setSlides(Array.isArray(data.slides) ? data.slides : [])
-        setAudioSync(data.audio_sync || data.pipeline_debug?.audio_sync || {})
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setSlidesError(e.message || 'Impossible de charger les slides')
-      })
-      .finally(() => {
-        if (!cancelled) setSlidesLoading(false)
-      })
+          setSlidesError(e.message || 'Impossible de charger les slides')
+        })
+        .finally(() => {
+          if (!cancelled) setSlidesLoading(false)
+        })
+    })
 
     return () => { cancelled = true }
   }, [folderId, filename])
@@ -482,7 +541,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     if (!waveRef.current) return
 
     let cancelled = false
-    const loadController = new AbortController()
     setError(null)
     setLoading(true)
 
@@ -491,7 +549,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
     const ws = WaveSurfer.create({
       container: waveRef.current,
-      backend: 'WebAudio',
       waveColor: darkMode ? '#475569' : '#cbd5e1',
       progressColor: darkMode ? '#cbd5e1' : '#334155',
       cursorColor: '#f59e0b',
@@ -503,11 +560,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       minPxPerSec: 0, // auto-fit au chargement
       autoScroll: true,
       fillParent: true,
-      blobMimeType: 'audio/mpeg',
-      fetchParams: {
-        credentials: 'include',
-        headers: audioFetchHeaders(),
-      },
       plugins: [regions],
     })
     wsRef.current = ws
@@ -540,7 +592,11 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     const waveEl = waveRef.current
     waveEl?.addEventListener('wheel', handleWheel, { passive: false })
 
-    Promise.resolve(loadWaveformAudio(ws, { signal: loadController.signal }))
+    Promise.resolve()
+      .then(async () => {
+        if (cancelled) return undefined
+        return loadAudioIntoWaveSurfer(ws)
+      })
       .catch(e => {
         if (cancelled) return
         // ws.destroy() pendant un fetch en cours déclenche un AbortError que
@@ -577,7 +633,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         if (pendingSeekRef.current === target) {
           pendingSeekRef.current = null
         }
-        if (resumePlayback) {
+        if (
+          resumePlayback
+          && !cancelled
+          && mountedRef.current
+          && wsRef.current === ws
+        ) {
           await ws.play()
         }
       } catch {
@@ -599,15 +660,46 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       const nextTime = Math.max(0, Math.min(Number(percent) || 0, 1)) * durationSeconds
       seekToSeconds(nextTime, { resumePlayback: true })
     })
-    ws.on('play', () => setPlaying(true))
-    ws.on('pause', () => setPlaying(false))
-    ws.on('finish', () => setPlaying(false))
+    ws.on('play', () => {
+      playingRef.current = true
+      setPlaying(true)
+    })
+    ws.on('pause', () => {
+      playingRef.current = false
+      setPlaying(false)
+    })
+    ws.on('finish', () => {
+      playingRef.current = false
+      setPlaying(false)
+    })
     ws.on('error', (e) => {
       if (cancelled) return
       if (e?.name === 'AbortError') return
+      // ws.load() emits this event before rejecting its promise. The retry
+      // loop above owns those failures and only exposes the final result.
+      if (streamLoadInProgressRef.current) return
+      if (streamRecoveryInProgressRef.current) return
+
       const message = typeof e === 'string' ? e : (e?.message || 'stream audio indisponible')
-      setLoading(false)
-      setError(`Impossible de charger l'audio : ${message}`)
+      const resumeAt = ws.getCurrentTime?.() || 0
+      const resumePlayback = ws.isPlaying?.() || playingRef.current
+      streamRecoveryInProgressRef.current = true
+      setStatus('Connexion au flux audio interrompue, reprise automatique…')
+      loadAudioIntoWaveSurfer(ws, { resumeAt, resumePlayback })
+        .then(() => {
+          if (!cancelled) setStatus(null)
+        })
+        .catch(recoveryError => {
+          if (cancelled || recoveryError?.name === 'AbortError') return
+          setLoading(false)
+          setStatus(null)
+          setError(
+            `Impossible de reprendre l'audio : ${recoveryError?.message || message}`,
+          )
+        })
+        .finally(() => {
+          streamRecoveryInProgressRef.current = false
+        })
     })
 
     // Permettre la création de régions par drag
@@ -619,25 +711,24 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       }
       activeRegionRef.current = r
       setRegion({ start: r.start * 1000, end: r.end * 1000 })
-      setPreviewId(null)
-      setPreviewAudio(null)
+      clearPreview()
     })
 
     regions.on('region-updated', (r) => {
       setRegion({ start: r.start * 1000, end: r.end * 1000 })
-      setPreviewId(null)
-      setPreviewAudio(null)
+      clearPreview()
     })
 
     return () => {
       cancelled = true
-      loadController.abort()
       waveEl?.removeEventListener('wheel', handleWheel)
-      ws.destroy()
-      stopStitchedPlayback()
+      stopAllPlayback({ destroyWaveSurfer: true, updateState: false })
+      streamLoadSequenceRef.current += 1
+      streamLoadInProgressRef.current = false
+      streamRecoveryInProgressRef.current = false
       clearAudioUrl()
     }
-  }, [audioFetchHeaders, clearAudioUrl, darkMode, loadWaveformAudio])
+  }, [clearAudioUrl, clearPreview, darkMode, loadAudioIntoWaveSurfer, stopAllPlayback])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {
@@ -661,9 +752,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     // après un clic sur la waveform), on attend la fin avant de lancer la lecture.
     // Sinon media.play() est appelé pendant le seeking et produit du silence.
     const media = ws.getMediaElement?.()
+    const playbackEpoch = playbackEpochRef.current
     if (media?.seeking) {
       await waitForMediaReadyAfterSeek(media, ws.getCurrentTime?.())
     }
+
+    if (
+      !mountedRef.current
+      || playbackEpochRef.current !== playbackEpoch
+      || wsRef.current !== ws
+    ) return
 
     try {
       await ws.play()
@@ -690,27 +788,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       activeRegionRef.current = null
     }
     setRegion(null)
-    setPreviewId(null)
-    setPreviewAudio(null)
-  }
-
-  // ── Écoute splicée côté client (Web Audio API) ──
-  const stopStitchedPlayback = () => {
-    stitchedSourcesRef.current.forEach(src => {
-      try {
-        src.stop()
-      } catch {
-        // Source déjà arrêtée.
-      }
-    })
-    stitchedSourcesRef.current = []
-    try {
-      audioCtxRef.current?.close()
-    } catch {
-      // Contexte déjà fermé.
-    }
-    audioCtxRef.current = null
-    setStitchedPlaying(false)
+    clearPreview()
   }
 
   const handleListenWithReplacement = async () => {
@@ -721,18 +799,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     try {
       const audioCtx = new AudioContext()
       audioCtxRef.current = audioCtx
-
-      // Récupérer le buffer décodé depuis WaveSurfer (déjà en mémoire, 0 réseau)
-      const wsBuffer = wsRef.current?.getDecodedData()
-      if (!wsBuffer) throw new Error('Audio non chargé')
-
-      // Copier dans notre AudioContext (les buffers sont liés à leur context)
-      const origBuffer = audioCtx.createBuffer(
-        wsBuffer.numberOfChannels, wsBuffer.length, wsBuffer.sampleRate
-      )
-      for (let ch = 0; ch < wsBuffer.numberOfChannels; ch++) {
-        origBuffer.copyToChannel(wsBuffer.getChannelData(ch), ch)
-      }
+      await audioCtx.resume()
 
       // Décoder le TTS preview depuis le base64
       const previewBytes = Uint8Array.from(atob(previewB64), c => c.charCodeAt(0))
@@ -743,42 +810,53 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
       // Jouer 8s avant la région (ou depuis le début)
       const listenFrom = Math.max(0, startSec - 8)
+      const originalDuration = (duration || wsRef.current?.getDuration?.() * 1000 || 0) / 1000
+      const listenUntil = Math.min(originalDuration, endSec + 8)
+      const streamUrl = audioUrlRef.current || await buildAudioStreamUrl()
+      const originalMedia = new Audio(streamUrl)
+      originalMedia.preload = 'auto'
+      stitchedMediaRef.current = [originalMedia]
+      const playbackId = ++stitchedPlaybackIdRef.current
 
-      const now = audioCtx.currentTime + 0.05
-
-      // Part 1 : original de listenFrom jusqu'au début de la région
-      const src1 = audioCtx.createBufferSource()
-      src1.buffer = origBuffer
-      const part1Duration = startSec - listenFrom
-      src1.connect(audioCtx.destination)
-      src1.start(now, listenFrom, part1Duration)
-
-      // Part 2 : TTS preview
-      const src2 = audioCtx.createBufferSource()
-      src2.buffer = previewBuffer
-      src2.connect(audioCtx.destination)
-      src2.start(now + part1Duration)
-
-      // Part 3 : original à partir de la fin de la région, pendant 8s max
-      const src3 = audioCtx.createBufferSource()
-      src3.buffer = origBuffer
-      const part3Duration = Math.min(8, origBuffer.duration - endSec)
-      src3.connect(audioCtx.destination)
-      src3.start(now + part1Duration + previewBuffer.duration, endSec, part3Duration)
-
-      stitchedSourcesRef.current = [src1, src2, src3]
-
-      const totalDuration = part1Duration + previewBuffer.duration + part3Duration
       setStitchedPlaying(true)
       setLoadingStitch(false)
 
-      setTimeout(() => {
-        if (audioCtxRef.current === audioCtx) {
-          stopStitchedPlayback()
+      // Le MP3 original reste streamé. Seul le petit clip TTS temporaire est
+      // décodé, puis inséré entre les deux segments de contexte.
+      await playMediaSegment(
+        originalMedia,
+        listenFrom,
+        startSec,
+        playbackId,
+        stitchedPlaybackIdRef,
+      )
+      if (stitchedPlaybackIdRef.current !== playbackId) return
+
+      await new Promise((resolve, reject) => {
+        const previewSource = audioCtx.createBufferSource()
+        previewSource.buffer = previewBuffer
+        previewSource.connect(audioCtx.destination)
+        previewSource.addEventListener('ended', resolve, { once: true })
+        stitchedSourcesRef.current = [previewSource]
+        try {
+          previewSource.start()
+        } catch (previewError) {
+          reject(previewError)
         }
-      }, (totalDuration + 0.5) * 1000)
+      })
+      if (stitchedPlaybackIdRef.current !== playbackId) return
+
+      await playMediaSegment(
+        originalMedia,
+        endSec,
+        listenUntil,
+        playbackId,
+        stitchedPlaybackIdRef,
+      )
+      if (stitchedPlaybackIdRef.current === playbackId) stopStitchedPlayback()
 
     } catch (e) {
+      stopStitchedPlayback()
       setError('Erreur lors de la lecture splicée : ' + e.message)
       setLoadingStitch(false)
     }
@@ -790,13 +868,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setSaving(true)
     setError(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/cut`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/cut`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ start_ms: Math.round(region.start), end_ms: Math.round(region.end) }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -807,10 +884,9 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setTimeout(async () => {
           try {
             setLoading(true)
-            if (wsRef.current) await loadWaveformAudio(wsRef.current)
-          } catch (e) {
-            setLoading(false)
-            setError(`Impossible de recharger l'audio : ${e.message || 'requête échouée'}`)
+            if (wsRef.current) await loadAudioIntoWaveSurfer(wsRef.current)
+          } catch {
+            // Le message d'état restera visible si le reload échoue.
           }
           setStatus(null)
         }, 1500)
@@ -827,21 +903,20 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   // ── Prévisualiser le TTS ──
   const handlePreviewTTS = async () => {
     if (!replaceText.trim()) return
+    clearPreview()
     setGenerating(true)
     setError(null)
-    setPreviewId(null)
-    setPreviewAudio(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-preview`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-preview`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: replaceText }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
+      if (!mountedRef.current) return
       if (data.success) {
         setPreviewId(data.preview_id)
         setPreviewB64(data.audio_b64)
@@ -853,8 +928,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         )
         const url = URL.createObjectURL(blob)
         const audio = new Audio(url)
-        setPreviewAudio(audio)
-        audio.play()
+        previewAudioRef.current = audio
+        previewAudioUrlRef.current = url
+        audio.addEventListener('ended', stopPreviewPlayback, { once: true })
+        audio.play().catch(() => {})
       } else {
         setError(data.error || 'Erreur lors de la génération TTS')
       }
@@ -871,17 +948,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setSaving(true)
     setError(null)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-confirm`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-confirm`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             preview_id: previewId,
             start_ms: Math.round(region.start),
             end_ms: Math.round(region.end),
           }),
-          credentials: 'include',
         }
       )
       const data = await resp.json()
@@ -892,10 +968,9 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setTimeout(async () => {
           try {
             setLoading(true)
-            if (wsRef.current) await loadWaveformAudio(wsRef.current)
-          } catch (e) {
-            setLoading(false)
-            setError(`Impossible de recharger l'audio : ${e.message || 'requête échouée'}`)
+            if (wsRef.current) await loadAudioIntoWaveSurfer(wsRef.current)
+          } catch {
+            // Le message d'état restera visible si le reload échoue.
           }
           setStatus(null)
         }, 1500)
@@ -912,35 +987,13 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const border = colors.border
   const textPrimary = colors.text
   const textMuted = colors.textMuted
-  const panelBg = darkMode ? '#111827' : '#f8fafc'
   const actionBg = colors.text
   const actionText = colors.cardBg
 
   return (
     <div className="flex min-h-0 flex-col" style={{ backgroundColor: colors.cardBg }}>
-        {/* Header */}
-        <div
-          className="flex items-center justify-between gap-3 border-b px-5 py-3 flex-shrink-0"
-          style={{ backgroundColor: panelBg, borderColor: colors.border }}
-        >
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
-            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-          >
-            <Icon name="arrow_back" style={{ fontSize: '16px' }} />
-            Retour aux audios
-          </button>
-          <div className="min-w-0 flex-1 text-right">
-            <p className="truncate text-xs font-medium" style={{ color: colors.textMuted }}>
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </p>
-          </div>
-        </div>
-
         {/* Corps */}
-        <div className="max-h-[calc(92vh-112px)] flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="max-h-[calc(92vh-58px)] flex-1 overflow-y-auto p-5 space-y-4">
 
           <AudioSlideSyncPreview
             colors={colors}
@@ -1060,7 +1113,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
               </p>
               <textarea
                 value={replaceText}
-                onChange={e => { setReplaceText(e.target.value); setPreviewId(null) }}
+                onChange={e => { setReplaceText(e.target.value); clearPreview() }}
                 rows={4}
                 placeholder="Écrivez ici le texte qui sera lu par la voix TTS à la place de la région sélectionnée..."
                 className="w-full rounded-xl p-3 text-sm resize-y outline-none"

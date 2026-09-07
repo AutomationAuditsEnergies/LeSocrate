@@ -26,7 +26,7 @@ import {
 
 export const COMMON_SLIDE_PROPS = {
   badge: 'TP-CRCD',
-  brandName: 'SALES HACKING',
+  brandName: 'LE SOCRATE',
 }
 
 export const OFFICIAL_SOURCE_TEMPLATE_IDS = new Set([
@@ -233,11 +233,13 @@ const hasTwoFamilyComparisonSignal = (data = {}) => {
 
 export const normalizeSlideType = (type, data = {}) => {
   const key = String(type || '').trim().toLowerCase()
+  const itemCount = Array.isArray(data.items) ? data.items.length : 0
+  const isDynamicDayProgram = itemCount >= 4 && itemCount <= 10
   if (key === 'day_program') {
-    return Array.isArray(data.items) && data.items.length === 7 ? 'day_program_7_steps' : 'program_year'
+    return isDynamicDayProgram ? 'day_program_7_steps' : 'program_year'
   }
   if (key === 'agenda') {
-    return Array.isArray(data.items) && data.items.length === 7 ? 'day_program_7_steps' : 'steps'
+    return isDynamicDayProgram ? 'day_program_7_steps' : 'steps'
   }
   const canonical = ALIASES[key] || 'reflection'
   if (canonical !== 'comparison' && hasTwoFamilyComparisonSignal(data)) {
@@ -469,6 +471,7 @@ export function renderSlideTemplate(slide = {}, extraProps = {}) {
   const props = {
     ...normalizeRegistryData(canonicalType, originalType, data),
     ...COMMON_SLIDE_PROPS,
+    ...(slide.brand_name ? { brandName: slide.brand_name } : {}),
     ...extraProps,
   }
 

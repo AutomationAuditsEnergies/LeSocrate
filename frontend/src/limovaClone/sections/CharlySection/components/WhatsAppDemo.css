@@ -1,0 +1,169 @@
+.cadrenza-phone-demo {
+  min-height: 620px;
+}
+
+.cadrenza-phone-device {
+  --width: 280px;
+  display: block;
+  width: 280px;
+  max-width: 100%;
+  filter: drop-shadow(0 24px 42px rgba(0, 0, 0, 0.28));
+}
+
+.cadrenza-phone-screen {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  padding: 48px 25px 20px;
+  background:
+    radial-gradient(circle at 50% 12%, rgba(35, 105, 255, 0.12), transparent 28%),
+    #090d13;
+  color: #f5f7fb;
+  font-family: "Instrument Sans", sans-serif;
+}
+
+.cadrenza-phone-robot {
+  position: relative;
+  display: grid;
+  height: 70px;
+  place-items: center;
+  margin-bottom: 8px;
+}
+
+.cadrenza-phone-robot__glow {
+  position: absolute;
+  width: 82px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(29, 103, 255, 0.28);
+  filter: blur(24px);
+}
+
+.cadrenza-phone-robot img {
+  position: relative;
+  z-index: 1;
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 18px rgba(17, 90, 255, 0.38));
+}
+
+.cadrenza-phone-screen h3 {
+  margin: 0;
+  color: #f7f9fc;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.cadrenza-phone-calendar__weekdays,
+.cadrenza-phone-calendar__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  align-items: center;
+  text-align: center;
+}
+
+.cadrenza-phone-calendar__weekdays {
+  margin-top: 10px;
+  color: #c6ccd5;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.cadrenza-phone-calendar__grid {
+  margin-top: 8px;
+  row-gap: 4px;
+  color: #e7ebf1;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cadrenza-phone-calendar__grid span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  margin: auto;
+  border-radius: 50%;
+}
+
+.cadrenza-phone-calendar__grid .is-muted {
+  color: #555d68;
+}
+
+.cadrenza-phone-calendar__grid .is-selected {
+  background: #1768ff;
+  color: #fff;
+  box-shadow: 0 4px 11px rgba(23, 104, 255, 0.34);
+}
+
+.cadrenza-phone-duration {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.cadrenza-phone-duration__options {
+  overflow: hidden;
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.cadrenza-phone-duration__options > div {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cadrenza-phone-duration__options > div:last-child {
+  border-bottom: 0;
+}
+
+.cadrenza-phone-duration__options span {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 1.5px solid #67717f;
+  border-radius: 50%;
+}
+
+.cadrenza-phone-duration__options strong {
+  color: #e5e9ef;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.cadrenza-phone-duration__options .is-selected span {
+  border: 4px solid #0d6efd;
+}
+
+.cadrenza-phone-duration__options .is-selected strong {
+  color: #fff;
+}
+
+@media (max-width: 47.999rem) {
+  .cadrenza-phone-demo {
+    min-height: 0;
+    padding-top: 8px;
+  }
+
+  .cadrenza-phone-device {
+    --width: 272px;
+    width: 272px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cadrenza-phone-device {
+    filter: none;
+  }
+}

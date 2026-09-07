@@ -8,6 +8,10 @@ export function audioBasename(value = '') {
   }
 }
 
+export function isCourseAudioFilename(value = '') {
+  return /^(cours|course)(?:_|-).*\.mp3$/i.test(audioBasename(value))
+}
+
 function toNumber(value) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
