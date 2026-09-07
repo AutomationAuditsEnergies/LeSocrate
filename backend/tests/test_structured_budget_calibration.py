@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from services import content_generation_service as cgs
+from services.content_pipeline.calibration import course_section_budget_defaults
 
 
 def words(count):
@@ -9,6 +10,76 @@ def words(count):
 
 
 class StructuredBudgetCalibrationTest(unittest.TestCase):
+    def test_single_course_day_reserves_only_light_conclusions(self):
+        budgets = course_section_budget_defaults(
+            1,
+            6498,
+            3,
+            words_per_minute=190,
+            is_last_day=False,
+            is_last_course=True,
+            total_courses=1,
+        )
+
+        self.assertLessEqual(budgets["course_conclusion"], 260)
+        self.assertLessEqual(budgets["day_conclusion"], 80)
+        self.assertGreater(budgets["day_conclusion"], 0)
+        self.assertEqual(
+            budgets["opening"]
+            + sum(budgets["parts"])
+            + budgets["course_conclusion"]
+            + budgets["day_conclusion"],
+            6498,
+        )
+
+    def test_multi_course_day_keeps_full_final_conclusion(self):
+        budgets = course_section_budget_defaults(
+            4,
+            1600,
+            3,
+            words_per_minute=190,
+            is_last_day=False,
+            is_last_course=True,
+            total_courses=4,
+        )
+
+        self.assertGreaterEqual(budgets["course_conclusion"], 320)
+        self.assertGreater(budgets["day_conclusion"], 80)
+
+    def test_one_course_day_accepts_the_final_audio_budget_margin(self):
+        course_plan = {
+            "course_number": 1,
+            "total_courses": 1,
+            "target_words": 6498,
+        }
+
+        status = cgs._structured_course_budget_status(course_plan, words(6573))
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["status"], "ok")
+        self.assertEqual(status["max_words"], 6848)
+
+    def test_course_budget_still_rejects_text_beyond_the_daily_margin(self):
+        course_plan = {
+            "course_number": 1,
+            "total_courses": 1,
+            "target_words": 6498,
+        }
+
+        status = cgs._structured_course_budget_status(course_plan, words(6849))
+
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["status"], "too_long")
+
+    def test_fixed_daily_margin_is_shared_between_multiple_courses(self):
+        course_plan = {
+            "course_number": 1,
+            "total_courses": 4,
+            "target_words": 1000,
+        }
+
+        self.assertEqual(cgs._structured_course_max_words(course_plan), 1088)
+
     def test_residual_shortfall_is_strict_by_default(self):
         with patch.dict("os.environ", {}, clear=True):
             self.assertFalse(cgs._structured_allow_residual_too_short())
@@ -48,7 +119,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
             ],
         }
 
-        with patch.object(cgs, "_anthropic_post", return_value=words(99)):
+        with patch.object(cgs, "_deepseek_post", return_value=words(99)):
             calibrated_text, calibration = cgs._calibrate_structured_course_sections(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -65,7 +136,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         section = {"kind": "opening", "title": "Intro", "target_words": 100}
         short_text = words(60)
 
-        with patch.object(cgs, "_anthropic_post", return_value=short_text):
+        with patch.object(cgs, "_deepseek_post", return_value=short_text):
             calibrated_text, calibration = cgs._calibrate_structured_section_text(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan={
@@ -93,7 +164,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         }
         current_text = f"{words(80)}\n\nConclusion {words(5)}"
 
-        with patch.object(cgs, "_anthropic_post", return_value=words(60)):
+        with patch.object(cgs, "_deepseek_post", return_value=words(60)):
             repaired_text, repair = cgs._repair_structured_course_text_to_budget(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -113,7 +184,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         }
         current_text = f"{words(80)}\n\nConclusion {words(5)}"
 
-        with patch.object(cgs, "_anthropic_post", side_effect=[words(500), words(60)]):
+        with patch.object(cgs, "_deepseek_post", side_effect=[words(500), words(60)]):
             repaired_text, repair = cgs._repair_structured_course_text_to_budget(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -172,7 +243,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
             },
         ]
 
-        with patch.object(cgs, "_anthropic_post", side_effect=[words(80), words(60)]):
+        with patch.object(cgs, "_deepseek_post", side_effect=[words(80), words(60)]):
             repaired_text, repaired_sections, repair = cgs._repair_structured_course_sections_to_budget(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,
@@ -248,7 +319,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         with (
             patch.dict("os.environ", {"FORMATION_STRUCTURED_COURSE_DEFICIT_REPAIR_MAX_ATTEMPTS": "0"}),
             patch.object(cgs, "_calibrate_structured_section_text", side_effect=keep_section_text),
-            patch.object(cgs, "_anthropic_post", return_value=words(60)),
+            patch.object(cgs, "_deepseek_post", return_value=words(60)),
         ):
             calibrated_text, calibration = cgs._calibrate_structured_course_sections(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
@@ -313,7 +384,7 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
             ],
         }
 
-        with patch.object(cgs, "_anthropic_post", side_effect=[words(150), words(245)]):
+        with patch.object(cgs, "_deepseek_post", side_effect=[words(150), words(245)]):
             calibrated_text, calibration = cgs._calibrate_structured_course_sections(
                 job={"program_title": "TP", "folder_name": "Jour 1"},
                 course_plan=course_plan,

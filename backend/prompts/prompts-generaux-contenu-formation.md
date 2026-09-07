@@ -1128,8 +1128,9 @@ Cette partie couvre :
   dans la réalité
 → Les techniques professionnelles : les gestes, les méthodes, les outils
   utilisés sur le terrain
-→ Des cas pratiques commentés (annoncés fictifs cf. RÈGLE #21) :
-  décrire des situations typiques et expliquer comment les gérer
+→ Des exemples professionnels fictifs commentés (cf. RÈGLE #21) :
+  raconter des situations typiques puis expliquer oralement comment les gérer,
+  sans jamais demander à l'apprenant de réaliser une activité
 → Les erreurs fréquentes : ce qu'on voit souvent et comment les éviter
 → Les bonnes pratiques : ce que font les pros, les réflexes qui font
   la différence

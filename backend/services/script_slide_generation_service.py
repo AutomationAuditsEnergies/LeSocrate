@@ -18,7 +18,19 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable
 
-from database.db import get_db_connection
+from repositories.pipeline_repository import (
+    ensure_script_slide_decks_table,
+    get_formation_pipeline_job_identity,
+    get_latest_script_slide_deck_row,
+    get_platform_slide_source_refs,
+    get_script_slide_deck_row,
+    get_script_slide_source_row,
+    insert_script_slide_deck,
+    list_completed_content_segment_rows,
+    list_script_slide_deck_rows_for_audio_lookup,
+    update_script_slide_deck_audio_sync_row,
+)
+from repositories.teacher_asset_repository import resolve_folder_asset_origin
 from services.content_pipeline.artifacts import (
     CONTENT_COURSE_SCRIPTS_BLOB,
     CONTENT_DRAFT_SECTIONS_BLOB,
@@ -26,7 +38,7 @@ from services.content_pipeline.artifacts import (
     load_content_artifact,
 )
 from services.content_pipeline.prompts import load_prompt_file
-from utils.anthropic_client import default_model, post_message
+from utils.deepseek_client import default_model, post_message
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -501,38 +513,7 @@ def _ensure_slide_deck_tables() -> None:
     if _SLIDE_DECK_TABLES_READY:
         return
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS script_slide_decks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            folder_id INTEGER NOT NULL,
-            content_job_id INTEGER NOT NULL,
-            formation_job_id INTEGER,
-            platform_id INTEGER,
-            generation_mode TEXT DEFAULT 'script',
-            pace TEXT,
-            max_slides INTEGER,
-            model TEXT,
-            slides_json TEXT NOT NULL,
-            timeline_json TEXT,
-            stats_json TEXT,
-            pipeline_debug_json TEXT,
-            audio_sync_json TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_script_slide_decks_folder
-        ON script_slide_decks(folder_id, content_job_id, created_at)
-        """
-    )
-    conn.commit()
-    conn.close()
+    ensure_script_slide_decks_table()
     _SLIDE_DECK_TABLES_READY = True
 
 
@@ -545,57 +526,45 @@ def _persist_script_slide_deck(
     model: str,
 ) -> int:
     _ensure_slide_deck_tables()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO script_slide_decks
-        (folder_id, content_job_id, formation_job_id, platform_id, generation_mode,
-         pace, max_slides, model, slides_json, timeline_json, stats_json,
-         pipeline_debug_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            source["folder_id"],
-            source["content_job_id"],
-            source.get("formation_job_id"),
-            source.get("platform_id"),
-            (result.get("stats") or {}).get("generation_mode") or "script",
-            pace,
-            max_slides,
-            model,
-            _json_dumps(result.get("slides", [])),
-            _json_dumps(result.get("timeline", [])),
-            _json_dumps(result.get("stats", {})),
-            _json_dumps(result.get("pipeline_debug", {})),
-        ),
+    return insert_script_slide_deck(
+        folder_id=source["folder_id"],
+        content_job_id=source["content_job_id"],
+        formation_job_id=source.get("formation_job_id"),
+        platform_id=source.get("platform_id"),
+        generation_mode=(result.get("stats") or {}).get("generation_mode") or "script",
+        pace=pace,
+        max_slides=max_slides,
+        model=model,
+        slides_json=_json_dumps(result.get("slides", [])),
+        timeline_json=_json_dumps(result.get("timeline", [])),
+        stats_json=_json_dumps(result.get("stats", {})),
+        pipeline_debug_json=_json_dumps(result.get("pipeline_debug", {})),
     )
-    deck_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return deck_id
 
 
 def _decode_deck_row(row) -> dict | None:
     if not row:
         return None
-    (
-        deck_id,
-        folder_id,
-        content_job_id,
-        formation_job_id,
-        platform_id,
-        pace,
-        max_slides,
-        model,
-        slides_json,
-        timeline_json,
-        stats_json,
-        pipeline_debug_json,
-        audio_sync_json,
-        created_at,
-        updated_at,
-    ) = row
+
+    def value(key: str, index: int):
+        return row.get(key) if isinstance(row, dict) else row[index]
+
+    deck_id = value("id", 0)
+    folder_id = value("folder_id", 1)
+    content_job_id = value("content_job_id", 2)
+    formation_job_id = value("formation_job_id", 3)
+    platform_id = value("platform_id", 4)
+    pace = value("pace", 5)
+    max_slides = value("max_slides", 6)
+    model = value("model", 7)
+    slides_json = value("slides_json", 8)
+    timeline_json = value("timeline_json", 9)
+    stats_json = value("stats_json", 10)
+    pipeline_debug_json = value("pipeline_debug_json", 11)
+    audio_sync_json = value("audio_sync_json", 12)
+    created_at = value("created_at", 13)
+    updated_at = value("updated_at", 14)
+
     stats = json.loads(stats_json or "{}")
     stats["deck_id"] = deck_id
     return {
@@ -619,28 +588,23 @@ def _decode_deck_row(row) -> dict | None:
 
 def get_latest_script_slide_deck(folder_id: int, content_job_id: int | None = None) -> dict | None:
     _ensure_slide_deck_tables()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    params = [folder_id]
-    where = "folder_id = ?"
-    if content_job_id is not None:
-        where += " AND content_job_id = ?"
-        params.append(content_job_id)
-    cursor.execute(
-        f"""
-        SELECT id, folder_id, content_job_id, formation_job_id, platform_id, pace,
-               max_slides, model, slides_json, timeline_json, stats_json,
-               pipeline_debug_json, audio_sync_json, created_at, updated_at
-        FROM script_slide_decks
-        WHERE {where}
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        tuple(params),
+    row = get_latest_script_slide_deck_row(
+        folder_id=folder_id,
+        content_job_id=content_job_id,
     )
-    row = cursor.fetchone()
-    conn.close()
     return _decode_deck_row(row)
+
+
+def is_script_slide_deck_usable(deck: dict | None) -> bool:
+    """Reject decks persisted by the former batch-error fallback path."""
+    if not deck or not (deck.get("slides") or []):
+        return False
+    batches = (deck.get("pipeline_debug") or {}).get("batches") or []
+    return not any(
+        str((batch or {}).get("status") or "").strip().lower() == "fallback"
+        for batch in batches
+        if isinstance(batch, dict)
+    )
 
 
 def _audio_basename(value: str | None) -> str:
@@ -690,69 +654,74 @@ def _unique_ints(values: Iterable[int | None]) -> list[int]:
 def get_latest_script_slide_deck_for_audio(
     audio_filename: str,
     platform_id: int | None = None,
+    *,
+    folder_id: int | None = None,
+    module_day_id: int | None = None,
+    audio_storage_prefix: str | None = None,
 ) -> dict | None:
-    """Find the latest generated deck that contains timings for an audio file."""
+    """Find the latest generated deck that contains timings for an audio file.
+
+    A V2 lookup is deliberately folder-scoped. Dynamic day filenames such as
+    ``course_01.mp3`` repeat across module days, so the broad platform/job
+    search remains valid only for legacy V1 callers.
+    """
     _ensure_slide_deck_tables()
     target_audio = _audio_basename(audio_filename)
     if not target_audio:
         return None
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    v2_scope_requested = any(
+        value is not None
+        for value in (folder_id, module_day_id, audio_storage_prefix)
+    )
+    if v2_scope_requested:
+        scoped_folder_ids = _unique_ints([folder_id])
+        scoped_module_day_ids = _unique_ints([module_day_id])
+        normalized_prefix = str(audio_storage_prefix or "").strip("/")
+        if (
+            len(scoped_folder_ids) != 1
+            or len(scoped_module_day_ids) != 1
+            or re.fullmatch(r"course-sessions/[1-9]\d*", normalized_prefix) is None
+        ):
+            return None
+        requested_folder_id = scoped_folder_ids[0]
+        origin = resolve_folder_asset_origin(requested_folder_id)
+        source_folder_id = requested_folder_id
+        if origin:
+            try:
+                resolved_requested_id = int(
+                    origin.get("requested_folder_id") or requested_folder_id
+                )
+                source_folder_id = int(origin.get("source_folder_id"))
+            except (TypeError, ValueError):
+                return None
+            if (
+                resolved_requested_id != requested_folder_id
+                or source_folder_id <= 0
+            ):
+                return None
+        deck = get_latest_script_slide_deck(source_folder_id)
+        if not deck or not _deck_references_audio(deck, target_audio):
+            return None
+        return deck
+
     platform_ids = _unique_ints([platform_id])
     job_ids: list[int] = []
 
     if platform_id:
-        cursor.execute(
-            """
-            SELECT pc.source_formation_id,
-                   pc.source_module_id,
-                   fm.source_pipeline_job_id,
-                   fm.source_platform_id
-            FROM platform_config pc
-            LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
-            WHERE pc.id = ?
-            """,
-            (platform_id,),
-        )
-        row = cursor.fetchone()
+        row = get_platform_slide_source_refs(platform_id)
         if row:
-            (
-                source_formation_id,
-                _source_module_id,
-                module_pipeline_job_id,
-                module_source_platform_id,
-            ) = row
+            source_formation_id = row.get("source_formation_id")
+            module_pipeline_job_id = row.get("source_pipeline_job_id")
+            module_source_platform_id = row.get("source_platform_id")
             platform_ids = _unique_ints([*platform_ids, module_source_platform_id])
             job_ids = _unique_ints([source_formation_id, module_pipeline_job_id])
 
-    where_parts = []
-    params: list[int] = []
-    if platform_ids:
-        placeholders = ", ".join("?" for _ in platform_ids)
-        where_parts.append(f"platform_id IN ({placeholders})")
-        params.extend(platform_ids)
-    if job_ids:
-        placeholders = ", ".join("?" for _ in job_ids)
-        where_parts.append(f"(formation_job_id IN ({placeholders}) OR content_job_id IN ({placeholders}))")
-        params.extend(job_ids)
-        params.extend(job_ids)
-
-    where_sql = f"WHERE {' OR '.join(where_parts)}" if where_parts else ""
-    cursor.execute(
-        f"""
-        SELECT id, folder_id, content_job_id, formation_job_id, platform_id, pace,
-               max_slides, model, slides_json, timeline_json, stats_json,
-               pipeline_debug_json, audio_sync_json, created_at, updated_at
-        FROM script_slide_decks
-        {where_sql}
-        ORDER BY id DESC
-        LIMIT 200
-        """,
-        tuple(params),
+    rows = list_script_slide_deck_rows_for_audio_lookup(
+        platform_ids=platform_ids,
+        job_ids=job_ids,
+        limit=200,
     )
-    rows = cursor.fetchall()
-    conn.close()
 
     for row in rows:
         deck = _decode_deck_row(row)
@@ -764,21 +733,8 @@ def get_latest_script_slide_deck_for_audio(
 
 def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict | None:
     _ensure_slide_deck_tables()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, folder_id, content_job_id, formation_job_id, platform_id, pace,
-               max_slides, model, slides_json, timeline_json, stats_json,
-               pipeline_debug_json, audio_sync_json, created_at, updated_at
-        FROM script_slide_decks
-        WHERE id = ?
-        """,
-        (deck_id,),
-    )
-    deck = _decode_deck_row(cursor.fetchone())
+    deck = _decode_deck_row(get_script_slide_deck_row(deck_id))
     if not deck:
-        conn.close()
         return None
 
     timings = audio_sync.get("timings", []) or []
@@ -790,6 +746,19 @@ def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict 
 
     slides = deck["slides"]
     for slide in slides:
+        # The payload is the source of truth.  Clear bindings from a previous
+        # deck/audio version before applying the current timing set; otherwise
+        # a slide removed from the new synchronization can keep pointing at a
+        # stale MP3 even though audio_sync_json no longer contains it.
+        for key in (
+            "audio_segments",
+            "audio_filename",
+            "trigger_time",
+            "end_time",
+            "audio_start_time",
+            "audio_end_time",
+        ):
+            slide.pop(key, None)
         slide_timings = timings_by_slide.get(slide.get("slide_id"), [])
         if not slide_timings:
             continue
@@ -804,6 +773,9 @@ def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict 
 
     timeline = deck["timeline"]
     for item in timeline:
+        item.pop("start_time", None)
+        item.pop("end_time", None)
+        item.pop("audio_filename", None)
         slide_index = item.get("slide_index")
         slide = slides[slide_index] if isinstance(slide_index, int) and slide_index < len(slides) else None
         if not slide:
@@ -823,25 +795,14 @@ def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict 
     pipeline_debug = deck["pipeline_debug"]
     pipeline_debug["audio_sync"] = audio_sync
 
-    cursor.execute(
-        """
-        UPDATE script_slide_decks
-        SET slides_json = ?, timeline_json = ?, stats_json = ?,
-            pipeline_debug_json = ?, audio_sync_json = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (
-            _json_dumps(slides),
-            _json_dumps(timeline),
-            _json_dumps(stats),
-            _json_dumps(pipeline_debug),
-            _json_dumps(audio_sync),
-            deck_id,
-        ),
+    update_script_slide_deck_audio_sync_row(
+        deck_id=deck_id,
+        slides_json=_json_dumps(slides),
+        timeline_json=_json_dumps(timeline),
+        stats_json=_json_dumps(stats),
+        pipeline_debug_json=_json_dumps(pipeline_debug),
+        audio_sync_json=_json_dumps(audio_sync),
     )
-    conn.commit()
-    conn.close()
 
     deck["slides"] = slides
     deck["timeline"] = timeline
@@ -871,60 +832,31 @@ def _parse_json_object(raw: str) -> dict:
 
 
 def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: int | None = None) -> dict:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT cf.id, cf.name, cf.platform_id, cg.id, cg.program_title,
-               cg.sub_parts, cg.status, cg.total_words
-        FROM cours_folders cf
-        JOIN content_generation_jobs cg ON cg.folder_id = cf.id
-        WHERE cf.id = ?
-        """,
-        (folder_id,),
-    )
-    row = cursor.fetchone()
+    row = get_script_slide_source_row(folder_id)
     if not row:
-        conn.close()
         raise ValueError(f"Aucun texte généré trouvé pour le dossier {folder_id}")
 
-    folder_id, folder_name, folder_platform_id, cg_job_id, program_title, sub_parts_json, cg_status, total_words = row
+    folder_id = row["folder_id"]
+    folder_name = row["folder_name"]
+    folder_platform_id = row["folder_platform_id"]
+    cg_job_id = row["content_job_id"]
+    program_title = row.get("program_title") or ""
+    sub_parts_json = row.get("sub_parts") or "[]"
+    cg_status = row.get("content_status")
+    total_words = row.get("total_words") or 0
 
     if platform_id is not None and int(folder_platform_id) != int(platform_id):
-        conn.close()
         raise ValueError("Ce dossier n'appartient pas à la plateforme active")
 
     formation_job = None
     if job_id:
-        cursor.execute(
-            """
-            SELECT id, tp_name, platform_id
-            FROM formation_pipeline_jobs
-            WHERE id = ?
-            """,
-            (job_id,),
-        )
-        formation_job = cursor.fetchone()
+        formation_job = get_formation_pipeline_job_identity(job_id)
         if not formation_job:
-            conn.close()
             raise ValueError(f"Job formation {job_id} introuvable")
-        if int(formation_job[2]) != int(folder_platform_id):
-            conn.close()
+        if int(formation_job["platform_id"]) != int(folder_platform_id):
             raise ValueError("Le dossier ne correspond pas au job formation demandé")
 
-    cursor.execute(
-        """
-        SELECT sub_part_index, sub_part_name, passe, text_content, word_count,
-               COALESCE(reviewed, 0), COALESCE(dirty, 0)
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
-        (cg_job_id,),
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(cg_job_id)
 
     if not rows:
         raise ValueError(f"Aucun segment complété pour le dossier {folder_id}")
@@ -936,7 +868,13 @@ def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: 
 
     segments = []
     for idx, row in enumerate(rows):
-        sub_idx, sub_name, passe, text, words, reviewed, dirty = row
+        sub_idx = row.get("sub_part_index")
+        sub_name = row.get("sub_part_name")
+        passe = row.get("passe")
+        text = row.get("text_content")
+        words = row.get("word_count")
+        reviewed = row.get("reviewed")
+        dirty = row.get("dirty")
         clean_text = _strip_tts_tags(text or "")
         if not clean_text:
             continue
@@ -956,7 +894,7 @@ def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: 
     if not segments:
         raise ValueError(f"Les segments du dossier {folder_id} sont vides")
 
-    title = program_title or (formation_job[1] if formation_job else "") or folder_name
+    title = program_title or (formation_job.get("tp_name") if formation_job else "") or folder_name
 
     return {
         "folder_id": folder_id,
@@ -1429,6 +1367,7 @@ def _course_section_records_from_artifact(source: dict) -> list[dict]:
                         else []
                     ),
                     "display_map_status": section.get("display_map_status") or "none",
+                    "suppress_slide": bool(section.get("suppress_slide")),
                 }
             )
     return records
@@ -1822,61 +1761,46 @@ def _align_section_to_slide_anchors(section: dict, units: list[dict], anchors: l
             "reason": "units_insufficient",
         }
 
-    base_prompt = _section_alignment_prompt(section, units, ordered_anchors)
-    last_reason = "invalid_or_failed_alignment"
-    for attempt in range(2):
-        prompt = base_prompt
-        if attempt:
-            prompt = f"""{base_prompt}
-
-CORRECTION OBLIGATOIRE:
-La réponse précédente était invalide ({last_reason}).
-Cette fois, tu dois fournir exactement {len(ordered_anchors)} assignations:
-- tous les anchor_id prévus, une seule fois chacun;
-- aucune unité oubliée;
-- des plages contiguës qui couvrent de 0 à {len(units) - 1};
-- JSON valide uniquement.
-Choisis les frontières les plus cohérentes avec le texte, sans inventer de contenu.
-"""
-        try:
-            response = post_message(
-                [{"role": "user", "content": prompt}],
-                max_tokens=2200,
-                model=model,
-                timeout=180,
-                temperature=0 if attempt else None,
-            )
-            parsed = _parse_json_object(response)
-            assignments = _validate_section_assignments(parsed, ordered_anchors, units)
-            if assignments:
-                return assignments, {
-                    "status": "llm_retry" if attempt else "llm",
-                    "assignments": len(assignments),
-                    "attempts": attempt + 1,
-                }
-            last_reason = "invalid_assignments"
-            logger.warning(
-                "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID course=%s section=%s anchors=%s units=%s attempt=%s",
-                section.get("course_number"),
-                section.get("section_label"),
-                len(ordered_anchors),
-                len(units),
-                attempt + 1,
-            )
-        except Exception as exc:
-            last_reason = f"{exc.__class__.__name__}: {str(exc)[:180]}"
-            logger.exception(
-                "PIPELINE_SLIDES_SECTION_ALIGNMENT_ERROR course=%s section=%s attempt=%s error=%s",
-                section.get("course_number"),
-                section.get("section_label"),
-                attempt + 1,
-                exc,
-            )
+    prompt = _section_alignment_prompt(section, units, ordered_anchors)
+    # L'appel réseau ne se répète pas ici : la file durable possède le retry.
+    response = post_message(
+        [{"role": "user", "content": prompt}],
+        max_tokens=2200,
+        model=model,
+        timeout=180,
+        temperature=None,
+        http_max_attempts=1,
+    )
+    last_reason = "invalid_assignments"
+    try:
+        parsed = _parse_json_object(response)
+        assignments = _validate_section_assignments(parsed, ordered_anchors, units)
+        if assignments:
+            return assignments, {
+                "status": "llm",
+                "assignments": len(assignments),
+                "attempts": 1,
+            }
+        logger.warning(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID course=%s section=%s anchors=%s units=%s",
+            section.get("course_number"),
+            section.get("section_label"),
+            len(ordered_anchors),
+            len(units),
+        )
+    except Exception as exc:
+        last_reason = f"{exc.__class__.__name__}: {str(exc)[:180]}"
+        logger.warning(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID_JSON course=%s section=%s error=%s",
+            section.get("course_number"),
+            section.get("section_label"),
+            exc,
+        )
 
     return _fallback_section_assignments(ordered_anchors, units, "fallback_invalid_alignment"), {
         "status": "fallback",
         "reason": last_reason,
-        "attempts": 2,
+        "attempts": 1,
     }
 
 
@@ -2073,6 +1997,12 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         section = prepared["section"]
         units = prepared["units"]
         section_anchors = prepared["anchors"]
+
+        # A mono-course day already has its single recap slide on the course
+        # conclusion. The final one-to-three spoken sentences deliberately keep
+        # that slide on screen instead of creating a duplicate recap.
+        if section.get("suppress_slide"):
+            continue
 
         if not section_anchors:
             blocks.append(
@@ -2730,7 +2660,7 @@ CATALOGUE TEMPLATES:
 TEMPLATES AUTORISÉS ET SCHÉMAS:
 - welcome: data={{"title":"Bienvenue","formation_name":"nom formation","day_label":"Journée X","meta_note":"note courte"}}
 - program_year: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Parcours annuel","phases":[{{"title":"phase","desc":"1 phrase"}}]}} avec exactement 2 phases
-- day_program_7_steps: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Feuille de route","active_item":1,"items":["thème 1","thème 2"]}} avec exactement 7 items
+- day_program_7_steps: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Feuille de route","active_item":1,"items":["thème 1","thème 2"]}} avec 1 à 10 items, exactement un par cours prévu dans la journée lorsque ce nombre est fourni
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
 - definition: data={{"term":"mot ou notion","eyebrow":"contexte court","definition":"1 phrase","isItems":["critère","critère"]}}
@@ -3192,7 +3122,9 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
         }
 
     if template in {"program_year", "day_program", "day_program_7_steps"}:
-        max_items = 7 if template == "day_program_7_steps" else 2
+        # The historical template name is kept for compatibility, but V2 day
+        # plans legitimately contain 1 to 10 course themes.
+        max_items = 10 if template == "day_program_7_steps" else 2
         items = []
         for item in _limit_list(data.get("phases") or data.get("items") or data.get("points"), max_items):
             if isinstance(item, dict):
@@ -3228,7 +3160,12 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "items": items or [_shorten(fallback_text, 90)],
         }
         if template == "day_program_7_steps":
-            normalized["active_item"] = _safe_int(data.get("active_item"), 1, 1, 7)
+            normalized["active_item"] = _safe_int(
+                data.get("active_item"),
+                1,
+                1,
+                max(1, len(items)),
+            )
         return normalized
 
     if template == "casestudy":
@@ -3889,101 +3826,79 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
 
 
 def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_profile: dict, max_batch_slides: int) -> tuple[list[dict], dict]:
-    base_prompt = _prompt_for_blocks(blocks, source_title, pace_profile, max_batch_slides)
-    last_error = None
+    prompt = _prompt_for_blocks(blocks, source_title, pace_profile, max_batch_slides)
+    response = post_message(
+        [{"role": "user", "content": prompt}],
+        max_tokens=5000,
+        model=model,
+        timeout=240,
+        temperature=None,
+        http_max_attempts=1,
+    )
+    parsed = _parse_json_object(response)
+    raw_slides = parsed.get("slides", [])
+    if not isinstance(raw_slides, list):
+        raise ValueError("Réponse LLM sans tableau slides")
+    if not raw_slides:
+        raise ValueError("Réponse LLM sans aucune slide générée")
 
-    for attempt in range(2):
-        prompt = base_prompt
-        if attempt:
-            prompt = f"""{base_prompt}
+    template_backlog = _normalize_template_backlog(
+        parsed.get("template_backlog")
+        if isinstance(parsed.get("template_backlog"), list)
+        else []
+    )
 
-CORRECTION STRICTE:
-La génération précédente du batch a échoué ({last_error}).
-Cette fois, pour toute fenêtre dont `source_alignment` vaut `section_slide_alignment`, tu n'as pas le choix:
-- produis exactement 1 slide pour cette fenêtre;
-- recopie son unique `slide_anchor_id`;
-- utilise son `source_block_id`;
-- n'invente pas de contenu;
-- choisis le meilleur `template_type` depuis le catalogue selon le texte réel, même s'il diffère du `planned_template_type`.
-- exception stricte: un anchor de conclusion de cours (`cX-conclusion-recap-slide`) doit rester en `recap`.
-- renseigne aussi `pedagogical_shape`, `shape_evidence`, `template_decision_reason` et `rejected_templates`.
-Les autres fenêtres restent facultatives.
-Réponds uniquement avec le JSON demandé.
-"""
+    block_by_id = {block["source_block_id"]: block for block in blocks}
+    per_block_counts = {}
+    slides = []
+
+    for raw in raw_slides:
+        if not isinstance(raw, dict):
+            continue
         try:
-            response = post_message(
-                [{"role": "user", "content": prompt}],
-                max_tokens=5000,
-                model=model,
-                timeout=240,
-                temperature=0 if attempt else None,
+            source_block_id = int(raw.get("source_block_id"))
+        except (TypeError, ValueError):
+            continue
+        block = block_by_id.get(source_block_id)
+        if not block:
+            continue
+        if block.get("source_alignment") == "section_slide_alignment":
+            per_block_limit = 1
+        else:
+            per_block_limit = max(
+                pace_profile["max_slides_per_block"],
+                len(block.get("slide_anchors") or []),
             )
-            parsed = _parse_json_object(response)
-            raw_slides = parsed.get("slides", [])
-            if not isinstance(raw_slides, list):
-                raise ValueError("Réponse LLM sans tableau slides")
-        except Exception as exc:
-            last_error = f"{exc.__class__.__name__}: {str(exc)[:180]}"
-            if attempt == 0 and _strict_anchor_blocks(blocks):
-                logger.warning(
-                    "PIPELINE_SLIDES_BATCH_RETRY_STRICT blocks=%s-%s error=%s",
-                    blocks[0].get("source_block_id") if blocks else None,
-                    blocks[-1].get("source_block_id") if blocks else None,
-                    exc,
-                )
-                continue
-            raise
+        if per_block_counts.get(source_block_id, 0) >= per_block_limit:
+            continue
+        slides.append(_normalize_slide(raw, block))
+        per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
+        if len(slides) >= max_batch_slides:
+            break
 
-        template_backlog = _normalize_template_backlog(parsed.get("template_backlog") if isinstance(parsed.get("template_backlog"), list) else [])
+    if not slides:
+        raise ValueError("Réponse LLM sans slide exploitable")
 
-        block_by_id = {block["source_block_id"]: block for block in blocks}
-        per_block_counts = {}
-        slides = []
+    slides, strict_fallback_slides = _ensure_strict_anchor_slides(
+        slides,
+        blocks,
+        "missing_strict_section_slide",
+    )
 
-        for raw in raw_slides:
-            if not isinstance(raw, dict):
-                continue
-            try:
-                source_block_id = int(raw.get("source_block_id"))
-            except (TypeError, ValueError):
-                continue
-            block = block_by_id.get(source_block_id)
-            if not block:
-                continue
-            if block.get("source_alignment") == "section_slide_alignment":
-                per_block_limit = 1
-            else:
-                per_block_limit = max(
-                    pace_profile["max_slides_per_block"],
-                    len(block.get("slide_anchors") or []),
-                )
-            if per_block_counts.get(source_block_id, 0) >= per_block_limit:
-                continue
-            slides.append(_normalize_slide(raw, block))
-            per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
-            if len(slides) >= max_batch_slides:
-                break
+    for slide in slides:
+        gap = slide.get("ideal_template_gap") or {}
+        if gap.get("needed") and gap.get("suggested_template_name") and gap.get("reason"):
+            template_backlog.extend(_normalize_template_backlog([gap], max_items=1))
 
-        slides, strict_fallback_slides = _ensure_strict_anchor_slides(
-            slides,
-            blocks,
-            "missing_strict_section_slide",
-        )
-
-        for slide in slides:
-            gap = slide.get("ideal_template_gap") or {}
-            if gap.get("needed") and gap.get("suggested_template_name") and gap.get("reason"):
-                template_backlog.extend(_normalize_template_backlog([gap], max_items=1))
-
-        return slides, {
-            "template_backlog": _normalize_template_backlog(template_backlog),
-            "raw_backlog_count": len(parsed.get("template_backlog") or []) if isinstance(parsed.get("template_backlog"), list) else 0,
-            "curation_enabled": _slide_curation_enabled(),
-            "attempts": attempt + 1,
-            "strict_fallback_slides": strict_fallback_slides,
-        }
-
-    raise RuntimeError(last_error or "batch_generation_failed")
+    return slides, {
+        "template_backlog": _normalize_template_backlog(template_backlog),
+        "raw_backlog_count": len(parsed.get("template_backlog") or [])
+        if isinstance(parsed.get("template_backlog"), list)
+        else 0,
+        "curation_enabled": _slide_curation_enabled(),
+        "attempts": 1,
+        "strict_fallback_slides": strict_fallback_slides,
+    }
 
 
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
@@ -4394,23 +4309,14 @@ def _run_slide_generation_from_source(
             max_batch_slides,
             batch_anchor_count,
         )
-        try:
-            batch_slides, curation_debug = _generate_batch(batch, source["program_title"], model, pace_config, max_batch_slides)
-            status = "llm"
-        except Exception as exc:
-            logger.exception("PIPELINE_SLIDES_BATCH_ERROR folder=%s batch=%s-%s error=%s", folder_id, start, start + len(batch) - 1, exc)
-            batch_slides, strict_fallback_slides = _ensure_strict_anchor_slides(
-                [],
-                batch,
-                "batch_error_strict_anchor_fallback",
-            )
-            curation_debug = {
-                "template_backlog": [],
-                "curation_enabled": _slide_curation_enabled(),
-                "strict_fallback_slides": strict_fallback_slides,
-                "fallback_reason": f"{exc.__class__.__name__}: {str(exc)[:180]}",
-            }
-            status = "fallback"
+        batch_slides, curation_debug = _generate_batch(
+            batch,
+            source["program_title"],
+            model,
+            pace_config,
+            max_batch_slides,
+        )
+        status = "llm"
         logger.info(
             "PIPELINE_SLIDES_BATCH_DONE folder=%s content_job=%s batch=%s-%s status=%s slides=%s duration_ms=%s",
             folder_id,
@@ -4451,40 +4357,7 @@ def _run_slide_generation_from_source(
             }
             for future in as_completed(future_map):
                 job = future_map[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    logger.exception(
-                        "PIPELINE_SLIDES_BATCH_FUTURE_ERROR folder=%s content_job=%s batch=%s-%s error=%s",
-                        folder_id,
-                        source.get("content_job_id"),
-                        job["start"],
-                        job["start"] + len(job["batch"]) - 1,
-                        exc,
-                    )
-                    batch_slides, strict_fallback_slides = _ensure_strict_anchor_slides(
-                        [],
-                        job["batch"],
-                        "batch_future_error_strict_anchor_fallback",
-                    )
-                    result = {
-                        "batch_index": job["batch_index"],
-                        "slides": batch_slides,
-                        "debug": {
-                            "start_block": job["batch"][0]["source_block_id"],
-                            "end_block": job["batch"][-1]["source_block_id"],
-                            "blocks": len(job["batch"]),
-                            "max_slides": job["max_batch_slides"],
-                            "anchors": job["anchor_count"],
-                            "status": "fallback",
-                            "curation": {
-                                "template_backlog": [],
-                                "curation_enabled": _slide_curation_enabled(),
-                                "strict_fallback_slides": strict_fallback_slides,
-                                "fallback_reason": f"{exc.__class__.__name__}: {str(exc)[:180]}",
-                            },
-                        },
-                    }
+                result = future.result()
                 batch_results[job["batch_index"]] = result
     else:
         for job in batch_jobs:
@@ -4830,6 +4703,7 @@ def generate_slides_from_script(
     target_words_per_slide: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     model: str | None = None,
+    repair_existing_audio_sync: bool = True,
 ) -> dict:
     folder_id = _safe_int(folder_id, 0, 1, 10**9)
     if folder_id <= 0:
@@ -4838,7 +4712,7 @@ def generate_slides_from_script(
     source = _prefer_beat_aligned_source(
         _load_script_source(folder_id, job_id=job_id, platform_id=platform_id)
     )
-    return _run_slide_generation_from_source(
+    result = _run_slide_generation_from_source(
         source,
         job_id=job_id,
         max_slides=max_slides,
@@ -4848,3 +4722,23 @@ def generate_slides_from_script(
         model=model,
         persist=True,
     )
+    if repair_existing_audio_sync:
+        try:
+            from services.content_generation_service import (
+                repair_audio_sync_from_existing_timelines,
+            )
+
+            repair = repair_audio_sync_from_existing_timelines(folder_id)
+        except ValueError as exc:
+            # A first-generation deck legitimately has no prior audio plan.
+            # In that case the audio stage will create the synchronization.
+            if "Aucun content-audio-plan exploitable" not in str(exc):
+                raise
+            repair = {
+                "success": True,
+                "status": "not_applicable",
+                "reason": "no_existing_audio_plan",
+            }
+        result.setdefault("stats", {})["audio_sync_repair"] = repair
+        result.setdefault("pipeline_debug", {})["audio_sync_repair"] = repair
+    return result

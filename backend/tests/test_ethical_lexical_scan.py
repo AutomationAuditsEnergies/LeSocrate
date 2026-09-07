@@ -61,7 +61,7 @@ class EthicalLexicalScanTest(unittest.TestCase):
             ]
         })
 
-        with patch.object(cgs, "_anthropic_post", return_value=raw):
+        with patch.object(cgs, "_deepseek_post", return_value=raw):
             result = cgs._run_ethical_lexical_rewrite_for_section(
                 job={"id": 1, "formation_job_id": 1},
                 course_plan=_course_plan(),
@@ -105,7 +105,7 @@ class EthicalLexicalScanTest(unittest.TestCase):
                 "FORMATION_ETHICAL_LEXICAL_MAX_ITERATIONS": "2",
             },
             clear=False,
-        ), patch.object(cgs, "_anthropic_post", side_effect=responses) as post:
+        ), patch.object(cgs, "_deepseek_post", side_effect=responses) as post:
             result = cgs._run_ethical_lexical_rewrite_for_section(
                 job={"id": 1, "formation_job_id": 1},
                 course_plan=_course_plan(),

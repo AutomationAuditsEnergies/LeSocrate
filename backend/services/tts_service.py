@@ -96,7 +96,8 @@ def convert_to_speech(
     model="s2-pro",
     speed=0.95,
     temperature=0.7,
-    top_p=0.7
+    top_p=0.7,
+    platform_id=None,
 ):
     """
     Convertit un texte en audio via fish.audio API.
@@ -104,6 +105,13 @@ def convert_to_speech(
     Returns:
         bytes du fichier MP3
     """
+    if platform_id is not None and not voice_id:
+        from repositories.ai_voice_repository import get_platform_voice_settings
+
+        voice_settings = get_platform_voice_settings(int(platform_id))
+        if voice_settings:
+            voice_id = voice_settings.get("fish_reference_id")
+            speed = float(voice_settings.get("playback_speed") or speed)
     if not voice_id:
         voice_id = DEFAULT_VOICE_ID
 
@@ -152,7 +160,15 @@ def _build_tts_payload(
     temperature=0.7,
     top_p=0.7,
     format="mp3",
+    platform_id=None,
 ):
+    if platform_id is not None and not voice_id:
+        from repositories.ai_voice_repository import get_platform_voice_settings
+
+        voice_settings = get_platform_voice_settings(int(platform_id))
+        if voice_settings:
+            voice_id = voice_settings.get("fish_reference_id")
+            speed = float(voice_settings.get("playback_speed") or speed)
     if not voice_id:
         voice_id = DEFAULT_VOICE_ID
 
@@ -201,6 +217,7 @@ def convert_to_speech_with_timestamps(
     temperature=0.7,
     top_p=0.7,
     format="mp3",
+    platform_id=None,
 ):
     """
     Convertit un texte via Fish Audio en conservant l'alignement timestampé.
@@ -219,6 +236,7 @@ def convert_to_speech_with_timestamps(
         temperature=temperature,
         top_p=top_p,
         format=format,
+        platform_id=platform_id,
     )
     headers = {
         "model": model,
