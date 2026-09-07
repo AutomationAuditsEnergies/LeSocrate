@@ -4,7 +4,6 @@ import { renderSlideTemplate } from './slideTemplateRegistry'
 
 export function SlidePreviewFrame({
   slide,
-  renderProps = {},
   maxWidth = 720,
   padding = 14,
   className = '',
@@ -66,7 +65,7 @@ export function SlidePreviewFrame({
             left: 0,
           }}
         >
-          {renderSlideTemplate(slide, renderProps)}
+          {renderSlideTemplate(slide)}
         </div>
       </div>
     </div>

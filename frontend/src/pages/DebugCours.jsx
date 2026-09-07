@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch, apiUrl, getPlatformId, setPlatformId, setPlatformName } from '../api'
-import AppLoader from '../components/AppLoader.jsx'
 
 export default function DebugCours() {
   const [debugInfo, setDebugInfo] = useState(null)
@@ -126,21 +125,14 @@ export default function DebugCours() {
     }
   }
 
-  const fetchPlaylist = useCallback(async () => {
-    try {
-      const response = await apiFetch(`/api/debug/playlist?p=${encodeURIComponent(platformId)}`)
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          setPlaylist(data.playlist)
-        }
-      }
-    } catch (err) {
-      console.error('Erreur chargement playlist:', err)
-    }
+  useEffect(() => {
+    fetchDebugInfo()
+    // Actualiser toutes les 5 secondes
+    const interval = setInterval(fetchDebugInfo, 5000)
+    return () => clearInterval(interval)
   }, [platformId])
 
-  const fetchDebugInfo = useCallback(async () => {
+  const fetchDebugInfo = async () => {
     try {
       const response = await apiFetch(`/api/debug/cours-info?p=${encodeURIComponent(platformId)}`)
 
@@ -160,17 +152,28 @@ export default function DebugCours() {
     } finally {
       setLoading(false)
     }
-  }, [fetchPlaylist, platformId])
+  }
 
-  useEffect(() => {
-    fetchDebugInfo()
-    // Actualiser toutes les 5 secondes
-    const interval = setInterval(fetchDebugInfo, 5000)
-    return () => clearInterval(interval)
-  }, [fetchDebugInfo])
+  const fetchPlaylist = async () => {
+    try {
+      const response = await apiFetch(`/api/debug/playlist?p=${encodeURIComponent(platformId)}`)
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success) {
+          setPlaylist(data.playlist)
+        }
+      }
+    } catch (err) {
+      console.error('Erreur chargement playlist:', err)
+    }
+  }
 
   if (loading) {
-    return <AppLoader label="Chargement des informations de debug" surface="dark" />
+    return (
+      <div className="bg-gray-900 text-white p-8 min-h-screen flex items-center justify-center">
+        <p className="text-xl">Chargement des informations de debug...</p>
+      </div>
+    )
   }
 
   if (error) {
@@ -178,7 +181,7 @@ export default function DebugCours() {
       <div className="bg-gray-900 text-white p-8 min-h-screen flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-500 text-xl mb-4">{error}</p>
-          <a href="/connexion-centre" className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
+          <a href={`/login-admin?p=${platformId}`} className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
             Se connecter
           </a>
         </div>
@@ -452,8 +455,8 @@ export default function DebugCours() {
         </div>
 
         <div className="mt-8 text-center space-x-4">
-          <a href="/dashboard-centre" className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition inline-block">
-            Retour au tableau de bord
+          <a href={`/admin?p=${platformId}`} className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition inline-block">
+            Retour à l&apos;Admin
           </a>
           <a
             href={`/video?p=${platformId}`}

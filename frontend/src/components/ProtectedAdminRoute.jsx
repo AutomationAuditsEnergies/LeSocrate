@@ -1,82 +1,50 @@
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { apiFetch } from '../api'
-import { hasAdminAccess } from '../adminAccess'
-import { clearSupabaseSession } from '../supabaseClient'
-import AppLoader from './AppLoader.jsx'
 
-const NO_REQUIRED_PERMISSIONS = []
-
-export default function ProtectedAdminRoute({
-  children,
-  loginPath = '/connexion-centre',
-  allowedAccountTypes = null,
-  requiredPermissions = NO_REQUIRED_PERMISSIONS,
-}) {
+export default function ProtectedAdminRoute({ children, loginPath = '/login-admin' }) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    let isMounted = true
-    const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => {
-      controller.abort()
-    }, 12000)
-
     // Vérifier si l'utilisateur est authentifié comme admin
     const checkAuth = async () => {
       try {
-        const response = await apiFetch('/api/admin/session', {
+        const response = await apiFetch('/api/admin/logs', {
           method: 'GET',
-          signal: controller.signal,
         })
 
         if (response.ok) {
-          const data = await response.json().catch(() => ({}))
-          if (isMounted) {
-            setIsAuthenticated(hasAdminAccess(data.account, {
-              allowedAccountTypes,
-              requiredPermissions,
-            }))
-          }
+          // Si on peut accéder aux logs, c'est qu'on est admin
+          setIsAuthenticated(true)
         } else if (response.status === 403 || response.status === 401) {
           // Non authentifié
-          localStorage.removeItem('admin_auth_token')
-          await clearSupabaseSession().catch(() => {})
-          if (isMounted) {
-            setIsAuthenticated(false)
-          }
+          setIsAuthenticated(false)
         } else {
           // Autre erreur
-          if (isMounted) {
-            setIsAuthenticated(false)
-          }
-        }
-      } catch (error) {
-        if (error?.name === 'AbortError' || !isMounted) return
-        console.error('Erreur vérification auth admin:', error)
-        if (isMounted) {
           setIsAuthenticated(false)
         }
+      } catch (error) {
+        console.error('Erreur vérification auth admin:', error)
+        setIsAuthenticated(false)
       } finally {
-        window.clearTimeout(timeoutId)
-        if (isMounted) {
-          setIsLoading(false)
-        }
+        setIsLoading(false)
       }
     }
 
     checkAuth()
-
-    return () => {
-      isMounted = false
-      window.clearTimeout(timeoutId)
-      controller.abort()
-    }
-  }, [allowedAccountTypes, requiredPermissions])
+  }, [])
 
   if (isLoading) {
-    return <AppLoader label="Vérification de votre accès" />
+    // Afficher un loader pendant la vérification
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Vérification...</p>
+        </div>
+      </div>
+    )
   }
 
   if (!isAuthenticated) {

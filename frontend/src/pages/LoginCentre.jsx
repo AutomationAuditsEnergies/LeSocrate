@@ -1,116 +1,16 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
-import { getSupabaseClient } from '../supabaseClient'
-import AppLoader from '../components/AppLoader.jsx'
-import './Auth.css'
-
-const AUTH_REQUEST_TIMEOUT_MS = 20_000
-
-function getSupabaseErrorMessage(error, fallback) {
-  const message = String(error?.message || '').toLowerCase()
-
-  if (message.includes('email rate limit')) {
-    return "Trop d'emails envoyés en peu de temps. Attendez quelques minutes avant de réessayer."
-  }
-
-  if (message.includes('password should be at least')) {
-    return 'Le mot de passe doit contenir au moins 8 caractères.'
-  }
-
-  if (message.includes('invalid login credentials')) {
-    return 'Email ou mot de passe incorrect.'
-  }
-
-  return error?.message || fallback
-}
 
 export default function LoginCentre({ preloadDashboardRoute }) {
-  const initialPasswordRecoveryMode = (() => {
-    if (typeof window === 'undefined') return false
-    const searchParams = new URLSearchParams(window.location.search)
-    const hashParams = new URLSearchParams(window.location.hash.slice(1))
-    return searchParams.get('auth') === 'recovery'
-      || hashParams.get('type') === 'recovery'
-      || (hashParams.has('access_token') && hashParams.has('refresh_token'))
-  })()
-  const initialAuthMode = (() => {
-    if (typeof window === 'undefined' || initialPasswordRecoveryMode) return 'login'
-    return new URLSearchParams(window.location.search).get('mode') === 'signup' ? 'signup' : 'login'
-  })()
-  const [authMode, setAuthMode] = useState(initialAuthMode)
+  const [authMode, setAuthMode] = useState('login')
   const [centerName, setCenterName] = useState('')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
+  const [username, setUsername] = useState('admin')
+  const [password, setPassword] = useState('secret123')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState(initialPasswordRecoveryMode ? 'Choisissez un nouveau mot de passe.' : '')
   const [loading, setLoading] = useState(false)
-  const [resetLoading, setResetLoading] = useState(false)
-  const [devAccessLoading, setDevAccessLoading] = useState(false)
-  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(initialPasswordRecoveryMode)
-  const [forgotPasswordMode, setForgotPasswordMode] = useState(false)
-  const [checkingExistingSession, setCheckingExistingSession] = useState(
-    !initialPasswordRecoveryMode && initialAuthMode === 'login',
-  )
-  const [showPassword, setShowPassword] = useState(false)
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const navigate = useNavigate()
-
-  useEffect(() => {
-    if (initialPasswordRecoveryMode || initialAuthMode !== 'login') {
-      setCheckingExistingSession(false)
-      return undefined
-    }
-
-    let cancelled = false
-
-    const resumeExistingSession = async () => {
-      try {
-        const supabaseClient = await getSupabaseClient()
-        const { data: sessionData } = supabaseClient
-          ? await supabaseClient.auth.getSession()
-          : { data: { session: null } }
-        const hasSupabaseSession = Boolean(sessionData.session?.access_token)
-        const hasLegacyAdminSession = Boolean(localStorage.getItem('admin_auth_token'))
-        if (!hasSupabaseSession && !hasLegacyAdminSession) return
-
-        const response = await apiFetch('/api/admin/session', {
-          method: 'GET',
-          timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
-        })
-        const data = await response.json().catch(() => ({}))
-
-        if (!cancelled && response.ok && data.authenticated) {
-          if (data.account?.type === 'legacy_admin') {
-            navigate('/admin/validations', { replace: true })
-          } else {
-            preloadDashboardRoute?.().catch(() => {})
-            navigate('/dashboard-centre', { replace: true })
-          }
-          return
-        }
-
-        if (!cancelled && (response.status === 401 || response.status === 403)) {
-          localStorage.removeItem('admin_auth_token')
-          if (hasSupabaseSession) {
-            await supabaseClient.auth.signOut({ scope: 'local' })
-          }
-        }
-      } catch (sessionError) {
-        console.warn('Reprise de session centre indisponible:', sessionError)
-      } finally {
-        if (!cancelled) setCheckingExistingSession(false)
-      }
-    }
-
-    resumeExistingSession()
-
-    return () => {
-      cancelled = true
-    }
-  }, [initialAuthMode, initialPasswordRecoveryMode, navigate, preloadDashboardRoute])
 
   useEffect(() => {
     const preload = () => { preloadDashboardRoute?.().catch(() => {}) }
@@ -122,303 +22,120 @@ export default function LoginCentre({ preloadDashboardRoute }) {
     return () => window.clearTimeout(timeoutId)
   }, [preloadDashboardRoute])
 
-  useEffect(() => {
-    let cancelled = false
-    let subscription = null
-
-    getSupabaseClient().then((client) => {
-      if (cancelled || !client) return
-      const { data } = client.auth.onAuthStateChange((event) => {
-        if (event === 'PASSWORD_RECOVERY') {
-          setPasswordRecoveryMode(true)
-          setAuthMode('login')
-          setNotice('Choisissez un nouveau mot de passe.')
-        }
-      })
-      subscription = data.subscription
-    })
-
-    return () => {
-      cancelled = true
-      subscription?.unsubscribe()
-    }
-  }, [])
-
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
-    setNotice('')
 
     if (authMode === 'signup' && password !== confirmPassword) {
       setError('Les deux mots de passe ne correspondent pas')
       return
     }
 
-    if ((authMode === 'signup' || passwordRecoveryMode) && password.length < 8) {
-      setError('Le mot de passe doit contenir au moins 8 caractères.')
-      return
-    }
-
     setLoading(true)
 
     try {
-      if (passwordRecoveryMode) {
-        const supabaseClient = await getSupabaseClient()
-        if (!supabaseClient) {
-          setError("Supabase Auth n'est pas configuré sur ce frontend.")
-          return
-        }
-        if (password !== confirmPassword) {
-          setError('Les deux mots de passe ne correspondent pas')
-          return
-        }
+      const response = await apiFetch(authMode === 'signup' ? '/api/admin/register' : '/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          center_name: centerName.trim(),
+          username: username.trim(),
+          password: password.trim(),
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
 
-        const { error: updateError } = await supabaseClient.auth.updateUser({ password })
-        if (updateError) {
-          setError(getSupabaseErrorMessage(updateError, 'Impossible de modifier le mot de passe.'))
-          return
-        }
-
-        await supabaseClient.auth.signOut()
-        window.history.replaceState({}, '', '/connexion-centre')
-        setPasswordRecoveryMode(false)
-        setPassword('')
-        setConfirmPassword('')
-        setNotice('Mot de passe modifié. Vous pouvez maintenant vous connecter.')
-        return
-      }
-
-      localStorage.removeItem('admin_auth_token')
-      const email = username.trim().toLowerCase()
-
-      // Le compte interne historique reste isolé du parcours Supabase des centres.
-      if (authMode === 'login' && email === 'admin') {
-        const response = await apiFetch('/api/admin/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
-          body: JSON.stringify({ username: email, password: password.trim() }),
-        })
-        const data = await response.json().catch(() => ({}))
-        if (!response.ok || !data.success) {
-          setError(data.error || `Erreur serveur (${response.status})`)
-          return
-        }
+      if (response.ok && data.success) {
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
-        navigate(data.account?.type === 'legacy_admin' ? '/admin/validations' : '/dashboard-centre')
+        await preloadDashboardRoute?.().catch(() => {})
+        navigate('/hr-dashboard')
         return
       }
 
-      const supabaseClient = await getSupabaseClient()
-      if (!supabaseClient) {
-        setError("Supabase Auth n'est pas configuré sur ce frontend.")
-        return
-      }
-
-      if (authMode === 'signup') {
-        await supabaseClient.auth.signOut({ scope: 'local' })
-        const registrationResponse = await apiFetch('/api/admin/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
-          body: JSON.stringify({
-            center_name: centerName.trim(),
-            username: email,
-            password: password.trim(),
-          }),
-        })
-        const registrationData = await registrationResponse.json().catch(() => ({}))
-        if (!registrationResponse.ok || !registrationData.success) {
-          setError(registrationData.error || `Erreur serveur (${registrationResponse.status})`)
-          return
-        }
-      }
-
-      const { error: signInError } = await supabaseClient.auth.signInWithPassword({
-        email,
-        password: password.trim(),
-      })
-      if (signInError) {
-        setError(getSupabaseErrorMessage(signInError, 'Impossible de vous connecter.'))
-        return
-      }
-
-      const sessionResponse = await apiFetch('/api/admin/session', {
-        method: 'GET',
-        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
-      })
-      const sessionData = await sessionResponse.json().catch(() => ({}))
-      if (!sessionResponse.ok || !sessionData.authenticated) {
-        await supabaseClient.auth.signOut({ scope: 'local' })
-        setError(sessionData.error || "Ce compte Supabase n'est pas associé à un centre actif.")
-        return
-      }
-
-      const account = sessionData.account || {}
-      localStorage.setItem('center_account_email', account.username || email)
-      localStorage.setItem('center_account_name', account.center_name || centerName.trim())
-      preloadDashboardRoute?.().catch(() => {})
-      navigate('/dashboard-centre')
+      setError(data.error || `Erreur serveur (${response.status})`)
     } catch (err) {
       console.error('Erreur login centre:', err)
-      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
-        setError('Le serveur met trop de temps à répondre. Réessayez dans quelques instants.')
-      } else {
-        setError('Erreur de connexion au serveur')
-      }
+      setError('Erreur de connexion au serveur')
     } finally {
       setLoading(false)
     }
   }
 
-  const handleForgotPassword = async (event) => {
-    event.preventDefault()
-    const email = username.trim().toLowerCase()
-    setError('')
-    setNotice('')
-    if (!email) {
-      setError('Veuillez entrer votre adresse email.')
-      return
-    }
-    const supabaseClient = await getSupabaseClient()
-    if (!supabaseClient) {
-      setError("Supabase Auth n'est pas configuré sur ce frontend.")
-      return
-    }
-    setResetLoading(true)
-    try {
-      const response = await apiFetch('/api/admin/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
-        body: JSON.stringify({ username: email }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok || !data.success) {
-        setError(data.error || `Erreur serveur (${response.status})`)
-        return
-      }
-
-      const { error: resetError } = await supabaseClient.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/connexion-centre?auth=recovery`,
-      })
-      if (resetError) {
-        setError(getSupabaseErrorMessage(resetError, "Impossible d'envoyer le lien de réinitialisation."))
-        return
-      }
-
-      setNotice('Email envoyé. Ouvrez le lien reçu pour modifier votre mot de passe.')
-    } catch (err) {
-      console.error('Erreur mot de passe oublié:', err)
-      setError("Impossible d'envoyer l'email de réinitialisation.")
-    } finally {
-      setResetLoading(false)
-    }
-  }
-
-  const handleLocalDevAccess = async () => {
-    setError('')
-    setNotice('')
-    setDevAccessLoading(true)
-    try {
-      const response = await apiFetch('/api/admin/dev-login', {
-        method: 'POST',
-        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok || !data.success) {
-        setError(data.error || `Accès local indisponible (${response.status})`)
-        return
-      }
-      if (data.token) localStorage.setItem('admin_auth_token', data.token)
-      preloadDashboardRoute?.().catch(() => {})
-      navigate('/dashboard-centre')
-    } catch (err) {
-      console.error('Erreur accès local:', err)
-      setError("Impossible d'ouvrir l'environnement local.")
-    } finally {
-      setDevAccessLoading(false)
-    }
-  }
-
-  if (checkingExistingSession) {
-    return <AppLoader label="Reprise de votre session" />
-  }
-
   return (
-    <main className={`cadrenza-auth cadrenza-auth--center${authMode === 'signup' && !passwordRecoveryMode && !forgotPasswordMode ? ' cadrenza-auth--signup' : ''}${forgotPasswordMode ? ' cadrenza-auth--forgot' : ''}`}>
-      <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
-      <a className="auth-home-return" href="/landing" aria-label="Retour à l’accueil">
-        <ArrowLeft size={20} strokeWidth={1.8} aria-hidden="true" />
-        <span>Accueil</span>
-      </a>
-      <div className="auth-layout">
-        <section className="auth-panel" id="auth-main">
-          {!passwordRecoveryMode && !forgotPasswordMode && (
-            <div className="auth-mode-switch" role="tablist" aria-label="Mode d’authentification">
+    <main className="min-h-screen bg-[#f8fafc] text-slate-950" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[minmax(0,1fr)_520px]">
+        <section
+          className="relative hidden overflow-hidden bg-[#03093d] lg:flex"
+          style={{
+            backgroundImage: 'url(/wallpaper-centre.webp)',
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+          }}
+        >
+          <div className="relative z-10 flex w-full items-center justify-center p-12">
+            <img
+              src="/robot-blue.png"
+              alt="Professeur IA"
+              draggable={false}
+              className="w-full max-w-[420px] object-contain drop-shadow-2xl"
+            />
+          </div>
+        </section>
+
+        <section className="flex min-h-screen items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
+          <div className="w-full max-w-[420px]">
+            <Link to="/landing" className="mb-10 inline-flex items-center gap-3 text-slate-950 lg:hidden">
+              <span className="h-3 w-3 rounded-full bg-[#8B5CF6]" />
+              <span className="text-sm font-semibold uppercase">Le Socrate</span>
+            </Link>
+
+            <div className="mb-8">
+              <p className="mb-3 text-sm font-semibold text-violet-700">Centre de formation</p>
+              <h2 className="text-3xl font-bold text-slate-950">
+                {authMode === 'signup' ? 'Inscription' : 'Connexion'}
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                {authMode === 'signup'
+                  ? 'Créez votre accès pour gérer vos plateformes de formation.'
+                  : 'Identifiez-vous pour accéder au tableau de bord de pilotage.'}
+              </p>
+            </div>
+
+            <div className="mb-7 grid h-11 grid-cols-2 rounded-lg bg-slate-200 p-1">
               {[
                 ['login', 'Connexion'],
-                ['signup', 'Créer un compte'],
+                ['signup', 'Inscription'],
               ].map(([mode, label]) => (
                 <button
                   key={mode}
                   type="button"
-                  role="tab"
-                  aria-pressed={authMode === mode}
-                  aria-selected={authMode === mode}
                   onClick={() => {
                     setAuthMode(mode)
-                    setForgotPasswordMode(false)
                     setError('')
-                    setNotice('')
                   }}
+                  className={`rounded-md text-sm font-semibold transition ${
+                    authMode === mode
+                      ? 'bg-white text-violet-700 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-950'
+                  }`}
                 >
-                  <span>{label}</span>
+                  {label}
                 </button>
               ))}
             </div>
-          )}
-
-          <div className="auth-panel__inner">
-            <header className="auth-heading">
-              <h2>
-                {passwordRecoveryMode
-                  ? 'Nouveau mot de passe'
-                  : forgotPasswordMode
-                    ? 'Mot de passe oublié'
-                    : authMode === 'signup'
-                      ? 'Créer votre espace'
-                      : 'Bienvenue sur Cadrenza'}
-              </h2>
-              <p>
-                {passwordRecoveryMode
-                  ? 'Définissez un nouveau mot de passe pour retrouver votre espace.'
-                  : forgotPasswordMode
-                    ? 'Vous recevrez un email avec un lien pour créer ou réinitialiser votre mot de passe en toute sécurité.'
-                    : authMode === 'signup'
-                      ? 'Renseignez les informations de votre centre pour commencer.'
-                      : 'Connectez-vous à votre espace centre de formation.'}
-              </p>
-            </header>
 
             {error && (
-              <div className="auth-alert auth-alert--error" role="alert" aria-live="assertive">
+              <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
                 {error}
               </div>
             )}
-            {notice && (
-              <div className="auth-alert auth-alert--success" role="status" aria-live="polite">
-                {notice}
-              </div>
-            )}
 
-            <form
-              className="auth-form"
-              onSubmit={forgotPasswordMode ? handleForgotPassword : handleSubmit}
-            >
-              {authMode === 'signup' && !passwordRecoveryMode && !forgotPasswordMode && (
-                <div className="auth-field">
-                  <label htmlFor="centre-name">Nom du centre</label>
+            <form className="space-y-5" onSubmit={handleSubmit}>
+              {authMode === 'signup' && (
+                <div>
+                  <label htmlFor="centre-name" className="mb-1.5 block text-sm font-medium text-slate-800">
+                    Nom du centre
+                  </label>
                   <input
                     id="centre-name"
                     name="center_name"
@@ -428,148 +145,74 @@ export default function LoginCentre({ preloadDashboardRoute }) {
                     onChange={(event) => setCenterName(event.target.value)}
                     required
                     placeholder="Votre centre de formation"
+                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
                   />
                 </div>
               )}
 
-              {!passwordRecoveryMode && (
-                <div className="auth-field">
-                  <label htmlFor="centre-username">
-                    {authMode === 'signup' && !forgotPasswordMode ? 'Email' : 'Adresse email'}
+              <div>
+                <label htmlFor="centre-username" className="mb-1.5 block text-sm font-medium text-slate-800">
+                  {authMode === 'signup' ? 'Email ou identifiant' : 'Identifiant'}
+                </label>
+                <input
+                  id="centre-username"
+                  name="username"
+                  type="text"
+                  autoComplete={authMode === 'signup' ? 'email' : 'username'}
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  required
+                  placeholder={authMode === 'signup' ? 'contact@centre.fr' : 'Votre identifiant'}
+                  className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="centre-password" className="mb-1.5 block text-sm font-medium text-slate-800">
+                  Mot de passe
+                </label>
+                <input
+                  id="centre-password"
+                  name="password"
+                  type="password"
+                  autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                  placeholder="Votre mot de passe"
+                  className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
+                />
+              </div>
+
+              {authMode === 'signup' && (
+                <div>
+                  <label htmlFor="centre-confirm-password" className="mb-1.5 block text-sm font-medium text-slate-800">
+                    Confirmer le mot de passe
                   </label>
                   <input
-                    id="centre-username"
-                    name="username"
-                    type="email"
-                    inputMode="email"
-                    autoComplete="email"
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
+                    id="centre-confirm-password"
+                    name="confirm_password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
                     required
-                    placeholder={forgotPasswordMode ? 'Veuillez entrer votre adresse email' : 'contact@centre.fr'}
+                    placeholder="Confirmez votre mot de passe"
+                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
                   />
-                </div>
-              )}
-
-              {!forgotPasswordMode && (
-                <div className="auth-field">
-                  <label htmlFor="centre-password">
-                    {passwordRecoveryMode ? 'Nouveau mot de passe' : 'Mot de passe'}
-                  </label>
-                  <div className="auth-password-wrap">
-                    <input
-                      id="centre-password"
-                      name="password"
-                      type={showPassword ? 'text' : 'password'}
-                      autoComplete={authMode === 'signup' || passwordRecoveryMode ? 'new-password' : 'current-password'}
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      required
-                      minLength={authMode === 'signup' || passwordRecoveryMode ? 8 : undefined}
-                      aria-describedby={authMode === 'signup' || passwordRecoveryMode ? 'centre-password-hint' : undefined}
-                      placeholder={passwordRecoveryMode ? 'Nouveau mot de passe' : 'Votre mot de passe'}
-                    />
-                    <button
-                      type="button"
-                      className="auth-password-toggle"
-                      onClick={() => setShowPassword((visible) => !visible)}
-                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
-                      aria-pressed={showPassword}
-                    >
-                      {showPassword ? 'Masquer' : 'Afficher'}
-                    </button>
-                  </div>
-                  {(authMode === 'signup' || passwordRecoveryMode) && (
-                    <p className="auth-field__hint" id="centre-password-hint">8 caractères minimum.</p>
-                  )}
-                  {authMode === 'login' && !passwordRecoveryMode && (
-                    <div className="auth-forgot-row">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setForgotPasswordMode(true)
-                          setError('')
-                          setNotice('')
-                        }}
-                        className="auth-text-button"
-                      >
-                        Mot de passe oublié ?
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {!forgotPasswordMode && (authMode === 'signup' || passwordRecoveryMode) && (
-                <div className="auth-field">
-                  <label htmlFor="centre-confirm-password">
-                    {passwordRecoveryMode ? 'Confirmer le nouveau mot de passe' : 'Confirmer le mot de passe'}
-                  </label>
-                  <div className="auth-password-wrap">
-                    <input
-                      id="centre-confirm-password"
-                      name="confirm_password"
-                      type={showConfirmPassword ? 'text' : 'password'}
-                      autoComplete="new-password"
-                      value={confirmPassword}
-                      onChange={(event) => setConfirmPassword(event.target.value)}
-                      required
-                      minLength={8}
-                      placeholder="Saisissez-le une seconde fois"
-                    />
-                    <button
-                      type="button"
-                      className="auth-password-toggle"
-                      onClick={() => setShowConfirmPassword((visible) => !visible)}
-                      aria-label={showConfirmPassword ? 'Masquer la confirmation' : 'Afficher la confirmation'}
-                      aria-pressed={showConfirmPassword}
-                    >
-                      {showConfirmPassword ? 'Masquer' : 'Afficher'}
-                    </button>
-                  </div>
                 </div>
               )}
 
               <button
                 type="submit"
-                disabled={forgotPasswordMode ? resetLoading : loading}
-                className="auth-submit"
+                disabled={loading}
+                className="mt-2 inline-flex h-12 w-full items-center justify-center rounded-lg bg-[#8B5CF6] px-5 text-sm font-semibold text-white transition hover:bg-[#7c3aed] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:cursor-not-allowed disabled:bg-[#a78bfa]"
               >
-                {forgotPasswordMode
-                  ? (resetLoading ? 'Envoi en cours…' : 'Valider')
-                  : loading
-                  ? (passwordRecoveryMode ? 'Modification…' : authMode === 'signup' ? 'Création…' : 'Connexion…')
-                  : (passwordRecoveryMode ? 'Enregistrer le mot de passe' : authMode === 'signup' ? 'Créer mon espace' : 'Se connecter')}
+                {loading
+                  ? (authMode === 'signup' ? 'Création...' : 'Connexion...')
+                  : (authMode === 'signup' ? 'Créer le compte' : 'Accéder au tableau de bord')}
               </button>
-
-              {import.meta.env.DEV && authMode === 'login' && !passwordRecoveryMode && !forgotPasswordMode && (
-                <div className="auth-dev-access">
-                  <span>Développement local</span>
-                  <button
-                    type="button"
-                    disabled={devAccessLoading}
-                    onClick={handleLocalDevAccess}
-                  >
-                    {devAccessLoading ? 'Ouverture…' : 'Accéder sans compte'}
-                  </button>
-                </div>
-              )}
-
-              {forgotPasswordMode && (
-                <button
-                  type="button"
-                  className="auth-back-button"
-                  onClick={() => {
-                    setForgotPasswordMode(false)
-                    setError('')
-                    setNotice('')
-                  }}
-                >
-                  Retour à la connexion
-                </button>
-              )}
             </form>
-
           </div>
         </section>
       </div>
