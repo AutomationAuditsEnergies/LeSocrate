@@ -26,7 +26,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
-DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
+DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
 _LLM_SEMAPHORES = {}
 _LLM_SEMAPHORES_LOCK = threading.Lock()
 
@@ -38,7 +38,7 @@ def default_model() -> str:
     Priorité :
       1. FORMATION_LLM_MODEL (nouveau nom générique)
       2. FORMATION_CLAUDE_MODEL (compatibilité existante)
-      3. deepseek-v4-flash si DEEPSEEK_API_KEY est configurée sans clé Anthropic
+      3. deepseek-flash si DEEPSEEK_API_KEY est configurée sans clé Anthropic
       4. Claude Sonnet historique
     """
     configured = os.environ.get("FORMATION_LLM_MODEL") or os.environ.get("FORMATION_CLAUDE_MODEL")
@@ -57,6 +57,12 @@ def default_model() -> str:
 
 
 def _resolve_provider(model: str) -> str:
+    # Le modèle choisi pour un job prime sur la configuration générale du serveur.
+    model_name = (model or "").lower()
+    if model_name.startswith("deepseek"):
+        return "deepseek"
+    if model_name.startswith("claude"):
+        return "anthropic"
     provider = (
         os.environ.get("FORMATION_LLM_PROVIDER")
         or os.environ.get("LLM_PROVIDER")
@@ -64,8 +70,6 @@ def _resolve_provider(model: str) -> str:
     ).strip().lower()
     if provider in ("deepseek", "anthropic"):
         return provider
-    if (model or "").lower().startswith("deepseek"):
-        return "deepseek"
     if os.getenv("DEEPSEEK_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
         return "deepseek"
     return "anthropic"
@@ -73,8 +77,8 @@ def _resolve_provider(model: str) -> str:
 
 def _normalize_model_alias(model: str) -> str:
     alias = (model or "").strip().lower()
-    if alias == "flash":
-        return "deepseek-v4-flash"
+    if alias in ("flash", "deepseek-v4-flash"):
+        return "deepseek-flash"
     if alias == "pro":
         return "deepseek-v4-pro"
     if alias == "haiku":
@@ -118,7 +122,7 @@ def _deepseek_concurrency_limit(model: str) -> int:
     if "v4-pro" in model_lower:
         default = _int_env("DEEPSEEK_MAX_CONCURRENT", 450)
         return max(1, min(500, _int_env("DEEPSEEK_V4_PRO_MAX_CONCURRENT", default)))
-    if "v4-flash" in model_lower:
+    if model_lower in ("deepseek-flash", "deepseek-v4-flash"):
         default = _int_env("DEEPSEEK_MAX_CONCURRENT", 2200)
         return max(1, min(2500, _int_env("DEEPSEEK_V4_FLASH_MAX_CONCURRENT", default)))
     if generic:

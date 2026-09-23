@@ -32,7 +32,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Modèle utilisé pour la génération du pipeline formation.
-# Configure `FORMATION_LLM_MODEL=deepseek-v4-flash` ou `deepseek-v4-pro`
+# Configure `FORMATION_LLM_MODEL=deepseek-flash` ou `deepseek-v4-pro`
 # pour passer par DeepSeek. `FORMATION_CLAUDE_MODEL` reste supporté.
 CLAUDE_MODEL = default_model()
 HOURS_PER_DAY = 7

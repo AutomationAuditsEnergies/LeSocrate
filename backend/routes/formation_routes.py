@@ -57,7 +57,7 @@ formation_bp = Blueprint("formation", __name__)
 _PIPELINE_MODEL_ALIASES = {
     "sonnet": "claude-sonnet-4-20250514",
     "haiku": "claude-haiku-4-5-20251001",
-    "flash": "deepseek-v4-flash",
+    "flash": "deepseek-flash",
     "pro": "deepseek-v4-pro",
 }
 _PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
@@ -73,16 +73,11 @@ def _slides_folder_workers(default: int = 3) -> int:
 
 
 def _resolve_pipeline_slide_model(api_model: str | None) -> str | None:
-    """Modèle dédié à la curation slides.
-
-    L'itération manuelle "Régénérer curation + slides" utilise DeepSeek Pro par
-    défaut. On aligne l'auto-pilot dessus, tout en laissant un override env pour
-    les environnements sans clé DeepSeek.
-    """
+    """Modèle des slides : celui du job, sauf override explicite."""
     override = (os.getenv("FORMATION_SLIDES_MODEL") or "").strip()
     if override:
-        return _PIPELINE_MODEL_ALIASES.get(override.lower(), override)
-    return "deepseek-v4-pro"
+        return _resolve_pipeline_api_model(None, override)
+    return _resolve_pipeline_api_model(None, api_model) if api_model else "deepseek-flash"
 
 
 def _formation_content_day_workers(default: int = 1) -> int:
@@ -108,8 +103,8 @@ def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
     Priorité :
       1. modèle explicite passé en argument
       2. modèle choisi au lancement (`auto_pilot_model`)
-      3. fallback FORMATION_LLM_PROVIDER (env var) → deepseek-v4-pro / sonnet
-      4. fallback DEEPSEEK_API_KEY (sans ANTHROPIC_API_KEY) → deepseek-v4-pro
+      3. fallback FORMATION_LLM_PROVIDER (env var) → deepseek-flash / sonnet
+      4. fallback DEEPSEEK_API_KEY (sans ANTHROPIC_API_KEY) → deepseek-flash
       5. None (laisse les services retomber sur leur default_model())
 
     Garantit qu'un job lancé en DeepSeek reste en DeepSeek pour TOUTES les
@@ -125,14 +120,16 @@ def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
             or ""
         ).strip().lower()
         if provider == "deepseek":
-            model = "deepseek-v4-pro"
+            model = "deepseek-flash"
         elif provider == "anthropic":
             model = "sonnet"
         elif os.environ.get("DEEPSEEK_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
-            model = "deepseek-v4-pro"
+            model = "deepseek-flash"
     if not model:
         return None
     model = str(model).strip()
+    if model.lower() == "deepseek-v4-flash":
+        return "deepseek-flash"
     return _PIPELINE_MODEL_ALIASES.get(model.lower(), model)
 
 
@@ -4568,7 +4565,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
     from database.db import get_db_connection
     from services.claude_code_mission_service import execute_mission_locally
 
-    model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="pro")
+    model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="flash")
     tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
     use_cc = bool(job.get("auto_pilot_use_cc"))
     platform_id = job["platform_id"]
@@ -5422,7 +5419,7 @@ def run_auto_pilot(job_id):
 
     Body (optionnel) :
       - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')
-      - model : 'sonnet' | 'haiku' | 'flash' | 'pro' (défaut 'pro')
+      - model : 'sonnet' | 'haiku' | 'flash' | 'pro' (défaut 'flash')
       - use_claude_code : bool (défaut false)
       - generate_audio : bool (défaut false) — legacy, enchaîne aussi l'audio
 
@@ -5439,7 +5436,7 @@ def run_auto_pilot(job_id):
     tts_mode = (payload.get("tts_mode") or "gtts").lower()
     if tts_mode not in ("fish_audio", "gtts", "mock"):
         return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
-    model = _normalize_pipeline_model_choice(payload.get("model"), default=job.get("auto_pilot_model") or "pro")
+    model = _normalize_pipeline_model_choice(payload.get("model"), default=job.get("auto_pilot_model") or "flash")
     if model not in _PIPELINE_MODEL_CHOICES:
         return jsonify({"error": "model invalide (sonnet | haiku | flash | pro)"}), 400
     use_cc = bool(payload.get("use_claude_code", False))

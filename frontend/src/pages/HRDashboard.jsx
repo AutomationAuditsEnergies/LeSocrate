@@ -91,7 +91,7 @@ export default function HRDashboard() {
   // - 'test'         : skip KB/global/daily/content, injecte des DOCX/TXT pré-rédigés.
   //                    La pipeline ne tourne que finalize + conformité locale + Word 2.
   //                    Permet de valider les étapes en aval en ~5 min au lieu de 30-60.
-  const [autoPilotMode, setAutoPilotMode] = useState('api')  // 'api' | 'api_deepseek' | 'claude_code' | 'test'
+  const [autoPilotMode, setAutoPilotMode] = useState('api_deepseek')  // 'api' | 'api_deepseek' | 'claude_code' | 'test'
   const [testDocs, setTestDocs] = useState([])  // File[] uploadés pour le mode test
   const backupPollingRef = useRef({})
   const audioRef = useRef(null)
@@ -546,7 +546,7 @@ export default function HRDashboard() {
                 body: JSON.stringify({
                   tts_mode: autoPilotTts,
                   use_claude_code: autoPilotMode === 'claude_code',
-                  model: autoPilotMode === 'api_deepseek' ? 'pro' : 'sonnet',
+                  model: autoPilotMode === 'api_deepseek' ? 'flash' : 'sonnet',
                   generate_audio: false,
                 }),
               },
@@ -1811,7 +1811,7 @@ function CreatePlatformView({
                       style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }}
                     >
                       <option value="api">API Anthropic — paie ta clé ANTHROPIC_API_KEY (~5–7$ pour 7h Sonnet)</option>
-                      <option value="api_deepseek">API DeepSeek — paie ta clé DEEPSEEK_API_KEY (deepseek-v4-pro, top modèle)</option>
+                      <option value="api_deepseek">API DeepSeek V4.1 Flash — modèle économique</option>
                       <option value="claude_code">Claude Code local — forfait Pro/Max via OAuth (gratuit côté API)</option>
                       <option value="test">TEST — injecte des DOCX/TXT pré-rédigés (skip génération, ~5 min)</option>
                     </select>
