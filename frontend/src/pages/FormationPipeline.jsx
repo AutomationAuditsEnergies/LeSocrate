@@ -245,7 +245,7 @@ function voiceColor(t) {
 }
 function pipelineModelLabel(model) {
   if (model === 'pro' || model === 'deepseek-v4-pro') return 'DeepSeek Pro'
-  if (model === 'flash' || model === 'deepseek-v4-flash') return 'DeepSeek Flash'
+  if (model === 'flash' || model === 'deepseek-v4-flash' || model === 'deepseek-flash') return 'DeepSeek V4.1 Flash'
   if (model === 'haiku' || String(model || '').includes('haiku')) return 'Claude Haiku'
   if (model === 'sonnet' || String(model || '').includes('sonnet')) return 'Claude Sonnet'
   return model || 'modèle par défaut'
@@ -2512,7 +2512,7 @@ function BeatFirstIterationPanel({
             disabled={running}
           >
             <option value="deepseek-v4-pro">DeepSeek Pro</option>
-            <option value="deepseek-v4-flash">DeepSeek Flash</option>
+            <option value="deepseek-flash">DeepSeek V4.1 Flash</option>
             <option value="sonnet">Claude Sonnet</option>
             <option value="haiku">Claude Haiku</option>
           </select>
@@ -5493,12 +5493,17 @@ export default function FormationPipeline() {
   const [slideIterationNotice, setSlideIterationNotice] = useState('')
   const [resumeExpanded, setResumeExpanded] = useState({})
   // Modèle utilisé pour la relance aval. Initialisé sur l'auto_pilot_model du
-  // job courant si présent, sinon DeepSeek Pro (cas des jobs historiques sans
+  // job courant si présent, sinon DeepSeek V4.1 Flash (jobs historiques sans
   // colonne persistée).
-  const [continueAfterTextModel, setContinueAfterTextModel] = useState('deepseek-v4-pro')
+  const [continueAfterTextModel, setContinueAfterTextModel] = useState('deepseek-flash')
   useEffect(() => {
     if (job?.auto_pilot_model) {
-      setContinueAfterTextModel(job.auto_pilot_model)
+      const selected = job.auto_pilot_model
+      setContinueAfterTextModel(
+        selected === 'flash' || selected === 'deepseek-v4-flash'
+          ? 'deepseek-flash'
+          : selected === 'pro' ? 'deepseek-v4-pro' : selected,
+      )
     }
   }, [job?.auto_pilot_model])
   const [pipelineDiagnostic, setPipelineDiagnostic] = useState(null)
@@ -5898,7 +5903,7 @@ export default function FormationPipeline() {
           platform_id: folder.platform_id || job?.platform_id || null,
           max_slides: 60,
           pace: 'normal',
-          model: continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro',
+          model: continueAfterTextModel || job?.auto_pilot_model || 'deepseek-flash',
         }),
       })
       const data = await resp.json().catch(() => ({}))
@@ -6127,7 +6132,7 @@ export default function FormationPipeline() {
     setBeatFirstIterationError('')
     setBeatFirstIterationNotice('')
     setPipelineDiagnostic(null)
-    const chosenModel = continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro'
+    const chosenModel = continueAfterTextModel || job?.auto_pilot_model || 'deepseek-flash'
     const fastMode = beatFirstIterationMode !== 'full'
     const startedFolders = []
     try {
@@ -7636,7 +7641,7 @@ export default function FormationPipeline() {
                                             }}
                                           >
                                             <option value="deepseek-v4-pro">DeepSeek Pro</option>
-                                            <option value="deepseek-v4-flash">DeepSeek Flash</option>
+                                            <option value="deepseek-flash">DeepSeek V4.1 Flash</option>
                                             <option value="sonnet">Claude Sonnet</option>
                                             <option value="haiku">Claude Haiku</option>
                                           </select>
