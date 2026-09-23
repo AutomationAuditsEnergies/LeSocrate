@@ -5509,26 +5509,42 @@ def resume_auto_pilot(job_id):
 
     lock_age = _ap_lock_age_seconds(job)
     lock_active = lock_age is not None and lock_age < _AP_LOCK_TTL
-    force = bool((request.get_json(silent=True) or {}).get("force"))
+    payload = request.get_json(silent=True) or {}
+    force = bool(payload.get("force"))
     if lock_active and not force:
         return jsonify({
             "error": "Auto-pilot déjà en cours pour ce job",
             "lock_age_seconds": lock_age,
         }), 409
 
+    requested_model = payload.get("model")
+    if requested_model is not None:
+        model_choice = (
+            _normalize_pipeline_model_choice(requested_model)
+            if isinstance(requested_model, str) else None
+        )
+        if model_choice not in _PIPELINE_MODEL_CHOICES:
+            return jsonify({"error": "model invalide (sonnet | haiku | flash | pro)"}), 400
+    else:
+        model_choice = job.get("auto_pilot_model")
+
     try:
         next_step = _determine_next_ap_step(job_id)
     except Exception as e:
         return jsonify({"error": f"Impossible de calculer la prochaine étape : {str(e)[:300]}"}), 500
 
-    update_job(
-        job_id,
-        auto_pilot_enabled=1,
-        auto_pilot_error=None,
-        auto_pilot_locked_at=None,
-        auto_pilot_lock_owner=None,
-        auto_pilot_step=next_step or "done",
-    )
+    updates = {
+        "auto_pilot_enabled": 1,
+        "auto_pilot_error": None,
+        "auto_pilot_locked_at": None,
+        "auto_pilot_lock_owner": None,
+        "auto_pilot_step": next_step or "done",
+    }
+    if next_step is not None and requested_model is not None:
+        updates["auto_pilot_model"] = model_choice
+        if model_choice in ("flash", "pro"):
+            updates["auto_pilot_use_cc"] = 0
+    update_job(job_id, **updates)
 
     if next_step is None:
         return jsonify({
@@ -5545,7 +5561,7 @@ def resume_auto_pilot(job_id):
             "pipeline_resume_requested",
             step=next_step,
             status="running",
-            model=job.get("auto_pilot_model"),
+            model=model_choice,
             message=f"Reprise auto-pilot demandée : {next_step}",
             data={"previous_step": job.get("auto_pilot_step"), "lock_age_seconds": lock_age},
         )
@@ -5559,7 +5575,7 @@ def resume_auto_pilot(job_id):
         "status": "auto_pilot_resumed",
         "step": next_step,
         "next_step": next_step,
-        "model": job.get("auto_pilot_model"),
+        "model": model_choice,
         "tts_mode": job.get("auto_pilot_tts_mode"),
         "generate_audio": bool(job.get("auto_pilot_generate_audio")),
     }), 202

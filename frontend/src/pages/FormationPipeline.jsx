@@ -5492,20 +5492,14 @@ export default function FormationPipeline() {
   const [slideIterationError, setSlideIterationError] = useState('')
   const [slideIterationNotice, setSlideIterationNotice] = useState('')
   const [resumeExpanded, setResumeExpanded] = useState({})
-  // Modèle utilisé pour la relance aval. Initialisé sur l'auto_pilot_model du
-  // job courant si présent, sinon DeepSeek V4.1 Flash (jobs historiques sans
-  // colonne persistée).
+  const [resumeWithFlash, setResumeWithFlash] = useState(true)
+  const [resumingAutoPilot, setResumingAutoPilot] = useState(false)
+  // Une relance manuelle propose Flash, même si le job a commencé sur Pro.
   const [continueAfterTextModel, setContinueAfterTextModel] = useState('deepseek-flash')
   useEffect(() => {
-    if (job?.auto_pilot_model) {
-      const selected = job.auto_pilot_model
-      setContinueAfterTextModel(
-        selected === 'flash' || selected === 'deepseek-v4-flash'
-          ? 'deepseek-flash'
-          : selected === 'pro' ? 'deepseek-v4-pro' : selected,
-      )
-    }
-  }, [job?.auto_pilot_model])
+    setResumeWithFlash(true)
+    setContinueAfterTextModel('deepseek-flash')
+  }, [selectedJobId])
   const [pipelineDiagnostic, setPipelineDiagnostic] = useState(null)
   const [pipelineDiagnosticLoading, setPipelineDiagnosticLoading] = useState(false)
   const [pipelineDiagnosticError, setPipelineDiagnosticError] = useState('')
@@ -6582,6 +6576,15 @@ export default function FormationPipeline() {
                   ) : null}
                   {autoPilotState.error ? <> : {autoPilotState.error}</> : null}
                 </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={resumeWithFlash}
+                    onChange={e => setResumeWithFlash(e.target.checked)}
+                    disabled={resumingAutoPilot}
+                  />
+                  Utiliser DeepSeek V4.1 Flash pour la suite
+                </label>
                 <button
                   style={{
                     ...S.btn('primary'),
@@ -6590,7 +6593,9 @@ export default function FormationPipeline() {
                     padding: '6px 14px',
                     fontSize: '12px',
                   }}
+                  disabled={resumingAutoPilot}
                   onClick={async () => {
+                    setResumingAutoPilot(true)
                     try {
                       const resp = await fetch(
                         apiUrl(`/api/formation/${selectedJobId}/run-auto/resume`),
@@ -6600,6 +6605,7 @@ export default function FormationPipeline() {
                           credentials: 'include',
                           body: JSON.stringify({
                             force: Boolean(autoPilotState.lock_stale),
+                            ...(resumeWithFlash ? { model: 'flash' } : {}),
                           }),
                         },
                       )
@@ -6612,10 +6618,12 @@ export default function FormationPipeline() {
                       }
                     } catch (e) {
                       alert('Erreur réseau lors de la reprise')
+                    } finally {
+                      setResumingAutoPilot(false)
                     }
                   }}
                 >
-                  <Icon name="autorenew" /> Reprendre auto-pilot
+                  <Icon name="autorenew" /> {resumingAutoPilot ? 'Reprise…' : 'Reprendre auto-pilot'}
                 </button>
               </div>
             )}
