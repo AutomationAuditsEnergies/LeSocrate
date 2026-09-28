@@ -82,6 +82,21 @@ def _local_dev_login_allowed() -> bool:
 
 def _get_or_create_local_dev_center():
     username = "local-dev@cadrenza.test"
+    keys = ("id", "username", "center_name", "slug", "is_active", "pipeline_access_enabled")
+    if postgres_enabled():
+        row = get_training_center_by_username(username)
+        if not row:
+            try:
+                row = create_training_center(
+                    username,
+                    generate_password_hash(_generate_temporary_password(32)),
+                    "Environnement local",
+                    "local-dev",
+                )
+            except DuplicateTrainingCenterUsername:
+                row = get_training_center_by_username(username)
+        return {key: row[key] for key in keys}
+
     now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db_connection()
     try:
