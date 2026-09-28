@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from flask import Flask, g, request, session
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Configuration et logging
 from config import (
@@ -14,6 +15,7 @@ from config import (
 from utils.env import env_bool
 from utils.logger import configure_logging, get_logger
 from utils.cors_config import configure_api_cors
+from utils.rate_limit import apply_auth_rate_limits, init_rate_limiter
 from services.pipeline_worker_health import (
     configure_pipeline_worker_health,
     get_pipeline_worker_health,
@@ -61,8 +63,21 @@ configure_pipeline_worker_health(
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
 
-# Configuration des cookies de session pour le cross-origin (Azure)
+# Sur Azure, l'app est derrière le proxy App Service : sans ProxyFix,
+# request.remote_addr serait l'IP du proxy pour tout le monde. x_for=1 ne fait
+# confiance qu'à la dernière entrée de X-Forwarded-For (celle ajoutée par le
+# proxy), que le client ne peut pas falsifier. Hors Azure il n'y a pas de proxy
+# de confiance : on garde l'adresse réelle du socket (sinon un poste du réseau
+# local pourrait se faire passer pour 127.0.0.1 via l'en-tête).
 is_azure = os.environ.get("WEBSITE_SITE_NAME") is not None
+if is_azure:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
+# Limitation des tentatives de connexion par IP (routes listées dans
+# utils/rate_limit.py, appliquées après l'enregistrement des blueprints).
+limiter = init_rate_limiter(app)
+
+# Configuration des cookies de session pour le cross-origin (Azure)
 if is_azure and SECRET_KEY == "fallback_secret_key_for_dev":
     raise RuntimeError("SECRET_KEY de production non configurée")
 if is_azure:
@@ -103,6 +118,7 @@ app.register_blueprint(chat_bp)
 app.register_blueprint(hr_bp)
 app.register_blueprint(formation_bp)
 app.register_blueprint(billing_bp)
+apply_auth_rate_limits(app, limiter)
 
 logger.info("✅ Tous les blueprints enregistrés")
 

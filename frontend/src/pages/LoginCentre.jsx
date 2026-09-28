@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { apiFetch } from '../api'
+import { apiFetch, authErrorMessage } from '../api'
 import { getSupabaseClient } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
 import './Auth.css'
@@ -201,7 +201,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
         })
         const data = await response.json().catch(() => ({}))
         if (!response.ok || !data.success) {
-          setError(data.error || `Erreur serveur (${response.status})`)
+          setError(authErrorMessage(response, data, `Erreur serveur (${response.status})`))
           return
         }
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
@@ -229,7 +229,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
         })
         const registrationData = await registrationResponse.json().catch(() => ({}))
         if (!registrationResponse.ok || !registrationData.success) {
-          setError(registrationData.error || `Erreur serveur (${registrationResponse.status})`)
+          setError(authErrorMessage(registrationResponse, registrationData, `Erreur serveur (${registrationResponse.status})`))
           return
         }
       }

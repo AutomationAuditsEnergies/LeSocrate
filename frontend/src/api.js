@@ -9,6 +9,16 @@ const CENTER_SESSION_ERROR_CODES = new Set([
   'TRAINING_CENTER_ACCOUNT_UNAVAILABLE',
 ])
 
+const RATE_LIMIT_MESSAGE = 'Trop de tentatives. Réessayez dans quelques minutes.'
+
+// Message à afficher pour une réponse d'authentification en échec : le texte du
+// serveur s'il existe, sinon celui du 429 (limite de tentatives) ou le repli.
+export function authErrorMessage(response, data, fallback) {
+  if (data?.error) return data.error
+  if (response?.status === 429) return RATE_LIMIT_MESSAGE
+  return fallback
+}
+
 export function getPlatformId() {
   return localStorage.getItem('platform_id') || '1'
 }

@@ -1,6 +1,6 @@
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useState, useEffect, useRef } from 'react'
-import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
+import { apiFetch, apiUrl, authErrorMessage, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import './Auth.css'
 
 export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloadVideoRoute }) {
@@ -60,7 +60,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
         }),
       })
 
-      const data = await response.json()
+      const data = await response.json().catch(() => ({}))
 
       if (data.success) {
         if (data.token) localStorage.setItem('auth_token', data.token)
@@ -90,7 +90,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
         await preloadVideoRoute?.().catch(() => {})
         navigate(withPlatform('/video'), { replace: true })
       } else {
-        setFormMessage({ type: 'error', text: data.error || 'Erreur lors de la connexion.' })
+        setFormMessage({ type: 'error', text: authErrorMessage(response, data, 'Erreur lors de la connexion.') })
       }
     } catch (error) {
       console.error('Erreur connexion:', error)

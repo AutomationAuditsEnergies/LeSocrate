@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-28
+
+### feat(sécurité): limitation des tentatives de connexion par adresse IP
+
+Flask-Limiter (stockage en mémoire, un seul worker gunicorn en production)
+limite désormais les routes d'authentification : connexion élève
+(`/api/auth/login`) et session centre (`/api/auth/supabase-session`) à 10 essais
+par minute et 50 par heure, connexion admin interne (`/api/admin/login`) à 5 par
+minute et 20 par heure, inscription centre (`/api/admin/register`) à 5 par
+heure. Au-delà, l'API répond 429 avec « Trop de tentatives. Réessayez dans
+quelques minutes. », message affiché tel quel sur les écrans de connexion et
+d'inscription. Sur Azure, `ProxyFix(x_for=1)` restitue la vraie IP du client
+derrière le proxy App Service ; en local il n'est pas activé, pour qu'un poste
+du réseau ne puisse pas se faire passer pour 127.0.0.1.
+
 ## 2026-09-01
 
 ### fix(rappels): signature personnalisable et priorité au rappel de 5 minutes
