@@ -1,9 +1,20 @@
+import os
 import unittest
 from unittest.mock import patch
 
 from flask import Flask
 
 from routes import admin_routes
+
+
+LOCAL_ACCOUNT = {
+    "id": 42,
+    "username": "local-dev@cadrenza.test",
+    "center_name": "Environnement local",
+    "slug": "local-dev",
+    "is_active": 1,
+    "pipeline_access_enabled": 0,
+}
 
 
 class AdminSessionPermissionsTest(unittest.TestCase):
@@ -76,6 +87,75 @@ class AdminSessionPermissionsTest(unittest.TestCase):
             response = self.client.post("/api/admin/dev-login")
 
         self.assertEqual(response.status_code, 404)
+
+    def _dev_login(self, env, remote_addr="127.0.0.1"):
+        """POST dev-login with exactly LOCAL_DEV / WEBSITE_SITE_NAME from ``env``."""
+        with patch.dict("os.environ", env), patch.object(
+            admin_routes,
+            "_get_or_create_local_dev_center",
+            return_value=LOCAL_ACCOUNT,
+        ) as create_account:
+            if "WEBSITE_SITE_NAME" not in env:
+                os.environ.pop("WEBSITE_SITE_NAME", None)
+            response = self.client.post(
+                "/api/admin/dev-login",
+                environ_base={"REMOTE_ADDR": remote_addr},
+            )
+        return response, create_account
+
+    def test_dev_login_is_refused_on_azure_even_with_local_dev(self):
+        response, create_account = self._dev_login(
+            {"LOCAL_DEV": "true", "WEBSITE_SITE_NAME": "cadrenza-p3"}
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.get_json(),
+            {"success": False, "error": "Accès local indisponible"},
+        )
+        create_account.assert_not_called()
+
+    def test_dev_login_works_locally_on_loopback(self):
+        response, _ = self._dev_login({"LOCAL_DEV": "true"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["success"])
+
+    def test_dev_login_is_refused_locally_without_local_dev(self):
+        response, create_account = self._dev_login({"LOCAL_DEV": "false"})
+
+        self.assertEqual(response.status_code, 404)
+        create_account.assert_not_called()
+
+    def test_dev_login_is_refused_locally_from_another_ip(self):
+        response, create_account = self._dev_login(
+            {"LOCAL_DEV": "true"}, remote_addr="192.168.1.50"
+        )
+
+        self.assertEqual(response.status_code, 404)
+        create_account.assert_not_called()
+
+
+class LocalDevStartupGuardTest(unittest.TestCase):
+    def test_local_dev_is_switched_off_and_logged_on_azure(self):
+        with patch.dict(
+            "os.environ", {"LOCAL_DEV": "1", "WEBSITE_SITE_NAME": "cadrenza-p3"}
+        ), self.assertLogs(admin_routes.logger, level="WARNING") as logs:
+            disabled = admin_routes.disable_local_dev_login_on_azure()
+            local_dev_after = os.environ["LOCAL_DEV"]
+
+        self.assertTrue(disabled)
+        self.assertEqual(local_dev_after, "false")
+        self.assertIn("LOCAL_DEV_IGNORED_ON_AZURE", logs.output[0])
+
+    def test_local_dev_is_kept_outside_azure(self):
+        with patch.dict("os.environ", {"LOCAL_DEV": "1"}):
+            os.environ.pop("WEBSITE_SITE_NAME", None)
+            disabled = admin_routes.disable_local_dev_login_on_azure()
+            local_dev_after = os.environ["LOCAL_DEV"]
+
+        self.assertFalse(disabled)
+        self.assertEqual(local_dev_after, "1")
 
 
 if __name__ == "__main__":

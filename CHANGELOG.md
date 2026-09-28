@@ -2,6 +2,15 @@
 
 ## 2026-09-28
 
+### fix(sécurité): accès local sans mot de passe impossible sur Azure
+
+`POST /api/admin/dev-login` refuse désormais toujours (404 « Accès local
+indisponible ») quand l'application tourne sur Azure (`WEBSITE_SITE_NAME`
+présent), même si `LOCAL_DEV` est activé. Au démarrage, un `LOCAL_DEV` trouvé
+sur Azure est signalé dans les logs (`LOCAL_DEV_IGNORED_ON_AZURE`) puis
+neutralisé, sans faire planter l'application. En local, le comportement est
+inchangé : `LOCAL_DEV` activé et requête depuis 127.0.0.1 ou ::1.
+
 ### feat(sécurité): limitation des tentatives de connexion par adresse IP
 
 Flask-Limiter (stockage en mémoire, un seul worker gunicorn en production)

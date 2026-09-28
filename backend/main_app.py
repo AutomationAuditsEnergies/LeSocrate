@@ -31,7 +31,7 @@ from database import db_safety
 # Routes
 from routes.auth_routes import create_auth_blueprint
 from routes.video_routes import video_bp
-from routes.admin_routes import create_admin_blueprint
+from routes.admin_routes import create_admin_blueprint, disable_local_dev_login_on_azure
 from routes.debug_routes import debug_bp
 from routes.slides_routes import slides_bp
 from routes.chat_routes import chat_bp
@@ -72,6 +72,10 @@ app.config["SECRET_KEY"] = SECRET_KEY
 is_azure = os.environ.get("WEBSITE_SITE_NAME") is not None
 if is_azure:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
+# L'accès local sans mot de passe n'existe jamais sur Azure : un LOCAL_DEV
+# présent par erreur est signalé dans les logs et neutralisé (sans planter).
+disable_local_dev_login_on_azure()
 
 # Limitation des tentatives de connexion par IP (routes listées dans
 # utils/rate_limit.py, appliquées après l'enregistrement des blueprints).

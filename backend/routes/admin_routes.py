@@ -74,10 +74,41 @@ def _internal_admin_password_valid(password: str) -> bool:
     return bool(password_secret and password and hmac.compare_digest(password_secret, password))
 
 
+def _running_on_azure() -> bool:
+    return os.getenv("WEBSITE_SITE_NAME") is not None
+
+
+def _local_dev_enabled() -> bool:
+    return os.getenv("LOCAL_DEV", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def disable_local_dev_login_on_azure() -> bool:
+    """Startup guard: a LOCAL_DEV flag set on Azure is logged and switched off.
+
+    Returns True when the flag had to be neutralised. The app keeps starting;
+    _local_dev_login_allowed() refuses on Azure regardless.
+    """
+    if not (_running_on_azure() and _local_dev_enabled()):
+        return False
+    logger.warning(
+        "LOCAL_DEV_IGNORED_ON_AZURE site=%s : LOCAL_DEV est activé sur Azure, "
+        "l'accès local sans mot de passe (/api/admin/dev-login) est désactivé. "
+        "Retirez LOCAL_DEV des paramètres de l'App Service.",
+        os.getenv("WEBSITE_SITE_NAME"),
+    )
+    os.environ["LOCAL_DEV"] = "false"
+    return True
+
+
 def _local_dev_login_allowed() -> bool:
-    """Allow passwordless access only from this machine in explicit dev mode."""
-    local_dev = os.getenv("LOCAL_DEV", "").strip().lower() in {"1", "true", "yes", "on"}
-    return local_dev and request.remote_addr in {"127.0.0.1", "::1"}
+    """Allow passwordless access only from this machine in explicit dev mode.
+
+    Never on Azure: behind ProxyFix, remote_addr comes from X-Forwarded-For,
+    and one misconfigured variable must not open a passwordless session.
+    """
+    if _running_on_azure():
+        return False
+    return _local_dev_enabled() and request.remote_addr in {"127.0.0.1", "::1"}
 
 
 def _get_or_create_local_dev_center():
