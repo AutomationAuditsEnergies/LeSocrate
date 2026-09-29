@@ -32,6 +32,7 @@ import {
   X,
 } from 'lucide-react'
 import { apiFetch } from '../api'
+import { hasAdminAccess } from '../adminAccess'
 import { clearSupabaseSession, getSupabaseClient } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
@@ -90,11 +91,13 @@ const formatPrice = (amountCents, currency = 'eur') => (
 )
 
 const PLATFORM_LOAD_TIMEOUT_MS = 30000
-const ORDER_REVIEW_CENTER_EMAIL = 'newpiprod@gmail.com'
-const isOrderReviewCenter = () => (
-  String(localStorage.getItem('center_account_email') || '').trim().toLowerCase()
-  === ORDER_REVIEW_CENTER_EMAIL
-)
+// Rôle d'opérateur de la plateforme, relu en base par /api/admin/session
+// (colonne is_platform_operator). Le serveur refuse de toute façon (403) les
+// routes réservées ; ceci ne sert qu'à choisir l'interface à afficher.
+const PLATFORM_OPERATOR_PERMISSIONS = ['platform_operator']
+const isOrderReviewCenter = (account) => hasAdminAccess(account, {
+  requiredPermissions: PLATFORM_OPERATOR_PERMISSIONS,
+})
 
 // Fixtures purement visuelles pour travailler le roster en local sans recopier
 // de données réelles. Elles ne sont utilisées qu'en mode Vite DEV.
@@ -440,9 +443,25 @@ export default function HRDashboard() {
     fetchAiVoices()
   }, [])
 
+  // undefined = session pas encore chargée ; null = indisponible (centre normal).
+  const [centerAccount, setCenterAccount] = useState(undefined)
+  const orderReviewCenter = isOrderReviewCenter(centerAccount)
+
+  useEffect(() => {
+    let cancelled = false
+    apiFetch('/api/admin/session')
+      .then(response => (response.ok ? response.json() : {}))
+      .catch(() => ({}))
+      .then(data => {
+        if (!cancelled) setCenterAccount(data?.account || null)
+      })
+    return () => { cancelled = true }
+  }, [])
+
   const fetchCenterMessages = useCallback(async () => {
+    if (centerAccount === undefined) return
     try {
-      const reviewMode = isOrderReviewCenter()
+      const reviewMode = isOrderReviewCenter(centerAccount)
       const response = await apiFetch(
         reviewMode ? '/api/admin/teacher-order-validations' : '/api/hr/messages',
       )
@@ -456,7 +475,7 @@ export default function HRDashboard() {
     } finally {
       setMessagesLoading(false)
     }
-  }, [])
+  }, [centerAccount])
 
   useEffect(() => {
     void fetchCenterMessages()
@@ -1653,7 +1672,7 @@ export default function HRDashboard() {
           ) : workspaceSection === 'ai-voices' ? (
             <AIVoicesView onVoicesChange={setAiVoices} />
           ) : workspaceSection === 'messages' ? (
-            isOrderReviewCenter() ? (
+            orderReviewCenter ? (
               <TeacherOrderReviewInbox onUnreadCountChange={setMessagesUnreadCount} />
             ) : (
               <CenterMessagesPanel
@@ -1666,6 +1685,7 @@ export default function HRDashboard() {
             )
           ) : (
             <PlatformCardsView
+              testClockAvailable={orderReviewCenter}
               platforms={platforms}
               cardPage={cardPage}
               setCardPage={setCardPage}
@@ -4197,6 +4217,7 @@ function TeacherArrivalAnimation({ platform, targetRef }) {
 }
 
 function PlatformCardsView({
+  testClockAvailable = false,
   platforms,
   cardPage,
   setCardPage,
@@ -4253,7 +4274,6 @@ function PlatformCardsView({
   const [testClockLoading, setTestClockLoading] = useState(false)
   const [testClockError, setTestClockError] = useState('')
   const [testClockNotice, setTestClockNotice] = useState('')
-  const testClockAvailable = isOrderReviewCenter()
 
   const toLocalDateTimeInput = (value) => {
     const date = value ? new Date(value) : new Date()

@@ -13,10 +13,26 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 FORMATION_PIPELINE_PERMISSION = "formation_pipeline"
+# Opérateur de la plateforme (colonne is_platform_operator) : relecture des
+# commandes des autres centres, commandes sans relecture, horloge de test.
+# Rien à voir avec les sessions `superadmin` / `legacy_admin`.
+PLATFORM_OPERATOR_PERMISSION = "platform_operator"
 
 
 def _empty_permissions() -> dict[str, bool]:
-    return {FORMATION_PIPELINE_PERMISSION: False}
+    return {
+        FORMATION_PIPELINE_PERMISSION: False,
+        PLATFORM_OPERATOR_PERMISSION: False,
+    }
+
+
+def account_is_platform_operator(account) -> bool:
+    """The role comes from the account row only, never from its e-mail."""
+    return bool(
+        account
+        and account.get("is_active")
+        and account.get("is_platform_operator")
+    )
 
 
 def permissions_from_account(account_type, account) -> dict[str, bool]:
@@ -28,6 +44,7 @@ def permissions_from_account(account_type, account) -> dict[str, bool]:
     permissions[FORMATION_PIPELINE_PERMISSION] = bool(
         account.get("pipeline_access_enabled")
     )
+    permissions[PLATFORM_OPERATOR_PERMISSION] = account_is_platform_operator(account)
     return permissions
 
 
@@ -36,7 +53,8 @@ def _sqlite_training_center_access(account_id: int) -> dict | None:
     try:
         row = conn.execute(
             """
-            SELECT id, username, is_active, pipeline_access_enabled
+            SELECT id, username, is_active, pipeline_access_enabled,
+                   is_platform_operator
             FROM training_center_accounts
             WHERE id = ?
             """,
@@ -52,6 +70,7 @@ def _sqlite_training_center_access(account_id: int) -> dict | None:
         "username": row[1],
         "is_active": bool(row[2]),
         "pipeline_access_enabled": bool(row[3]),
+        "is_platform_operator": bool(row[4]),
     }
 
 
@@ -96,4 +115,10 @@ def get_admin_permissions(account_type, account_id) -> dict[str, bool]:
 def can_access_formation_pipeline(account_type, account_id) -> bool:
     return get_admin_permissions(account_type, account_id)[
         FORMATION_PIPELINE_PERMISSION
+    ]
+
+
+def is_platform_operator(account_type, account_id) -> bool:
+    return get_admin_permissions(account_type, account_id)[
+        PLATFORM_OPERATOR_PERMISSION
     ]

@@ -110,13 +110,30 @@ class PostgresSchemaContractTest(unittest.TestCase):
         self.assertIn("pipeline_access_enabled = TRUE", schema)
         permission_bootstrap = schema[
             schema.index("-- Grant the initial Formation3 operator"):
-            schema.index("-- Correction one-shot du bootstrap historique")
+            schema.index("-- Rôle d'opérateur de la plateforme")
         ]
         self.assertNotIn(
             "UPDATE platform_config",
             permission_bootstrap,
             "Une permission pipeline ne doit jamais modifier la propriété tenant",
         )
+
+    def test_platform_operator_role_is_bootstrapped_once_from_the_database(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        operator_bootstrap = schema[
+            schema.index("-- Rôle d'opérateur de la plateforme"):
+            schema.index("-- Correction one-shot du bootstrap historique")
+        ]
+        self.assertIn(
+            "ADD COLUMN IF NOT EXISTS is_platform_operator BOOLEAN NOT NULL DEFAULT FALSE",
+            operator_bootstrap,
+        )
+        self.assertIn("IF platform_operator_was_missing THEN", operator_bootstrap)
+        self.assertIn("IF platform_operator_count > 1 THEN", operator_bootstrap)
+        self.assertIn("RAISE EXCEPTION", operator_bootstrap)
+        self.assertIn("SET is_platform_operator = TRUE", operator_bootstrap)
+        self.assertIn("AND is_active = TRUE", operator_bootstrap)
+        self.assertNotIn("UPDATE platform_config", operator_bootstrap)
 
     def test_historical_bulk_ownership_cleanup_is_evidence_based_and_one_time(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")

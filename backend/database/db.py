@@ -539,6 +539,7 @@ def init_database(_recovered_from_corruption: bool = False):
                 center_name TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 pipeline_access_enabled INTEGER NOT NULL DEFAULT 0,
+                is_platform_operator INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -588,6 +589,35 @@ def init_database(_recovered_from_corruption: bool = False):
             )
             logger.info(
                 "✅ Permission formation pipeline ajoutée à training_center_accounts"
+            )
+        # Rôle d'opérateur de la plateforme : l'opérateur historique le reçoit
+        # une seule fois, quand la colonne est créée (même contrat que
+        # postgres_schema.sql), puis via tools/admin/set_platform_operator.py.
+        if "is_platform_operator" not in center_columns:
+            cursor.execute(
+                "SELECT COUNT(*) FROM training_center_accounts WHERE LOWER(username) = ?",
+                ("newpiprod@gmail.com",),
+            )
+            if cursor.fetchone()[0] > 1:
+                raise RuntimeError(
+                    "Plusieurs comptes correspondent à newpiprod@gmail.com; "
+                    "bootstrap opérateur refusé"
+                )
+            cursor.execute(
+                "ALTER TABLE training_center_accounts "
+                "ADD COLUMN is_platform_operator INTEGER NOT NULL DEFAULT 0"
+            )
+            cursor.execute(
+                """
+                UPDATE training_center_accounts
+                SET is_platform_operator = 1
+                WHERE LOWER(username) = ?
+                  AND is_active = 1
+                """,
+                ("newpiprod@gmail.com",),
+            )
+            logger.info(
+                "✅ Rôle opérateur de plateforme ajouté à training_center_accounts"
             )
         # Never retain reversible credentials. The compatibility column stays
         # temporarily so old binaries/migrations don't fail, but is always NULL.

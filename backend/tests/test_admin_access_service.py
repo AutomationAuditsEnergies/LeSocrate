@@ -25,7 +25,10 @@ class AdminAccessServiceTest(unittest.TestCase):
                 12,
             )
 
-        self.assertEqual(permissions, {"formation_pipeline": True})
+        self.assertEqual(
+            permissions,
+            {"formation_pipeline": True, "platform_operator": False},
+        )
 
     def test_revoked_or_inactive_center_fails_closed(self):
         for account in (
@@ -67,7 +70,10 @@ class AdminAccessServiceTest(unittest.TestCase):
                 None,
             )
 
-        self.assertEqual(permissions, {"formation_pipeline": False})
+        self.assertEqual(
+            permissions,
+            {"formation_pipeline": False, "platform_operator": False},
+        )
         lookup.assert_not_called()
 
 

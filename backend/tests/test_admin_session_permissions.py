@@ -55,7 +55,7 @@ class AdminSessionPermissionsTest(unittest.TestCase):
         self.assertIsNone(response.get_json()["account"]["type"])
         self.assertEqual(
             response.get_json()["account"]["permissions"],
-            {"formation_pipeline": False},
+            {"formation_pipeline": False, "platform_operator": False},
         )
 
     def test_local_dev_login_creates_center_session_on_loopback(self):

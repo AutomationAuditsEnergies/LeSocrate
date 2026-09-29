@@ -868,6 +868,47 @@ BEGIN
 END
 $$;
 
+-- Rôle d'opérateur de la plateforme (relecture des commandes des autres
+-- centres, commandes sans relecture, horloge de test). Distinct des sessions
+-- `superadmin` / `legacy_admin` de l'admin interne. L'opérateur historique
+-- reçoit le rôle une seule fois, quand la colonne est créée ; ensuite il se
+-- gère avec backend/tools/admin/set_platform_operator.py.
+DO $$
+DECLARE
+    platform_operator_was_missing BOOLEAN;
+    platform_operator_count INTEGER;
+BEGIN
+    SELECT NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'training_center_accounts'
+          AND column_name = 'is_platform_operator'
+    )
+    INTO platform_operator_was_missing;
+
+    ALTER TABLE training_center_accounts
+        ADD COLUMN IF NOT EXISTS is_platform_operator BOOLEAN NOT NULL DEFAULT FALSE;
+
+    IF platform_operator_was_missing THEN
+        SELECT COUNT(*)
+        INTO platform_operator_count
+        FROM training_center_accounts
+        WHERE LOWER(username) = 'newpiprod@gmail.com';
+
+        IF platform_operator_count > 1 THEN
+            RAISE EXCEPTION
+                'Plusieurs comptes correspondent à newpiprod@gmail.com; bootstrap opérateur refusé';
+        END IF;
+
+        UPDATE training_center_accounts
+        SET is_platform_operator = TRUE
+        WHERE LOWER(username) = 'newpiprod@gmail.com'
+          AND is_active = TRUE;
+    END IF;
+END
+$$;
+
 -- Correction one-shot du bootstrap historique ci-dessus. Il avait rattaché
 -- tous les pipelines orphelins au premier opérateur Formation3. Les lignes
 -- restent intégralement persistées mais redeviennent globales quand aucune

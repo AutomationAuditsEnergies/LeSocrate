@@ -7,7 +7,7 @@ import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
-from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file, g
+from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ, PIPELINE_DATABASE_BACKEND
@@ -81,6 +81,7 @@ from services.course_schedule_service import (
     delete_course_reminder_rule,
     update_course_schedule,
 )
+from services.admin_access_service import is_platform_operator
 from services.export_service import generate_attendance_excel_export
 from services.attendance_service import (
     download_daily_attendance_excel,
@@ -989,13 +990,7 @@ def create_hr_blueprint():
         if _admin_account_type() != "training_center" or center_account_id is None:
             return None, (jsonify({"success": False, "error": "Compte centre requis"}), 403)
 
-        account = get_training_center_by_id(center_account_id) or {}
-        verified_email = str(
-            getattr(g, "supabase_auth_claims", {}).get("email")
-            or account.get("username")
-            or ""
-        ).strip().lower()
-        if verified_email != "newpiprod@gmail.com":
+        if not is_platform_operator("training_center", center_account_id):
             return None, (jsonify({
                 "success": False,
                 "error": "Horloge de test non autorisée pour ce compte",

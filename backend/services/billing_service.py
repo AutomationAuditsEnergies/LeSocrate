@@ -40,6 +40,7 @@ from services.dynamic_day_schedule_service import (
     compile_module_schedule,
     validate_new_module_lead_time,
 )
+from services.admin_access_service import account_is_platform_operator
 from services.billing_email_service import send_payment_link, send_review_request
 from utils.logger import get_logger
 from utils.planning_summary import summarize_v2_schedule
@@ -66,8 +67,6 @@ PRODUCTS = {
 }
 
 SERVER_EXEMPT_CENTER_EMAILS = frozenset()
-SERVER_REVIEW_EXEMPT_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
-SERVER_ORDER_REVIEW_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
 PIPELINE_MODEL_CHOICES = frozenset({"flash", "pro"})
 WEEKDAY_IDS = {
     "lundi": 0,
@@ -428,20 +427,12 @@ def _center_is_exempt(center: dict[str, Any]) -> bool:
 
 
 def _center_review_is_exempt(center: dict[str, Any]) -> bool:
-    normalized_username = str(center.get("username") or "").strip().lower()
-    return (
-        _center_is_exempt(center)
-        or normalized_username in SERVER_REVIEW_EXEMPT_CENTER_EMAILS
-    )
+    return _center_is_exempt(center) or account_is_platform_operator(center)
 
 
 def center_can_review_orders(center_account_id: int) -> bool:
-    """Grant the cross-centre review inbox only to explicitly trusted centres."""
-    center = get_center_billing_account(center_account_id)
-    if not center or not center.get("is_active"):
-        return False
-    normalized_username = str(center.get("username") or "").strip().lower()
-    return normalized_username in SERVER_ORDER_REVIEW_CENTER_EMAILS
+    """Grant the cross-centre review inbox only to platform operators."""
+    return account_is_platform_operator(get_center_billing_account(center_account_id))
 
 
 def center_can_manage_review(public_id: str, center_account_id: int) -> bool:

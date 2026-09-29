@@ -184,8 +184,9 @@ def get_center_billing_account(center_account_id: int) -> dict[str, Any] | None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, username, center_name, is_active, stripe_customer_id,
-                       billing_mode, billing_exempt_reason, billing_exempt_at
+                SELECT id, username, center_name, is_active, is_platform_operator,
+                       stripe_customer_id, billing_mode, billing_exempt_reason,
+                       billing_exempt_at
                 FROM training_center_accounts
                 WHERE id = %s
                 """,

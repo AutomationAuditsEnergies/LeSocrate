@@ -32,9 +32,11 @@ test('gives the internal admin a protected validation inbox and API credit links
   assert.match(adminValidations, /Accepter et envoyer le paiement/)
 })
 
-test('lets only the Lyon review center validate other centers from its messaging tab', () => {
-  assert.match(dashboard, /ORDER_REVIEW_CENTER_EMAIL = 'newpiprod@gmail\.com'/)
-  assert.match(dashboard, /<TeacherOrderReviewInbox/)
+test('lets only platform operators validate other centers from their messaging tab', () => {
+  assert.doesNotMatch(dashboard, /newpiprod@gmail\.com/)
+  assert.match(dashboard, /PLATFORM_OPERATOR_PERMISSIONS = \['platform_operator'\]/)
+  assert.match(dashboard, /apiFetch\('\/api\/admin\/session'\)/)
+  assert.match(dashboard, /orderReviewCenter \? \(\s*<TeacherOrderReviewInbox/)
   assert.match(reviewInbox, /api\/admin\/teacher-order-validations/)
   assert.match(reviewInbox, /pour les autres centres/)
   assert.match(reviewInbox, /training_weeks/)

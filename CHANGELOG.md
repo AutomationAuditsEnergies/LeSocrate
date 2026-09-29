@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-29
+
+### fix(sécurité): rôle d'opérateur de plateforme stocké en base, plus d'e-mail codé en dur
+
+Les droits spéciaux de l'opérateur (boîte de relecture des commandes des autres
+centres, commandes sans relecture, horloge de test) dépendent désormais de la
+colonne `training_center_accounts.is_platform_operator` d'un compte actif, et
+non plus de l'e-mail `newpiprod@gmail.com` écrit dans le code backend et
+frontend. La colonne est ajoutée par `postgres_schema.sql` et `db.py` ; le
+compte historique la reçoit une seule fois, à sa création (refus si plusieurs
+comptes correspondent). Le rôle est exposé au tableau de bord par
+`/api/admin/session` (`permissions.platform_operator`) et se donne ou se retire
+avec `backend/tools/admin/set_platform_operator.py`. Il est distinct des
+sessions `superadmin` / `legacy_admin` de l'admin interne.
+
 ## 2026-09-28
 
 ### fix(sécurité): accès local sans mot de passe impossible sur Azure

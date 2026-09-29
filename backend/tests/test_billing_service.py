@@ -304,14 +304,15 @@ class BillingServiceTest(unittest.TestCase):
     @patch.object(billing_service, "create_order")
     @patch.object(billing_service, "get_product_catalog")
     @patch.object(billing_service, "get_center_billing_account")
-    def test_lyon_center_skips_review_but_goes_directly_to_payment(
+    def test_platform_operator_skips_review_but_goes_directly_to_payment(
         self, get_center, get_catalog, create_order, create_checkout,
     ):
         center = {
             "id": 42,
-            "username": "  NEWPIPROD@GMAIL.COM  ",
+            "username": "operateur@example.test",
             "center_name": "Centre Lyon",
             "is_active": True,
+            "is_platform_operator": True,
             "billing_mode": "stripe_required",
         }
         get_center.return_value = center

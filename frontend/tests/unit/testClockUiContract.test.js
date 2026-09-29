@@ -8,9 +8,10 @@ const source = readFileSync(
   'utf8',
 )
 
-test('limits the test clock UI to the designated admin account', () => {
-  assert.match(source, /ORDER_REVIEW_CENTER_EMAIL = 'newpiprod@gmail\.com'/)
-  assert.match(source, /testClockAvailable = isOrderReviewCenter\(\)/)
+test('limits the test clock UI to platform operators', () => {
+  assert.doesNotMatch(source, /newpiprod@gmail\.com/)
+  assert.match(source, /PLATFORM_OPERATOR_PERMISSIONS = \['platform_operator'\]/)
+  assert.match(source, /testClockAvailable=\{orderReviewCenter\}/)
   assert.match(source, /testClockAvailable && !rosterSearchOpen/)
 })
 

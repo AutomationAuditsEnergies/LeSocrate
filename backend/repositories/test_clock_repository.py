@@ -343,21 +343,18 @@ def reset_center_test_state(
 
 
 def list_authorized_active_test_clocks() -> list[dict]:
-    """Return clocks for the single server-authorized test account."""
+    """Return clocks of active platform-operator centres (is_platform_operator)."""
     query = """
         SELECT clock.center_account_id, clock.simulated_anchor, clock.real_anchor
         FROM center_test_clocks clock
         JOIN training_center_accounts center ON center.id = clock.center_account_id
-        WHERE LOWER(center.username) = LOWER({placeholder})
-          AND center.is_active = {active_value}
+        WHERE center.is_platform_operator = {true_value}
+          AND center.is_active = {true_value}
     """
     if postgres_enabled():
         with get_postgres_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    query.format(placeholder="%s", active_value="TRUE"),
-                    ("newpiprod@gmail.com",),
-                )
+                cursor.execute(query.format(true_value="TRUE"))
                 return [dict(row) for row in cursor.fetchall()]
     conn = get_db_connection()
     try:
@@ -370,10 +367,7 @@ def list_authorized_active_test_clocks() -> list[dict]:
             # Some isolated scheduler tests intentionally use a minimal DB.
             # With no centre registry, no centre-scoped clock can be active.
             return []
-        cursor.execute(
-            query.format(placeholder="?", active_value="1"),
-            ("newpiprod@gmail.com",),
-        )
+        cursor.execute(query.format(true_value="1"))
         return [
             {
                 "center_account_id": row[0],

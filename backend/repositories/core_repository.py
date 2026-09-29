@@ -165,7 +165,7 @@ def get_training_center_by_id(center_id):
                 cur.execute(
                     """
                     SELECT id, auth_user_id, username, center_name, slug, is_active,
-                           pipeline_access_enabled
+                           pipeline_access_enabled, is_platform_operator
                     FROM training_center_accounts
                     WHERE id = %s
                     """,
@@ -179,7 +179,7 @@ def get_training_center_by_id(center_id):
         return _rest_get_first(
             "training_center_accounts",
             {
-                "select": "id,auth_user_id,username,center_name,slug,is_active,pipeline_access_enabled",
+                "select": "id,auth_user_id,username,center_name,slug,is_active,pipeline_access_enabled,is_platform_operator",
                 "id": f"eq.{center_id}",
             },
         )
