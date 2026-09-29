@@ -2,6 +2,20 @@
 
 ## 2026-09-29
 
+### fix(sécurité): gestionnaire d'erreurs central et logs utilisables sous Windows
+
+Une exception non prévue sous `/api/` renvoie maintenant un JSON 500 avec une
+référence courte (`error_id`) au lieu de la page d'erreur Flask. Le détail de
+l'exception (tables, chemins, SQL) ne part plus au navigateur : il est écrit
+dans les logs avec la même référence (`utils/errors.py`,
+`internal_error_response`). Les réponses 404, 405 et 429 (« Trop de
+tentatives ») sont inchangées, ainsi que les pages hors `/api/`. Les routes qui
+renvoient encore `str(e)` seront traitées dans les tâches 1.17 à 1.19. Le
+fichier de logs n'est plus fixé à `/tmp/app.log` : `LOG_FILE` s'il est défini,
+sinon `app.log` dans le dossier temporaire du système (toujours `/tmp/app.log`
+sous Linux et sur Azure). S'il ne peut pas être ouvert, le backend démarre
+quand même avec les logs sur la console.
+
 ### fix(audio): la synthèse vocale gratuite (Edge TTS) ne peut plus rester bloquée
 
 Correctif repris du commit `9150609` de `staging` (« Prevent Edge TTS

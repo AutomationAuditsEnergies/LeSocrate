@@ -16,6 +16,7 @@ from utils.env import env_bool
 from utils.logger import configure_logging, get_logger
 from utils.cors_config import configure_api_cors
 from utils.rate_limit import apply_auth_rate_limits, init_rate_limiter
+from utils.errors import register_api_error_handler
 from services.pipeline_worker_health import (
     configure_pipeline_worker_health,
     get_pipeline_worker_health,
@@ -80,6 +81,10 @@ disable_local_dev_login_on_azure()
 # Limitation des tentatives de connexion par IP (routes listées dans
 # utils/rate_limit.py, appliquées après l'enregistrement des blueprints).
 limiter = init_rate_limiter(app)
+
+# Exceptions non prévues sous /api/ : JSON avec une référence courte, détail
+# uniquement dans les logs (utils/errors.py). Les 404/405/429 sont inchangés.
+register_api_error_handler(app)
 
 # Configuration des cookies de session pour le cross-origin (Azure)
 if is_azure and SECRET_KEY == "fallback_secret_key_for_dev":
