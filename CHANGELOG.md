@@ -2,6 +2,19 @@
 
 ## 2026-09-29
 
+### fix(sécurité): plus de détail d'exception dans les réponses formation, slides, admin, debug et billing
+
+Les réponses d'erreur inattendue de `formation_routes.py`, `slides_routes.py`,
+`admin_routes.py` et `debug_routes.py` passent par `internal_error_response` :
+un message neutre avec une référence, et le détail uniquement dans les logs.
+Le statut de la file d'un job et le diagnostic de santé ne renvoient plus non
+plus le texte de l'exception. Le webhook Stripe répond « Événement Stripe
+invalide. » au lieu du texte d'une `ValueError` (le détail reste enregistré pour
+la relance). Les erreurs de saisie (400) dont le message est écrit par notre
+code pour l'utilisateur gardent ce message. Une route inconnue sous `/api/`
+renvoie désormais un 404 JSON « Ressource introuvable » ; hors `/api/`, rien ne
+change. `hr_routes.py` sera traité dans la tâche 1.19.
+
 ### fix(sécurité): gestionnaire d'erreurs central et logs utilisables sous Windows
 
 Une exception non prévue sous `/api/` renvoie maintenant un JSON 500 avec une

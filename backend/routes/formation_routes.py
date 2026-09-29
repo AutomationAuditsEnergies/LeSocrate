@@ -34,6 +34,7 @@ from services.knowledge_base_service import (
     kb_stats,
 )
 from utils.deepseek_client import is_deterministic_deepseek_error
+from utils.errors import internal_error_response
 from utils.logger import get_logger
 from services.admin_access_service import can_access_formation_pipeline
 
@@ -343,8 +344,7 @@ def search_rncp_route():
         results = search_rncp(query)
         return jsonify({"results": results})
     except Exception as e:
-        logger.error(f"❌ search_rncp : {e}")
-        return jsonify({"error": str(e)}), 500
+        return internal_error_response(e, context="search_rncp")
 
 
 # ─── Initialisation d'un job ──────────────────────────────────────────────────
@@ -593,8 +593,9 @@ def get_course_text(job_id, folder_id):
             sections.append(f"═══ {title} ═══\n\n{body}")
         return jsonify({"text": "\n\n\n".join(sections), "sections_count": len(segments)})
     except Exception as e:
-        logger.error(f"❌ Job {job_id} get_course_text folder={folder_id} : {e}")
-        return jsonify({"error": str(e)}), 500
+        return internal_error_response(
+            e, context=f"get_course_text job={job_id} folder={folder_id}"
+        )
 
 
 @formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/artifact/<path:filename>", methods=["GET"])
@@ -666,8 +667,9 @@ def download_course_docx(job_id, folder_id):
             download_name=filename,
         )
     except Exception as e:
-        logger.error(f"❌ Job {job_id} download_course_docx folder={folder_id} v={version} : {e}")
-        return jsonify({"error": str(e)}), 500
+        return internal_error_response(
+            e, context=f"download_course_docx job={job_id} folder={folder_id} v={version}"
+        )
 
 
 # ─── Rapport de révision conformité ──────────────────────────────────────────
@@ -1216,7 +1218,9 @@ def get_review_report(job_id, folder_id):
         parsed = _json.loads(extract_json(output_text))
         reviews = parsed.get("reviews", [])
     except Exception as e:
-        return jsonify({"error": f"output.md illisible : {e}"}), 500
+        return internal_error_response(
+            e, context=f"review_report output.md illisible job={job_id} folder={folder_id}"
+        )
 
     # Récupère input.md (segments d'origine) pour la résolution positionnelle
     input_md_path = os.path.join(chunk_dir_with_output, "input.md")
@@ -1381,8 +1385,7 @@ def volume_audit(job_id):
         audit = compute_volume_audit(job_id)
         return jsonify(audit), 200
     except Exception as e:
-        logger.error(f"❌ volume_audit job {job_id} : {e}")
-        return jsonify({"error": str(e)}), 500
+        return internal_error_response(e, context=f"volume_audit job={job_id}")
 
 
 @formation_bp.route(
@@ -1444,8 +1447,7 @@ def preflight_pipeline(job_id):
         result = compute_preflight(job_id, tts_mode=tts_mode)
         return jsonify(result), 200 if result["ok"] else 422
     except Exception as e:
-        logger.error(f"❌ preflight job {job_id} : {e}")
-        return jsonify({"error": str(e)}), 500
+        return internal_error_response(e, context=f"preflight job={job_id}")
 
 
 @formation_bp.route("/api/formation/<int:job_id>/health", methods=["GET"])
@@ -1462,8 +1464,7 @@ def health_pipeline(job_id):
         result = compute_health(job_id)
         return jsonify(result), 200
     except Exception as e:
-        logger.error(f"❌ health-check job {job_id} : {e}")
-        return jsonify({"error": str(e)}), 500
+        return internal_error_response(e, context=f"health_check job={job_id}")
 
 
 # ─── Étape 7 : Lancement de la synthèse TTS Fish Audio ───────────────────────
@@ -2568,7 +2569,7 @@ def _queue_status_for_job(job_id: int) -> dict:
         }
     except Exception as exc:
         logger.warning("PIPELINE_QUEUE_STATUS_FAILED job=%s", job_id, exc_info=True)
-        return {"mode": "queue", "status": "unavailable", "error": str(exc)[:300]}
+        return {"mode": "queue", "status": "unavailable", "error": "Statut de la file indisponible"}
 
 
 def _pipeline_error_fallback_status(job: dict) -> str:
@@ -3437,7 +3438,7 @@ def resume_auto_pilot(job_id):
     try:
         next_step = _determine_next_ap_step(job_id)
     except Exception as e:
-        return jsonify({"error": f"Impossible de calculer la prochaine étape : {str(e)[:300]}"}), 500
+        return internal_error_response(e, context=f"resume_auto_pilot next_step job={job_id}")
 
     resume_updates = {
         "auto_pilot_enabled": 1,
@@ -3619,12 +3620,12 @@ def formation_pipeline_diagnostic(job_id):
         from services.formation_health_service import compute_health
         health = compute_health(job_id)
     except Exception as e:
-        logger.warning(f"⚠️ Diagnostic health job {job_id} : {e}")
+        logger.warning(f"⚠️ Diagnostic health job {job_id} : {e}", exc_info=True)
         health = {
             "ok": False,
             "blocking": ["health_error"],
             "warnings": [],
-            "checks": {"health_error": {"ok": False, "detail": str(e)[:500]}},
+            "checks": {"health_error": {"ok": False, "detail": "Audit indisponible (détail dans les logs serveur)"}},
         }
 
     try:

@@ -42,6 +42,7 @@ from services.admin_access_service import (
     permissions_from_account,
 )
 from services.course_schedule_service import create_missing_course_schedule, get_course_schedule_summary, update_course_schedule
+from utils.errors import internal_error_response
 from utils.logger import get_logger
 from utils.auth_tokens import issue_auth_token
 from utils.slug import slugify, unique_slug
@@ -825,8 +826,7 @@ def create_admin_blueprint():
                 200,
             )
         except Exception as e:
-            logger.error(f"❌ Erreur récupération heure cours: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="get_course_time")
 
     @admin_bp.route("/api/admin/config_cours", methods=["POST"])
     def config_cours():
@@ -883,8 +883,7 @@ def create_admin_blueprint():
                 400,
             )
         except Exception as e:
-            logger.error(f"❌ Erreur configuration cours: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="config_cours")
 
     # ─── Endpoints internes service-to-service (P1 HR → P2) ──────────────
 
@@ -923,8 +922,7 @@ def create_admin_blueprint():
             )
             return jsonify({"success": True, "upload_locked": locked, "platform_id": platform_id}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur internal set-lock: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="internal_set_lock")
 
     @admin_bp.route("/api/internal/config-cours", methods=["POST"])
     def internal_config_cours():
@@ -1036,8 +1034,7 @@ def create_admin_blueprint():
         except Exception as e:
             if conn:
                 conn.close()
-            logger.error(f"❌ Erreur internal config-cours: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="internal_config_cours")
 
     @admin_bp.route("/api/internal/course-time", methods=["GET"])
     def internal_get_course_time():
@@ -1069,8 +1066,7 @@ def create_admin_blueprint():
                 })
             return jsonify(payload), 200
         except Exception as e:
-            logger.error(f"❌ Erreur internal course-time: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="internal_course_time")
 
     @admin_bp.route("/api/admin/export_excel")
     def export_excel():
@@ -1792,8 +1788,7 @@ def create_admin_blueprint():
             path = db_safety.create_backup(label="manual")
             return jsonify({"success": True, "backup": os.path.basename(path) if path else None})
         except Exception as e:
-            logger.error(f"❌ Backup manuel en échec: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="db_backup")
 
     @admin_bp.route("/api/admin/db/restore", methods=["POST"])
     def db_restore():
@@ -1876,8 +1871,7 @@ def create_admin_blueprint():
             )
 
         except Exception as e:
-            logger.error(f"❌ Erreur simulation temps: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="simulate_current_time")
 
     @admin_bp.route("/api/admin/reset-simulation", methods=["POST"])
     def reset_simulation():
@@ -1894,8 +1888,7 @@ def create_admin_blueprint():
             return jsonify({"success": True, "message": "Heure réelle restaurée"}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur reset simulation: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="reset_simulation")
 
     @admin_bp.route("/api/admin/force-logout-finished-users", methods=["POST"])
     def force_logout_finished_users():
@@ -1932,8 +1925,7 @@ def create_admin_blueprint():
             )
 
         except Exception as e:
-            logger.error(f"❌ Erreur force logout: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="force_logout_finished_users")
 
     @admin_bp.route("/api/admin/upload-pdf", methods=["POST"])
     def upload_pdf():
@@ -2063,8 +2055,7 @@ def create_admin_blueprint():
             )
 
         except Exception as e:
-            logger.error(f"❌ Erreur upload PDF: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="upload_pdf")
 
     @admin_bp.route("/api/admin/indexer-status", methods=["GET"])
     def indexer_status():
@@ -2132,7 +2123,6 @@ def create_admin_blueprint():
             )
 
         except Exception as e:
-            logger.error(f"❌ Erreur statut indexer: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="indexer_status")
 
     return admin_bp

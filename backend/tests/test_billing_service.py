@@ -661,10 +661,13 @@ class BillingServiceTest(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"STRIPE_WEBHOOK_SECRET": "whsec_placeholder"}):
-            with self.assertRaisesRegex(billing_service.BillingError, "Montant") as raised:
+            with self.assertRaisesRegex(
+                billing_service.BillingError, "^Événement Stripe invalide.$"
+            ) as raised:
                 billing_service.process_stripe_webhook(json.dumps(event).encode(), "signed")
 
         self.assertEqual(raised.exception.status_code, 400)
+        # Le détail reste côté serveur pour la relance, jamais dans la réponse.
         record_failure.assert_called_once_with(event, "Montant Stripe incohérent")
 
     @patch.object(billing_service, "retry_order_fulfillment")

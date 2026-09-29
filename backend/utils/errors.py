@@ -36,17 +36,22 @@ def internal_error_response(exc, context=""):
 def register_api_error_handler(app):
     """Gestionnaire global des exceptions non prévues sur ``app``.
 
-    - Les HTTPException (404, 405, 429…) gardent leur réponse habituelle ; un
-      gestionnaire plus précis (ex. RateLimitExceeded) reste prioritaire.
-    - Sous ``/api/`` : réponse JSON avec un identifiant, détail dans les logs.
-    - Ailleurs : comportement Flask par défaut, inchangé.
+    - 404 sous ``/api/`` : JSON « Ressource introuvable ».
+    - Autres HTTPException (405, 429…) : réponse habituelle ; un gestionnaire
+      plus précis (ex. RateLimitExceeded) reste prioritaire.
+    - Autres exceptions sous ``/api/`` : JSON avec un identifiant, détail dans
+      les logs.
+    - Hors ``/api/`` : comportement Flask par défaut, inchangé.
     """
 
     @app.errorhandler(Exception)
     def _handle_unexpected_exception(exc):
+        is_api = request.path.startswith("/api/")
         if isinstance(exc, HTTPException):
+            if is_api and exc.code == 404:
+                return jsonify({"success": False, "error": "Ressource introuvable"}), 404
             return exc
-        if not request.path.startswith("/api/"):
+        if not is_api:
             raise exc
         return internal_error_response(exc, context=f"{request.method} {request.path}")
 

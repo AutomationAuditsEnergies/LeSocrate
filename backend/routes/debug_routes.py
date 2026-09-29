@@ -2,6 +2,7 @@
 from flask import Blueprint, request, session, jsonify
 import state
 from services.audio_service import get_current_playback_context
+from utils.errors import internal_error_response
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -113,8 +114,7 @@ def debug_cours_info():
         }), 200
 
     except Exception as e:
-        logger.error(f"❌ Erreur API debug: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return internal_error_response(e, context="debug_cours_info")
 
 
 @debug_bp.route("/api/debug/playlist")
@@ -146,5 +146,4 @@ def debug_playlist():
         return jsonify(payload), 200
 
     except Exception as e:
-        logger.error(f"❌ Erreur API debug playlist: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return internal_error_response(e, context="debug_playlist")

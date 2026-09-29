@@ -7,6 +7,7 @@ from services.script_slide_generation_service import (
 )
 from repositories.pipeline_repository import hr_resource_belongs_to_center
 from services.admin_access_service import can_access_formation_pipeline
+from utils.errors import internal_error_response
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -173,11 +174,7 @@ def generate_from_script():
         }), 400
 
     except Exception as e:
-        logger.exception("Erreur lors de la génération depuis script")
-        return jsonify({
-            "status": "error",
-            "message": f"Erreur lors de la génération depuis script: {str(e)}"
-        }), 500
+        return internal_error_response(e, context="slides generate_from_script")
 
 
 @slides_bp.route("/preview-from-text", methods=["POST"])
@@ -234,11 +231,7 @@ def preview_from_text():
         logger.error(f"Erreur de validation preview slides: {e}")
         return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
-        logger.exception("Erreur preview slides depuis texte")
-        return jsonify({
-            "status": "error",
-            "message": f"Erreur preview slides depuis texte: {str(e)}",
-        }), 500
+        return internal_error_response(e, context="slides preview_from_text")
 
 
 @slides_bp.route("/data", methods=["GET"])

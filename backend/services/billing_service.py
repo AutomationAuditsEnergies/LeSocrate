@@ -1384,8 +1384,11 @@ def process_stripe_webhook(raw_payload: bytes, signature: str) -> None:
     try:
         apply_stripe_webhook_event(event)
     except ValueError as exc:
+        # Le détail reste côté serveur (journal des webhooks + logs) ; Stripe
+        # ne reçoit qu'un message neutre.
         record_webhook_failure(event, str(exc))
-        raise BillingError(str(exc), status_code=400) from exc
+        logger.warning("STRIPE_WEBHOOK_EVENT_REJECTED error=%s", exc)
+        raise BillingError("Événement Stripe invalide.", status_code=400) from exc
     except Exception as exc:
         try:
             record_webhook_failure(event, str(exc))

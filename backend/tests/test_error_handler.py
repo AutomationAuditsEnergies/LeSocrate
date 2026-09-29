@@ -55,10 +55,20 @@ class ApiErrorHandlerTest(unittest.TestCase):
         self.assertIn("GET /api/test/boom", logged)
         self.assertIn("secret table xyz", logged)
 
-    def test_unknown_api_route_is_still_404(self):
+    def test_unknown_api_route_is_a_json_404(self):
         response = self.client.get("/api/route-inconnue")
 
         self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.get_json(), {"success": False, "error": "Ressource introuvable"}
+        )
+
+    def test_unknown_route_outside_api_keeps_the_html_404(self):
+        response = self.client.get("/page-inconnue")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIsNone(response.get_json(silent=True))
+        self.assertIn("text/html", response.content_type)
 
     def test_wrong_method_is_still_405(self):
         response = self.client.delete("/api/auth/login")
