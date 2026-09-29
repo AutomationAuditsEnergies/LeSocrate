@@ -7,6 +7,11 @@ from services import basic_tts_service as tts
 
 
 class BasicTTSWatchdogTest(unittest.TestCase):
+    @unittest.skipIf(
+        os.name == "nt",
+        "os.killpg et signal.SIGKILL n'existent pas sous Windows "
+        "(voir test_stuck_edge_tts_process_is_killed_at_deadline_on_windows)",
+    )
     def test_stuck_edge_tts_process_is_killed_at_deadline(self):
         proc = Mock()
         proc.pid = 321
@@ -24,6 +29,28 @@ class BasicTTSWatchdogTest(unittest.TestCase):
 
         killpg.assert_called_with(321, tts.signal.SIGKILL)
         proc.wait.assert_called_with(timeout=5)
+
+    def test_stuck_edge_tts_process_is_killed_at_deadline_on_windows(self):
+        # os.name est forcé à "nt" : ce chemin est aussi vérifié par la CI Linux.
+        proc = Mock()
+        proc.pid = 321
+        proc.poll.return_value = None
+
+        with (
+            patch.dict(os.environ, {"EDGE_TTS_SUBPROCESS_TIMEOUT_SEC": "10"}),
+            patch.object(tts.os, "name", "nt"),
+            patch.object(tts.subprocess, "Popen", return_value=proc) as popen,
+            patch.object(tts.time, "monotonic", side_effect=[0.0, 11.0]),
+            patch.object(tts.time, "sleep"),
+            patch.object(tts.os, "killpg", create=True) as killpg,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "timeout après 10s"):
+                tts._synthesize_chunk_sync("Bonjour", "voice", "+0%", "+0%")
+
+        self.assertFalse(popen.call_args.kwargs["start_new_session"])
+        proc.kill.assert_called()
+        proc.wait.assert_called_with(timeout=5)
+        killpg.assert_not_called()
 
     def test_configured_smaller_chunks_are_used(self):
         source = ("Une phrase assez longue pour tester le découpage. " * 60).strip()

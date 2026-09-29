@@ -2,6 +2,18 @@
 
 ## 2026-09-29
 
+### fix(audio): la synthèse vocale gratuite (Edge TTS) ne peut plus rester bloquée
+
+Correctif repris du commit `9150609` de `staging` (« Prevent Edge TTS
+subprocess hangs (#5) »). Le processus `edge-tts` est désormais surveillé avec
+une horloge et tué, lui et ses processus enfants, à l'échéance
+(`EDGE_TTS_SUBPROCESS_TIMEOUT_SEC`, 90 s par défaut, 10 s minimum) : le timeout
+de `subprocess.run` pouvait ne jamais se déclencher et la génération audio
+d'une journée ne se terminait pas. Le texte est aussi découpé en morceaux plus
+petits (`EDGE_TTS_CHUNK_MAX_CHARS`, 2000 caractères par défaut). Le test d'arrêt
+forcé est adapté à Windows : la variante Linux (`os.killpg`) est ignorée sous
+Windows et une variante Windows (`proc.kill()`) tourne sur les deux systèmes.
+
 ### fix(sécurité): rôle d'opérateur de plateforme stocké en base, plus d'e-mail codé en dur
 
 Les droits spéciaux de l'opérateur (boîte de relecture des commandes des autres
