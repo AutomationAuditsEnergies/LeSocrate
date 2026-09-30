@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import './SalesHackingSourceDeck.css';
+import { BRAND_NAME } from '../../../brand';
 
 export const SOURCE_SLIDES = {
   "welcome": {
@@ -461,19 +462,19 @@ const useSourceSlideScale = () => {
 
 // `replacements` : remplacements littéraux { "texte source": "texte affiché" }
 // appliqués au HTML statique (ex : durée réelle de la pause).
-const escapeBrandHtml = (value) => String(value == null ? 'Le Socrate' : value)
+const escapeBrandHtml = (value) => String(value == null ? BRAND_NAME : value)
   .replaceAll('&', '&amp;')
   .replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
 
-export const SalesHackingSourceSlide = ({ sourceId, replacements, brandName = 'Le Socrate' }) => {
+export const SalesHackingSourceSlide = ({ sourceId, replacements, brandName = BRAND_NAME }) => {
   const source = SOURCE_SLIDE_CATALOG[sourceId] || SOURCE_SLIDES.welcome;
   const [shellRef, scale] = useSourceSlideScale();
 
   let html = source.html;
-  const safeBrand = escapeBrandHtml(String(brandName ?? 'Le Socrate').trim());
+  const safeBrand = escapeBrandHtml(String(brandName ?? BRAND_NAME).trim());
   html = html.replace(
     /<div class="brand"><span class="mark">Sales<\/span><span class="tag">hacking<\/span><\/div>/g,
     `<div class="brand"><span class="mark">${safeBrand}</span></div>`,

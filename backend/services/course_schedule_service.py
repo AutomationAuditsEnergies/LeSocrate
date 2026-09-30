@@ -23,6 +23,7 @@ from utils.auth_tokens import (
     course_personal_access_code,
     issue_course_invitation_token,
 )
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -186,7 +187,7 @@ def ensure_course_schedule_tables(cursor):
             local_time TEXT,
             subject_template TEXT NOT NULL,
             content_template TEXT NOT NULL,
-            signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate',
+            signature_template TEXT NOT NULL DEFAULT 'L''équipe Cadrenza',
             recipient_scope TEXT NOT NULL DEFAULT 'all',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -201,7 +202,7 @@ def ensure_course_schedule_tables(cursor):
     if "signature_template" not in reminder_rule_columns:
         cursor.execute(
             "ALTER TABLE course_reminder_rules "
-            "ADD COLUMN signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate'"
+            "ADD COLUMN signature_template TEXT NOT NULL DEFAULT 'L''équipe Cadrenza'"
         )
     cursor.execute(
         """
@@ -1598,7 +1599,7 @@ def _send_reminder_email_batch(payloads):
     username = os.environ.get("EMAIL_USERNAME")
     password = os.environ.get("EMAIL_PASSWORD")
     sender = os.environ.get("EMAIL_FROM") or username
-    sender_name = os.environ.get("EMAIL_FROM_NAME", "Le Socrate")
+    sender_name = os.environ.get("EMAIL_FROM_NAME", BRAND_NAME)
     smtp_timeout = _bounded_network_timeout("COURSE_REMINDER_SMTP_TIMEOUT_SECONDS")
     imap_timeout = _bounded_network_timeout("COURSE_REMINDER_IMAP_TIMEOUT_SECONDS")
     results = {}
@@ -2167,7 +2168,7 @@ def _validated_reminder_rule(data):
 
     subject_template = str(payload.get("subject_template") or "").strip()
     content_template = str(payload.get("content_template") or "").strip()
-    raw_signature = payload.get("signature_template", "L'équipe Le Socrate")
+    raw_signature = payload.get("signature_template", f"L'équipe {BRAND_NAME}")
     signature_template = str(raw_signature if raw_signature is not None else "").strip()
     if not subject_template or len(subject_template) > 200:
         raise ValueError("L'objet du mail est requis (200 caractères maximum)")

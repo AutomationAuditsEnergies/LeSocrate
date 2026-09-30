@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from services import billing_service
+from utils.brand import BRAND_NAME
 from config import FRANCE_TZ
 
 
@@ -54,7 +55,7 @@ class BillingServiceTest(unittest.TestCase):
         self.assertEqual(len(project["teacher_description"]), 600)
         self.assertFalse(project["teacher_description"].startswith(" "))
 
-    def test_slide_brand_name_is_trimmed_bounded_and_defaults_to_le_socrate(self):
+    def test_slide_brand_name_is_trimmed_bounded_and_defaults_to_the_brand(self):
         payload = _project()
         payload["project"]["slide_brand_name"] = f"  {'A' * 140}  "
 
@@ -65,7 +66,7 @@ class BillingServiceTest(unittest.TestCase):
 
         payload = _project()
         _, project, _ = billing_service._normalize_project(payload, 42)
-        self.assertEqual(project["slide_brand_name"], "Le Socrate")
+        self.assertEqual(project["slide_brand_name"], BRAND_NAME)
 
         payload = _project()
         payload["project"]["slide_brand_name"] = ""

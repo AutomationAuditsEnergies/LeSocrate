@@ -1,6 +1,7 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import './DeckTemplates.css';
 import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
+import { BRAND_NAME } from '../../../brand';
 
 const splitTitle = (title = '', fallback = '') => String(title || fallback).split(/\s+/);
 
@@ -123,8 +124,8 @@ const getRecapCardFit = (title = '', desc = '') => {
   };
 };
 
-const getDeckBrandParts = (brandName = 'Le Socrate') => {
-  const normalizedBrandName = brandName == null ? 'Le Socrate' : String(brandName).trim();
+const getDeckBrandParts = (brandName = BRAND_NAME) => {
+  const normalizedBrandName = brandName == null ? BRAND_NAME : String(brandName).trim();
   if (!normalizedBrandName) return { brandHead: '', brandTail: '' };
   const brandParts = normalizedBrandName.split(/\s+/);
   return {
@@ -133,7 +134,7 @@ const getDeckBrandParts = (brandName = 'Le Socrate') => {
   };
 };
 
-const DeckSlide = ({ children, type = 'TEMPLATE', page = '01', className = '', danger = false, badge = 'TP-CRCD', brandName = 'LE SOCRATE' }) => (
+const DeckSlide = ({ children, type = 'TEMPLATE', page = '01', className = '', danger = false, badge = 'TP-CRCD', brandName = BRAND_NAME.toUpperCase() }) => (
   <div className={`deck-slide ${danger ? 'deck-slide--danger' : ''} ${className}`}>
     <div className="deck-chrome">
       <div className="deck-brand"><span className="deck-brand-mark">{getDeckBrandParts(brandName).brandHead}</span>{getDeckBrandParts(brandName).brandTail && <span className="deck-brand-tag">{getDeckBrandParts(brandName).brandTail}</span>}</div>
@@ -314,7 +315,7 @@ const svgBodyBlock = (value = '', maxChars = 44, maxLines = 2) => {
   };
 };
 
-const deckChrome = (brandName = 'Le Socrate') => {
+const deckChrome = (brandName = BRAND_NAME) => {
   const { brandHead, brandTail } = getDeckBrandParts(brandName);
   return (
     <div className="deck-chrome">
@@ -326,7 +327,7 @@ const deckChrome = (brandName = 'Le Socrate') => {
   );
 };
 
-const sourceChrome = (brandName = 'Le Socrate') => {
+const sourceChrome = (brandName = BRAND_NAME) => {
   const { brandHead, brandTail } = getDeckBrandParts(brandName);
   return (
     <div className="chrome">

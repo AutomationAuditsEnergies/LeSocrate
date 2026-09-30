@@ -16,6 +16,7 @@ from typing import Any
 from config import DATABASE_BACKEND, FRANCE_TZ, PIPELINE_DATABASE_BACKEND
 from database.db import get_db_connection
 from database.postgres import get_postgres_connection
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 
 
@@ -1640,7 +1641,7 @@ def _ensure_sqlite_reminder_tables(cursor) -> None:
             local_time TEXT,
             subject_template TEXT NOT NULL,
             content_template TEXT NOT NULL,
-            signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate',
+            signature_template TEXT NOT NULL DEFAULT 'L''équipe Cadrenza',
             recipient_scope TEXT NOT NULL DEFAULT 'all',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -1655,7 +1656,7 @@ def _ensure_sqlite_reminder_tables(cursor) -> None:
     if "signature_template" not in rule_columns:
         cursor.execute(
             "ALTER TABLE course_reminder_rules "
-            "ADD COLUMN signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate'"
+            "ADD COLUMN signature_template TEXT NOT NULL DEFAULT 'L''équipe Cadrenza'"
         )
     cursor.execute(
         """
@@ -1864,7 +1865,7 @@ DEFAULT_COURSE_REMINDER_RULES = (
             "Cliquez ici pour vous connecter avec votre code {session_code} : "
             "{class_url_accueil}"
         ),
-        "signature_template": "L'équipe Le Socrate",
+        "signature_template": f"L'équipe {BRAND_NAME}",
     },
     {
         "system_key": "five_minutes_before",
@@ -1879,7 +1880,7 @@ DEFAULT_COURSE_REMINDER_RULES = (
             "Cliquez ici pour vous connecter avec votre code {session_code} : "
             "{class_url_accueil}"
         ),
-        "signature_template": "L'équipe Le Socrate",
+        "signature_template": f"L'équipe {BRAND_NAME}",
     },
 )
 

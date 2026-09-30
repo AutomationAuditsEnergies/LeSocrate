@@ -33,6 +33,7 @@ from services.billing_service import (
     serialize_order,
     training_days_for_order,
 )
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 from services.pipeline_worker_health import get_pipeline_worker_health
 
@@ -81,10 +82,10 @@ def _error(exc: BillingError):
 def _review_html(title: str, content: str, *, status_code: int = 200):
     return f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{html.escape(title)} · Le Socrate</title></head>
+<title>{html.escape(title)} · {html.escape(BRAND_NAME)}</title></head>
 <body style="margin:0;background:#f8fafc;font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a">
 <main style="max-width:720px;margin:0 auto;padding:40px 18px">
-<p style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#7c3aed">LE SOCRATE · VALIDATION INTERNE</p>
+<p style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#7c3aed">{html.escape(BRAND_NAME.upper())} · VALIDATION INTERNE</p>
 <section style="margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:30px">
 <h1 style="margin:0;font-size:26px">{html.escape(title)}</h1>{content}</section></main></body></html>""", status_code, {"Content-Type": "text/html; charset=utf-8"}
 

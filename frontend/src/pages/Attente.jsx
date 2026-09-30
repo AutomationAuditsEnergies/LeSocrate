@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch, getPlatformId, getStudentLoginPath, setPlatformId } from '../api'
 import './Attente.css'
+import { BRAND_NAME } from '../brand'
 
 const COUNTDOWN_UNITS = [
   { key: 'jours', label: 'Jours' },
@@ -70,7 +71,7 @@ export default function Attente() {
 
   return (
     <main className="waiting-screen">
-      <aside className="waiting-screen__identity" aria-label="Le Socrate">
+      <aside className="waiting-screen__identity" aria-label={BRAND_NAME}>
         <div className="waiting-brand">
           <span className="waiting-brand__mark" aria-hidden="true">S</span>
           <span>SOCRATE</span>

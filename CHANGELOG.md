@@ -2,6 +2,23 @@
 
 ## 2026-09-30
 
+### feat(marque): « Cadrenza » à la place de « Le Socrate » dans ce que voient les utilisateurs
+
+Le nom de marque vit désormais à un seul endroit : `BRAND_NAME` dans
+`frontend/src/brand.js` et `backend/utils/brand.py`. Il remplace « Le Socrate »
+écrit en dur dans les slides, les écrans apprenant, le tableau de bord RH, les
+e-mails (expéditeur par défaut, facturation), la page de validation, le nom de
+centre par défaut, le fichier Excel des présences, le PDF de cours, le prompt
+des slides et la description des voix Fish. Le build du frontend P3 affiche
+« Cadrenza » (`VITE_FORMATION_NAME`). La signature par défaut des rappels
+devient « L'équipe Cadrenza » dans le schéma (`ALTER … SET DEFAULT` idempotent
+dans `postgres_schema.sql`, littéraux SQLite) sans modifier aucune ligne
+existante. L'icône « S » (`socrate-mark.svg`) est conservée en attendant la
+validation du nouveau logo ; seul son titre interne devient « Cadrenza ».
+Inchangés : les noms internes (socrate.db, slug `le-socrate`, variables
+d'environnement…), les données déjà en base et le compte interne
+« Sales Hacking / Le Socrate interne ».
+
 ### ci: toute la suite de tests avant chaque déploiement
 
 Le job `postgres-integration` (appelé par le déploiement avant build et

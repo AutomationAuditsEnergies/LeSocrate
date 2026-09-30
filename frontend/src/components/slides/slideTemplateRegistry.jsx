@@ -23,10 +23,11 @@ import {
   DeckWarning,
   DeckWelcome,
 } from './templates/DeckTemplates'
+import { BRAND_NAME } from '../../brand'
 
 export const COMMON_SLIDE_PROPS = {
   badge: 'TP-CRCD',
-  brandName: 'LE SOCRATE',
+  brandName: BRAND_NAME.toUpperCase(),
 }
 
 export const OFFICIAL_SOURCE_TEMPLATE_IDS = new Set([

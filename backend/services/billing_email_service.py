@@ -10,6 +10,7 @@ from email.mime.text import MIMEText
 from email.utils import make_msgid
 from typing import Any
 
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 
 
@@ -48,7 +49,7 @@ def _send_html(recipient: str, subject: str, content: str) -> bool:
         return False
 
     sender = os.getenv("EMAIL_FROM", "").strip() or username
-    sender_name = os.getenv("EMAIL_FROM_NAME", "Le Socrate").strip() or "Le Socrate"
+    sender_name = os.getenv("EMAIL_FROM_NAME", BRAND_NAME).strip() or BRAND_NAME
     message = MIMEMultipart("alternative")
     message["Message-ID"] = make_msgid()
     message["Subject"] = subject
@@ -78,14 +79,14 @@ def _shell(title: str, lead: str, body: str, *, button_label: str, button_url: s
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
 <body style="margin:0;background:#f8fafc;font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a">
   <div style="max-width:640px;margin:0 auto;padding:32px 18px">
-    <div style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#7c3aed">LE SOCRATE</div>
+    <div style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#7c3aed">{html.escape(BRAND_NAME.upper())}</div>
     <div style="margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:30px">
       <h1 style="margin:0;font-size:24px;line-height:1.25">{html.escape(title)}</h1>
       <p style="margin:14px 0 0;color:#475569;font-size:15px;line-height:1.6">{html.escape(lead)}</p>
       {body}
       <p style="margin:26px 0 0"><a href="{html.escape(button_url, quote=True)}" style="display:inline-block;background:#7c3aed;color:#fff;text-decoration:none;padding:13px 18px;border-radius:8px;font-weight:700">{html.escape(button_label)}</a></p>
     </div>
-    <p style="margin:16px 0 0;text-align:center;color:#64748b;font-size:12px">Message automatique de la plateforme Le Socrate.</p>
+    <p style="margin:16px 0 0;text-align:center;color:#64748b;font-size:12px">Message automatique de la plateforme {html.escape(BRAND_NAME)}.</p>
   </div>
 </body></html>"""
 

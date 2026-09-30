@@ -30,6 +30,7 @@ from repositories.pipeline_repository import (
     list_completed_content_segment_rows,
     list_course_folder_ids_for_platform,
 )
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -278,6 +279,7 @@ def build_course_pdf(job_id: int, folder_id: int) -> Tuple[bytes, str]:
         sub_parts=sub_parts_render,
         total_words=f"{total_words:,}".replace(",", " "),
         generated_at=datetime.now().strftime("%d/%m/%Y %H:%M"),
+        brand_name=BRAND_NAME,
     )
 
     with tempfile.TemporaryDirectory(prefix="socrate-pdf-") as workdir:

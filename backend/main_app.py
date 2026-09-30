@@ -12,6 +12,7 @@ from config import (
     SECRET_KEY,
     sqlite_runtime_enabled,
 )
+from utils.brand import BRAND_NAME
 from utils.env import env_bool
 from utils.logger import configure_logging, get_logger
 from utils.cors_config import configure_api_cors
@@ -412,7 +413,7 @@ def class_access(center_slug, platform_slug):
             pc.name,
             pc.slug,
             COALESCE(tca.slug, 'le-socrate') AS center_slug,
-            COALESCE(tca.center_name, 'Le Socrate') AS center_name,
+            COALESCE(tca.center_name, ?) AS center_name,
             COALESCE(pc.public_access_enabled, 1) AS public_access_enabled,
             COALESCE(pc.status, 'ready') AS status
         FROM platform_config pc
@@ -421,7 +422,7 @@ def class_access(center_slug, platform_slug):
           AND COALESCE(tca.slug, 'le-socrate') = ?
         LIMIT 1
         """,
-        (platform_slug, center_slug),
+        (BRAND_NAME, platform_slug, center_slug),
     )
     row = cursor.fetchone()
     conn.close()

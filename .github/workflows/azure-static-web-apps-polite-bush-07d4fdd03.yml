@@ -37,7 +37,7 @@ jobs:
           production_branch: "codex/current-saas-postgres-20260705"
         env:
           VITE_API_URL: https://formation3-cpdhezh4cdcqecfy.francecentral-01.azurewebsites.net
-          VITE_FORMATION_NAME: "Le Socrate"
+          VITE_FORMATION_NAME: "Cadrenza"
           VITE_SUPABASE_URL: ${{ secrets.SAAS_SUPABASE_URL || secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SAAS_SUPABASE_ANON_KEY || secrets.SUPABASE_ANON_KEY }}
 

@@ -1,4 +1,4 @@
--- Postgres target schema for Le Socrate multi-tenant SaaS.
+-- Postgres target schema for the Cadrenza multi-tenant SaaS.
 -- This schema keeps the current table names where possible to make the
 -- SQLite -> Postgres migration incremental instead of a full rewrite.
 
@@ -442,7 +442,7 @@ CREATE TABLE IF NOT EXISTS course_reminder_rules (
     local_time TIME,
     subject_template TEXT NOT NULL,
     content_template TEXT NOT NULL,
-    signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate',
+    signature_template TEXT NOT NULL DEFAULT 'L''équipe Cadrenza',
     recipient_scope TEXT NOT NULL DEFAULT 'all',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -454,7 +454,10 @@ CREATE TABLE IF NOT EXISTS course_reminder_rules (
 );
 
 ALTER TABLE course_reminder_rules
-    ADD COLUMN IF NOT EXISTS signature_template TEXT NOT NULL DEFAULT 'L''équipe Le Socrate';
+    ADD COLUMN IF NOT EXISTS signature_template TEXT NOT NULL DEFAULT 'L''équipe Cadrenza';
+-- Nouvelle marque : ne change que la valeur par défaut, jamais les lignes existantes.
+ALTER TABLE course_reminder_rules
+    ALTER COLUMN signature_template SET DEFAULT 'L''équipe Cadrenza';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_course_reminder_rules_system_key
     ON course_reminder_rules(platform_id, system_key)

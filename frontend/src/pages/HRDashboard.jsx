@@ -49,6 +49,7 @@ import { buildTeacherDescription } from '../teacherIdentity'
 import { classifyFormationAudios } from '../audioLibrary'
 import { calculateTrainingDays, RECRUITMENT_STEPS } from '../recruitmentConversation'
 import { getMinimumNewModuleStartDate, prefillTrainingDates } from '../formationScheduleV2'
+import { BRAND_NAME } from '../brand'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -1205,7 +1206,7 @@ export default function HRDashboard() {
     return () => window.clearTimeout(timeoutId)
   }, [newlyCreatedPlatformId])
 
-  const handleCreatePlatform = async (teacherDescription = '', schedule = null, slideBrandName = 'Le Socrate') => {
+  const handleCreatePlatform = async (teacherDescription = '', schedule = null, slideBrandName = BRAND_NAME) => {
     if (creatingRef.current) return
     setCreateOrderError('')
     const teacherName = teacherFirstName.trim()
@@ -1221,7 +1222,7 @@ export default function HRDashboard() {
       teacher_name: teacherName,
       teacher_color: teacherColor || 'violet',
       teacher_description: String(teacherDescription || '').trim(),
-      slide_brand_name: slideBrandName == null ? 'Le Socrate' : String(slideBrandName).trim(),
+      slide_brand_name: slideBrandName == null ? BRAND_NAME : String(slideBrandName).trim(),
       ai_voice_id: selectedAiVoiceId ? Number(selectedAiVoiceId) : null,
     }
     let operationType = 'new_teacher'
@@ -2355,7 +2356,7 @@ function CenterWorkspaceSidebar({
     >
       <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
         {!collapsed && (
-          <img src="/socrate-mark.svg" alt="Le Socrate" className="h-8 w-8" />
+          <img src="/socrate-mark.svg" alt={BRAND_NAME} className="h-8 w-8" />
         )}
         <button
           type="button"
@@ -6642,7 +6643,7 @@ function AudioCard({ title, icon, audios }) {
 // Slide-to-confirm + backup pipeline ne sont plus rendus ici : ils ont été
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
 const DEFAULT_REMINDER_SUBJECT = 'Votre cours commence le {date} à {time}'
-const DEFAULT_REMINDER_SIGNATURE = "L’équipe Le Socrate"
+const DEFAULT_REMINDER_SIGNATURE = `L’équipe ${BRAND_NAME}`
 const DEFAULT_REMINDER_MESSAGE = `Votre cours commence le {date} à {time}.
 
 Cliquez ici pour vous connecter directement : {class_url_connexion}
@@ -6974,7 +6975,7 @@ function ReminderRulesPanel({ platformId, recipients, recipientsLoading = false,
               maxLength={500}
               value={form.signature_template ?? DEFAULT_REMINDER_SIGNATURE}
               onChange={(e) => setForm({ ...form, signature_template: e.target.value })}
-              placeholder="L’équipe Le Socrate"
+              placeholder={DEFAULT_REMINDER_SIGNATURE}
               className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-black/25"
               style={inputStyle}
             />

@@ -23,6 +23,7 @@ from repositories.course_schedule_repository import (
     list_explicit_course_reminder_recipients,
     schedule_store_is_postgres,
 )
+from utils.brand import BRAND_NAME
 from utils.auth_tokens import course_invitation_recipient_hash
 from utils.logger import get_logger
 from utils.slug import slugify
@@ -202,7 +203,7 @@ def build_daily_attendance_workbook(
     details = workbook.create_sheet("Détail connexions")
     workbook.properties.title = f"Présences {platform_name} {course_date}"
     workbook.properties.subject = "Relevé quotidien des présences"
-    workbook.properties.creator = "Le Socrate"
+    workbook.properties.creator = BRAND_NAME
     workbook.properties.keywords = ";".join(
         f"{key}={value}"
         for key, value in (

@@ -9,6 +9,7 @@ from config import FRANCE_TZ
 from repositories import course_schedule_repository as repo
 from services import course_schedule_service as service
 from services import time_service
+from utils.brand import BRAND_NAME
 
 
 def _make_schedule_db():
@@ -267,7 +268,7 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
                 )
                 repo.ensure_default_course_reminder_rules(12, now=now)
                 rule = repo.list_course_reminder_rules(12)[0]
-                self.assertEqual(rule["signature_template"], "L'équipe Le Socrate")
+                self.assertEqual(rule["signature_template"], f"L'équipe {BRAND_NAME}")
                 delivery_id = repo.claim_course_reminder_delivery(
                     platform_id=12,
                     session_id=9,

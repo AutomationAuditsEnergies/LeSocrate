@@ -19,7 +19,7 @@ DEFAULT_SCHEMA = BACKEND_ROOT / "database" / "postgres_schema.sql"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Apply Le Socrate Postgres schema")
+    parser = argparse.ArgumentParser(description="Apply the Cadrenza Postgres schema")
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL"))
     parser.add_argument("--schema", default=str(DEFAULT_SCHEMA))
     args = parser.parse_args()

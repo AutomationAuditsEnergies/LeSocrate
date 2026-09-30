@@ -13,6 +13,7 @@ import {
 import { apiFetch } from '../api'
 import { clearSupabaseSession } from '../supabaseClient'
 import AppLoader from '../components/AppLoader.jsx'
+import { BRAND_NAME } from '../brand'
 
 const formatDateTime = (value) => {
   if (!value) return 'Date inconnue'
@@ -159,7 +160,7 @@ export default function AdminValidations() {
     <div className="flex min-h-dvh bg-white text-[#18181B]">
       <aside className="hidden w-[248px] shrink-0 border-r border-[#E9E9EC] bg-[#F7F7F5] p-3 md:flex md:flex-col">
         <div className="flex h-14 items-center gap-3 px-2">
-          <img src="/socrate-mark.svg" alt="Le Socrate" className="h-8 w-8" />
+          <img src="/socrate-mark.svg" alt={BRAND_NAME} className="h-8 w-8" />
           <div>
             <p className="text-sm font-semibold">Administration</p>
             <p className="text-xs text-[#6B6B72]">Sales Hacking</p>

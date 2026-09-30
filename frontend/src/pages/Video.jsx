@@ -20,6 +20,7 @@ import {
   synchronizeStudentAudioToLiveOffset,
 } from '../studentCoursePlayback.js'
 import './Video.css'
+import { BRAND_NAME } from '../brand'
 
 function formatCountdown(seconds) {
   const total = Math.max(0, Math.ceil(Number(seconds) || 0))
@@ -41,7 +42,7 @@ function CourseEndScreen({ title, message, onLeave }) {
 
   return (
     <main className="course-end-screen">
-      <aside className="course-end-screen__identity" aria-label="Le Socrate">
+      <aside className="course-end-screen__identity" aria-label={BRAND_NAME}>
         <div className="course-end-brand">
           <span className="course-end-brand__mark" aria-hidden="true">S</span>
           <span>SOCRATE</span>
@@ -130,7 +131,7 @@ export default function Video() {
   const [error, setError] = useState(null)
   const [showPlayPrompt, setShowPlayPrompt] = useState(false)
   const [breakRemaining, setBreakRemaining] = useState(null)
-  const [slideDeck, setSlideDeck] = useState({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
+  const [slideDeck, setSlideDeck] = useState({ slides: [], audioSync: {}, brandName: BRAND_NAME })
   const [slideView, setSlideView] = useState(() => getStudentCourseView())
   const [playbackTime, setPlaybackTime] = useState(0)
   const audioRef = useRef(null)
@@ -315,7 +316,7 @@ export default function Video() {
     let cancelled = false
     const resetTimer = window.setTimeout(() => {
       if (cancelled) return
-      setSlideDeck({ slides: [], audioSync: {}, brandName: 'Le Socrate' })
+      setSlideDeck({ slides: [], audioSync: {}, brandName: BRAND_NAME })
     }, 0)
 
     if (audioInfo?.status !== 'playing' || isCurrentBreakAudio || !currentAudioName) {
@@ -336,7 +337,7 @@ export default function Video() {
           setSlideDeck({
             slides: Array.isArray(data.slides) ? data.slides : [],
             audioSync: data.audio_sync || {},
-            brandName: data.brand_name == null ? 'Le Socrate' : String(data.brand_name),
+            brandName: data.brand_name == null ? BRAND_NAME : String(data.brand_name),
           })
         }
       })

@@ -12,6 +12,7 @@ from typing import Any
 import requests as http_requests
 from pydub import AudioSegment
 
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -170,7 +171,7 @@ def create_instant_clone(
         ("title", name),
         ("train_mode", "fast"),
         ("visibility", "private"),
-        ("description", "Voix pédagogique privée créée depuis Le Socrate"),
+        ("description", f"Voix pédagogique privée créée depuis {BRAND_NAME}"),
         ("enhance_audio_quality", "true"),
         ("generate_sample", "false"),
         ("tags", "le-socrate"),

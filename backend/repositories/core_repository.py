@@ -6,6 +6,7 @@ import requests
 
 from config import DATABASE_BACKEND, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.postgres import get_postgres_connection, postgres_enabled
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 from utils.slug import slugify
 
@@ -394,7 +395,7 @@ def resolve_class_access(center_slug, platform_slug):
                         pc.name,
                         pc.slug,
                         COALESCE(tca.slug, 'le-socrate') AS center_slug,
-                        COALESCE(tca.center_name, 'Le Socrate') AS center_name,
+                        COALESCE(tca.center_name, %s) AS center_name,
                         COALESCE(pc.public_access_enabled, TRUE) AS public_access_enabled,
                         COALESCE(pc.status, 'ready') AS status
                     FROM platform_config pc
@@ -403,14 +404,14 @@ def resolve_class_access(center_slug, platform_slug):
                       AND COALESCE(tca.slug, 'le-socrate') = %s
                     LIMIT 1
                     """,
-                    (platform_slug, center_slug),
+                    (BRAND_NAME, platform_slug, center_slug),
                 )
                 return cur.fetchone()
     except Exception as exc:
         if not _supabase_rest_enabled():
             raise
         _log_pg_fallback("resolve_class_access", exc)
-        center_name = "Le Socrate"
+        center_name = BRAND_NAME
         center_account_id = None
         if center_slug != "le-socrate":
             center = _rest_get_first(

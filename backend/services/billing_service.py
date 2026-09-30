@@ -42,6 +42,7 @@ from services.dynamic_day_schedule_service import (
 )
 from services.admin_access_service import account_is_platform_operator
 from services.billing_email_service import send_payment_link, send_review_request
+from utils.brand import BRAND_NAME
 from utils.logger import get_logger
 from utils.planning_summary import summarize_v2_schedule
 
@@ -961,7 +962,7 @@ def _normalize_project(data: dict[str, Any], center_account_id: int) -> tuple[st
     project["teacher_description"] = str(project.get("teacher_description") or "").strip()[:600]
     raw_slide_brand_name = project.get("slide_brand_name")
     project["slide_brand_name"] = (
-        "Le Socrate"
+        BRAND_NAME
         if raw_slide_brand_name is None
         else str(raw_slide_brand_name).strip()[:120]
     )

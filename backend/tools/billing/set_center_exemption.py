@@ -4,7 +4,7 @@
 Example (Formation3 environment loaded):
   python tools/billing/set_center_exemption.py \
     --username newpiprod@gmail.com --grant \
-    --reason "Compte interne Le Socrate" --actor "deployment"
+    --reason "Compte interne Cadrenza" --actor "deployment"
 """
 
 from __future__ import annotations

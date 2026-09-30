@@ -19,6 +19,7 @@ from services.audio_service import (
 )
 from services.script_slide_generation_service import get_latest_script_slide_deck_for_audio
 from services.platform_storage_service import issue_platform_audio_read_url
+from utils.brand import BRAND_NAME
 from utils.auth_tokens import issue_auth_token, verify_auth_token
 from utils.logger import get_logger
 
@@ -36,7 +37,7 @@ def _platform_slide_brand_name(platform_id):
             platform_id,
             exc_info=True,
         )
-        return "Le Socrate"
+        return BRAND_NAME
 
 
 class StudentCourseAccessError(Exception):

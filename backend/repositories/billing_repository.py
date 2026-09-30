@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 import uuid
 
+from utils.brand import BRAND_NAME
 from database.postgres import get_postgres_connection
 from repositories.teacher_asset_repository import (
     get_module_audio_manifest_readiness,
@@ -408,18 +409,18 @@ def get_platform_slide_brand_name(platform_id: int) -> str:
                 SELECT CASE
                          WHEN request_payload_json ? 'slide_brand_name'
                            THEN BTRIM(request_payload_json->>'slide_brand_name')
-                         ELSE 'Le Socrate'
+                         ELSE %s
                        END AS slide_brand_name
                 FROM ai_teacher_orders
                 WHERE platform_id = %s
                 ORDER BY updated_at DESC, id DESC
                 LIMIT 1
                 """,
-                (int(platform_id),),
+                (BRAND_NAME, int(platform_id)),
             )
             row = cur.fetchone()
             if not row:
-                return "Le Socrate"
+                return BRAND_NAME
             return str(row.get("slide_brand_name") or "")[:120]
 
 

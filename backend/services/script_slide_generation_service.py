@@ -38,6 +38,7 @@ from services.content_pipeline.artifacts import (
     load_content_artifact,
 )
 from services.content_pipeline.prompts import load_prompt_file
+from utils.brand import BRAND_NAME
 from utils.deepseek_client import default_model, post_message
 from utils.logger import get_logger
 
@@ -2584,7 +2585,7 @@ CADRAGE DU NOMBRE DE SLIDES:
 - En cas de doute entre deux templates, choisis le template le plus simple qui respecte le texte. Ne force pas un template spectaculaire.
 """
 
-    return f"""Tu conçois des slides pédagogiques pour Le Socrate.
+    return f"""Tu conçois des slides pédagogiques pour {BRAND_NAME}.
 
 Source: {source_title}
 
