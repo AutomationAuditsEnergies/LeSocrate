@@ -4434,6 +4434,28 @@ def create_hr_blueprint():
                 if error:
                     results.append({"platform_id": platform_id, "success": False, "error": error})
                     logger.error(f"❌ Auto-schedule P{platform_id} : {error}")
+                elif not isinstance(result, dict) or result.get("success") is False:
+                    # La plateforme a répondu, mais en erreur. `error_id` n'existe
+                    # que dans la forme neutre des 5xx construite par
+                    # _call_platform ; sans lui, c'est un 4xx dont le message est
+                    # une validation de notre propre code distant.
+                    payload = result if isinstance(result, dict) else {}
+                    error_id = payload.get("error_id")
+                    remote_error = payload.get("error")
+                    failure = {"platform_id": platform_id, "success": False}
+                    if error_id is None and isinstance(remote_error, str) and remote_error.strip():
+                        failure["error"] = remote_error
+                    else:
+                        failure["error"] = f"Échec de la programmation sur la plateforme P{platform_id}"
+                    if error_id:
+                        failure["error_id"] = error_id
+                    results.append(failure)
+                    logger.error(
+                        "❌ Auto-schedule P%s : %s%s",
+                        platform_id,
+                        failure["error"],
+                        f" (réf. {error_id})" if error_id else "",
+                    )
                 else:
                     results.append({"platform_id": platform_id, "success": True, "scheduled": f"{date_str} {heure_str}"})
                     logger.info(f"📅 Auto-schedule P{platform_id} : {date_str} {heure_str}")

@@ -2,6 +2,16 @@
 
 ## 2026-09-30
 
+### fix(rh): la programmation automatique ne compte plus une plateforme en erreur comme un succès
+
+Dans `auto_schedule` (ancien mode avec `schedule`), une plateforme distante qui
+répondait en erreur (4xx relayé ou 5xx rendu neutre par `_call_platform`) était
+comptée « programmée » et journalisée en succès. Elle est maintenant en échec
+(`success: false` pour elle et pour le résultat global), avec le message de
+validation de la plateforme pour un 4xx, ou un message neutre et la référence
+`error_id` pour un 5xx, et un `logger.error`. Une vraie réussite
+(`success: true`) et l'erreur réseau gardent leur comportement.
+
 ### feat(marque): « Cadrenza » à la place de « Le Socrate » dans ce que voient les utilisateurs
 
 Le nom de marque vit désormais à un seul endroit : `BRAND_NAME` dans
