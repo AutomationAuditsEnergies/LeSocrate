@@ -2,6 +2,15 @@
 
 ## 2026-09-30
 
+### ci: toute la suite de tests avant chaque déploiement
+
+Le job `postgres-integration` (appelé par le déploiement avant build et
+deploy) lance désormais toute la suite backend (`unittest discover`, mode
+SQLite), en plus des tests Postgres et des tests critiques : un seul test en
+échec bloque le déploiement. Les 18 tests (10 modules) qui ouvraient le vrai
+`backend/database/socrate.db` utilisent maintenant une base SQLite temporaire ;
+la CI échoue si un test recrée ce fichier.
+
 ### test: la suite backend repasse à 0 échec (Linux et Windows)
 
 Les 4 échecs connus venaient des tests, restés en retard sur le code, et non

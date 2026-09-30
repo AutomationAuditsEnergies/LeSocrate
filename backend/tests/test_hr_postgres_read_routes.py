@@ -1,4 +1,6 @@
 import unittest
+import os
+import tempfile
 import sys
 import types
 from datetime import datetime
@@ -6,6 +8,22 @@ from unittest.mock import ANY, patch
 
 from flask import Flask
 from config import FRANCE_TZ
+
+
+# La suite ne doit jamais ouvrir le vrai backend/database/socrate.db : les
+# accès SQLite de ce module passent par une base temporaire jetable.
+_SQLITE_TMP = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_SQLITE_DB_PATH = patch("database.db.DB_PATH", os.path.join(_SQLITE_TMP.name, "tests.db"))
+
+
+def setUpModule():
+    _SQLITE_DB_PATH.start()
+
+
+def tearDownModule():
+    _SQLITE_DB_PATH.stop()
+    _SQLITE_TMP.cleanup()
+
 
 _export_service = types.ModuleType("services.export_service")
 _export_service.generate_attendance_excel_export = lambda *_args, **_kwargs: None

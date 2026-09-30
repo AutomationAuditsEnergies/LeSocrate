@@ -135,3 +135,23 @@ jobs:
           tests.test_slides_tenant_scope
           tests.test_student_course_access
           tests.test_teacher_order_asset_reuse
+
+      # Toute la suite, avant chaque déploiement (staging_formation3.yml appelle
+      # ce job). Mode SQLite comme les tests critiques ; les tests d'intégration
+      # Postgres (déjà lancés plus haut sur le vrai Postgres) sont ignorés ici.
+      # Aucun test ne doit créer le vrai database/socrate.db : le fichier est
+      # supprimé au départ pour que le contrôle final ne porte que sur cette étape.
+      - name: Run full backend test suite
+        env:
+          DATABASE_BACKEND: sqlite
+          PIPELINE_DATABASE_BACKEND: sqlite
+          DATABASE_URL: ''
+          POSTGRES_TEST_DATABASE_URL: ''
+          POSTGRES_TEST_RESET_SCHEMA: '0'
+        run: |
+          rm -f database/socrate.db
+          python -m unittest discover -s tests -p 'test_*.py'
+          if [ -e database/socrate.db ]; then
+            echo "Un test a écrit dans le vrai backend/database/socrate.db" >&2
+            exit 1
+          fi

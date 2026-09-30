@@ -1,8 +1,25 @@
 import unittest
+import os
+import tempfile
 from unittest.mock import patch
 
 from services import content_generation_service as content
 from services.playlist_tts_service import PLAYLIST_SPEC
+
+
+# La suite ne doit jamais ouvrir le vrai backend/database/socrate.db : les
+# accès SQLite de ce module passent par une base temporaire jetable.
+_SQLITE_TMP = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_SQLITE_DB_PATH = patch("database.db.DB_PATH", os.path.join(_SQLITE_TMP.name, "tests.db"))
+
+
+def setUpModule():
+    _SQLITE_DB_PATH.start()
+
+
+def tearDownModule():
+    _SQLITE_DB_PATH.stop()
+    _SQLITE_TMP.cleanup()
 
 
 def _dynamic_playlist():

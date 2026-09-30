@@ -1,4 +1,6 @@
 import sys
+import os
+import tempfile
 import types
 import unittest
 from dataclasses import replace
@@ -12,6 +14,21 @@ from services.pipeline_queue.handlers import (
     mark_pipeline_dead_letter,
 )
 from utils.deepseek_client import DeepSeekAPIError
+
+
+# La suite ne doit jamais ouvrir le vrai backend/database/socrate.db : les
+# accès SQLite de ce module passent par une base temporaire jetable.
+_SQLITE_TMP = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_SQLITE_DB_PATH = patch("database.db.DB_PATH", os.path.join(_SQLITE_TMP.name, "tests.db"))
+
+
+def setUpModule():
+    _SQLITE_DB_PATH.start()
+
+
+def tearDownModule():
+    _SQLITE_DB_PATH.stop()
+    _SQLITE_TMP.cleanup()
 
 
 def _item(payload=None):

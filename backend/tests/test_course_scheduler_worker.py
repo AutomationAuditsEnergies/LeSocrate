@@ -1,10 +1,27 @@
 import threading
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from routes import formation_routes as formation_routes
 from services import scheduled_audio_service
 from workers import course_scheduler_worker as worker
+
+
+# La suite ne doit jamais ouvrir le vrai backend/database/socrate.db : les
+# accès SQLite de ce module passent par une base temporaire jetable.
+_SQLITE_TMP = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_SQLITE_DB_PATH = patch("database.db.DB_PATH", os.path.join(_SQLITE_TMP.name, "tests.db"))
+
+
+def setUpModule():
+    _SQLITE_DB_PATH.start()
+
+
+def tearDownModule():
+    _SQLITE_DB_PATH.stop()
+    _SQLITE_TMP.cleanup()
 
 
 class CourseSchedulerWorkerTest(unittest.TestCase):
