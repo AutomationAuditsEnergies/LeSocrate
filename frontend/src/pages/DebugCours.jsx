@@ -1,11 +1,25 @@
-import { useEffect, useState } from 'react'
-import { apiUrl } from '../api'
+import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { apiFetch, apiUrl, getPlatformId, setPlatformId, setPlatformName } from '../api'
+import AppLoader from '../components/AppLoader.jsx'
 
 export default function DebugCours() {
   const [debugInfo, setDebugInfo] = useState(null)
   const [playlist, setPlaylist] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [searchParams] = useSearchParams()
+  const pParam = searchParams.get('p')
+  const platformId = pParam || getPlatformId()
+
+  useEffect(() => {
+    if (!pParam) return
+    setPlatformId(pParam)
+    fetch(apiUrl(`/api/platform-info?id=${pParam}`))
+      .then(r => r.json())
+      .then(data => { if (data.name) setPlatformName(data.name) })
+      .catch(() => {})
+  }, [pParam])
 
   // Fonction pour simuler un saut dans le temps
   const handleTimeJump = async (seconds) => {
@@ -32,15 +46,15 @@ export default function DebugCours() {
       const dateStr = `${year}-${month}-${day}`
       const timeStr = `${hours}:${minutes}:${secs}`
 
-      const response = await fetch(apiUrl('/api/admin/config_cours'), {
+      const response = await apiFetch('/api/admin/config_cours', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        credentials: 'include',
         body: JSON.stringify({
           date_cours: dateStr,
           heure_cours: timeStr,
+          platform_id: Number(platformId),
         }),
       })
 
@@ -68,15 +82,15 @@ export default function DebugCours() {
       const dateStr = `${year}-${month}-${day}`
       const timeStr = `${hours}:${minutes}:${secs}`
 
-      const response = await fetch(apiUrl('/api/admin/config_cours'), {
+      const response = await apiFetch('/api/admin/config_cours', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        credentials: 'include',
         body: JSON.stringify({
           date_cours: dateStr,
           heure_cours: timeStr,
+          platform_id: Number(platformId),
         }),
       })
 
@@ -92,15 +106,15 @@ export default function DebugCours() {
   const handleResetSimulation = async () => {
     try {
       // Remettre l'heure de début à l'heure par défaut (28 mai 2025 16:35)
-      const response = await fetch(apiUrl('/api/admin/config_cours'), {
+      const response = await apiFetch('/api/admin/config_cours', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        credentials: 'include',
         body: JSON.stringify({
           date_cours: '2025-05-28',
           heure_cours: '16:35',
+          platform_id: Number(platformId),
         }),
       })
 
@@ -112,18 +126,23 @@ export default function DebugCours() {
     }
   }
 
-  useEffect(() => {
-    fetchDebugInfo()
-    // Actualiser toutes les 5 secondes
-    const interval = setInterval(fetchDebugInfo, 5000)
-    return () => clearInterval(interval)
-  }, [])
-
-  const fetchDebugInfo = async () => {
+  const fetchPlaylist = useCallback(async () => {
     try {
-      const response = await fetch(apiUrl('/api/debug/cours-info'), {
-        credentials: 'include',
-      })
+      const response = await apiFetch(`/api/debug/playlist?p=${encodeURIComponent(platformId)}`)
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success) {
+          setPlaylist(data.playlist)
+        }
+      }
+    } catch (err) {
+      console.error('Erreur chargement playlist:', err)
+    }
+  }, [platformId])
+
+  const fetchDebugInfo = useCallback(async () => {
+    try {
+      const response = await apiFetch(`/api/debug/cours-info?p=${encodeURIComponent(platformId)}`)
 
       if (response.ok) {
         const data = await response.json()
@@ -141,30 +160,17 @@ export default function DebugCours() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [fetchPlaylist, platformId])
 
-  const fetchPlaylist = async () => {
-    try {
-      const response = await fetch(apiUrl('/api/debug/playlist'), {
-        credentials: 'include',
-      })
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          setPlaylist(data.playlist)
-        }
-      }
-    } catch (err) {
-      console.error('Erreur chargement playlist:', err)
-    }
-  }
+  useEffect(() => {
+    fetchDebugInfo()
+    // Actualiser toutes les 5 secondes
+    const interval = setInterval(fetchDebugInfo, 5000)
+    return () => clearInterval(interval)
+  }, [fetchDebugInfo])
 
   if (loading) {
-    return (
-      <div className="bg-gray-900 text-white p-8 min-h-screen flex items-center justify-center">
-        <p className="text-xl">Chargement des informations de debug...</p>
-      </div>
-    )
+    return <AppLoader label="Chargement des informations de debug" surface="dark" />
   }
 
   if (error) {
@@ -172,7 +178,7 @@ export default function DebugCours() {
       <div className="bg-gray-900 text-white p-8 min-h-screen flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-500 text-xl mb-4">{error}</p>
-          <a href="/login-admin" className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
+          <a href="/connexion-centre" className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
             Se connecter
           </a>
         </div>
@@ -189,7 +195,7 @@ export default function DebugCours() {
   return (
     <div className="bg-gray-900 text-white p-8 min-h-screen">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6">Debug - État du cours</h1>
+        <h1 className="text-3xl font-bold mb-6">Debug - État du cours P{platformId}</h1>
         <p className="text-sm text-gray-400 mb-6">Actualisation automatique toutes les 5 secondes</p>
 
         {/* Table de mixage temporelle */}
@@ -200,6 +206,7 @@ export default function DebugCours() {
             {/* Bouton simuler début */}
             <div className="flex justify-center">
               <button
+                type="button"
                 onClick={handleSimulateStart}
                 className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-medium transition shadow-lg"
               >
@@ -214,24 +221,28 @@ export default function DebugCours() {
               {/* Grands sauts */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(-3600)}
                   className="bg-red-700 hover:bg-red-800 px-3 py-2 rounded text-sm transition font-bold"
                 >
                   -1h
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(-1800)}
                   className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-sm transition"
                 >
                   -30min
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(1800)}
                   className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm transition"
                 >
                   +30min
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(3600)}
                   className="bg-blue-700 hover:bg-blue-800 px-3 py-2 rounded text-sm transition font-bold"
                 >
@@ -242,24 +253,28 @@ export default function DebugCours() {
               {/* Sauts moyens */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(-900)}
                   className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-sm transition"
                 >
                   -15min
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(-300)}
                   className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-sm transition"
                 >
                   -5min
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(300)}
                   className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm transition"
                 >
                   +5min
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(900)}
                   className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm transition"
                 >
@@ -270,24 +285,28 @@ export default function DebugCours() {
               {/* Petits sauts */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(-60)}
                   className="bg-red-500 hover:bg-red-600 px-3 py-2 rounded text-sm transition"
                 >
                   -1min
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(-10)}
                   className="bg-red-500 hover:bg-red-600 px-3 py-2 rounded text-sm transition"
                 >
                   -10s
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(10)}
                   className="bg-blue-500 hover:bg-blue-600 px-3 py-2 rounded text-sm transition"
                 >
                   +10s
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleTimeJump(60)}
                   className="bg-blue-500 hover:bg-blue-600 px-3 py-2 rounded text-sm transition"
                 >
@@ -303,6 +322,7 @@ export default function DebugCours() {
                   <strong>Raccourcis :</strong> 10s • 1min • 5min • 15min • 30min • 1h
                 </div>
                 <button
+                  type="button"
                   onClick={handleResetSimulation}
                   className="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded text-sm font-medium transition"
                 >
@@ -432,11 +452,11 @@ export default function DebugCours() {
         </div>
 
         <div className="mt-8 text-center space-x-4">
-          <a href="/admin" className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition inline-block">
-            Retour à l&apos;Admin
+          <a href="/dashboard-centre" className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition inline-block">
+            Retour au tableau de bord
           </a>
           <a
-            href="/video"
+            href={`/video?p=${platformId}`}
             className="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg font-medium transition inline-block"
           >
             Aller au cours

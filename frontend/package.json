@@ -5,15 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run test:unit && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test:unit": "node --test tests/unit/*.test.js",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
+    "@sneas/telephone": "^1.1.2",
     "@splinetool/react-spline": "^4.1.0",
     "@splinetool/runtime": "^1.9.3",
+    "@supabase/supabase-js": "^2.108.2",
     "@tailwindcss/vite": "^4.1.18",
     "framer-motion": "^12.34.0",
     "lucide-react": "^0.564.0",

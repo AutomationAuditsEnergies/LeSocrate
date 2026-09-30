@@ -2,53 +2,254 @@
 Service de génération de contenu TTS-direct.
 
 Pipeline par dossier (= 1 journée de formation) :
-  1. Extraction automatique de 6 sous-parties depuis le programme (1 appel Claude)
-  2. Pour chaque sous-partie : Passe 1 → Passe 2 → Passe 3 (volume calibré audio)
-  3. Total TTS-ready calibré sur les créneaux cours Fish Audio → document .txt
+  1. Extraction automatique des cours depuis le programme (1 appel DeepSeek)
+  2. Pour chaque cours : Passe 1 → Passe 2 → Passe 3 (volume calibré audio)
+  3. Total TTS-ready calibré sur les cours audio Fish Audio → document .txt
 
 Checkpointing : chaque segment complété est sauvegardé en DB immédiatement.
 En cas d'interruption, la génération reprend au segment suivant non complété.
 """
 
+from __future__ import annotations
+
 import io
 import hashlib
+import math
 import os
 import re
 import json
 import threading
 import time
 import uuid as uuid_mod
+from difflib import SequenceMatcher
+from datetime import datetime
 
-from database.db import get_db_connection
-from utils.anthropic_client import (
-    AnthropicAPIError,
-    AnthropicRateLimitError,
-    default_model,
-    post_message as _llm_post,
+from config import PIPELINE_DATABASE_BACKEND
+
+from repositories.pipeline_repository import (
+    clear_cross_day_carryover,
+    completed_content_segment_keys,
+    delete_stale_structured_content_checkpoints,
+    ensure_content_generation_carryover_columns,
+    ensure_content_review_state_columns,
+    find_next_course_folder_id,
+    get_existing_carryover_out_row,
+    get_content_generation_job_by_folder,
+    get_content_segment_text,
+    list_completed_content_segment_rows,
+    list_content_segment_status_rows,
+    list_structured_content_checkpoint_rows,
+    load_structured_content_plan_checkpoint,
+    list_final_script_document_rows,
+    mark_content_segment_modified,
+    mark_content_segment_review_clean,
+    mark_content_segment_review_patched,
+    mark_content_segments_clean,
+    replace_final_script_document_record,
+    record_content_segment_review_error,
+    reset_and_upsert_content_generation_job,
+    reset_content_segments_review_state,
+    save_completed_content_segment,
+    save_structured_content_checkpoint,
+    save_structured_content_plan_checkpoint,
+    select_content_segments_for_review,
+    snapshot_content_segments_pre_review,
+    store_cross_day_carryover,
+    update_content_segment_audio_calibration,
+    update_content_segment_plan_repair,
+    update_content_generation_job,
 )
+from utils.deepseek_client import default_model, post_message as _llm_post
+from utils.concurrency import run_parallel_ordered
 from utils.logger import get_logger
+from services.content_pipeline.artifacts import (
+    CONTENT_AUDIO_PLAN_BLOB as _CONTENT_AUDIO_PLAN_BLOB,
+    CONTENT_BUDGET_CALIBRATION_BLOB as _CONTENT_BUDGET_CALIBRATION_BLOB,
+    CONTENT_COURSE_SCRIPTS_BLOB as _CONTENT_COURSE_SCRIPTS_BLOB,
+    CONTENT_DRAFT_SECTIONS_BLOB as _CONTENT_DRAFT_SECTIONS_BLOB,
+    CONTENT_ETHICAL_MICRO_REVIEW_BLOB as _CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
+    CONTENT_PLAN_BLOB as _CONTENT_PLAN_BLOB,
+    CONTENT_QUALITY_REVIEWS_BLOB as _CONTENT_QUALITY_REVIEWS_BLOB,
+    CONTENT_REVIEWED_SCRIPTS_BLOB as _CONTENT_REVIEWED_SCRIPTS_BLOB,
+    COURSE_SCRIPT_PLAN_BLOB as _COURSE_SCRIPT_PLAN_BLOB,
+    artifact_payload as _artifact_payload,
+    content_artifacts_for_ui as _content_artifacts_for_ui,
+    load_content_artifact as _load_content_artifact,
+    save_content_artifact as _save_content_artifact,
+)
+from services.content_pipeline.calibration import (
+    course_section_budget_defaults as _pipeline_course_section_budget_defaults,
+    load_budget_rewrite_contract,
+    structured_generation_max_tokens as _structured_generation_max_tokens,
+)
+from services.content_pipeline.planning import load_planning_prompt_parts
+from services.content_pipeline.prompts import (
+    load_prompt_file as _load_prompt_file,
+    prompt_file_path as _prompt_file_path,
+)
+from services.content_pipeline.reviews import (
+    AUDIO_BLOCK_MARKER_RE as _AUDIO_BLOCK_MARKER_RE,
+    extract_audio_block_number as _extract_audio_block_number,
+    load_structured_rule_file as _load_structured_rule_file,
+    structured_review_context_for_segment as _structured_review_context_for_segment,
+)
+from services.content_pipeline.section_generation import load_section_prompt_parts
+from services.content_pipeline.validators import (
+    validate_structured_course_plan as _validate_structured_course_plan,
+)
 
 logger = get_logger(__name__)
 
-CLAUDE_MODEL = default_model()
-NUM_SUB_PARTS = 6
+
+def _log_content_pipeline_event(
+    job: dict,
+    event_type: str,
+    *,
+    folder_id: int | None = None,
+    status: str = "info",
+    message: str | None = None,
+    model: str | None = None,
+    duration_ms: int | None = None,
+    data: dict | None = None,
+    error: str | None = None,
+) -> None:
+    """Best-effort durable event for content generation debugging."""
+    formation_job_id = job.get("formation_job_id")
+    if not formation_job_id:
+        return
+    try:
+        from services.formation_observability_service import log_pipeline_event
+
+        payload = {
+            "content_job_id": job.get("id"),
+            **(data or {}),
+        }
+        log_pipeline_event(
+            int(formation_job_id),
+            event_type,
+            step="content",
+            status=status,
+            folder_id=folder_id,
+            message=message,
+            model=model or DEEPSEEK_MODEL,
+            duration_ms=duration_ms,
+            data=payload,
+            error=error,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_CONTENT_EVENT_LOG_FAILED formation_job_id=%s content_job_id=%s event_type=%s error=%s",
+            formation_job_id,
+            job.get("id"),
+            event_type,
+            str(exc)[:240],
+        )
+
+
+DEEPSEEK_MODEL = default_model()
+NUM_SUB_PARTS = 7
+_STRUCTURED_CHECKPOINT_VERSION = "2026-07-30-structured-course-v1"
 _COURSE_START_SILENCE_SECONDS = 17
 # Fish Audio S2-Pro mesuré sur 72,2 min / 11 959 mots à speed=0.90.
 _DEFAULT_TTS_WORDS_PER_MINUTE = 165.7
+# Calibration Fish Audio observée sur les MP3 cours générés avec la voix
+# actuelle. Objectif : viser la durée finale affichée à ~slot - 75s
+# (ex. 43m30-44m00 pour un fichier de 45 min).
+_DEFAULT_TTS_WPM_BY_BLOC = {
+    1: 199.9,  # 36:16 -> ~43:45
+    2: 197.7,  # 36:40 -> ~43:45
+    3: 198.5,  # 44:52 -> ~53:45
+    4: 207.4,  # 34:57 -> ~43:45
+    5: 194.8,  # 49:58 -> ~58:45
+    6: 213.9,  # 45:30 -> ~58:45
+    7: 208.3,  # 38:47 -> ~48:45
+}
 _COURSE_CONCLUSION_START_MARGIN_SECONDS = 0
-_COURSE_FINAL_SILENCE_SECONDS = 60
+# Marge utilisée pour estimer le budget mots et garder une fin de créneau
+# silencieuse. Une voix qui empiète sur cette marge est rejetée avant upload.
+_COURSE_FINAL_SILENCE_SECONDS = 120
+# V2 has one exact 30-second audio margin. Fish Audio keeps its historical
+# 17-second opening silence inside that margin; the remaining 13 seconds are
+# therefore left at the end. V1 retains its calibrated opening + 120s ending.
+_DYNAMIC_COURSE_TOTAL_MARGIN_SECONDS = 30.0
 _DEFAULT_TTS_SPEED = 0.90
 _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
 _DEFAULT_TTS_PREFLIGHT_SAFETY = 1.0
 _SENTENCE_END_RE = re.compile(r"[.!?…][\"'»”’)\]]*$")
 _CARRYOVER_INTRO = (
-    "Avant d'entrer dans la suite de ce cours, on reprend le point que nous "
+    "Avant d'entrer dans la suite, on reprend le point que nous "
     "n'avons pas terminé la dernière fois. On le pose proprement, puis on "
     "enchaînera naturellement avec le programme prévu."
 )
 _CARRYOVER_COLUMNS_READY = False
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
-_AUDIO_BLOCK_MARKER_RE = re.compile(r"^\s*<<<BLOC_AUDIO_(\d+)>>>\s*$", re.MULTILINE)
+_SLIDE_DISPLAY_ORDER_MARKER = "===ORDRE_AFFICHAGE_SLIDES==="
+_SLIDE_DISPLAY_MAP_MARKER = "===CARTE_AFFICHAGE_SLIDES==="
+_SLIDE_DISPLAY_END_MARKER = "===FIN_CARTE==="
+_SLIDE_DISPLAY_FIELD_RE = re.compile(r'^(?P<key>[A-Z_]+)\s*:\s*(?P<value>.*)$')
+_SLIDE_DISPLAY_MARKER_LINE_RE = re.compile(r"^\s*={3}[^=\n]{1,80}={3}\s*$")
+_SLIDE_DISPLAY_ANCHOR_LINE_RE = re.compile(r"^\s*[^|\n]{1,160}\|\s*ANCRAGE\s*:", re.IGNORECASE)
+_INTERNAL_SCHEDULE_TIME_RANGE_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\s*"
+    r"(?:[-–—]|à|a)\s*"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\b",
+    re.IGNORECASE,
+)
+_INTERNAL_SCHEDULE_SINGLE_TIME_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*h\s*(?:[0-5]\d)?\b|"
+    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b",
+    re.IGNORECASE,
+)
+_LEARNER_FACING_SCHEDULE_LEAK_RE = re.compile(
+    r"\b(?:horaires?|créneaux?|creneaux?|planning|emploi\s+du\s+temps)\b|"
+    r"\b(?:trois\s+quarts?\s+d['’]heure|45\s+minutes?|quarante-cinq\s+minutes?)\s+"
+    r"(?:à\s+venir|qui\s+viennent|prochaines?)\b|"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\s*"
+    r"(?:[-–—]|à|a)\s*"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?|"
+    r"\b(?:[01]?\d|2[0-3])\s*h\s*(?:[0-5]\d)?\b|"
+    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b",
+    re.IGNORECASE,
+)
+_LEARNER_FACING_INTERNAL_COURSE_RE = re.compile(
+    r"\b(?:tout\s+premier\s+cours|premier\s+cours|ce\s+cours|cours\s+actuel|"
+    r"cours\s+qui\s+nous\s+occupe|cours\s+qui\s+va\s+nous\s+occuper|"
+    r"pour\s+(?:les\s+)?(?:trois\s+quarts?\s+d['’]heure|45\s+minutes?|quarante-cinq\s+minutes?)(?:\s+à\s+venir)?)\b",
+    re.IGNORECASE,
+)
+_PART_SECTION_OPENING_LEAK_RE = re.compile(
+    r"\b(?:bonjour\s+à\s+(?:tous|toutes)|bienvenue|"
+    r"cadre\s+g[ée]n[ée]ral\s+(?:de\s+la\s+journ[ée]e|est\s+pos[ée])|"
+    r"th[èe]mes?\s+de\s+la\s+journ[ée]e|programme\s+annuel|parcours\s+annuel|"
+    r"tout\s+au\s+long\s+de\s+la\s+journ[ée]e|d['’]ici\s+ce\s+soir|"
+    r"chemin\s+que\s+nous\s+allons\s+parcourir|"
+    r"premi[èe]re\s+journ[ée]e\s+(?:est\s+)?cruciale|"
+    r"pose\s+les\s+bases\s+de\s+tout\s+le\s+reste|"
+    r"concentrons-nous\s+sur\s+aujourd['’]hui|"
+    r"on\s+peut\s+entrer\s+dans\s+le\s+premier\s+grand\s+th[èe]me)\b",
+    re.IGNORECASE,
+)
+_DUPLICATE_OPENING_CATEGORY_PATTERNS = {
+    "annual_overview": re.compile(
+        r"\b(?:programme\s+annuel|parcours\s+annuel|formation\s+sur\s+l['’]ann[ée]e)\b",
+        re.IGNORECASE,
+    ),
+    "day_overview": re.compile(
+        r"\b(?:th[èe]mes?\s+de\s+la\s+journ[ée]e|tout\s+au\s+long\s+de\s+la\s+journ[ée]e|"
+        r"d['’]ici\s+ce\s+soir|chemin\s+que\s+nous\s+allons\s+parcourir|"
+        r"cadre\s+g[ée]n[ée]ral\s+de\s+la\s+journ[ée]e)\b",
+        re.IGNORECASE,
+    ),
+    "theme_opening": re.compile(
+        r"\b(?:premier\s+grand\s+th[èe]me|cette\s+premi[èe]re\s+partie|"
+        r"ce\s+premier\s+th[èe]me)\b.{0,260}\b(?:objectif|plan|axes?|fil\s+conducteur)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+}
+_SLIDE_META_LEAK_RE = re.compile(
+    r"\b(?:slides?|power\s*point|powerpoint|templates?|slide_anchor|anchor|teaching\s+beats?|beats?)\b",
+    re.IGNORECASE,
+)
 _EDGE_TTS_FAST_CACHE = {}
 _EDGE_TTS_FAST_CACHE_LOCK = threading.Lock()
 
@@ -97,6 +298,44 @@ def _edge_tts_fast_workers() -> int:
     return max(1, min(workers, 6))
 
 
+def _fish_audio_course_workers() -> int:
+    """Nombre de blocs cours Fish Audio lancés en parallèle dans une journée."""
+    try:
+        workers = int(os.getenv("FISH_AUDIO_COURSE_WORKERS", "5"))
+    except (TypeError, ValueError):
+        workers = 5
+    return max(1, min(workers, 7))
+
+
+def _break_audio_workers() -> int:
+    """Nombre de Q&A/pauses générés en parallèle lors d'une génération complète."""
+    try:
+        workers = int(os.getenv("BREAK_AUDIO_WORKERS", "4"))
+    except (TypeError, ValueError):
+        workers = 4
+    return max(1, min(workers, 8))
+
+
+def _fish_audio_429_retry_config() -> dict:
+    try:
+        max_retries = int(os.getenv("FISH_AUDIO_429_MAX_RETRIES", "4"))
+    except (TypeError, ValueError):
+        max_retries = 4
+    try:
+        base_wait = float(os.getenv("FISH_AUDIO_429_BASE_WAIT_SEC", "45"))
+    except (TypeError, ValueError):
+        base_wait = 45.0
+    try:
+        max_wait = float(os.getenv("FISH_AUDIO_429_MAX_WAIT_SEC", "240"))
+    except (TypeError, ValueError):
+        max_wait = 240.0
+    return {
+        "max_retries": max(0, max_retries),
+        "base_wait_sec": max(1.0, base_wait),
+        "max_wait_sec": max(1.0, max_wait),
+    }
+
+
 def _edge_tts_fast_cache_enabled() -> bool:
     value = (os.getenv("EDGE_TTS_FAST_TEST_CACHE", "true") or "").strip().lower()
     return value not in {"0", "false", "no", "off"}
@@ -135,7 +374,7 @@ _MOCK_PHRASES = [
 ]
 
 def _generate_mock_text(passe, sub_part_name, sub_idx):
-    """Génère ~220 mots de texte factice structuré pour les tests (sans appel Claude)."""
+    """Génère ~220 mots factices structurés pour les tests, sans appel DeepSeek."""
     label = _MOCK_PASSE_LABELS[passe - 1]
     lines = [
         f"Bonjour et bienvenue dans cette partie consacrée à {sub_part_name}.",
@@ -188,6 +427,12 @@ def _course_preflight_safety():
     )
 
 
+def _fish_timestamp_alignment_enabled() -> bool:
+    """Utilise Fish Audio SSE timestampé pour mesurer le cours réellement lu."""
+    value = (os.getenv("FORMATION_FISH_TIMESTAMP_ALIGNMENT", "true") or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _course_words_per_minute():
     """Fish Audio calibrated rate for the configured voice/speed."""
     return _env_float(
@@ -196,6 +441,91 @@ def _course_words_per_minute():
         min_value=100,
         max_value=260,
     )
+
+
+def _course_wpm_by_bloc_overrides() -> dict[int, float]:
+    raw = (os.getenv("FORMATION_TTS_WPM_BY_BLOC") or "").strip()
+    if not raw:
+        return {}
+    overrides: dict[int, float] = {}
+    for part in raw.split(","):
+        key, sep, value = part.partition(":")
+        if not sep:
+            continue
+        try:
+            bloc = int(key.strip())
+            wpm = float(value.strip())
+        except (TypeError, ValueError):
+            continue
+        if 1 <= bloc <= 10 and 100 <= wpm <= 260:
+            overrides[bloc] = wpm
+    return overrides
+
+
+def _course_words_per_minute_for_bloc(bloc_number=None) -> float:
+    """Cadence Fish par cours.
+
+    `FORMATION_TTS_WORDS_PER_MINUTE` reste un override global. Sans override
+    global, on applique la calibration par bloc issue des MP3 réels.
+    `FORMATION_TTS_WPM_BY_BLOC` peut surcharger finement, ex:
+    `1:198,2:196,3:197`.
+    """
+    global_wpm = _course_words_per_minute()
+    if abs(global_wpm - _DEFAULT_TTS_WORDS_PER_MINUTE) > 0.001:
+        return global_wpm
+    try:
+        bloc = int(bloc_number or 0)
+    except (TypeError, ValueError):
+        bloc = 0
+    overrides = _course_wpm_by_bloc_overrides()
+    return float(overrides.get(bloc, _DEFAULT_TTS_WPM_BY_BLOC.get(bloc, global_wpm)))
+
+
+def _content_parallel_subpart_workers(default: int = 7) -> int:
+    """Nombre de cours générés en parallèle."""
+    try:
+        workers = int(os.getenv("FORMATION_CONTENT_PARALLEL_SUBPART_WORKERS", str(default)))
+    except (TypeError, ValueError):
+        workers = default
+    return max(1, min(16, workers))
+
+
+def _structured_course_parallel_workers(default: int = 3) -> int:
+    """Concurrence prudente pour le mode structuré."""
+    try:
+        workers = int(os.getenv("FORMATION_STRUCTURED_COURSE_WORKERS", str(default)))
+    except (TypeError, ValueError):
+        workers = default
+    return max(1, min(7, workers))
+
+
+def _structured_beat_first_enabled() -> bool:
+    """Expérience désactivée par défaut : trop instable pour la qualité orale."""
+    value = str(os.getenv("FORMATION_STRUCTURED_BEAT_FIRST_ENABLED", "0")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _structured_plan_two_stage_enabled() -> bool:
+    """Plan global léger, puis enrichissement teaching beats par cours."""
+    value = str(os.getenv("FORMATION_STRUCTURED_PLAN_TWO_STAGE_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _runtime_intra_day_carryover_enabled() -> bool:
+    """Autorise le report technique d'un reste audio vers le cours suivant.
+
+    Désactivé par défaut : chaque cours doit rester autonome. Si un bloc est
+    trop long, son texte complet reste canonique mais l'audio doit être
+    recalibré avant de pouvoir être publié.
+    """
+    value = (os.getenv("FORMATION_RUNTIME_INTRA_DAY_CARRYOVER") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _structured_allow_residual_too_short() -> bool:
+    """Compat flag only: final text budgets are strict by default."""
+    value = str(os.getenv("FORMATION_STRUCTURED_ALLOW_RESIDUAL_TOO_SHORT", "0")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def _course_conclusion_start_margin_sec():
@@ -211,41 +541,84 @@ def _course_final_silence_sec():
     return _env_float(
         "FORMATION_TTS_FINAL_SILENCE_SEC",
         _COURSE_FINAL_SILENCE_SECONDS,
-        min_value=10,
+        min_value=60,
         max_value=180,
     )
 
 
-def _words_budget_for_speaking_window(target_sec: int, stop_before_end_sec: float) -> int:
+def _course_effective_final_silence_sec(dynamic_schedule: bool = False) -> float:
+    if dynamic_schedule:
+        return max(
+            0.0,
+            _DYNAMIC_COURSE_TOTAL_MARGIN_SECONDS
+            - float(_COURSE_START_SILENCE_SECONDS),
+        )
+    return float(_course_final_silence_sec())
+
+
+def _course_total_audio_margin_sec(dynamic_schedule: bool = False) -> float:
+    if dynamic_schedule:
+        return _DYNAMIC_COURSE_TOTAL_MARGIN_SECONDS
+    return (
+        float(_COURSE_START_SILENCE_SECONDS)
+        + _course_effective_final_silence_sec(False)
+    )
+
+
+def _words_budget_for_speaking_window(
+    target_sec: int,
+    stop_before_end_sec: float,
+    *,
+    words_per_minute: float | None = None,
+) -> int:
     voice_seconds = max(
         0.0,
         float(target_sec) - float(stop_before_end_sec) - _COURSE_START_SILENCE_SECONDS,
     )
-    return int((voice_seconds / 60.0) * _course_words_per_minute() * _course_preflight_safety())
+    wpm = float(words_per_minute if words_per_minute is not None else _course_words_per_minute())
+    return int((voice_seconds / 60.0) * wpm * _course_preflight_safety())
 
 
-def _course_speech_deadline_sec(target_sec: int | float) -> float:
-    """Dernière seconde autorisée pour la parole avant le silence final."""
-    return max(0.0, float(target_sec or 0) - _course_final_silence_sec())
+def _course_speech_deadline_sec(
+    target_sec: int | float,
+    dynamic_schedule: bool = False,
+) -> float:
+    """Dernière seconde autorisée pour la parole avant la marge finale."""
+    return max(
+        0.0,
+        float(target_sec or 0)
+        - _course_effective_final_silence_sec(dynamic_schedule),
+    )
 
 
-def _course_voice_window_sec(target_sec: int | float) -> float:
-    """Durée maximale de voix réelle, hors silence initial et silence final."""
-    return max(0.0, _course_speech_deadline_sec(target_sec) - _COURSE_START_SILENCE_SECONDS)
+def _course_voice_window_sec(
+    target_sec: int | float,
+    dynamic_schedule: bool = False,
+) -> float:
+    """Durée maximale de voix réelle, hors marge initiale et marge finale."""
+    return max(
+        0.0,
+        _course_speech_deadline_sec(target_sec, dynamic_schedule)
+        - _COURSE_START_SILENCE_SECONDS,
+    )
 
 
-def _estimated_words_budget_for_course(target_sec, api_speed):
+def _estimated_words_budget_for_course(target_sec, api_speed, bloc_number=None):
     """Total words allowed for spoken content, stopping before final silence."""
-    return _words_budget_for_speaking_window(target_sec, _course_final_silence_sec())
+    return _words_budget_for_speaking_window(
+        target_sec,
+        _course_final_silence_sec(),
+        words_per_minute=_course_words_per_minute_for_bloc(bloc_number),
+    )
 
 
-def _estimated_main_words_budget_for_course(target_sec, api_speed):
+def _estimated_main_words_budget_for_course(target_sec, api_speed, bloc_number=None):
     """Words allowed for the canonical course block text.
 
     Conclusions and transitions are now part of the generated/calibrated block
     itself, so there is no separate runtime conclusion reserve.
     """
-    return _estimated_words_budget_for_course(target_sec, api_speed)
+    return _estimated_words_budget_for_course(target_sec, api_speed, bloc_number)
 
 
 def count_tts_spoken_words(text: str | None) -> int:
@@ -260,13 +633,91 @@ def _strip_audio_block_markers(text: str | None) -> str:
     return _AUDIO_BLOCK_MARKER_RE.sub("", text or "").strip()
 
 
-def get_course_day_word_budget(playlist_spec=None) -> dict:
+def _preserve_audio_block_marker(original_text: str, updated_text: str) -> str:
+    """Conserve le marqueur canonique `<<<BLOC_AUDIO_N>>>` après review."""
+    match = _AUDIO_BLOCK_MARKER_RE.search(original_text or "")
+    if not match:
+        return updated_text or ""
+    marker = match.group(0).strip()
+    clean_updated = _strip_audio_block_markers(updated_text or "")
+    return f"{marker}\n\n{clean_updated}".strip()
+
+
+def _playlist_uses_dynamic_schedule(playlist_spec) -> bool:
+    return any(
+        file_type == "cours"
+        and re.fullmatch(r"course_\d{2}\.mp3", os.path.basename(str(filename)))
+        for filename, _duration, file_type, _bloc_number in (playlist_spec or [])
+    )
+
+
+def _playlist_course_word_budget(
+    duration_sec,
+    api_speed,
+    bloc_number,
+    *,
+    dynamic_schedule: bool,
+    calibrated_wpm: float | None = None,
+) -> int:
+    if calibrated_wpm is not None:
+        return max(
+            0,
+            int(
+                _course_voice_window_sec(duration_sec, dynamic_schedule)
+                * float(calibrated_wpm)
+                / 60.0
+            ),
+        )
+    if dynamic_schedule:
+        from services.dynamic_day_schedule_service import (
+            calculate_course_word_budget,
+        )
+
+        return calculate_course_word_budget(
+            int(duration_sec) // 60,
+            words_per_minute=(calibrated_wpm or _course_words_per_minute()),
+        )
+    return _estimated_words_budget_for_course(
+        duration_sec,
+        api_speed,
+        bloc_number,
+    )
+
+
+def _platform_calibrated_words_per_minute(platform_id: int | None) -> float | None:
+    if platform_id in (None, ""):
+        return None
+    try:
+        from repositories.ai_voice_repository import get_platform_voice_settings
+
+        voice = get_platform_voice_settings(int(platform_id))
+        if not voice or voice.get("calibration_status") != "completed":
+            return None
+        measured = float(voice.get("measured_wpm") or 0.0)
+        calibrated_speed = float(voice.get("calibration_playback_speed") or 0.0)
+        playback_speed = float(voice.get("playback_speed") or 1.0)
+        if (
+            60 <= measured <= 300
+            and abs(calibrated_speed - playback_speed) <= 0.0001
+        ):
+            return measured
+    except Exception:
+        logger.warning(
+            "VOICE_CALIBRATED_WPM_LOOKUP_FAILED platform_id=%s",
+            platform_id,
+            exc_info=True,
+        )
+    return None
+
+
+def get_course_day_word_budget(playlist_spec=None, *, platform_id=None) -> dict:
     """Budget mots quotidien dérivé des seuls créneaux `cours`.
 
     Les Q&A/pauses ne sont pas intégrées au texte de cours et ne doivent donc
-    pas gonfler la cible. Pour chaque créneau cours, on retire le silence de
-    début et le silence final de sécurité avant d'appliquer la cadence calibrée
-    Fish Audio.
+    pas gonfler la cible. Pour chaque créneau cours, on retire la marge
+    initiale et la marge parole finale avant d'appliquer la cadence calibrée
+    Fish Audio. Cette marge réduit le nombre de mots cible ; elle ne retire pas
+    de minutes au fichier audio final.
     """
     if playlist_spec is None:
         from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
@@ -276,12 +727,23 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
         for filename, duration, file_type, bloc_num in playlist_spec
         if file_type == "cours"
     ]
+    dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
     per_course = []
     target_words = 0
     speakable_seconds = 0.0
     for filename, duration_sec, bloc_num in course_items:
-        voice_window = _course_voice_window_sec(duration_sec)
-        words = _estimated_words_budget_for_course(duration_sec, _DEFAULT_TTS_SPEED)
+        voice_window = _course_voice_window_sec(
+            duration_sec,
+            dynamic_schedule,
+        )
+        words = _playlist_course_word_budget(
+            duration_sec,
+            _DEFAULT_TTS_SPEED,
+            bloc_num,
+            dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
+        )
         target_words += words
         speakable_seconds += voice_window
         per_course.append({
@@ -289,6 +751,10 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
             "bloc_number": bloc_num,
             "duration_sec": duration_sec,
             "speakable_sec": round(voice_window, 3),
+            "words_per_minute": round(
+                calibrated_wpm or _course_words_per_minute_for_bloc(bloc_num),
+                3,
+            ),
             "target_words": words,
         })
 
@@ -305,59 +771,867 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
         "target_words": int(target_words),
         "min_words": int(min_words),
         "max_words": int(max_words),
-        "words_per_minute": float(_course_words_per_minute()),
+        "words_per_minute": (
+            round((target_words / (speakable_seconds / 60.0)), 3)
+            if speakable_seconds > 0 else float(_course_words_per_minute())
+        ),
         "course_seconds": int(sum(item[1] for item in course_items)),
         "speakable_seconds": round(speakable_seconds, 3),
         "start_silence_sec": int(_COURSE_START_SILENCE_SECONDS),
-        "final_silence_sec": float(_course_final_silence_sec()),
+        "final_silence_sec": _course_effective_final_silence_sec(
+            dynamic_schedule
+        ),
+        "audio_margin_sec": _course_total_audio_margin_sec(dynamic_schedule),
+        "dynamic_schedule": dynamic_schedule,
         "course_items": per_course,
     }
 
 
-def get_course_segment_generation_budget(segment_count: int = NUM_SUB_PARTS * 3) -> dict:
+def _course_block_for_generation_context(generation_context=None) -> dict | None:
+    """Retourne le bloc cours associé à la sous-partie générée, si connu."""
+    if not generation_context:
+        return None
+    try:
+        sub_idx = int(generation_context.get("sub_part_index", -1))
+    except (TypeError, ValueError):
+        return None
+    bloc_number = sub_idx + 1
+    for block in _course_audio_block_plan(
+        (generation_context or {}).get("playlist_spec"),
+        folder_position=generation_context.get("folder_position"),
+        platform_id=generation_context.get("platform_id"),
+    ):
+        if int(block.get("bloc_number") or 0) == bloc_number:
+            return block
+    return None
+
+
+def get_course_segment_generation_budget(segment_count: int = NUM_SUB_PARTS * 3,
+                                         generation_context=None) -> dict:
     """Budget indicatif par segment pour que la journée tombe juste après review."""
-    day_budget = get_course_day_word_budget()
-    segment_count = max(1, int(segment_count or 1))
+    day_budget = get_course_day_word_budget(
+        (generation_context or {}).get("playlist_spec"),
+        platform_id=(generation_context or {}).get("platform_id"),
+    )
     reserve_ratio = _env_float(
         "FORMATION_TTS_GENERATION_REVIEW_RESERVE_RATIO",
         0.97,
         min_value=0.80,
         max_value=1.0,
     )
-    target = max(800, int(day_budget["target_words"] * reserve_ratio / segment_count))
-    minimum = max(700, int(day_budget["min_words"] / segment_count))
-    maximum = max(target, int(day_budget["max_words"] / segment_count))
+    block = _course_block_for_generation_context(generation_context)
+    if block:
+        segment_count = 3
+        target = max(800, int(int(block["target_words"]) * reserve_ratio / segment_count))
+        minimum = max(700, int(int(block["min_words"]) / segment_count))
+        maximum = max(target, int(int(block["max_words"]) / segment_count))
+        block_budget = block
+    else:
+        segment_count = max(1, int(segment_count or 1))
+        target = max(800, int(day_budget["target_words"] * reserve_ratio / segment_count))
+        minimum = max(700, int(day_budget["min_words"] / segment_count))
+        maximum = max(target, int(day_budget["max_words"] / segment_count))
+        block_budget = None
     return {
         "target_words": target,
         "min_words": minimum,
         "max_words": maximum,
         "day_budget": day_budget,
         "segment_count": segment_count,
+        "block_budget": block_budget,
     }
 
 
-def _build_generation_volume_context() -> str:
-    budget = get_course_segment_generation_budget()
+def _build_generation_volume_context(generation_context=None) -> str:
+    budget = get_course_segment_generation_budget(generation_context=generation_context)
     day = budget["day_budget"]
+    block = budget.get("block_budget")
+    final_margin_sec = int(round(day["audio_margin_sec"]))
+    final_margin_min = final_margin_sec / 60.0
+    final_margin_words = int((final_margin_sec / 60.0) * float(day["words_per_minute"]))
+    block_line = ""
+    if block:
+        block_line = (
+            f"\nCette passe appartient au cours interne {block['bloc_number']} "
+            f"({block['filename']}, {block['duration_min']} min). Le cours complet "
+            f"doit viser {block['target_words']} mots parlés, avec une plage "
+            f"{block['min_words']}–{block['max_words']} mots. Les trois passes de "
+            "cette unité interne doit donc se compléter sans déborder sur la suivante. "
+            "Ces données sont internes : ne les verbalise jamais aux apprenants.\n"
+        )
     return f"""
 ═══════════════════════════════════════════════════════════════════
 CONTRAINTE VOLUME AUDIO PRIORITAIRE — FISH AUDIO
 ═══════════════════════════════════════════════════════════════════
-La journée est maintenant calculée au mot près sur les créneaux cours,
+La journée est maintenant calculée au mot près sur les cours internes,
 hors Q&A et hors pauses.
 
 Cadence calibrée : {day['words_per_minute']:.0f} mots/minute.
 Budget journée cours uniquement : cible {day['target_words']} mots parlés,
 tolérance {day['min_words']} à {day['max_words']} mots.
+Le budget est un repère de calibrage : il ne coupe pas l'audio final et ne
+bloque plus l'upload TTS si la durée réelle dépasse. Il retire déjà la marge
+initiale et une marge audio totale de
+{final_margin_sec} secondes ({final_margin_min:.1f} min), soit environ
+{final_margin_words} mots en moins par rapport à une parole continue jusqu'à la
+fin du cours interne.
 
 Cette passe doit viser environ {budget['target_words']} mots utiles,
 avec une plage acceptable de {budget['min_words']} à {budget['max_words']}
 mots. Cette consigne remplace toutes les anciennes consignes qui parlaient
 de 5 000 mots ou de 90 000 mots par journée.
+{block_line}
 
 N'allonge pas artificiellement le texte. Ne cherche pas à remplir les Q&A
 ou les pauses : ils ont leurs propres fichiers et ne comptent pas ici.
+Ne parle jamais côté apprenant d'horaires, de créneaux, de planning, de durée
+de fichier ou de budget mots.
 """
+
+
+def _structured_content_generation_enabled() -> bool:
+    value = (os.getenv("FORMATION_STRUCTURED_CONTENT_GENERATION", "true") or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _structured_course_kind(
+    course_number: int,
+    *,
+    total_courses: int = 7,
+) -> str:
+    if course_number == 1:
+        return "opening_year_day"
+    if course_number == total_courses:
+        return "end_of_day"
+    return "standard_reprise"
+
+
+def _clean_llm_text(raw: str) -> str:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    text = _strip_audio_block_markers(text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _strip_internal_schedule_from_label(value: str | None) -> str:
+    """Retire les horaires techniques des libellés injectés dans les prompts."""
+    original = str(value or "").strip()
+    if not original:
+        return ""
+    text = _INTERNAL_SCHEDULE_TIME_RANGE_RE.sub("", original)
+    text = _INTERNAL_SCHEDULE_SINGLE_TIME_RE.sub("", text)
+    text = re.sub(r"\b(?:45|50|55|60)\s*minutes\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[-–—]\s*[-–—]\s*", " — ", text)
+    text = re.sub(r"\s*[-–—]\s*:\s*", " — ", text)
+    text = re.sub(r"\s*:\s*[-–—]\s*", " — ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"\s*[-–—]\s*$", "", text).strip()
+    text = re.sub(r"^\s*[-–—]\s*", "", text).strip()
+    text = re.sub(r"^cours\s+\d+\s*[-–—:]\s*", "", text, flags=re.IGNORECASE).strip()
+    return text or original
+
+
+def _sanitize_learner_facing_text(text: str) -> str:
+    # Ne fait pas de remplacement lexical automatique : les reformulations
+    # sensibles, comme "bloc" côté apprenant, relèvent de la conformité IA afin
+    # de choisir naturellement entre "cours", "partie", "séquence" ou "moment".
+    return (text or "").strip()
+
+
+def _parse_structured_course_plan(raw: str) -> dict:
+    data = _extract_llm_json(raw)
+    if "courses" not in data and "course_plans" in data:
+        data["courses"] = data.get("course_plans")
+    if not isinstance(data.get("courses"), list):
+        raise ValueError("Plan structuré invalide : clé courses absente")
+    return data
+
+
+def _merge_unique_strings(*values) -> list[str]:
+    seen = set()
+    merged = []
+    for value in values:
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, list):
+            candidates = value
+        else:
+            candidates = []
+        for item in candidates:
+            clean = str(item or "").strip()
+            key = clean.lower()
+            if clean and key not in seen:
+                seen.add(key)
+                merged.append(clean)
+    return merged
+
+
+_BEAT_TYPE_TO_TEMPLATE = {
+    "welcome": "welcome",
+    "day_welcome": "welcome",
+    "opening": "welcome",
+    "chapter_opener": "chapter_opener",
+    "chapter_intro": "chapter_opener",
+    "theme_opening": "chapter_opener",
+    "program_year": "program_year",
+    "day_year": "program_year",
+    "annual_program": "program_year",
+    "parcours_annuel": "program_year",
+    "day_program": "program_year",
+    "day_program_7_steps": "day_program_7_steps",
+    "program_7_steps": "day_program_7_steps",
+    "roadmap_7_steps": "day_program_7_steps",
+    "agenda": "steps",
+    "definition": "definition",
+    "concept": "reflection",
+    "key_message": "reflection",
+    "process": "steps",
+    "method": "steps",
+    "framework": "framework",
+    "steps": "steps",
+    "flow": "flow",
+    "facilitator": "flow",
+    "mots_a_bannir": "situations",
+    "expressions_interdites": "situations",
+    "blacklist_3": "situations",
+    "trois_piliers": "situations",
+    "piliers": "situations",
+    "triade": "situations",
+    "triptyque": "situations",
+    "trepied": "situations",
+    "trépied": "situations",
+    "checklist": "recap",
+    "recap": "recap",
+    "reprise": "reprise_recap",
+    "reprise_recap": "reprise_recap",
+    "opening_recap": "reprise_recap",
+    "rappel": "reprise_recap",
+    "takeaways": "recap",
+    "example": "casestudy",
+    "case": "casestudy",
+    "story": "story",
+    "scenario": "casestudy",
+    "situations": "situations",
+    "situation": "situations",
+    "comparison": "comparison",
+    "beforeafter": "comparison",
+    "synchrone_asynchrone": "comparison",
+    "synchronous_asynchronous": "comparison",
+    "canaux_synchrones": "comparison",
+    "canaux_asynchrones": "comparison",
+    "deux_familles": "comparison",
+    "warning": "warning",
+    "mistake": "warning",
+    "risk": "warning",
+    "blacklist": "warning",
+    "forbidden": "warning",
+    "interdit": "warning",
+    "bannir": "warning",
+    "anti_pattern": "warning",
+    "trap": "warning",
+    "piege": "warning",
+    "tip": "tip",
+    "advice": "tip",
+    "good_practice": "tip",
+    "analogy": "analogy",
+    "metaphor": "analogy",
+    "data": "recap",
+    "numbers": "recap",
+    "stats": "recap",
+    "chart": "comparison",
+    "transition": "reflection",
+    "opinion": "opinion",
+    "quote": "quotable",
+    "quotable": "quotable",
+    "journal": "quotable",
+    "pause": "pause",
+    "break": "pause",
+    "qa": "qa",
+    "questions": "qa",
+    "q&a": "qa",
+}
+_SUPPORTED_SLIDE_TEMPLATES = {
+    "welcome",
+    "chapter_opener",
+    "program_year",
+    "day_program_7_steps",
+    "reflection",
+    "definition",
+    "comparison",
+    "casestudy",
+    "situations",
+    "steps",
+    "flow",
+    "story",
+    "analogy",
+    "framework",
+    "opinion",
+    "recap",
+    "reprise_recap",
+    "warning",
+    "tip",
+    "quotable",
+    "pause",
+    "qa",
+}
+_PEDAGOGICAL_SHAPE_TO_TEMPLATES = {
+    "ouverture": ("welcome", "chapter_opener", "program_year", "day_program_7_steps"),
+    "definition_notion": ("definition",),
+    "idee_forte": ("reflection", "opinion"),
+    "maxime_a_ancrer": ("quotable",),
+    "recit_avec_morale": ("story",),
+    "image_mentale": ("analogy",),
+    "conseil_actionnable": ("tip",),
+    "mise_en_garde": ("warning",),
+    "opposition_deux_modes": ("comparison",),
+    "triade_structurante": ("situations",),
+    "progression_ordonnee": ("steps", "flow"),
+    "cas_comparables": ("casestudy",),
+    "synthese_de_reprise": ("reprise_recap",),
+    "synthese_apres_developpement": ("recap",),
+    "modele_a_leviers": ("framework",),
+}
+_DEFAULT_SHAPE_BY_TEMPLATE = {
+    template: shape
+    for shape, templates in _PEDAGOGICAL_SHAPE_TO_TEMPLATES.items()
+    for template in templates
+}
+_ETHICAL_MICRO_RULE_IDS = list(range(1, 17))
+_ETHICAL_LEXICAL_RULE_IDS = tuple(range(1, 17))
+_ETHICAL_LEXICAL_PREFIX_PATTERNS = {
+    # La famille "musique" est souvent réintroduite sous forme de métaphore
+    # ("musique de la voix") ou de dérivé ("musicale", "musicien").
+    "musique": r"musi(?:qu|c)[\wÀ-ÿ]*",
+    "musical": r"musi(?:qu|c)[\wÀ-ÿ]*",
+}
+_ETHICAL_MICRO_RULESET_VERSION = "2026-06-10-ethical-micro-v4-full"
+_ETHICAL_MICRO_RULES_CACHE = {"mtime": None, "text": ""}
+_ETHICAL_LEXICAL_TERMS_CACHE = {"mtime": None, "data": None}
+
+
+def _load_slide_template_catalog() -> dict:
+    raw = _load_prompt_file("slides", "template-catalog.json", fallback="")
+    if not raw:
+        return {"version": "missing", "templates": []}
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        logger.warning("⚠️ Catalogue templates slides invalide: %s", exc)
+        return {"version": "invalid", "templates": []}
+    if not isinstance(data.get("templates"), list):
+        data["templates"] = []
+    return data
+
+
+def _slide_template_catalog_prompt() -> str:
+    catalog = _load_slide_template_catalog()
+    templates = []
+    for item in catalog.get("templates") or []:
+        if not isinstance(item, dict):
+            continue
+        template_id = item.get("template_id")
+        if template_id not in _SUPPORTED_SLIDE_TEMPLATES:
+            continue
+        templates.append({
+            "template_id": template_id,
+            "pedagogical_shape": item.get("pedagogical_shape") or "",
+            "use_cases": item.get("use_cases") or item.get("families") or [],
+            "plan_signals": item.get("plan_signals") or [],
+            "plan_avoid": item.get("plan_avoid") or "",
+            "use_when": item.get("use_when") or "",
+            "avoid_when": item.get("avoid_when") or "",
+            "requires": item.get("requires") or {},
+        })
+    return json.dumps(
+        {
+            "catalog_version": catalog.get("version"),
+            "principle": catalog.get("principle"),
+            "templates": templates,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _slide_template_for_beat(beat_type: str | None, requested: str | None = None) -> str:
+    requested_key = str(requested or "").strip().lower()
+    if requested_key in _SUPPORTED_SLIDE_TEMPLATES:
+        return requested_key
+    alias = _BEAT_TYPE_TO_TEMPLATE.get(requested_key)
+    if alias in _SUPPORTED_SLIDE_TEMPLATES:
+        return alias
+    beat_key = str(beat_type or "").strip().lower()
+    return _BEAT_TYPE_TO_TEMPLATE.get(beat_key, "reflection")
+
+
+def _pedagogical_shape_mapping_prompt() -> str:
+    rows = []
+    for shape, templates in _PEDAGOGICAL_SHAPE_TO_TEMPLATES.items():
+        template_list = ", ".join(templates)
+        if shape == "progression_ordonnee":
+            template_list += " (si 2 à 4 gestes métier enchaînés: flow)"
+        rows.append(f"- {shape}: {template_list}")
+    return "\n".join(rows)
+
+
+def _pedagogical_shape_for_template(value: str | None, template_type: str | None) -> str:
+    shape = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    template = _slide_template_for_beat(None, template_type)
+    if shape in _PEDAGOGICAL_SHAPE_TO_TEMPLATES:
+        if template in _PEDAGOGICAL_SHAPE_TO_TEMPLATES[shape]:
+            return shape
+    return _DEFAULT_SHAPE_BY_TEMPLATE.get(template, "")
+
+
+_GENERIC_BEAT_PATTERNS = (
+    "idée centrale",
+    "idee centrale",
+    "idée principale",
+    "idee principale",
+    "point pédagogique",
+    "point pedagogique",
+    "formulation orale concrète",
+    "formulation orale concrete",
+)
+
+
+def _compact_list_items(value, limit: int = 3) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _is_generic_beat_text(text: str | None) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return True
+    return any(pattern in normalized for pattern in _GENERIC_BEAT_PATTERNS)
+
+
+def _part_context_for_fallback(raw_part: dict) -> dict:
+    title = str(raw_part.get("title") or raw_part.get("label") or "cette partie").strip()
+    function = str(raw_part.get("function") or raw_part.get("pedagogical_role") or "").strip()
+    must_include = _compact_list_items(raw_part.get("must_include"), limit=4)
+    first_focus = must_include[0] if must_include else title
+    second_focus = must_include[1] if len(must_include) > 1 else function or first_focus
+    return {
+        "title": title,
+        "function": function,
+        "must_include": must_include,
+        "first_focus": first_focus,
+        "second_focus": second_focus,
+    }
+
+
+def _fallback_teaching_beats_for_part(raw_part: dict) -> list[dict]:
+    context = _part_context_for_fallback(raw_part)
+    title = context["title"]
+    function = context["function"]
+    first_focus = context["first_focus"]
+    second_focus = context["second_focus"]
+    method_focus = second_focus if second_focus and second_focus != first_focus else first_focus
+    role_suffix = f" pour {function}" if function else ""
+    return [
+        {
+            "type": "concept",
+            "role": f"poser le repère métier spécifique de {title}",
+            "spoken_requirement": (
+                f"Expliquer concrètement {first_focus} en le reliant à la pratique professionnelle"
+                f"{role_suffix}. Ne pas rester au niveau d'une idée générale."
+            ),
+            "slide_anchor": {
+                "enabled": True,
+                "template_type": "reflection",
+                "pedagogical_shape": "idee_forte",
+                "visual_goal": f"faire retenir le repère pratique propre à {title}",
+                "must_cover": first_focus,
+                "must_not_cover": "une formulation générique sans contenu métier précis",
+            },
+        },
+        {
+            "type": "method",
+            "role": f"transformer {title} en action observable",
+            "spoken_requirement": (
+                f"Montrer comment appliquer {method_focus} dans une situation concrète, "
+                "avec un geste, une décision ou une vigilance directement utilisable."
+            ),
+            "slide_anchor": {
+                "enabled": True,
+                "template_type": "tip",
+                "pedagogical_shape": "conseil_actionnable",
+                "visual_goal": f"ancrer l'action concrète à mener dans {title}",
+                "must_cover": method_focus,
+                "must_not_cover": "un simple rappel abstrait de l'idée principale",
+            },
+        },
+    ]
+
+
+def _contextualize_generic_beat(raw: dict, raw_part: dict, idx: int) -> dict:
+    context = _part_context_for_fallback(raw_part)
+    title = context["title"]
+    focus = context["must_include"][idx - 1] if idx - 1 < len(context["must_include"]) else context["first_focus"]
+    raw = {**raw}
+    anchor = raw.get("slide_anchor") if isinstance(raw.get("slide_anchor"), dict) else {}
+    anchor = {**anchor}
+    if _is_generic_beat_text(raw.get("role")):
+        raw["role"] = f"traiter précisément {focus} dans {title}"
+    if _is_generic_beat_text(raw.get("spoken_requirement")):
+        raw["spoken_requirement"] = (
+            f"Développer {focus} avec une explication métier concrète, un exemple ou une règle "
+            "d'action directement compréhensible par l'apprenant."
+        )
+    if _is_generic_beat_text(anchor.get("visual_goal")):
+        anchor["visual_goal"] = f"faire mémoriser {focus} dans le cadre de {title}"
+    if not str(anchor.get("must_cover") or "").strip():
+        anchor["must_cover"] = focus
+    if not str(anchor.get("must_not_cover") or "").strip():
+        anchor["must_not_cover"] = "une reformulation générique du titre sans contenu opérationnel"
+    raw["slide_anchor"] = anchor
+    return raw
+
+
+def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number: int) -> list[dict]:
+    raw_beats = raw_part.get("teaching_beats") if isinstance(raw_part.get("teaching_beats"), list) else []
+    if not raw_beats:
+        raw_beats = _fallback_teaching_beats_for_part(raw_part)
+
+    normalized = []
+    part_context = _part_context_for_fallback(raw_part)
+    default_role = f"traiter précisément {part_context['first_focus']} dans {part_context['title']}"
+    default_visual_goal = f"faire mémoriser {part_context['first_focus']} dans le cadre de {part_context['title']}"
+    for idx, raw in enumerate(raw_beats[:5], start=1):
+        if not isinstance(raw, dict):
+            continue
+        raw = _contextualize_generic_beat(raw, raw_part, idx)
+        beat_type = str(raw.get("type") or raw.get("beat_type") or "concept").strip().lower()
+        role = str(raw.get("role") or raw.get("intent") or default_role).strip()
+        spoken_requirement = str(
+            raw.get("spoken_requirement")
+            or raw.get("requirement")
+            or raw.get("description")
+            or role
+        ).strip()
+        anchor = raw.get("slide_anchor") if isinstance(raw.get("slide_anchor"), dict) else {}
+        enabled = bool(anchor.get("enabled", idx == 1))
+        template_type = _slide_template_for_beat(
+            beat_type,
+            anchor.get("template_type") or anchor.get("template_family") or raw.get("template_type"),
+        )
+        beat_id = str(raw.get("beat_id") or f"c{course_number}p{part_number}b{idx}").strip()
+        slide_anchor = {
+            "enabled": enabled,
+            "anchor_id": str(anchor.get("anchor_id") or f"{beat_id}-slide").strip(),
+            "template_type": template_type,
+            "pedagogical_shape": _pedagogical_shape_for_template(anchor.get("pedagogical_shape"), template_type),
+            "visual_goal": str(anchor.get("visual_goal") or default_visual_goal).strip(),
+            "items_expected": anchor.get("items_expected"),
+            "must_cover": str(anchor.get("must_cover") or "").strip(),
+            "must_not_cover": str(anchor.get("must_not_cover") or "").strip(),
+            "fields_hint": anchor.get("fields_hint") if isinstance(anchor.get("fields_hint"), dict) else {},
+        }
+        normalized.append({
+            "beat_id": beat_id,
+            "type": beat_type,
+            "role": role,
+            "spoken_requirement": spoken_requirement,
+            "slide_anchor": slide_anchor,
+        })
+
+    return normalized
+
+
+def _opening_structure_teaching_beats(
+    *,
+    course_number: int,
+    day_number: int | None,
+    job: dict,
+    sub_parts: list,
+    raw_parts: list | None = None,
+    course_title: str | None = None,
+    is_first_day: bool,
+) -> list[dict]:
+    formation_name = (
+        job.get("program_title")
+        or job.get("tp_name")
+        or job.get("title")
+        or "formation"
+    )
+    day_label = f"Journée {day_number}" if day_number else "Journée"
+    day_title = job.get("folder_name") or day_label
+    program_items = [
+        _strip_internal_schedule_from_label(str(item or "")).strip()
+        for item in (sub_parts or [])
+    ]
+    program_items = [item for item in program_items if item]
+    clean_course_title = _strip_internal_schedule_from_label(
+        str(course_title or (sub_parts[course_number - 1] if 0 <= course_number - 1 < len(sub_parts) else ""))
+    ).strip() or f"Cours {course_number}"
+    first_axes = [
+        _strip_internal_schedule_from_label(str((part or {}).get("title") or (part or {}).get("label") or "")).strip()
+        for part in (raw_parts or [])[:4]
+    ]
+    if not first_axes:
+        first_axes = [
+            _strip_internal_schedule_from_label(str(item or "")).strip()
+            for item in (sub_parts or [])[:3]
+        ]
+    first_axes = [item for item in first_axes if item and item != clean_course_title]
+    chapter_beat = {
+        "beat_id": f"c{course_number}opening-chapter-opener",
+        "type": "chapter_opener",
+        "role": "annoncer le nouveau chapitre et ses axes",
+        "spoken_requirement": (
+            "Annoncer le thème qui commence, son objectif et un plan oral en 2 à 4 axes "
+            "avant tout exemple ou développement."
+        ),
+        "slide_anchor": {
+            "enabled": True,
+            "anchor_id": f"c{course_number}-opening-chapter-opener-slide",
+            "template_type": "chapter_opener",
+            "pedagogical_shape": "ouverture",
+            "visual_goal": "ouvrir le chapitre avec son titre et ses axes principaux",
+            "items_expected": len(first_axes) or None,
+            "fields_hint": {
+                "chapter_label": f"Chapitre {course_number}",
+                "title": clean_course_title,
+                "axes": [{"title": axis} for axis in first_axes[:4]],
+            },
+        },
+    }
+
+    if course_number != 1:
+        return [
+            {
+                "beat_id": f"c{course_number}opening-recap",
+                "type": "reprise_recap",
+                "role": "reprendre les repères utiles du chapitre précédent avant le nouveau thème",
+                "spoken_requirement": (
+                    "Marquer une courte reprise de début de cours : regarder en arrière, rappeler "
+                    "2 à 4 repères utiles du chapitre précédent, puis les relier à la suite. Ne pas "
+                    "refaire l'accueil général, ne pas annoncer encore le nouveau chapitre en détail."
+                ),
+                "slide_anchor": {
+                    "enabled": True,
+                    "anchor_id": f"c{course_number}-opening-recap-slide",
+                    "template_type": "reprise_recap",
+                    "pedagogical_shape": "synthese_de_reprise",
+                    "visual_goal": "remettre en mémoire les repères précédents avant d'ouvrir le nouveau thème",
+                    "items_expected": 3,
+                    "fields_hint": {
+                        "title": "On reprend le fil.",
+                        "points": [
+                            "Le repère clé précédent",
+                            "Ce qu'il faut garder en tête",
+                            "Le lien avec la suite",
+                        ],
+                    },
+                },
+            },
+            chapter_beat,
+        ]
+
+    welcome_requirement = (
+        f"Accueillir les apprenants en disant clairement qu'ils entrent dans la {day_label.lower()} "
+        f"de la formation {formation_name}, avec une formule orale simple et chaleureuse."
+    )
+    if is_first_day:
+        welcome_requirement = (
+            f"Accueillir les apprenants au lancement de la formation {formation_name}, puis situer "
+            f"cette première journée avec une formule orale simple et chaleureuse."
+        )
+
+    beats = [
+        {
+            "beat_id": "c1opening-welcome",
+            "type": "welcome",
+            "role": "accueillir la journée de formation",
+            "spoken_requirement": welcome_requirement,
+            "slide_anchor": {
+                "enabled": True,
+                "anchor_id": "day-opening-welcome-slide",
+                "template_type": "welcome",
+                "pedagogical_shape": "ouverture",
+                "visual_goal": "installer immédiatement le cadre de la journée et le nom de la formation",
+                "items_expected": None,
+                "fields_hint": {
+                    "formation_name": formation_name,
+                    "day_label": day_label,
+                    "title": "Bienvenue",
+                    "subtitle": day_title,
+                },
+            },
+        },
+    ]
+    if is_first_day:
+        beats.append(
+            {
+                "beat_id": "c1opening-program-year",
+                "type": "program_year",
+                "role": "présenter la vision annuelle de la formation",
+                "spoken_requirement": (
+                    "Présenter synthétiquement les deux grandes phases de la formation annuelle "
+                    "sans parler d'horaires, de durées, de créneaux ou de planning."
+                ),
+                "slide_anchor": {
+                    "enabled": True,
+                    "anchor_id": "day-opening-program-year-slide",
+                    "template_type": "program_year",
+                    "pedagogical_shape": "ouverture",
+                    "visual_goal": "donner une vision annuelle des deux grands blocs de compétences",
+                    "items_expected": 2,
+                    "fields_hint": {
+                        "title": "Programme de l'année.",
+                        "subtitle": "Deux grands ensembles de compétences qui se complètent pour tenir toutes les facettes du poste.",
+                        "day_label": "Parcours annuel",
+                        "formation_name": formation_name,
+                    },
+                },
+            }
+        )
+    beats.extend([
+        {
+            "beat_id": "c1opening-day-program",
+            "type": "day_program",
+            "role": "annoncer le programme du jour",
+            "spoken_requirement": (
+                "Présenter les grands thèmes de la journée dans leur ordre pédagogique, sans parler "
+                "d'horaires, de durées, de créneaux ou de planning."
+            ),
+            "slide_anchor": {
+                "enabled": True,
+                "anchor_id": "day-opening-program-slide",
+                "template_type": "day_program_7_steps",
+                "pedagogical_shape": "ouverture",
+                "visual_goal": "donner une carte claire des thèmes de la journée avant le premier contenu",
+                "items_expected": len(program_items) or None,
+                "fields_hint": {
+                    "title": "Programme de la journée.",
+                    "subtitle": "Une journée dédiée aux fondamentaux de l'échange à distance.",
+                    "day_label": day_label,
+                    "formation_name": formation_name,
+                    "active_item": 1,
+                    "items": program_items,
+                },
+            },
+        },
+        chapter_beat,
+    ])
+    return beats
+
+
+def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> list[dict]:
+    merged = []
+    seen = set()
+
+    def structural_key(beat: dict) -> str:
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        template_type = _slide_template_for_beat(
+            beat.get("type"),
+            anchor.get("template_type") or anchor.get("template_family") or beat.get("template_type"),
+        )
+        if template_type in {"welcome", "program_year", "day_program", "day_program_7_steps", "recap", "chapter_opener"}:
+            return f"template:{template_type}"
+        beat_id = str(beat.get("beat_id") or "").strip()
+        anchor_id = str(anchor.get("anchor_id") or "").strip()
+        return anchor_id or beat_id or f"beat:{len(merged)}"
+
+    # Opening structure is a deck contract: forced beats define the expected
+    # visual order, model beats can add detail only after that structure.
+    for beat in [*(forced or []), *(existing or [])]:
+        if not isinstance(beat, dict):
+            continue
+        key = structural_key(beat)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(beat)
+    return merged[:6]
+
+
+def _course_conclusion_recap_beat(
+    *,
+    course_number: int,
+    course_title: str | None,
+    parts: list[dict],
+    single_course_day: bool = False,
+) -> dict:
+    clean_course_title = _strip_internal_schedule_from_label(str(course_title or "")).strip() or f"Cours {course_number}"
+    points = [
+        _strip_internal_schedule_from_label(str((part or {}).get("title") or "")).strip()
+        for part in (parts or [])[:4]
+    ]
+    points = [point for point in points if point]
+    if not points:
+        points = [
+            "Le repère clé du cours",
+            "Le réflexe à garder",
+            "Le lien avec la pratique",
+        ]
+    return {
+        "beat_id": f"c{course_number}conclusion-recap",
+        "type": "recap",
+        "role": (
+            "fixer les repères essentiels du chapitre unique sans refaire une synthèse de journée"
+            if single_course_day
+            else "récapituler ce qui a été vu dans le cours avant la conclusion du chapitre"
+        ),
+        "spoken_requirement": (
+            "Rappeler seulement deux ou trois repères essentiels, puis conclure brièvement "
+            "le chapitre unique sans refaire ensuite ce récapitulatif."
+            if single_course_day
+            else "Faire un récapitulatif bref de ce qui vient d'être vu dans le cours, "
+            "puis conclure ce chapitre sans annoncer le bloc suivant."
+        ),
+        "slide_anchor": {
+            "enabled": True,
+            "anchor_id": f"c{course_number}-conclusion-recap-slide",
+            "template_type": "recap",
+            "pedagogical_shape": "synthese_apres_developpement",
+            "visual_goal": (
+                "fixer une seule synthèse légère du chapitre unique"
+                if single_course_day
+                else "synthétiser les points vus dans le cours avant sa conclusion"
+            ),
+            "items_expected": min(3 if single_course_day else 4, max(2, len(points))),
+            "fields_hint": {
+                "title": "Ce qu'on retient.",
+                "subtitle": clean_course_title,
+                "points": points[:4],
+            },
+        },
+    }
+
+
+def _merge_conclusion_teaching_beats(forced: list[dict], existing: list[dict]) -> list[dict]:
+    merged = []
+    seen = set()
+    for beat in [*(forced or []), *(existing or [])]:
+        if not isinstance(beat, dict):
+            continue
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        template_type = _slide_template_for_beat(
+            beat.get("type"),
+            anchor.get("template_type") or anchor.get("template_family") or beat.get("template_type"),
+        )
+        key = f"template:{template_type}" if template_type == "recap" else str(
+            anchor.get("anchor_id") or beat.get("beat_id") or f"beat:{len(merged)}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(beat)
+    return merged[:4]
 
 
 def _next_playlist_item_after_index(playlist_spec, idx: int):
@@ -367,7 +1641,14 @@ def _next_playlist_item_after_index(playlist_spec, idx: int):
         return None
 
 
-def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None) -> str:
+def _course_block_role(
+    bloc_number: int,
+    *,
+    folder_position=None,
+    previous_item=None,
+    next_item=None,
+    total_courses: int = 7,
+) -> str:
     """Direction artistique du bloc audio selon sa position dans la journée."""
     day_number = None
     try:
@@ -376,16 +1657,41 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
         day_number = None
 
     parts = []
-    if bloc_number == 1 and day_number == 1:
+    previous_type = previous_item[2] if previous_item and len(previous_item) >= 3 else None
+    next_type = next_item[2] if next_item and len(next_item) >= 3 else None
+
+    if total_courses == 1 and day_number == 1:
         parts.append(
-            "Ouverture absolue de la formation : accueil calme, contexte général, "
-            "utilité concrète de la formation, programme global, encouragement, "
-            "puis lancement progressif du premier sujet."
+            "Cours unique de la journée et ouverture de la formation : accueil "
+            "calme, cadrage du parcours, présentation de l'unique chapitre de "
+            "la séance, développement progressif et conclusion adaptée."
+        )
+    elif total_courses == 1:
+        parts.append(
+            "Cours unique de la journée : accueil sobre, repère temporel exact, "
+            "présentation de l'unique chapitre et développement autonome."
+        )
+    elif bloc_number == 1 and day_number == 1:
+        parts.append(
+            "Ouverture absolue de la formation : accueil calme, présentation "
+            "synthétique du parcours annuel, thèmes de la journée dans leur ordre pédagogique, "
+            "transition vers le premier grand thème, plan oral en 2 à 4 axes, puis seulement "
+            "lancement progressif du premier sujet."
         )
     elif bloc_number == 1:
         parts.append(
             "Ouverture de journée : reprise douce, rappel vague de la progression, "
             "objectifs de la journée, puis transition naturelle vers le premier sujet."
+        )
+    elif previous_type in {"qa", "pause", "pause_midi"}:
+        parts.append(
+            "Reprise autonome après un bloc facultatif : bref rappel de la "
+            "progression, lien avec le nouveau thème, objectif puis plan oral."
+        )
+    elif previous_type == "jointure":
+        parts.append(
+            "Cours contigu au précédent : la jointure audio vient d'assurer le "
+            "raccord ; entrer directement et naturellement dans le nouveau chapitre."
         )
     else:
         parts.append(
@@ -393,34 +1699,1870 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
             "insérer respirations pédagogiques, exemples terrain et mini-synthèses."
         )
 
-    if bloc_number == 7:
+    if bloc_number == total_courses and next_type is None:
         parts.append(
             "Fin de journée : conclusion progressive, synthèse des idées essentielles, "
-            "valorisation du chemin parcouru et projection sobre vers la suite."
+            "valorisation du chemin parcouru, sans dater ni annoncer la prochaine "
+            "séance ; la clôture temporelle sera ajoutée lors de l'audio."
         )
 
-    next_type = next_item[2] if next_item and len(next_item) >= 3 else None
-    next_duration = int(next_item[1] or 0) if next_item and len(next_item) >= 2 else 0
     if next_type in {"qa", "pause", "pause_midi"}:
-        if next_type == "qa":
-            parts.append(
-                "Outro : annoncer que l'on va passer au temps de questions-réponses. "
-                "Le Q&A suivant démarre sans introduction propre."
-            )
-        elif next_type == "pause_midi":
-            parts.append(
-                "Outro : annoncer naturellement la pause déjeuner. "
-                "Le fichier pause suivant démarre sans introduction propre."
-            )
-        else:
-            minutes = max(1, round(next_duration / 60)) if next_duration else None
-            pause_label = f" de {minutes} minutes" if minutes else ""
-            parts.append(
-                f"Outro : annoncer naturellement une pause{pause_label}. "
-                "Le fichier pause suivant démarre sans introduction propre."
-            )
+        parts.append(
+            "Outro : conclure uniquement le chapitre, sans annoncer le Q&R ou "
+            "la pause ; le bloc facultatif suivant possède sa propre intro."
+        )
+    elif next_type == "jointure":
+        parts.append(
+            "Outro : conclure uniquement ce chapitre, sans annoncer le chapitre "
+            "suivant ; la jointure technique assure le raccord."
+        )
 
     return " ".join(parts)
+
+
+_COURSE_SLOT_PROMPT_PROFILES = {
+    1: {
+        "label": "Cours interne 1 — ouverture de la formation et premier grand thème",
+        "moment": "première grande partie de la journée, et potentiellement ouverture absolue de l'année",
+        "intention": (
+            "installer une carte mentale claire avant le contenu : parcours global, "
+            "thèmes de la journée, transition naturelle vers le premier grand thème, "
+            "objectif et plan oral en axes"
+        ),
+        "rhythm": (
+            "progressif, accueillant et très clair : accueil humain, cadrage explicite, "
+            "plan annoncé, puis exemples courts seulement après la structure"
+        ),
+        "structure": [
+            "accueillir les apprenants sans démarrer par une métaphore ou un cas client",
+            "si c'est l'ouverture absolue de l'année, présenter synthétiquement les grands thèmes de la formation",
+            "annoncer les thèmes de la journée dans leur ordre pédagogique sans parler d'horaires ni de planning",
+            "basculer naturellement vers le premier grand thème de la journée",
+            "formuler l'objectif de cette première partie et ce que l'apprenant saura mieux faire ensuite",
+            "annoncer un plan oral en 2 à 4 axes et suivre ce plan dans le même ordre",
+            "verbaliser chaque changement de partie avec une transition claire",
+            "conclure par un récapitulatif des points vus et leur utilité concrète, sans annoncer le bloc suivant",
+            "arrêter strictement le texte après la conclusion : aucun exemple ni remplissage supplémentaire",
+        ],
+        "examples": "exemples simples et explicitement fictifs, uniquement après l'annonce du cadre et du plan",
+        "avoid": [
+            "démarrage direct par la relation client, la voix de l'entreprise ou un client mécontent",
+            "storytelling avant que l'apprenant sache où il est et ce qu'il va apprendre",
+            "tunnels émotionnels ou métaphores longues sans idée nouvelle identifiable",
+            "vocabulaire littéraire ou trop abstrait pour un cours magistral professionnel",
+            "blocs répétés comme 'Prenons quelques secondes pour ancrer cette idée'",
+            "dire 'tout premier cours', 'ce cours', 'cours actuel' ou 'trois quarts d'heure à venir'",
+            "nouveau développement après la conclusion",
+        ],
+        "handoff": "conclure uniquement le chapitre, sans annoncer Q&R, pause ou thème suivant",
+    },
+    2: {
+        "label": "Cours interne 2 — reprise autonome et nouveau thème",
+        "moment": "reprise adaptée à l'élément audio qui précède réellement",
+        "intention": (
+            "ouvrir une nouvelle partie autonome de la journée : rappeler brièvement "
+            "ce qui a été posé avant la pause, puis basculer vers le nouveau thème "
+            "avec objectif, axes et progression claire"
+        ),
+        "rhythm": (
+            "reprise douce mais nette : quelques phrases de lien, annonce du "
+            "nouveau thème, plan oral en 2 à 4 axes, puis développement "
+            "méthodique avec transitions visibles"
+        ),
+        "structure": [
+            "commencer par une reprise autonome : ne jamais finir une idée qui appartenait à la partie précédente",
+            "rappeler en une ou deux phrases ce qui a été abordé au cours précédent",
+            "faire le lien entre le thème précédent et le nouveau thème",
+            "annoncer clairement ce que cette nouvelle partie va travailler et pourquoi c'est utile",
+            "annoncer un plan de 2 à 4 axes maximum avant tout exemple développé",
+            "développer les parties dans l'ordre annoncé, chacune avec une idée nouvelle identifiable",
+            "verbaliser les transitions : passons au deuxième point, maintenant que nous avons vu X, intéressons-nous à Y",
+            "conclure par un récapitulatif des points de cette partie et leur utilité concrète, sans annoncer le bloc suivant",
+        ],
+        "examples": "exemples simples et explicitement fictifs si le cas n'est pas issu du programme, uniquement après le rappel, le lien et le plan",
+        "avoid": [
+            "commencer par 'Et puis', 'Ensuite' ou une phrase qui continue directement la conclusion de la partie précédente",
+            "terminer une notion absente du texte écrit de la partie précédente",
+            "rejouer la conclusion de la partie précédente",
+            "démarrer par un exemple comme Monsieur Klein avant d'avoir annoncé le nouveau thème et le plan",
+            "faire une double introduction du nouveau thème",
+            "dire 'ce cours' ou 'cours actuel' côté apprenant",
+            "réexpliquer longuement la partie précédente",
+            "changer de thème sans transition explicite",
+            "accumuler des conseils non hiérarchisés",
+        ],
+        "handoff": "conclure uniquement le chapitre ; l'audio suivant porte sa propre intro",
+    },
+    3: {
+        "label": "Cours 3 — densité avant respiration longue",
+        "moment": "troisième cours de la journée, juste avant une respiration plus longue",
+        "intention": (
+            "traiter un point dense, pousser le raisonnement, faire travailler les "
+            "arbitrages et refermer proprement cette première grande séquence"
+        ),
+        "rhythm": (
+            "soutenu mais respirable : séquences d'explication plus longues, pauses pédagogiques, "
+            "synthèses intermédiaires pour ne pas saturer"
+        ),
+        "structure": [
+            "rappeler en une phrase où on en est dans la progression de la journée",
+            "entrer dans une situation plus exigeante ou un cas plus complet",
+            "montrer les décisions successives à prendre",
+            "insister sur les pièges, limites et critères de qualité",
+            "conclure clairement cette séquence sans annoncer le bloc suivant",
+        ],
+        "examples": "cas complexe, diagnostic, arbitrage, client difficile, erreur de procédure, correction commentée",
+        "avoid": [
+            "ouvrir un gros sujet qui ne pourra pas être refermé",
+            "finir sur une phrase suspendue",
+            "enchaîner trop de notions nouvelles sans respiration",
+            "annoncer la pause comme une coupure administrative froide",
+        ],
+        "handoff": "faire sentir que la séquence a une vraie conclusion avant la pause ou le déjeuner",
+    },
+    4: {
+        "label": "Cours 4 — reprise après déjeuner",
+        "moment": "début d'après-midi, reprise après déjeuner",
+        "intention": (
+            "remettre l'apprenant en mouvement sans brutalité, reconnecter au fil de la journée "
+            "et ouvrir une séquence autonome plus concrète"
+        ),
+        "rhythm": (
+            "calme et relance douce : phrases plus courtes au départ, exemples accessibles, "
+            "puis montée progressive vers l'application"
+        ),
+        "structure": [
+            "reprendre avec une amorce de relance, pas avec un rappel lourd",
+            "rattacher ce qui a déjà été vu au nouveau sujet",
+            "lancer une application pratique ou un nouveau terrain d'exemple",
+            "faire alterner explication et mise en situation",
+            "finir sur un point clair pour éviter l'effet tunnel",
+        ],
+        "examples": "cas simple de reprise, application terrain, situation de service, comparaison avant/après",
+        "avoid": [
+            "supposer une attention maximale dès la première phrase",
+            "reprendre toute la séquence précédente en détail",
+            "démarrer par une abstraction lourde",
+            "finir sans signal de clôture",
+        ],
+        "handoff": "préparer la montée en profondeur des cours longs d'après-midi",
+    },
+    5: {
+        "label": "Cours 5 — grand développement de l'après-midi",
+        "moment": "cours long d'approfondissement après la reprise",
+        "intention": (
+            "développer la séquence la plus substantielle : approfondissement, démonstration, variations, "
+            "contre-exemples et consolidation"
+        ),
+        "rhythm": (
+            "ample et maîtrisé : accepter des développements longs, mais avec des jalons fréquents "
+            "pour garder le fil oral"
+        ),
+        "structure": [
+            "annoncer clairement la compétence travaillée",
+            "déployer l'explication en plusieurs sous-situations",
+            "alterner principe, exemple, piège, correction",
+            "montrer des variantes du même problème pour éviter l'apprentissage superficiel",
+            "faire une vraie mini-synthèse avant la transition",
+        ],
+        "examples": "scénarios professionnels complets, contre-exemples, analyse d'une mauvaise réponse, amélioration progressive",
+        "avoid": [
+            "remplissage générique pour tenir la durée",
+            "redite des parties précédentes",
+            "enchaînement de listes sans narration pédagogique",
+            "absence de jalons dans un long passage",
+        ],
+        "handoff": "donner le sentiment d'une séquence maîtrisée, puis préparer la mise en maîtrise",
+    },
+    6: {
+        "label": "Cours 6 — mise en maîtrise",
+        "moment": "dernière grande séquence avant la fin de journée",
+        "intention": (
+            "passer de la compréhension à la maîtrise : relier les compétences, traiter les cas limites "
+            "et montrer comment décider dans une vraie situation"
+        ),
+        "rhythm": (
+            "assuré, nuancé, orienté pratique : moins de définitions, plus de décisions, "
+            "de comparaisons et de posture professionnelle"
+        ),
+        "structure": [
+            "reprendre le résultat de la partie précédente sans le répéter",
+            "mettre les notions en tension dans un cas plus réaliste",
+            "montrer les critères de décision et les arbitrages",
+            "faire verbaliser la posture attendue",
+            "préparer la dernière ligne droite sans conclure toute la journée",
+        ],
+        "examples": "cas limites, conflit de priorités, décision à prendre, posture professionnelle, reformulation experte",
+        "avoid": [
+            "revenir à des bases déjà acquises",
+            "ouvrir trop de nouveaux sujets",
+            "faire une conclusion finale trop tôt",
+            "traiter le cas pratique comme une simple illustration décorative",
+        ],
+        "handoff": "ouvrir naturellement vers la consolidation finale de la journée",
+    },
+    7: {
+        "label": "Cours 7 — consolidation et clôture",
+        "moment": "fin de journée, dernier cours avant le Q&A final",
+        "intention": (
+            "terminer la progression du jour, consolider les apprentissages, faire une synthèse utile "
+            "et projeter sobrement vers la suite"
+        ),
+        "rhythm": (
+            "posé, conclusif, valorisant sans emphase : on ralentit légèrement, on relie, "
+            "on donne de la lisibilité et on évite d'ouvrir un chantier neuf"
+        ),
+        "structure": [
+            "réactiver le fil de la journée en quelques phrases",
+            "terminer le dernier point prévu ou le dernier exemple utile",
+            "relier les notions principales sans refaire tout le cours",
+            "donner les points clés à retenir pour la pratique",
+            "conclure pédagogiquement la journée sans dater ni annoncer la prochaine séance",
+        ],
+        "examples": "dernier cas d'intégration, synthèse appliquée, checklist mentale, situation de transfert au poste",
+        "avoid": [
+            "démarrer un gros sujet neuf",
+            "faire un résumé exhaustif de plusieurs heures",
+            "finir abruptement",
+            "survaloriser artificiellement ou faire une conclusion trop solennelle",
+        ],
+        "handoff": "conclure la journée seulement si ce cours est le dernier bloc audible ; sinon conclure uniquement le chapitre",
+    },
+}
+
+
+def _course_slot_prompt_profile(
+    bloc_number: int | str | None,
+    passe: int | str | None = None,
+    *,
+    total_courses: int | str | None = NUM_SUB_PARTS,
+) -> str:
+    """Profil éditorial relatif à la position du cours dans la journée."""
+    try:
+        bloc = int(bloc_number or 0)
+    except (TypeError, ValueError):
+        bloc = 0
+    try:
+        total = max(1, int(total_courses or NUM_SUB_PARTS))
+    except (TypeError, ValueError):
+        total = NUM_SUB_PARTS
+    try:
+        passe_num = int(passe or 0)
+    except (TypeError, ValueError):
+        passe_num = 0
+
+    if total == 1:
+        return (
+            "- Profil : chapitre unique de la journée.\n"
+            "- Accueillir sobrement, situer la séance avec la fiche temporelle, "
+            "annoncer l'unique thème et son plan, puis le développer sans faire "
+            "croire que d'autres chapitres sont prévus ce jour-là.\n"
+            "- Conclure uniquement le chapitre ; conclure aussi la séance seulement "
+            "si aucun Q&R ne suit.\n"
+            "- Ne jamais annoncer un Q&R ou une pause : l'audio suivant possède sa propre intro."
+        )
+
+    if bloc <= 1:
+        profile_index = 1
+    elif bloc >= total:
+        profile_index = 7
+    else:
+        # Projette les cours intermédiaires sur les cinq profils historiques
+        # sans perdre les rôles d'ouverture et de clôture.
+        profile_index = 2 + round(
+            ((bloc - 2) * 4) / max(1, total - 2)
+        )
+        profile_index = max(2, min(6, profile_index))
+
+    profile = _COURSE_SLOT_PROMPT_PROFILES.get(profile_index)
+    if not profile:
+        return ""
+
+    passe_focus = {
+        1: "Passe 1 : poser les bases de la partie, clarifier les notions et préparer l'écoute.",
+        2: "Passe 2 : développer la pratique, les exemples, les gestes professionnels et les cas terrain.",
+        3: "Passe 3 : consolider, nuancer, relier les idées et finir le cours proprement.",
+    }.get(passe_num, "Passe : respecter la progression Fondation / Pratique / Maîtrise.")
+
+    profile_label = re.sub(
+        r"^Cours\s+\d+",
+        f"Cours {bloc}",
+        profile.get("label", f"Cours {bloc}"),
+    )
+    lines = [
+        f"- Profil : {profile_label}.",
+        f"- Moment : {profile['moment']}.",
+        f"- Intention pédagogique : {profile['intention']}.",
+        f"- Rythme et voix : {profile['rhythm']}.",
+        "- Structure interne attendue :",
+    ]
+    lines.extend(f"  {idx}. {item}" for idx, item in enumerate(profile.get("structure", []), 1))
+    lines.extend([
+        f"- Exemples à privilégier : {profile['examples']}.",
+        "- À éviter :",
+    ])
+    lines.extend(f"  - {item}" for item in profile.get("avoid", []))
+    lines.extend([
+        f"- Sortie de la partie : {profile['handoff']}.",
+        f"- Focus de cette passe : {passe_focus}",
+    ])
+    return "\n".join(lines)
+
+
+def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_items: list, sub_parts: list) -> dict:
+    """Valide et complète les plans JSON. Les budgets serveur font autorité."""
+    block_plan = _course_audio_block_plan(
+        playlist_items,
+        folder_position=job.get("folder_position"),
+        platform_id=job.get("platform_id"),
+    )
+    budgets_by_course = {int(b["bloc_number"]): b for b in block_plan}
+    course_numbers = [int(block["bloc_number"]) for block in block_plan]
+    if not course_numbers:
+        raise ValueError("Le planning audio ne contient aucun cours")
+    total_courses = len(course_numbers)
+    day_ends_with_course = bool(
+        playlist_items and playlist_items[-1][2] == "cours"
+    )
+    raw_by_number = {}
+    for item in raw_plan.get("courses") or []:
+        try:
+            raw_by_number[int(item.get("course_number"))] = item
+        except Exception:
+            continue
+
+    try:
+        day_number = int(job.get("folder_position") or 0) + 1
+    except Exception:
+        day_number = None
+    try:
+        nb_days = int(job.get("nb_days") or 0) or None
+    except Exception:
+        nb_days = None
+    is_last_day = bool(nb_days and day_number == nb_days)
+
+    courses = []
+    for course_number in course_numbers:
+        raw = raw_by_number.get(course_number) or {}
+        budget_block = budgets_by_course.get(course_number) or {}
+        target_words = int(budget_block.get("target_words") or budget_block.get("max_words") or 1200)
+        title = _strip_internal_schedule_from_label(
+            raw.get("course_title")
+            or (sub_parts[course_number - 1] if course_number - 1 < len(sub_parts) else f"Cours {course_number}")
+        ).strip()
+        raw_parts = raw.get("parts") if isinstance(raw.get("parts"), list) else []
+        parts_count = max(2, min(4, len(raw_parts) or 3))
+        budgets = _pipeline_course_section_budget_defaults(
+            course_number,
+            target_words,
+            parts_count,
+            words_per_minute=_course_words_per_minute(),
+            is_last_day=is_last_day,
+            is_last_course=(
+                course_number == course_numbers[-1] and day_ends_with_course
+            ),
+            total_courses=total_courses,
+        )
+
+        opening = raw.get("opening") if isinstance(raw.get("opening"), dict) else {}
+        opening.setdefault("type", "ouverture_formation" if course_number == 1 else "reprise_apres_qa_pause")
+        opening["target_words"] = budgets["opening"]
+        if course_number == 1 and day_number == 1:
+            forced_opening_include = [
+                "accueil oral des apprenants",
+                "présentation synthétique du programme annuel",
+                "présentation des thèmes de la journée dans leur ordre pédagogique",
+                "transition naturelle vers le premier grand thème",
+                "objectif de cette première partie",
+                "plan oral en axes avant tout exemple",
+            ]
+            forced_opening_avoid = [
+                "démarrer directement par un exemple",
+                "storytelling avant carte mentale",
+                "mot bloc devant les élèves",
+                "dire ce cours ou tout premier cours devant les élèves",
+                "mentionner trois quarts d'heure ou une durée",
+            ]
+        elif course_number == 1:
+            forced_opening_include = [
+                "accueil oral des apprenants",
+                "reprise douce de la progression de formation",
+                "présentation des thèmes de la journée dans leur ordre pédagogique",
+                "transition naturelle vers le premier grand thème de la journée",
+                "objectif de cette première partie",
+                "plan oral en axes avant tout exemple",
+            ]
+            forced_opening_avoid = [
+                "refaire la présentation annuelle complète",
+                "démarrer directement par un exemple",
+                "storytelling avant carte mentale",
+                "mot bloc devant les élèves",
+                "dire ce cours ou tout premier cours devant les élèves",
+                "mentionner trois quarts d'heure ou une durée",
+            ]
+        else:
+            forced_opening_include = [
+                "petite reprise naturelle cohérente avec l'élément audio précédent",
+                "rappel bref de la partie précédente",
+                "lien avec le nouveau thème",
+                "thème de cette nouvelle partie",
+                "objectif de cette partie",
+                "plan oral en axes avant tout exemple",
+            ]
+            forced_opening_avoid = [
+                "continuer le cours précédent",
+                "double introduction",
+                "exemple avant le plan",
+                "mot bloc devant les élèves",
+                "dire ce cours ou cours actuel devant les élèves",
+                "mentionner trois quarts d'heure ou une durée",
+            ]
+        opening["must_include"] = _merge_unique_strings(opening.get("must_include"), forced_opening_include)
+        opening["must_avoid"] = _merge_unique_strings(opening.get("must_avoid"), forced_opening_avoid)
+        opening["teaching_beats"] = _merge_opening_teaching_beats(
+            _opening_structure_teaching_beats(
+                course_number=course_number,
+                day_number=day_number,
+                job=job,
+                sub_parts=sub_parts,
+                raw_parts=raw_parts,
+                course_title=title,
+                is_first_day=bool(day_number == 1),
+            ),
+            opening.get("teaching_beats") if isinstance(opening.get("teaching_beats"), list) else [],
+        )
+
+        parts = []
+        for idx in range(parts_count):
+            raw_part = raw_parts[idx] if idx < len(raw_parts) and isinstance(raw_parts[idx], dict) else {}
+            forced_part_avoid = [
+                "refaire l'accueil ou l'introduction",
+                "réannoncer les thèmes de la journée",
+                "réannoncer le programme annuel",
+                "répéter l'objectif global ou le plan complet",
+                "mentionner les horaires, créneaux, durées ou le planning",
+            ]
+            if idx == 0:
+                forced_part_avoid.extend([
+                    "commencer par le cadrage général de la journée",
+                    "dire maintenant que le cadre général est posé",
+                    "dire on peut entrer dans le premier grand thème",
+                ])
+            parts.append({
+                "part_number": idx + 1,
+                "title": (raw_part.get("title") or f"Partie {idx + 1}").strip(),
+                "target_words": budgets["parts"][idx],
+                "function": (raw_part.get("function") or "Développer une idée pédagogique identifiable.").strip(),
+                "must_include": raw_part.get("must_include") if isinstance(raw_part.get("must_include"), list) else [],
+                "must_avoid": _merge_unique_strings(
+                    raw_part.get("must_avoid") if isinstance(raw_part.get("must_avoid"), list) else [],
+                    forced_part_avoid,
+                ),
+                "teaching_beats": _normalize_teaching_beats(
+                    raw_part,
+                    course_number=course_number,
+                    part_number=idx + 1,
+                ),
+                "transition_in": (raw_part.get("transition_in") or "").strip(),
+                "transition_out": (raw_part.get("transition_out") or "").strip(),
+            })
+
+        course_conclusion = raw.get("course_conclusion") if isinstance(raw.get("course_conclusion"), dict) else {}
+        course_conclusion["target_words"] = budgets["course_conclusion"]
+        single_course_day = total_courses == 1
+        course_conclusion["single_course_light"] = single_course_day
+        if single_course_day:
+            course_conclusion["must_include"] = [
+                "synthèse courte de deux ou trois repères essentiels du chapitre unique",
+                "utilité concrète des points vus",
+            ]
+            course_conclusion["must_avoid"] = _merge_unique_strings(
+                course_conclusion.get("must_avoid"),
+                [
+                    "récapitulatif exhaustif",
+                    "répéter le plan complet",
+                    "seconde conclusion de journée",
+                    "annoncer un Q/R ou une pause à la place du bloc suivant",
+                    "transition vers un nouveau développement",
+                ],
+            )
+        elif course_number == course_numbers[-1]:
+            course_conclusion["must_include"] = _merge_unique_strings(
+                course_conclusion.get("must_include"),
+                [
+                    "récapitulatif de ce qui a été vu dans le cours avant la conclusion",
+                    "utilité concrète des points vus",
+                ],
+            )
+            course_conclusion["must_avoid"] = _merge_unique_strings(
+                course_conclusion.get("must_avoid"),
+                [
+                    "annoncer un Q/R ou une pause à la place du bloc suivant",
+                    "transition vers un nouveau développement",
+                ],
+            )
+        else:
+            course_conclusion["must_include"] = _merge_unique_strings(
+                course_conclusion.get("must_include"),
+                [
+                    "récapitulatif de ce qui a été vu dans le cours avant la conclusion",
+                    "utilité concrète",
+                ],
+            )
+            course_conclusion["must_avoid"] = _merge_unique_strings(
+                course_conclusion.get("must_avoid"),
+                [
+                    "annonce Q/R ou pause",
+                    "transition vers le cours suivant",
+                ],
+            )
+        course_conclusion["teaching_beats"] = _merge_conclusion_teaching_beats(
+            [
+                _course_conclusion_recap_beat(
+                    course_number=course_number,
+                    course_title=title,
+                    parts=parts,
+                    single_course_day=single_course_day,
+                )
+            ],
+            (
+                []
+                if single_course_day
+                else course_conclusion.get("teaching_beats")
+                if isinstance(course_conclusion.get("teaching_beats"), list)
+                else []
+            ),
+        )
+
+        day_conclusion = None
+        if course_number == course_numbers[-1] and day_ends_with_course:
+            raw_day = raw.get("day_conclusion") if isinstance(raw.get("day_conclusion"), dict) else {}
+            day_must_include = (
+                "fermeture très brève de la journée en une à trois phrases, sans nouveau récapitulatif"
+                if single_course_day
+                else "récapitulatif global de la journée"
+            )
+            day_must_avoid = [
+                "nouveau développement",
+                "mot bloc devant les élèves",
+                "date ou rendez-vous de prochaine séance",
+                "demain, après-demain ou la semaine prochaine",
+            ]
+            if single_course_day:
+                day_must_avoid.extend([
+                    "récapituler le contenu déjà conclu",
+                    "liste de points à retenir",
+                    "nouvelle synthèse détaillée",
+                    "nouvelle slide de récapitulatif",
+                ])
+            day_conclusion = {
+                "target_words": budgets["day_conclusion"],
+                "single_course_light": single_course_day,
+                "suppress_slide": single_course_day,
+                "must_include": _merge_unique_strings(
+                    [] if single_course_day else raw_day.get("must_include"),
+                    day_must_include,
+                ),
+                "must_avoid": _merge_unique_strings(
+                    raw_day.get("must_avoid"),
+                    day_must_avoid,
+                ),
+            }
+
+        courses.append({
+            "course_number": course_number,
+            "total_courses": total_courses,
+            "course_title": title,
+            "filename": budget_block.get("filename") or _course_filename_for_bloc(playlist_items, course_number),
+            "duration_minutes": budget_block.get("duration_min") or round(_course_duration_for_bloc(playlist_items, course_number) / 60, 1),
+            "target_words": target_words,
+            "pedagogical_role": (raw.get("pedagogical_role") or _course_block_role(
+                course_number,
+                folder_position=job.get("folder_position"),
+                next_item=("qa", 0, "qa", course_number),
+                total_courses=total_courses,
+            )).strip(),
+            "course_kind": _structured_course_kind(
+                course_number,
+                total_courses=total_courses,
+            ),
+            "opening": opening,
+            "learning_objectives": raw.get("learning_objectives") if isinstance(raw.get("learning_objectives"), list) else [],
+            "parts": parts,
+            "course_conclusion": course_conclusion,
+            "day_conclusion": day_conclusion,
+            "global_constraints": {
+                "parts_min": 2,
+                "parts_max": 4,
+                "learner_facing_forbidden_words": ["bloc", "créneau", "horaire", "planning"],
+                "learner_facing_preferred_units": ["thème", "partie", "chapitre", "séquence", "axe"],
+                "learner_facing_internal_course_policy": (
+                    "Le mot course/cours désigne une unité interne. Dans le texte "
+                    "apprenant, préférer thème, partie, chapitre, séquence ou axe."
+                ),
+                "examples_policy": (
+                    "Les exemples non sourcés doivent être fictifs ou hypothétiques "
+                    "avec une formulation naturelle. 'Imaginons...' ou 'Supposons que...' "
+                    "suffit quand l'hypothèse est claire."
+                ),
+                "schedule_policy": (
+                    "Les horaires, durées et créneaux sont internes. Le formateur "
+                    "présente la progression pédagogique sans les mentionner."
+                ),
+            },
+        })
+
+    return {
+        "version": "structured-course-plan-v2",
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "title": job.get("program_title") or "",
+        "folder_id": job.get("folder_id"),
+        "day_number": day_number,
+        "nb_days": nb_days,
+        "is_last_day": is_last_day,
+        "courses": courses,
+    }
+
+
+def _build_structured_course_plan_prompt(
+    job: dict,
+    playlist_items: list,
+    sub_parts: list,
+    module_contents: dict,
+    *,
+    planning_mode: str = "full",
+) -> str:
+    prompt_parts = load_planning_prompt_parts()
+    base_style = prompt_parts["base_style"]
+    plan_contract = prompt_parts["plan_contract"]
+    slide_template_catalog = _slide_template_catalog_prompt()
+    skeleton_mode = planning_mode == "skeleton"
+    block_plan = _course_audio_block_plan(
+        playlist_items,
+        folder_position=job.get("folder_position"),
+        platform_id=job.get("platform_id"),
+    )
+    course_count = len(block_plan)
+    if course_count <= 0:
+        raise ValueError("Le planning audio ne contient aucun cours")
+    try:
+        day_number = int(job.get("folder_position") or 0) + 1
+    except Exception:
+        day_number = None
+    try:
+        nb_days = int(job.get("nb_days") or 0) or None
+    except Exception:
+        nb_days = None
+    is_first_day = day_number == 1
+    is_last_day = bool(nb_days and day_number == nb_days)
+    ending_type = playlist_items[-1][2] if playlist_items else None
+    ending_owner = (
+        "le dernier cours"
+        if ending_type == "cours"
+        else "le Q&R final"
+        if ending_type == "qa"
+        else "le dernier bloc audio"
+    )
+    block_lines = "\n".join(
+        f"- Cours {b['bloc_number']} · {b['duration_min']} min · cible {b['target_words']} mots · {b['role']}"
+        for b in block_plan
+    )
+    sub_part_lines = "\n".join(
+        f"- Cours {i + 1}: {_strip_internal_schedule_from_label(name)}"
+        for i, name in enumerate(sub_parts or [])
+    )
+    module_summary = "\n\n".join(
+        f"## {_strip_internal_schedule_from_label(name)}\n{_compact_words(text, 650)}"
+        for name, text in (module_contents or {}).items()
+        if (text or "").strip()
+    )
+    if skeleton_mode:
+        planning_pass_contract = f"""
+MODE DE CETTE PASSE : PLAN GLOBAL LÉGER
+- Ta mission ici est de construire la colonne vertébrale pédagogique de la journée.
+- Ne crée pas encore les `teaching_beats` détaillés ni les `slide_anchor` de chaque partie.
+- Concentre-toi sur : progression des {course_count} thèmes, parties, fonctions pédagogiques,
+  `must_include`, `must_avoid`, transitions et conclusions.
+- Les teaching beats et les slides seront créés ensuite par des appels IA séparés,
+  cours par cours, avec ce plan global en contexte.
+- Pour l'instant, laisse `teaching_beats` vide ou absent dans les parties.
+"""
+        teaching_beat_rules = """
+- Ne détaille pas les `teaching_beats` dans cette passe. Tu peux seulement définir
+  les objectifs et contraintes qui permettront de les créer ensuite proprement.
+- Pour chaque partie, `title`, `function`, `must_include` et `must_avoid` doivent être
+  assez spécifiques pour qu'un second agent puisse créer des moments visuels variés.
+"""
+        response_schema = """{
+  "courses": [
+    {
+      "course_number": 1,
+      "course_title": "...",
+      "pedagogical_role": "...",
+      "opening": {"type": "...", "must_include": [], "must_avoid": []},
+      "learning_objectives": ["..."],
+      "parts": [
+        {
+          "part_number": 1,
+          "title": "...",
+          "function": "...",
+          "must_include": [],
+          "must_avoid": [],
+          "transition_in": "...",
+          "transition_out": ""
+        }
+      ],
+      "course_conclusion": {"must_include": [], "must_avoid": []},
+      "day_conclusion": null
+    }
+  ]
+}"""
+    else:
+        planning_pass_contract = """
+MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
+- Tu dois produire le plan complet, incluant les `teaching_beats` et les
+  `slide_anchor` de chaque partie.
+"""
+        teaching_beat_rules = f"""
+- Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
+- Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
+- Interdiction de beats paresseux ou génériques : n'écris jamais `role` ou `visual_goal` du type "poser l'idée centrale", "faire retenir l'idée centrale", "présenter l'idée principale" ou "visualiser le point pédagogique".
+- Chaque beat doit nommer le contenu métier précis à traiter : notion, geste, piège, méthode, exemple, comparaison ou décision observable. On doit comprendre ce que l'apprenant retient sans lire le titre de la partie.
+- Dans `spoken_requirement`, indique ce qui doit être dit concrètement à l'oral, pas seulement "présenter clairement".
+- La `spoken_requirement` d'un beat slideable doit réaliser la forme pédagogique déclarée dans son `slide_anchor` : déduis d'abord la structure orale dominante, fixe le `pedagogical_shape`, puis choisis un `template_type` compatible avec cette shape. Ne livre jamais un anchor dont l'exigence orale fabrique déjà une autre forme que celle annoncée.
+- Dans `slide_anchor.pedagogical_shape`, nomme la fonction pédagogique du passage avant le template.
+- Dans `slide_anchor.visual_goal`, formule le souvenir visuel spécifique à construire, pas une intention générale.
+Taxonomie `pedagogical_shape`:
+{_pedagogical_shape_mapping_prompt()}
+"""
+        response_schema = """{
+  "courses": [
+    {
+      "course_number": 1,
+      "course_title": "...",
+      "pedagogical_role": "...",
+      "opening": {"type": "...", "must_include": [], "must_avoid": [], "teaching_beats": []},
+      "learning_objectives": ["..."],
+      "parts": [
+        {
+          "part_number": 1,
+          "title": "...",
+          "function": "...",
+          "must_include": [],
+          "must_avoid": [],
+          "teaching_beats": [
+            {
+              "beat_id": "c1p1b1",
+              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|reprise_recap|opinion|quote",
+              "role": "fonction pédagogique du moment",
+              "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
+              "slide_anchor": {
+                "enabled": true,
+                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|reprise_recap|warning|tip|quotable|pause|qa",
+                "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_de_reprise|synthese_apres_developpement|modele_a_leviers",
+                "visual_goal": "ce que la slide doit aider à retenir",
+                "items_expected": null,
+                "fields_hint": {}
+              }
+            }
+          ],
+          "transition_in": "...",
+          "transition_out": "..."
+        }
+      ],
+      "course_conclusion": {"must_include": [], "must_avoid": []},
+      "day_conclusion": null
+    }
+  ]
+}"""
+    return f"""Tu es ingénieur pédagogique. Tu dois produire le PLAN JSON STRICT de {course_count} cours audio d'une journée.
+
+SOCLE GÉNÉRAL À RESPECTER :
+{base_style}
+
+CONTRAT DE PLANIFICATION :
+{plan_contract}
+
+Le plan est libre maintenant, mais il sera verrouillé ensuite : le texte final devra suivre ce plan.
+
+{planning_pass_contract}
+
+Contraintes générales :
+- Chaque cours a 2 à 4 parties, jamais moins, jamais plus.
+- Dans ce JSON, "cours" est une unité interne. Devant les élèves, présente ces unités comme des grands thèmes, parties, chapitres ou séquences de journée.
+- Devant les élèves, ne jamais utiliser les mots "bloc", "créneau", "horaire" ou "planning" : utiliser "thème", "partie", "chapitre", "séquence", "axe", "moment" ou parler simplement de progression.
+- Évite aussi côté apprenant : "tout premier cours", "ce cours", "cours actuel", "le cours qui nous occupe", "pour les trois quarts d'heure à venir".
+- Les durées, horaires, budgets mots, noms de fichiers et découpages playlist sont internes. Ils ne doivent jamais apparaître dans les titres, ouvertures, transitions ou conclusions côté apprenant.
+- Ne jamais écrire une phrase du type "sans vous soucier des horaires précis" : si tu présentes la journée, énonce seulement les thèmes dans leur ordre pédagogique.
+- Les Q&R et les pauses sont facultatifs et ne font pas partie du texte des cours.
+- Chaque Q&R/pause porte sa propre intro et sa propre outro : le cours précédent ne l'annonce jamais.
+- Deux cours contigus sont reliés par une jointure audio générique : aucun des deux cours ne doit verbaliser ce mécanisme.
+- Si la journée comporte un seul cours, applique la règle `mono-cours light` : une seule synthèse courte dans la conclusion du cours, puis une fermeture de journée de une à trois phrases sans répéter le contenu. Ne prévois jamais une deuxième synthèse ni une deuxième slide `recap`.
+- Cours interne 1 de la première journée seulement : accueil, parcours annuel synthétique, chapitres réellement prévus ce jour-là, transition vers le premier chapitre, objectif et axes.
+- Cours interne 1 d'une journée suivante : accueil de journée, reprise douce de la progression, chapitres réellement prévus ce jour-là, puis premier chapitre. Ne refais pas la présentation annuelle complète.
+- Cours internes suivants : reprise cohérente avec l'élément audio précédent, rappel bref si utile, lien avec le nouveau chapitre, objectif et axes.
+- Chaque cours conclut seulement son propre chapitre. Propriétaire de la clôture de journée : {ending_owner}.
+- Si le dernier bloc est un Q&R, le dernier cours ne clôt pas la journée : l'outro du Q&R le fera.
+- Si le dernier bloc est un cours, ce cours fait la conclusion pédagogique globale sans annoncer de date ni de prochain rendez-vous.
+- La courte clôture temporelle exacte est ajoutée plus tard, au moment de l'audio ; ne l'écris pas dans le contenu durable du cours.
+- Les exemples non sourcés doivent être fictifs ou hypothétiques avec une
+  formulation naturelle. "Imaginons...", "Imaginez qu'un client...",
+  "Prenons un exemple fictif..." ou "Supposons que..." suffit.
+{teaching_beat_rules}
+- Dans `opening` du cours interne 1 de la première journée, prévois explicitement les moments structurels dans cet ordre : accueil (`welcome`), vision annuelle (`program_year`), feuille de route des {course_count} thèmes (`day_program_7_steps`), puis ouverture du premier chapitre (`chapter_opener`).
+- Dans `opening` d'un cours interne suivant, prévois une reprise brève du chapitre précédent (`reprise_recap`), puis l'ouverture du nouveau chapitre (`chapter_opener`). N'utilise pas `steps` pour ces deux fonctions.
+- Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
+- Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
+- Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
+- Si le passage introduit une maxime, une phrase clé, une formule exacte ou un repère à mémoriser, le bon anchor est `quotable`, pas `recap` ni `reflection`.
+- Si cette phrase clé est ensuite illustrée par une scène ou une expérience concrète, `story` peut être utilisé comme déclinaison narrative.
+- Une structure nouvelle en trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions est `situations`, pas `recap`.
+- Un seul cas fictif qui sert à faire passer un conseil, une astuce ou un réflexe métier est `tip`, pas `casestudy`.
+- `casestudy` est réservé à 2 à 4 cas métier comparables en cartes.
+- La structure demandée par la `spoken_requirement` fait autorité : règle d'action = `conseil_actionnable`, cas comparables = `cas_comparables`, opposition = `opposition_deux_modes`, triade = `triade_structurante`, suite ordonnée = `progression_ordonnee`. Si cette structure contredit le template envisagé, change la shape et le template au lieu de forcer le choix initial.
+- Une distinction en deux familles ou deux modes, comme synchrone/asynchrone, téléphone/courriel, immédiat/différé, rapidité/exhaustivité, est `comparison`.
+- Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
+- `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
+
+Position dans la formation :
+- Journée courante : {day_number or "inconnue"}
+- Nombre total de journées : {nb_days or "inconnu"}
+- Première journée : {"oui" if is_first_day else "non"}
+- Dernière journée : {"oui" if is_last_day else "non"}
+
+Budget audio par cours :
+{block_lines}
+
+Cours détectés, libellés nettoyés des horaires internes :
+{sub_part_lines}
+
+Titre professionnel :
+{job.get('program_title') or ''}
+
+Intitulé journée :
+{job.get('folder_name') or ''}
+
+Programme source :
+{_compact_words(job.get('program_text') or '', 3500)}
+
+Contenus module disponibles :
+{module_summary or '(aucun contenu module dédié)'}
+
+Catalogue interne des templates de slides :
+{slide_template_catalog}
+
+Réponds UNIQUEMENT en JSON valide :
+{response_schema}"""
+
+
+def _course_plan_without_teaching_beats(course_plan: dict) -> dict:
+    clean = json.loads(json.dumps(course_plan or {}, ensure_ascii=False))
+    opening = clean.get("opening") if isinstance(clean.get("opening"), dict) else {}
+    opening.pop("teaching_beats", None)
+    opening.pop("slide_anchors", None)
+    for part in clean.get("parts") or []:
+        if isinstance(part, dict):
+            part.pop("teaching_beats", None)
+            part.pop("slide_anchors", None)
+    return clean
+
+
+def _day_skeleton_for_enrichment(plan: dict) -> list[dict]:
+    skeleton = []
+    for course in plan.get("courses") or []:
+        if not isinstance(course, dict):
+            continue
+        skeleton.append({
+            "course_number": course.get("course_number"),
+            "course_title": course.get("course_title"),
+            "pedagogical_role": course.get("pedagogical_role"),
+            "learning_objectives": course.get("learning_objectives") or [],
+            "parts": [
+                {
+                    "part_number": part.get("part_number"),
+                    "title": part.get("title"),
+                    "function": part.get("function"),
+                    "must_include": part.get("must_include") or [],
+                    "must_avoid": part.get("must_avoid") or [],
+                }
+                for part in (course.get("parts") or [])
+                if isinstance(part, dict)
+            ],
+        })
+    return skeleton
+
+
+def _neighbor_course_summary(plan: dict, course_number: int, offset: int) -> dict | None:
+    wanted = int(course_number or 0) + int(offset or 0)
+    for course in plan.get("courses") or []:
+        if not isinstance(course, dict):
+            continue
+        try:
+            if int(course.get("course_number") or 0) != wanted:
+                continue
+        except Exception:
+            continue
+        return {
+            "course_number": course.get("course_number"),
+            "course_title": course.get("course_title"),
+            "pedagogical_role": course.get("pedagogical_role"),
+            "learning_objectives": course.get("learning_objectives") or [],
+            "parts": [
+                {
+                    "part_number": part.get("part_number"),
+                    "title": part.get("title"),
+                    "function": part.get("function"),
+                }
+                for part in (course.get("parts") or [])
+                if isinstance(part, dict)
+            ],
+        }
+    return None
+
+
+def _build_course_beats_enrichment_prompt(plan: dict, course_plan: dict, *, job: dict) -> str:
+    course_number = int(course_plan.get("course_number") or 0)
+    slide_template_catalog = _slide_template_catalog_prompt()
+    course_skeleton = _course_plan_without_teaching_beats(course_plan)
+    day_skeleton = _day_skeleton_for_enrichment(plan)
+    previous_course = _neighbor_course_summary(plan, course_number, -1)
+    next_course = _neighbor_course_summary(plan, course_number, 1)
+    return f"""Tu es un ingénieur pédagogique spécialisé dans le design des moments d'apprentissage et des slides.
+
+Tu enrichis UN SEUL cours d'une journée déjà planifiée.
+La colonne vertébrale globale est verrouillée : tu ne dois pas changer les titres, parties, budgets, `must_include` ou `must_avoid`.
+
+Objectif de cette passe :
+- Créer les `teaching_beats` précis de chaque partie de développement du cours cible.
+- Choisir les moments qui méritent une slide.
+- Associer un template existant pertinent à chaque `slide_anchor`.
+- Associer aussi une `pedagogical_shape` à chaque `slide_anchor`, avant le choix du template.
+- Produire des objectifs visuels et exigences orales spécifiques au contenu métier.
+
+Règles de qualité obligatoires :
+- Pour chaque partie, crée 2 à 4 teaching beats.
+- Chaque beat doit traiter un contenu métier précis : notion, geste, piège, méthode, exemple, comparaison, décision observable ou synthèse opérationnelle.
+- Interdiction absolue des formulations paresseuses : "idée centrale", "idée principale", "point pédagogique", "présenter clairement", "faire retenir l'idée centrale".
+- `role` doit dire à quoi sert le moment dans la progression.
+- `spoken_requirement` doit décrire ce que l'oral devra concrètement couvrir.
+- La `spoken_requirement` d'un beat slideable doit réaliser la forme pédagogique déclarée dans son `slide_anchor` : déduis d'abord la structure orale dominante, fixe le `pedagogical_shape`, puis choisis un `template_type` compatible avec cette shape. Ne livre jamais un anchor dont l'exigence orale fabrique déjà une autre forme que celle annoncée.
+- `slide_anchor.pedagogical_shape` doit nommer la fonction pédagogique du passage, pas son thème.
+- `slide_anchor.visual_goal` doit indiquer le souvenir visuel spécifique à construire.
+- `slide_anchor.must_cover` doit nommer le contenu exact couvert par cette slide.
+- `slide_anchor.must_not_cover` doit indiquer ce que cette slide ne doit pas absorber, pour éviter les doublons.
+- Diversifie les types de beats et les templates quand le contenu le permet. Ne mets pas tout en `reflection`.
+- N'active pas une slide pour une simple liaison orale.
+- Si une partie contient plusieurs slides, elles doivent couvrir des mouvements distincts et non interchangeables.
+- Garde les beats dans l'ordre chronologique naturel de la partie.
+- Le texte final ne devra jamais prononcer "slide", "template", "anchor" ou "teaching beat".
+
+Contexte global de journée :
+{json.dumps(day_skeleton, ensure_ascii=False, indent=2)}
+
+Cours précédent :
+{json.dumps(previous_course or {}, ensure_ascii=False, indent=2)}
+
+Cours suivant :
+{json.dumps(next_course or {}, ensure_ascii=False, indent=2)}
+
+Cours cible à enrichir :
+{json.dumps(course_skeleton, ensure_ascii=False, indent=2)}
+
+Titre professionnel :
+{job.get('program_title') or ''}
+
+Intitulé journée :
+{job.get('folder_name') or ''}
+
+Catalogue interne des templates de slides :
+{slide_template_catalog}
+
+Règles de choix à respecter :
+Taxonomie `pedagogical_shape`:
+{_pedagogical_shape_mapping_prompt()}
+
+- Maxime, phrase clé, formule exacte ou repère à mémoriser = `quotable`.
+- Scène ou expérience qui illustre une maxime = `story`.
+- Trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions = `situations`.
+- Cas unique qui amène un conseil, une astuce ou un réflexe métier = `tip`.
+- 2 à 4 cas métier comparables = `casestudy`.
+- La structure demandée par la `spoken_requirement` fait autorité : règle d'action = `conseil_actionnable`, cas comparables = `cas_comparables`, opposition = `opposition_deux_modes`, triade = `triade_structurante`, suite ordonnée = `progression_ordonnee`. Si cette structure contredit le template envisagé, change la shape et le template au lieu de forcer le choix initial.
+- Deux familles ou deux modes à opposer = `comparison`.
+- Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
+- `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
+
+Réponds UNIQUEMENT en JSON valide.
+Ne renvoie que les parties et leurs teaching_beats, pas le plan complet.
+
+FORMAT EXACT :
+{{
+  "course_number": {course_number},
+  "parts": [
+    {{
+      "part_number": 1,
+      "teaching_beats": [
+        {{
+          "beat_id": "c{course_number}p1b1",
+          "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|reprise_recap|opinion|quote",
+          "role": "fonction pédagogique spécifique du moment",
+          "spoken_requirement": "ce que l'oral devra couvrir concrètement",
+          "slide_anchor": {{
+            "enabled": true,
+            "template_type": "chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|reprise_recap|warning|tip|quotable|pause|qa",
+            "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_de_reprise|synthese_apres_developpement|modele_a_leviers",
+            "visual_goal": "souvenir visuel spécifique à construire",
+            "items_expected": null,
+            "must_cover": "contenu précis couvert par la slide",
+            "must_not_cover": "contenu voisin à ne pas absorber",
+            "fields_hint": {{}}
+          }}
+        }}
+      ]
+    }}
+  ]
+}}"""
+
+
+def _parse_course_beats_enrichment(raw: str, course_number: int) -> dict:
+    data = _extract_llm_json(raw)
+    if isinstance(data.get("course"), dict):
+        data = data["course"]
+    if not isinstance(data.get("parts"), list):
+        raise ValueError(f"Enrichissement cours {course_number} invalide : parts absent")
+    return data
+
+
+def _merge_course_beats_enrichment(course_plan: dict, enrichment: dict) -> dict:
+    course_number = int(course_plan.get("course_number") or 0)
+    enriched_by_part = {}
+    for part in enrichment.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        try:
+            enriched_by_part[int(part.get("part_number") or 0)] = part
+        except Exception:
+            continue
+
+    merged = {**course_plan}
+    merged_parts = []
+    enriched_parts_count = 0
+    enriched_beats_count = 0
+    for part in course_plan.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        part_number = int(part.get("part_number") or len(merged_parts) + 1)
+        enriched_part = enriched_by_part.get(part_number) or {}
+        raw_beats = enriched_part.get("teaching_beats") if isinstance(enriched_part.get("teaching_beats"), list) else []
+        next_part = {**part}
+        if raw_beats:
+            next_part["teaching_beats"] = _normalize_teaching_beats(
+                {**part, "teaching_beats": raw_beats},
+                course_number=course_number,
+                part_number=part_number,
+            )
+            enriched_parts_count += 1
+            enriched_beats_count += len(next_part["teaching_beats"])
+        merged_parts.append(next_part)
+
+    merged["parts"] = merged_parts
+    merged["teaching_beats_enrichment"] = {
+        "status": "enriched" if enriched_parts_count else "fallback_existing",
+        "parts": enriched_parts_count,
+        "beats": enriched_beats_count,
+    }
+    return merged
+
+
+def _enrich_structured_course_plan_with_beats(*, plan: dict, course_plan: dict, job: dict, model=None) -> dict:
+    course_number = int(course_plan.get("course_number") or 0)
+    prompt = _build_course_beats_enrichment_prompt(plan, course_plan, job=job)
+    started_at = time.time()
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_START formation_job_id=%s content_job_id=%s course=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_number,
+    )
+    # Une erreur fournisseur remonte à la file durable. Seule une réponse
+    # reçue mais inexploitable conserve le plan squelette déjà valide.
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=6500,
+        model=model,
+    )
+    try:
+        enrichment = _parse_course_beats_enrichment(raw, course_number)
+        merged = _merge_course_beats_enrichment(course_plan, enrichment)
+        logger.info(
+            "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_DONE formation_job_id=%s content_job_id=%s course=%s status=%s beats=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            (merged.get("teaching_beats_enrichment") or {}).get("status"),
+            (merged.get("teaching_beats_enrichment") or {}).get("beats"),
+            int((time.time() - started_at) * 1000),
+        )
+        return merged
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_WARN formation_job_id=%s content_job_id=%s course=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            str(exc)[:260],
+        )
+        fallback = {**course_plan}
+        fallback["teaching_beats_enrichment"] = {
+            "status": "fallback_existing",
+            "reason": str(exc)[:260],
+        }
+        return fallback
+
+
+def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
+    started_at = time.time()
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_START formation_job_id=%s content_job_id=%s folder=%s model=%s playlist_items=%s sub_parts=%s module_chars=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        model or DEEPSEEK_MODEL,
+        len(playlist_items or []),
+        len(sub_parts or []),
+        sum(len(str(value or "")) for value in (module_contents or {}).values()),
+    )
+    skeleton_prompt = _build_structured_course_plan_prompt(
+        job,
+        playlist_items,
+        sub_parts,
+        module_contents,
+        planning_mode="skeleton",
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_PROMPT_READY formation_job_id=%s content_job_id=%s folder=%s prompt_chars=%s max_tokens=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        len(skeleton_prompt),
+        7000,
+    )
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": skeleton_prompt}],
+        max_tokens=7000,
+        model=model,
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_RESPONSE formation_job_id=%s content_job_id=%s folder=%s response_chars=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        len(raw or ""),
+        int((time.time() - started_at) * 1000),
+    )
+    skeleton_plan = _normalize_structured_course_plans(
+        _parse_structured_course_plan(raw),
+        job=job,
+        playlist_items=playlist_items,
+        sub_parts=sub_parts,
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_DONE formation_job_id=%s content_job_id=%s courses=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        len(skeleton_plan.get("courses") or []),
+        int((time.time() - started_at) * 1000),
+    )
+    workers = _structured_course_parallel_workers()
+    enrichment_started_at = time.time()
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_ENRICH_START formation_job_id=%s content_job_id=%s courses=%s workers=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        len(skeleton_plan.get("courses") or []),
+        workers,
+    )
+    enriched_courses = _run_structured_parallel(
+        sorted(skeleton_plan.get("courses") or [], key=lambda item: int(item.get("course_number") or 0)),
+        lambda course_plan: _enrich_structured_course_plan_with_beats(
+            plan=skeleton_plan,
+            course_plan=course_plan,
+            job=job,
+            model=model,
+        ),
+        workers=workers,
+    )
+    enriched_courses = sorted(enriched_courses, key=lambda item: int(item.get("course_number") or 0))
+    total_beats = sum(
+        len(part.get("teaching_beats") or [])
+        for course in enriched_courses
+        for part in (course.get("parts") or [])
+        if isinstance(part, dict)
+    )
+    plan = {
+        **skeleton_plan,
+        "courses": enriched_courses,
+        "planning_strategy": "global_skeleton_then_parallel_course_beats",
+        "planning_enrichment": {
+            "workers": workers,
+            "courses": len(enriched_courses),
+            "beats": total_beats,
+        },
+    }
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_DONE formation_job_id=%s content_job_id=%s courses=%s beats=%s enrich_duration_ms=%s total_duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        len(enriched_courses),
+        total_beats,
+        int((time.time() - enrichment_started_at) * 1000),
+        int((time.time() - started_at) * 1000),
+    )
+    return plan
+
+
+def _generate_structured_course_plan(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
+    if _structured_plan_two_stage_enabled():
+        return _generate_structured_course_plan_two_stage(
+            job,
+            playlist_items,
+            sub_parts,
+            module_contents,
+            model=model,
+        )
+
+    attempt_started_at = time.time()
+    prompt = _build_structured_course_plan_prompt(
+        job,
+        playlist_items,
+        sub_parts,
+        module_contents,
+        planning_mode="full",
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_FULL_START formation_job_id=%s content_job_id=%s folder=%s model=%s prompt_chars=%s max_tokens=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        model or DEEPSEEK_MODEL,
+        len(prompt),
+        9000,
+    )
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=9000,
+        model=model,
+    )
+    plan = _normalize_structured_course_plans(
+        _parse_structured_course_plan(raw),
+        job=job,
+        playlist_items=playlist_items,
+        sub_parts=sub_parts,
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_FULL_DONE formation_job_id=%s content_job_id=%s folder=%s response_chars=%s courses=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        len(raw or ""),
+        len(plan.get("courses") or []),
+        int((time.time() - attempt_started_at) * 1000),
+    )
+    return plan
+
+
+def _section_label(section: dict) -> str:
+    kind = section.get("kind")
+    if kind == "opening":
+        return "introduction"
+    if kind == "course_calibrated":
+        return "cours complet calibré"
+    if kind == "course_conclusion":
+        return "conclusion du cours"
+    if kind == "day_conclusion":
+        return "conclusion globale de la journée"
+    return f"partie {section.get('part_number')}"
+
+
+def _structured_sections_for_course(course_plan: dict) -> list[dict]:
+    sections = [{"kind": "opening", **(course_plan.get("opening") or {})}]
+    for part in course_plan.get("parts") or []:
+        sections.append({"kind": "part", **part})
+    sections.append({"kind": "course_conclusion", **(course_plan.get("course_conclusion") or {})})
+    if course_plan.get("day_conclusion"):
+        sections.append({"kind": "day_conclusion", **course_plan["day_conclusion"]})
+    return sections
+
+
+def _section_artifact_metadata(section: dict) -> dict:
+    teaching_beats = section.get("teaching_beats") if isinstance(section.get("teaching_beats"), list) else []
+    slide_anchors = []
+    for beat in teaching_beats:
+        anchor = beat.get("slide_anchor") if isinstance(beat, dict) else None
+        if not isinstance(anchor, dict) or not anchor.get("enabled"):
+            continue
+        slide_anchors.append({
+            "beat_id": beat.get("beat_id"),
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "slide_anchor": anchor,
+            "text_anchor_scope": "section",
+        })
+    return {
+        "must_include": section.get("must_include") if isinstance(section.get("must_include"), list) else [],
+        "must_avoid": section.get("must_avoid") if isinstance(section.get("must_avoid"), list) else [],
+        "teaching_beats": teaching_beats,
+        "slide_anchors": slide_anchors,
+        "single_course_light": bool(section.get("single_course_light")),
+        "suppress_slide": bool(section.get("suppress_slide")),
+    }
+
+
+def _fold_display_text(text: str | None) -> str:
+    cleaned = _FISHAUDIO_TAG_RE.sub(" ", text or "")
+    cleaned = cleaned.replace("\u00a0", " ")
+    cleaned = cleaned.replace("’", "'").replace("‘", "'").replace("`", "'")
+    cleaned = cleaned.replace("«", '"').replace("»", '"').replace("“", '"').replace("”", '"')
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip().lower()
+
+
+def _fold_display_token(text: str | None) -> str:
+    folded = _fold_display_text(text)
+    return re.sub(r"^[^\wÀ-ÖØ-öø-ÿ]+|[^\wÀ-ÖØ-öø-ÿ]+$", "", folded)
+
+
+def _display_text_tokens(text: str) -> list[dict]:
+    tokens = []
+    for match in re.finditer(r"\S+", text or ""):
+        folded = _fold_display_token(match.group(0))
+        if not folded:
+            continue
+        tokens.append({
+            "text": match.group(0),
+            "folded": folded,
+            "start": match.start(),
+            "end": match.end(),
+        })
+    return tokens
+
+
+def _display_anchor_matches(text: str, anchor_text: str) -> list[dict]:
+    tokens = _display_text_tokens(text)
+    anchor_tokens = [token["folded"] for token in _display_text_tokens(anchor_text)]
+    if not tokens or not anchor_tokens:
+        return []
+    folded_tokens = [token["folded"] for token in tokens]
+    matches = []
+    span_len = len(anchor_tokens)
+    for idx in range(0, len(folded_tokens) - span_len + 1):
+        if folded_tokens[idx:idx + span_len] == anchor_tokens:
+            matches.append({
+                "word_start": idx,
+                "word_end": idx + span_len,
+                "char_start": tokens[idx]["start"],
+                "char_end": tokens[idx + span_len - 1]["end"],
+            })
+    return matches
+
+
+def _display_map_expected_beats(section: dict) -> dict[str, dict]:
+    expected = {}
+    for beat in _section_teaching_beats(section):
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        beat_id = str(beat.get("beat_id") or "").strip()
+        if beat_id and anchor.get("enabled"):
+            expected[beat_id] = {"beat": beat, "anchor": anchor}
+    return expected
+
+
+def _strip_residual_slide_display_map_leaks(text: str | None) -> str:
+    lines = (text or "").splitlines()
+    kept = []
+    dropping_display_block = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped in {_SLIDE_DISPLAY_ORDER_MARKER, _SLIDE_DISPLAY_MAP_MARKER}:
+            dropping_display_block = True
+            continue
+        if stripped == _SLIDE_DISPLAY_END_MARKER:
+            dropping_display_block = False
+            continue
+        if dropping_display_block:
+            continue
+        if _SLIDE_DISPLAY_ANCHOR_LINE_RE.match(line):
+            continue
+        if _SLIDE_DISPLAY_MARKER_LINE_RE.match(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _strip_slide_display_map_block(raw_text: str | None) -> tuple[str, str, list[str]]:
+    text = raw_text or ""
+    map_start = text.rfind(_SLIDE_DISPLAY_MAP_MARKER)
+    order_start = text.rfind(
+        _SLIDE_DISPLAY_ORDER_MARKER,
+        0,
+        map_start if map_start >= 0 else len(text),
+    )
+    if map_start < 0 and order_start < 0:
+        return _strip_residual_slide_display_map_leaks(text), "", ["missing_block"]
+    block_start = order_start if order_start >= 0 and (map_start < 0 or order_start < map_start) else map_start
+    map_start = text.find(_SLIDE_DISPLAY_MAP_MARKER, block_start)
+    if map_start < 0:
+        clean = _strip_residual_slide_display_map_leaks(text[:block_start])
+        return clean, text[block_start:].strip(), ["missing_map_marker"]
+    end_start = text.find(_SLIDE_DISPLAY_END_MARKER, map_start)
+    if end_start < 0:
+        block = text[block_start:].strip()
+        clean = _strip_residual_slide_display_map_leaks(text[:block_start])
+        return clean, block, []
+    end = end_start + len(_SLIDE_DISPLAY_END_MARKER)
+    block = text[block_start:end].strip()
+    clean = _strip_residual_slide_display_map_leaks(f"{text[:block_start]}\n{text[end:]}")
+    return clean, block, []
+
+
+def _unquote_display_value(value: str) -> str:
+    value = (value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1].strip()
+    return value.strip()
+
+
+def _parse_slide_display_map_line(line: str) -> tuple[dict | None, str | None]:
+    parts = [part.strip() for part in line.split("|")]
+    if len(parts) < 2:
+        return None, "malformed_line"
+    beat_id = parts[0].strip()
+    if not beat_id:
+        return None, "missing_beat_id"
+    entry = {
+        "beat_id": beat_id,
+        "anchor_text": "",
+        "quote": "",
+        "items": [],
+        "status": "ok",
+    }
+    for field in parts[1:]:
+        if not field:
+            continue
+        match = _SLIDE_DISPLAY_FIELD_RE.match(field)
+        if not match:
+            return None, f"malformed_field:{field[:40]}"
+        key = match.group("key").strip().upper()
+        value = match.group("value").strip()
+        if key == "ANCRAGE":
+            entry["anchor_text"] = _unquote_display_value(value)
+        elif key == "QUOTE":
+            entry["quote"] = _unquote_display_value(value)
+        elif key == "ITEMS":
+            entry["items"] = [
+                item.strip()
+                for item in re.split(r"\s*;\s*", _unquote_display_value(value))
+                if item.strip()
+            ]
+        else:
+            return None, f"unknown_field:{key}"
+    if not entry["anchor_text"]:
+        return None, "missing_anchor_text"
+    return entry, None
+
+
+def _parse_slide_display_map_with_order(raw_text: str | None) -> tuple[str, list[dict], list[str], list[str]]:
+    clean_text, block, errors = _strip_slide_display_map_block(raw_text)
+    if not block:
+        return clean_text, [], errors, []
+    map_start = block.find(_SLIDE_DISPLAY_MAP_MARKER)
+    if map_start < 0:
+        return clean_text, [], errors or ["missing_map_marker"], []
+    order_text = ""
+    if _SLIDE_DISPLAY_ORDER_MARKER in block:
+        order_text = block.split(_SLIDE_DISPLAY_ORDER_MARKER, 1)[1].split(_SLIDE_DISPLAY_MAP_MARKER, 1)[0]
+    order_declared = [
+        item.strip()
+        for item in re.split(r"[,\n]+", order_text)
+        if item.strip() and not item.strip().startswith("===")
+    ]
+    map_text = block[map_start + len(_SLIDE_DISPLAY_MAP_MARKER):]
+    if _SLIDE_DISPLAY_END_MARKER in map_text:
+        map_text = map_text.split(_SLIDE_DISPLAY_END_MARKER, 1)[0]
+    entries = []
+    for line_no, raw_line in enumerate(map_text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("==="):
+            continue
+        entry, error = _parse_slide_display_map_line(line)
+        if error:
+            errors.append(f"line_{line_no}:{error}")
+            continue
+        entries.append(entry)
+    if not entries:
+        errors.append("empty_map")
+    return clean_text, entries, errors, order_declared
+
+
+def _parse_slide_display_map(raw_text: str | None) -> tuple[str, list[dict], list[str]]:
+    clean_text, entries, errors, _order_declared = _parse_slide_display_map_with_order(raw_text)
+    return clean_text, entries, errors
+
+
+def _validate_slide_display_map(section: dict, entries: list[dict], clean_text: str) -> tuple[list[dict], list[str]]:
+    expected = _display_map_expected_beats(section)
+    errors = []
+    if not expected:
+        return [], []
+    by_beat: dict[str, list[dict]] = {}
+    for entry in entries or []:
+        by_beat.setdefault(str(entry.get("beat_id") or "").strip(), []).append(entry)
+
+    validated = []
+    for beat_id, matches in by_beat.items():
+        if beat_id not in expected:
+            errors.append(f"unknown_beat:{beat_id}")
+        if len(matches) > 1:
+            errors.append(f"duplicate_beat:{beat_id}")
+
+    for beat_id, expected_info in expected.items():
+        matches = by_beat.get(beat_id) or []
+        if not matches:
+            errors.append(f"missing_beat:{beat_id}")
+            continue
+        entry = {**matches[0]}
+        anchor_matches = _display_anchor_matches(clean_text, entry.get("anchor_text") or "")
+        if len(anchor_matches) != 1:
+            errors.append(
+                f"{'missing_anchor' if not anchor_matches else 'ambiguous_anchor'}:{beat_id}"
+            )
+            entry["status"] = "dropped"
+        else:
+            entry["status"] = entry.get("status") or "ok"
+
+        quote = str(entry.get("quote") or "").strip()
+        if quote:
+            quote_words = len(quote.split())
+            if quote_words > 25 or len(_display_anchor_matches(clean_text, quote)) < 1:
+                logger.info(
+                    "PIPELINE_SLIDE_DISPLAY_MAP_QUOTE_DROPPED beat_id=%s reason=%s",
+                    beat_id,
+                    "too_long" if quote_words > 25 else "not_found",
+                )
+                entry["quote"] = ""
+
+        items_expected = expected_info["anchor"].get("items_expected")
+        if items_expected is not None:
+            try:
+                expected_count = int(items_expected)
+            except (TypeError, ValueError):
+                expected_count = 0
+            if expected_count > 0 and len(entry.get("items") or []) != expected_count:
+                errors.append(f"items_count:{beat_id}:expected_{expected_count}:got_{len(entry.get('items') or [])}")
+                entry["status"] = "dropped"
+        validated.append(entry)
+    return validated, errors
+
+
+def _repair_slide_display_map_block(
+    *,
+    section: dict,
+    clean_text: str,
+    errors: list[str],
+    model=None,
+) -> str | None:
+    expected = _display_map_expected_beats(section)
+    if not expected:
+        return None
+    beats_payload = []
+    for beat_id, item in expected.items():
+        beat = item["beat"]
+        anchor = item["anchor"]
+        beats_payload.append({
+            "beat_id": beat_id,
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "pedagogical_shape": anchor.get("pedagogical_shape"),
+            "template_type": anchor.get("template_type"),
+            "items_expected": anchor.get("items_expected"),
+        })
+    prompt = f"""Tu répares uniquement la carte technique d'affichage des slides.
+
+Le texte oral ci-dessous est définitif. Ne le réécris pas.
+Tu dois produire uniquement ce bloc, sans commentaire:
+
+{_SLIDE_DISPLAY_ORDER_MARKER}
+beat_id_1, beat_id_2
+{_SLIDE_DISPLAY_MAP_MARKER}
+beat_id_1 | ANCRAGE: "8 à 20 mots copiés exactement depuis le texte"
+{_SLIDE_DISPLAY_END_MARKER}
+
+Règles:
+- une seule entrée par beat_id attendu;
+- ANCRAGE = les premiers mots exacts de la phrase où commence le développement principal du beat;
+- recopie caractère pour caractère depuis le texte oral;
+- si une phrase d'ancrage est ambiguë, utilise 15 à 20 mots;
+- ajoute QUOTE pour un beat maxime_a_ancrer si une phrase exacte est prononcée;
+- ajoute ITEMS séparés par ; si items_expected est renseigné.
+
+Erreurs à corriger:
+{json.dumps(errors or [], ensure_ascii=False)}
+
+Beats attendus:
+{json.dumps(beats_payload, ensure_ascii=False, indent=2)}
+
+Texte oral:
+{clean_text}
+"""
+    try:
+        return _deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1400,
+            model=model,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_SLIDE_DISPLAY_MAP_REPAIR_FAILED section=%s error=%s",
+            _section_label(section),
+            str(exc)[:220],
+        )
+        return None
+
+
+def _prepare_slide_display_map_for_section(section: dict, raw_text: str, model=None) -> dict:
+    clean_text, entries, parse_errors, order_declared = _parse_slide_display_map_with_order(raw_text)
+    expected = _display_map_expected_beats(section)
+    if not expected:
+        return {
+            "text": clean_text,
+            "slide_display_map": [],
+            "display_order_declared": order_declared,
+            "display_map_status": "none",
+            "display_map_errors": parse_errors if entries else [],
+        }
+
+    validated, validation_errors = _validate_slide_display_map(section, entries, clean_text)
+    errors = [*parse_errors, *validation_errors]
+    if not errors and validated:
+        return {
+            "text": clean_text,
+            "slide_display_map": validated,
+            "display_order_declared": order_declared,
+            "display_map_status": "ok",
+            "display_map_errors": [],
+        }
+
+    repaired_raw = _repair_slide_display_map_block(
+        section=section,
+        clean_text=clean_text,
+        errors=errors,
+        model=model,
+    )
+    if repaired_raw:
+        _repaired_text, repaired_entries, repaired_parse_errors, repaired_order = _parse_slide_display_map_with_order(
+            f"{clean_text}\n\n{repaired_raw}"
+        )
+        repaired_validated, repaired_validation_errors = _validate_slide_display_map(
+            section,
+            repaired_entries,
+            clean_text,
+        )
+        repaired_errors = [*repaired_parse_errors, *repaired_validation_errors]
+        if not repaired_errors and repaired_validated:
+            return {
+                "text": clean_text,
+                "slide_display_map": [
+                    {**entry, "status": "repaired"} for entry in repaired_validated
+                ],
+                "display_order_declared": repaired_order,
+                "display_map_status": "repaired",
+                "display_map_errors": [],
+            }
+
+    logger.info(
+        "PIPELINE_SLIDE_DISPLAY_MAP_FAILED section=%s errors=%s",
+        _section_label(section),
+        errors[:8],
+    )
+    return {
+        "text": clean_text,
+        "slide_display_map": validated,
+        "display_order_declared": order_declared,
+        "display_map_status": "failed",
+        "display_map_errors": errors[:20],
+    }
+
+
+def _slide_display_generation_fields(section_generation: dict) -> dict:
+    return {
+        "slide_display_map": section_generation.get("slide_display_map") or [],
+        "display_order_declared": section_generation.get("display_order_declared") or [],
+        "display_map_status": section_generation.get("display_map_status") or "none",
+        "display_map_errors": section_generation.get("display_map_errors") or [],
+    }
+
+
+def _revalidate_slide_display_payload(
+    section: dict,
+    display_payload: dict,
+    text: str,
+    reason: str,
+) -> dict:
+    if display_payload.get("display_map_status") not in {"ok", "repaired", "relocated_patch"}:
+        return display_payload
+    validated, errors = _validate_slide_display_map(
+        section,
+        display_payload.get("slide_display_map") or [],
+        text,
+    )
+    if not errors:
+        return {
+            **display_payload,
+            "slide_display_map": validated,
+            "display_map_errors": [],
+        }
+    return {
+        **display_payload,
+        "slide_display_map": validated,
+        "display_map_status": "failed",
+        "display_map_errors": [
+            *display_payload.get("display_map_errors", []),
+            f"lost_after_{reason}",
+            *errors,
+        ][:20],
+    }
+
+
+def _patch_char_range(patch: dict, current_text: str) -> tuple[int, int] | None:
+    try:
+        start = int(patch.get("original_start"))
+        end = int(patch.get("original_end"))
+    except (TypeError, ValueError):
+        start = -1
+        end = -1
+    original = str(patch.get("original") or "")
+    if start >= 0 and end >= start and current_text[start:end] == original:
+        return start, end
+    if not original:
+        return None
+    if current_text.count(original) != 1:
+        return None
+    start = current_text.find(original)
+    return start, start + len(original)
+
+
+def _tracked_display_text_after_patch(
+    *,
+    current_text: str,
+    tracked_text: str,
+    patch_start: int,
+    patch_end: int,
+    replacement: str,
+) -> tuple[str, bool]:
+    matches = _display_anchor_matches(current_text, tracked_text)
+    if len(matches) != 1:
+        return tracked_text, False
+    span_start = int(matches[0]["char_start"])
+    span_end = int(matches[0]["char_end"])
+    if max(span_start, patch_start) >= min(span_end, patch_end):
+        return tracked_text, False
+    prefix = current_text[span_start:min(max(patch_start, span_start), span_end)]
+    suffix = current_text[max(min(patch_end, span_end), span_start):span_end]
+    updated = f"{prefix}{replacement}{suffix}".strip()
+    return (updated or replacement.strip() or tracked_text), True
+
+
+def _thread_slide_display_map_through_patches(
+    section: dict,
+    *,
+    before_text: str,
+    after_text: str,
+    applied_patches: list[dict],
+    pass_name: str,
+) -> dict:
+    entries = section.get("slide_display_map") if isinstance(section.get("slide_display_map"), list) else []
+    status = str(section.get("display_map_status") or "none")
+    if status not in {"ok", "repaired", "relocated_patch"} or not entries:
+        return section
+
+    threaded_entries = [dict(entry) for entry in entries if isinstance(entry, dict)]
+    current_text = before_text or ""
+    touched_any = False
+
+    for patch in applied_patches or []:
+        original = str((patch or {}).get("original") or "")
+        replacement = str((patch or {}).get("replacement") or "")
+        patch_range = _patch_char_range(patch or {}, current_text)
+        if not patch_range:
+            continue
+        patch_start, patch_end = patch_range
+        next_text = f"{current_text[:patch_start]}{replacement}{current_text[patch_end:]}"
+        touched_patch = False
+
+        for entry in threaded_entries:
+            anchor_text = str(entry.get("anchor_text") or "")
+            if anchor_text:
+                updated_anchor, changed = _tracked_display_text_after_patch(
+                    current_text=current_text,
+                    tracked_text=anchor_text,
+                    patch_start=patch_start,
+                    patch_end=patch_end,
+                    replacement=replacement,
+                )
+                if changed:
+                    entry["anchor_text"] = updated_anchor
+                    entry["status"] = "relocated_patch"
+                    touched_patch = True
+
+            quote = str(entry.get("quote") or "")
+            if quote:
+                updated_quote, changed = _tracked_display_text_after_patch(
+                    current_text=current_text,
+                    tracked_text=quote,
+                    patch_start=patch_start,
+                    patch_end=patch_end,
+                    replacement=replacement,
+                )
+                if changed:
+                    entry["quote"] = updated_quote
+                    entry["status"] = "relocated_patch"
+                    touched_patch = True
+
+        if touched_patch:
+            touched_any = True
+        current_text = next_text
+
+    validated, errors = _validate_slide_display_map(section, threaded_entries, after_text or current_text)
+    if errors:
+        degraded_entries = []
+        for entry in validated:
+            entry = {**entry}
+            if entry.get("status") == "dropped":
+                entry["status"] = f"lost_after_{pass_name}"
+            degraded_entries.append(entry)
+        return {
+            **section,
+            "slide_display_map": degraded_entries,
+            "display_map_status": "degraded",
+            "display_map_errors": [
+                *(section.get("display_map_errors") or []),
+                f"lost_after_{pass_name}",
+                *errors,
+            ][:20],
+        }
+
+    if not touched_any:
+        return {
+            **section,
+            "slide_display_map": validated,
+            "display_map_errors": [],
+        }
+    return {
+        **section,
+        "slide_display_map": validated,
+        "display_map_status": "relocated_patch",
+        "display_map_errors": [],
+    }
 
 
 def _block_min_words(word_budget: int) -> int:
@@ -428,19 +3570,48 @@ def _block_min_words(word_budget: int) -> int:
     return max(0, int(int(word_budget or 0) * ratio))
 
 
-def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> list[dict]:
+def _structured_course_min_words(word_budget: int) -> int:
+    ratio = _env_float("FORMATION_STRUCTURED_COURSE_MIN_RATIO", 0.95, min_value=0.90, max_value=1.0)
+    return max(0, int(int(word_budget or 0) * ratio))
+
+
+def _structured_section_min_words(word_budget: int) -> int:
+    ratio = _env_float("FORMATION_STRUCTURED_SECTION_MIN_RATIO", 0.94, min_value=0.90, max_value=1.0)
+    return max(0, int(int(word_budget or 0) * ratio))
+
+
+def _course_audio_block_plan(
+    playlist_spec=None,
+    *,
+    folder_position=None,
+    platform_id=None,
+) -> list[dict]:
     if playlist_spec is None:
         from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
     api_speed = _course_tts_speed()
+    dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
+    total_courses = sum(
+        1
+        for item in playlist_spec
+        if len(item) >= 3 and item[2] == "cours"
+    )
     blocks = []
     for idx, item in enumerate(playlist_spec):
         filename, duration_sec, file_type, bloc_num = item
         if file_type != "cours":
             continue
         target_sec = int(duration_sec or 0)
-        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+        word_budget = _playlist_course_word_budget(
+            target_sec,
+            api_speed,
+            bloc_num,
+            dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
+        )
         min_words = _block_min_words(word_budget)
         next_item = _next_playlist_item_after_index(playlist_spec, idx)
+        previous_item = playlist_spec[idx - 1] if idx > 0 else None
         blocks.append({
             "bloc_number": int(bloc_num or 0),
             "filename": filename,
@@ -449,47 +3620,123 @@ def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> lis
             "min_words": min_words,
             "target_words": word_budget,
             "max_words": word_budget,
-            "role": _course_block_role(int(bloc_num or 0), folder_position=folder_position, next_item=next_item),
+            "role": _course_block_role(
+                int(bloc_num or 0),
+                folder_position=folder_position,
+                previous_item=previous_item,
+                next_item=next_item,
+                total_courses=total_courses,
+            ),
             "next_item_type": next_item[2] if next_item and len(next_item) >= 3 else None,
+            "dynamic_schedule": dynamic_schedule,
         })
+    for block in blocks:
+        block["total_courses"] = total_courses
     return blocks
 
 
 def _build_audio_day_plan_context(generation_context=None) -> str:
     """Injecte la direction artistique par blocs playlist dans le prompt initial."""
     folder_position = (generation_context or {}).get("folder_position")
-    blocks = _course_audio_block_plan(folder_position=folder_position)
+    blocks = _course_audio_block_plan(
+        (generation_context or {}).get("playlist_spec"),
+        folder_position=folder_position,
+        platform_id=(generation_context or {}).get("platform_id"),
+    )
     lines = [
         "═══════════════════════════════════════════════════════════════════",
-        "DIRECTION ARTISTIQUE AUDIO — STRUCTURE PAR BLOCS PLAYLIST",
+        "DIRECTION ARTISTIQUE AUDIO — STRUCTURE INTERNE PLAYLIST",
         "═══════════════════════════════════════════════════════════════════",
         "Le texte final sera lu en plusieurs fichiers cours selon la playlist réelle.",
         "Écris donc une journée vécue, fluide, avec des paragraphes qui peuvent se",
-        "répartir naturellement dans les blocs ci-dessous. Ne mets pas de marqueurs",
+        "répartir naturellement dans les cours internes ci-dessous. Ne mets pas de marqueurs",
         "techniques dans ta réponse : le système s'en charge.",
+        "Ces durées, budgets et découpages sont invisibles pour les apprenants :",
+        "ne les verbalise jamais, même pour dire qu'ils ne sont pas importants.",
         "",
     ]
     for block in blocks:
         lines.append(
-            f"- Bloc cours {block['bloc_number']} · {block['duration_min']} min · "
+            f"- Cours interne {block['bloc_number']} · {block['duration_min']} min · "
             f"budget parole {block['min_words']}–{block['max_words']} mots : {block['role']}"
         )
     lines.extend([
         "",
         "Règles impératives :",
-        "- Le premier bloc ne démarre jamais brutalement.",
-        "- Chaque bloc se ferme proprement : mini-synthèse, transition, ou annonce pause/Q&A si nécessaire.",
-        "- Si un Q&A ou une pause suit, son introduction est portée par l'outro du cours précédent.",
+        "- La première partie ne démarre jamais brutalement.",
+        "- Chaque partie se ferme proprement par une mini-synthèse ou une conclusion de chapitre.",
+        "- Ne jamais annoncer un Q&R ou une pause : chacun porte sa propre intro.",
+        "- Entre deux cours contigus, la jointure technique porte seule le raccord.",
         "- Les Q&A et pauses ne comptent pas dans le texte de cours.",
         "- Les références entre cours restent vagues : jamais \"hier\" ni \"demain\".",
+        "- Ne jamais dire \"horaire\", \"créneau\", \"planning\" ou \"sans vous soucier des horaires\".",
     ])
     return "\n".join(lines)
+
+
+def _build_course_slot_generation_context(
+    generation_context=None,
+    *,
+    sub_part_name: str = "",
+    module_content: str = "",
+    program_text: str = "",
+) -> str:
+    """Ajoute le cadrage précis du créneau courant au prompt de génération."""
+    block = _course_block_for_generation_context(generation_context)
+    if not block:
+        return ""
+
+    slot_label = (
+        f"Cours interne {block['bloc_number']} · {block['filename']} · "
+        f"{block['duration_min']} min"
+    )
+    slot_profile = _course_slot_prompt_profile(
+        block.get("bloc_number"),
+        (generation_context or {}).get("passe"),
+        total_courses=block.get("total_courses"),
+    )
+    return f"""
+═══════════════════════════════════════════════════════════════════
+CADRAGE INTERNE DU COURS COURANT — À RESPECTER STRICTEMENT
+═══════════════════════════════════════════════════════════════════
+Tu écris uniquement cette unité interne : {slot_label}.
+Thème pédagogique : {_strip_internal_schedule_from_label(sub_part_name)}
+Rôle oral de cette partie : {block.get('role') or 'continuité pédagogique'}
+
+Attention : le libellé, la durée, le fichier, le budget et la position dans la
+playlist sont des données internes. Les apprenants ne doivent jamais entendre
+"horaire", "créneau", "planning", une heure précise ou une durée de fichier.
+
+Profil éditorial propre à cette partie :
+{slot_profile or '(profil spécifique indisponible)'}
+
+Contenu prioritaire à développer dans CETTE PARTIE :
+{(module_content or '').strip()[:7000] or '(contenu spécifique non fourni)'}
+
+Contexte journée complet, seulement pour éviter les doublons et assurer la continuité :
+{(program_text or '').strip()[:9000] or '(contexte journée non fourni)'}
+
+Règles de périmètre :
+- Ne traite pas les autres cours comme s'ils appartenaient à celui-ci.
+- Ne recommence pas toute la journée à chaque passe.
+- Si une notion appartient plutôt à une autre partie, garde-la en transition courte.
+- La fin de la partie doit être propre : synthèse, chute ou transition naturelle.
+"""
 
 
 def compute_course_day_word_budget_audit(folder_id: int, job: dict | None = None) -> dict:
     """Audit final du nombre de mots réellement parlés pour une journée."""
     job = job or get_job_from_db(folder_id)
-    budget = get_course_day_word_budget()
+    playlist_spec = None
+    if job and job.get("platform_id") is not None:
+        playlist_spec = _playlist_items_for_platform(
+            int(job["platform_id"]),
+            folder_id=int(folder_id),
+        )
+    budget = get_course_day_word_budget(
+        playlist_spec,
+        platform_id=(job or {}).get("platform_id"),
+    )
     if not job:
         return {
             "ok": False,
@@ -503,27 +3750,13 @@ def compute_course_day_word_budget_audit(folder_id: int, job: dict | None = None
             "overflow": 0,
         }
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT COALESCE(text_content, ''), COALESCE(word_count, 0)
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
-        (job["id"],),
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job["id"])
 
     raw_words = 0
     spoken_words = 0
     for row in rows:
-        if len(row) >= 4 and not isinstance(row[0], str):
-            text, wc = row[2], row[3]
-        else:
-            text, wc = row[0], row[1]
+        text = row.get("text_content") or ""
+        wc = row.get("word_count") or 0
         raw_words += int(wc or len((text or "").split()))
         spoken_words += count_tts_spoken_words(text)
 
@@ -681,22 +3914,107 @@ def _mp3_duration_seconds_no_ffprobe(audio_bytes: bytes) -> float:
     return duration
 
 
+_CONTENT_SILENCE_1S_MP3_CACHE = None
+_FISH_SILENCE_1S_MP3_CACHE = None
+
+
+def _load_content_silence_1s_mp3() -> bytes:
+    global _CONTENT_SILENCE_1S_MP3_CACHE
+    if _CONTENT_SILENCE_1S_MP3_CACHE is None:
+        silence_path = os.path.join(os.path.dirname(__file__), "..", "assets", "silence_1s.mp3")
+        with open(silence_path, "rb") as f:
+            _CONTENT_SILENCE_1S_MP3_CACHE = f.read()
+    return _CONTENT_SILENCE_1S_MP3_CACHE
+
+
+def _load_fish_silence_1s_mp3() -> bytes:
+    global _FISH_SILENCE_1S_MP3_CACHE
+    if _FISH_SILENCE_1S_MP3_CACHE is None:
+        silence_path = os.path.join(os.path.dirname(__file__), "..", "assets", "fish_silence_1s.mp3")
+        with open(silence_path, "rb") as f:
+            _FISH_SILENCE_1S_MP3_CACHE = f.read()
+    return _FISH_SILENCE_1S_MP3_CACHE
+
+
 def _silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
     """Return bundled silent MP3 bytes repeated close to the requested duration."""
-    from services.playlist_tts_service import _generate_silence_mp3
-
     if duration_sec <= 0:
         return b"", 0.0
-    one_sec = _generate_silence_mp3(1)
+    one_sec = _load_content_silence_1s_mp3()
     try:
         one_sec_duration = _mp3_duration_seconds_no_ffprobe(one_sec)
     except Exception:
         one_sec_duration = 1.0
-    repeat = max(1, int(round(duration_sec / one_sec_duration)))
+
+    raw_repeat = duration_sec / max(one_sec_duration, 0.001)
+    floor_repeat = int(raw_repeat)
+    candidates = {floor_repeat, floor_repeat + 1}
+    candidates = {repeat for repeat in candidates if repeat > 0}
+    if not candidates:
+        return b"", 0.0
+
+    max_allowed = duration_sec + 0.45
+    valid_candidates = [
+        repeat for repeat in candidates
+        if repeat * one_sec_duration <= max_allowed
+    ]
+    if valid_candidates:
+        repeat = min(valid_candidates, key=lambda value: abs(duration_sec - value * one_sec_duration))
+    else:
+        repeat = max(0, floor_repeat)
+    if repeat <= 0:
+        return b"", 0.0
     if repeat == 1:
         return one_sec, one_sec_duration
     from services.basic_tts_service import concat_mp3_bytes
     return concat_mp3_bytes([one_sec] * repeat), one_sec_duration * repeat
+
+
+def _fish_silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
+    """Return silent MP3 bytes matching Fish Audio's 44.1 kHz / 128 kbps output."""
+    if duration_sec <= 0:
+        return b"", 0.0
+    one_sec = _load_fish_silence_1s_mp3()
+    one_sec_duration = _mp3_duration_seconds_no_ffprobe(one_sec)
+
+    raw_repeat = duration_sec / max(one_sec_duration, 0.001)
+    floor_repeat = int(raw_repeat)
+    candidates = {floor_repeat, floor_repeat + 1}
+    candidates = {repeat for repeat in candidates if repeat > 0}
+    if not candidates:
+        return b"", 0.0
+
+    max_allowed = duration_sec + 0.45
+    valid_candidates = [
+        repeat for repeat in candidates
+        if repeat * one_sec_duration <= max_allowed
+    ]
+    if valid_candidates:
+        repeat = min(valid_candidates, key=lambda value: abs(duration_sec - value * one_sec_duration))
+    else:
+        repeat = max(0, floor_repeat)
+    if repeat <= 0:
+        return b"", 0.0
+    if repeat == 1:
+        return one_sec, one_sec_duration
+    from services.basic_tts_service import concat_mp3_bytes
+    return concat_mp3_bytes([one_sec] * repeat), one_sec_duration * repeat
+
+
+def _pad_course_mp3_to_duration_no_ffprobe(
+    audio_bytes: bytes,
+    voice_duration_sec: float,
+    target_duration_sec: int | float,
+) -> tuple[bytes, float]:
+    """Pad course MP3 without pydub/ffprobe by concatenating MP3 frame streams."""
+    from services.basic_tts_service import concat_mp3_bytes
+
+    target_duration_sec = float(target_duration_sec or 0)
+    voice_duration_sec = max(0.0, float(voice_duration_sec or 0.0))
+    start_bytes, start_duration = _silent_mp3_approx_no_ffmpeg(_COURSE_START_SILENCE_SECONDS)
+    end_duration_target = max(0.0, target_duration_sec - start_duration - voice_duration_sec)
+    end_bytes, end_duration = _silent_mp3_approx_no_ffmpeg(end_duration_target)
+    return concat_mp3_bytes([start_bytes, audio_bytes, end_bytes]), start_duration + voice_duration_sec + end_duration
 
 
 def _edge_muted_padding_audio(duration_sec: float, on_progress=None) -> tuple[bytes, float]:
@@ -716,10 +4034,20 @@ def _word_slice(text: str, start: int, end: int) -> str:
 def _slides_for_bloc(slides: list, bloc: dict) -> list:
     bloc_start = int(bloc.get("start_w") or 0)
     bloc_end = int(bloc.get("end_w") or bloc_start)
+    try:
+        bloc_number = int(bloc.get("bloc_number") or 0)
+    except (TypeError, ValueError):
+        bloc_number = 0
     raw_relevant = []
     seen = set()
 
     for slide_idx, slide in enumerate(slides or []):
+        declared_course = _slide_declared_course_number(slide)
+        if declared_course and bloc_number and declared_course != bloc_number:
+            # Numeric word ranges can become stale after the final script
+            # review.  A canonical course anchor is more trustworthy than an
+            # overlapping range from an older text layout.
+            continue
         source_ref = slide.get("source_ref") or {}
         try:
             start = int(source_ref.get("word_start"))
@@ -742,6 +4070,45 @@ def _slides_for_bloc(slides: list, bloc: dict) -> list:
         })
 
     raw_relevant.sort(key=lambda item: (item["source_word_start"], item["slide_index"]))
+    if not raw_relevant:
+        # A deck can have been generated from a pre-review word layout while
+        # the final audio bloc uses the post-review layout. In that case the
+        # numeric ranges no longer overlap, but structured slide anchors still
+        # carry the canonical course number. Reproject those slides across the
+        # current bloc instead of producing an audio chunk with no slide_id.
+        declared = [
+            (slide_idx, slide)
+            for slide_idx, slide in enumerate(slides or [])
+            if slide.get("slide_id")
+            and bloc_number
+            and _slide_declared_course_number(slide) == bloc_number
+        ]
+
+        def declared_sort_key(pair):
+            try:
+                word_start = int(
+                    (pair[1].get("source_ref") or {}).get("word_start")
+                )
+            except (TypeError, ValueError):
+                word_start = 10**12
+            return word_start, pair[0]
+
+        declared.sort(key=declared_sort_key)
+        span = max(0, bloc_end - bloc_start)
+        for declared_idx, (slide_idx, slide) in enumerate(declared):
+            start = bloc_start + round(declared_idx * span / len(declared))
+            end = bloc_start + round((declared_idx + 1) * span / len(declared))
+            if end <= start:
+                continue
+            raw_relevant.append({
+                "slide_id": slide["slide_id"],
+                "slide_index": slide_idx,
+                "source_word_start": start,
+                "source_word_end": end,
+                "word_start": start,
+                "word_end": end,
+            })
+
     relevant = []
     idx = 0
     while idx < len(raw_relevant):
@@ -779,6 +4146,500 @@ def _slides_for_bloc(slides: list, bloc: dict) -> list:
     elif relevant and relevant[0]["word_start"] < bloc_start:
         relevant[0]["word_start"] = bloc_start
     return relevant
+
+
+def _slide_declared_course_number(slide: dict) -> int | None:
+    source_ref = slide.get("source_ref") or {}
+    for ref in source_ref.get("segments") or []:
+        try:
+            course_number = int(ref.get("course_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if course_number:
+            return course_number
+    for anchor in source_ref.get("slide_anchors") or []:
+        try:
+            course_number = int(anchor.get("course_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if course_number:
+            return course_number
+    return None
+
+
+def _folded_token_values(text: str) -> list[str]:
+    return [token["folded"] for token in _display_text_tokens(text or "")]
+
+
+def _find_token_sequence(haystack: list[str], needle: list[str], min_start: int = 0) -> int | None:
+    if not haystack or not needle or len(needle) > len(haystack):
+        return None
+    min_start = max(0, min_start)
+    last_start = len(haystack) - len(needle)
+    for idx in range(min_start, last_start + 1):
+        if haystack[idx:idx + len(needle)] == needle:
+            return idx
+    return None
+
+
+def _find_fuzzy_token_sequence(
+    haystack: list[str],
+    needle: list[str],
+    min_start: int = 0,
+    *,
+    threshold: float = 0.82,
+) -> int | None:
+    if not haystack or len(needle) < 8 or len(needle) > len(haystack):
+        return None
+    search_start = max(0, min_start - 18)
+    last_start = len(haystack) - len(needle)
+    best_idx = None
+    best_score = 0.0
+    needle_set = set(needle)
+    for idx in range(search_start, last_start + 1):
+        window = haystack[idx:idx + len(needle)]
+        # Cheap prefilter before SequenceMatcher; avoids scoring every window
+        # when the opening words are clearly unrelated.
+        overlap = len(needle_set.intersection(window)) / max(1, len(needle_set))
+        if overlap < 0.45:
+            continue
+        score = SequenceMatcher(None, needle, window).ratio()
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+    return best_idx if best_idx is not None and best_score >= threshold else None
+
+
+def _slide_reprojection_candidates(slide: dict) -> list[list[str]]:
+    source_ref = slide.get("source_ref") or {}
+    texts = [
+        source_ref.get("source_quote") or "",
+        slide.get("source_text") or "",
+    ]
+    seen = set()
+    candidates = []
+    for text in texts:
+        tokens = _folded_token_values(_strip_tts_tags_for_sync(text or ""))
+        if len(tokens) < 8:
+            continue
+        for size in (48, 36, 24, 16, 12, 8):
+            if len(tokens) < size:
+                continue
+            candidate = tuple(tokens[:size])
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            candidates.append(list(candidate))
+    return candidates
+
+
+def _reproject_slides_to_audio_bloc(slides: list, bloc: dict) -> list:
+    """Recalage des slides sur le texte final réellement envoyé au TTS.
+
+    Les slides sont produites plus tôt dans la pipeline et peuvent porter des
+    `word_start` issus d'une version antérieure du script. Avant de produire les
+    timings audio, on retrouve le début de chaque slide dans le texte du MP3 du
+    cours courant et on remplace ses bornes par des coordonnées du texte audio.
+    """
+    if not slides:
+        return slides
+    bloc_text = _strip_tts_tags_for_sync(bloc.get("text") or "")
+    bloc_tokens = _folded_token_values(bloc_text)
+    if not bloc_tokens:
+        return slides
+
+    try:
+        bloc_number = int(bloc.get("bloc_number") or 0)
+        bloc_start = int(bloc.get("start_w") or 0)
+        bloc_end = int(bloc.get("end_w") or (bloc_start + len(bloc_tokens)))
+    except (TypeError, ValueError):
+        return slides
+    if bloc_end <= bloc_start:
+        bloc_end = bloc_start + len(bloc_tokens)
+
+    ordered = sorted(
+        enumerate(slides),
+        key=lambda pair: (
+            int(((pair[1].get("source_ref") or {}).get("word_start")) or 10**12),
+            pair[0],
+        ),
+    )
+    reprojected_by_index = {}
+    search_cursor = 0
+    matched = 0
+    eligible = 0
+
+    for original_index, slide in ordered:
+        source_ref = slide.get("source_ref") or {}
+        declared_course = _slide_declared_course_number(slide)
+        if declared_course and bloc_number and declared_course != bloc_number:
+            continue
+        candidates = _slide_reprojection_candidates(slide)
+        if not candidates:
+            continue
+        eligible += 1
+        match_start = None
+        for candidate in candidates:
+            match_start = _find_token_sequence(bloc_tokens, candidate, search_cursor)
+            if match_start is None:
+                match_start = _find_fuzzy_token_sequence(bloc_tokens, candidate, search_cursor)
+            if match_start is not None:
+                break
+        if match_start is None:
+            continue
+
+        old_start = source_ref.get("word_start")
+        old_end = source_ref.get("word_end")
+        source_words = len(_folded_token_values(slide.get("source_text") or ""))
+        try:
+            old_span = int(old_end) - int(old_start)
+        except (TypeError, ValueError):
+            old_span = 0
+        span = max(1, source_words or old_span or len(candidates[0]))
+
+        clone = json.loads(json.dumps(slide, ensure_ascii=False))
+        clone_ref = dict(clone.get("source_ref") or {})
+        new_start = bloc_start + match_start
+        new_end = min(bloc_end, new_start + span)
+        clone_ref["word_start"] = new_start
+        clone_ref["word_end"] = max(new_start + 1, new_end)
+        clone_ref["word_count"] = clone_ref["word_end"] - clone_ref["word_start"]
+        clone_ref["audio_reprojection"] = {
+            "method": "source_text_prefix",
+            "old_word_start": old_start,
+            "old_word_end": old_end,
+            "audio_bloc_number": bloc_number,
+            "audio_local_word_start": match_start,
+        }
+        clone["source_ref"] = clone_ref
+        reprojected_by_index[original_index] = clone
+        matched += 1
+        search_cursor = max(search_cursor, match_start + 1)
+
+    if not matched:
+        return slides
+    if eligible and matched < max(1, eligible // 3):
+        logger.warning(
+            "PIPELINE_AUDIO_SLIDE_REPROJECT_LOW_MATCH bloc=%s matched=%s eligible=%s",
+            bloc_number,
+            matched,
+            eligible,
+        )
+    return [
+        reprojected_by_index.get(idx, slide)
+        for idx, slide in enumerate(slides)
+    ]
+
+
+def _timeline_word_tokens(actual_reading: dict) -> list[str]:
+    tokens = []
+    for item in actual_reading.get("timeline") or []:
+        folded = _fold_display_token(item.get("text") or "")
+        if folded:
+            tokens.append(folded)
+    return tokens
+
+
+def _approx_timeline_index_for_bloc_word(
+    word_index: int,
+    bloc_word_count: int,
+    timeline_len: int,
+) -> int:
+    if timeline_len <= 0:
+        return 0
+    if bloc_word_count <= 1:
+        return 0
+    ratio = max(0.0, min(1.0, float(word_index) / float(bloc_word_count)))
+    return max(0, min(timeline_len - 1, int(round(ratio * (timeline_len - 1)))))
+
+
+def _locate_chunk_in_timeline(
+    chunk: dict,
+    timeline_tokens: list[str],
+    min_start: int,
+    fallback_word_index: int,
+    bloc_word_count: int,
+) -> tuple[int, str]:
+    candidates = []
+    chunk_tokens = _folded_token_values(chunk.get("text") or "")
+    for size in (48, 36, 24, 16, 12, 8):
+        if len(chunk_tokens) >= size:
+            candidates.append(chunk_tokens[:size])
+
+    for candidate in candidates:
+        match = _find_token_sequence(timeline_tokens, candidate, min_start)
+        if match is None:
+            match = _find_fuzzy_token_sequence(timeline_tokens, candidate, min_start)
+        if match is not None:
+            return match, "timeline_text_match"
+
+    return (
+        _approx_timeline_index_for_bloc_word(
+            fallback_word_index,
+            bloc_word_count,
+            len(timeline_tokens),
+        ),
+        "timeline_word_ratio_fallback",
+    )
+
+
+def _repair_bloc_timings_from_timeline(bloc: dict, slides: list, filename: str) -> tuple[list[dict], dict]:
+    actual_reading = bloc.get("actual_reading") if isinstance(bloc.get("actual_reading"), dict) else {}
+    timeline = actual_reading.get("timeline") if isinstance(actual_reading.get("timeline"), list) else []
+    if not timeline:
+        return _repair_bloc_timings_by_word_ratio(bloc, slides, filename, reason="missing_timeline")
+
+    chunks = _build_slide_audio_chunks(bloc, slides)
+    chunks = [chunk for chunk in chunks if chunk.get("slide_id")]
+    if not chunks:
+        return [], {"filename": filename, "status": "no_slide_chunks", "timings": 0}
+
+    timeline_tokens = _timeline_word_tokens(actual_reading)
+    if not timeline_tokens:
+        return _repair_bloc_timings_by_word_ratio(bloc, slides, filename, reason="empty_timeline_tokens")
+
+    bloc_start = int(bloc.get("start_w") or 0)
+    bloc_word_count = max(1, len((bloc.get("text") or "").split()))
+    located = []
+    cursor = 0
+    fallback_count = 0
+    for chunk in chunks:
+        fallback_word_index = max(0, int(chunk.get("word_start") or bloc_start) - bloc_start)
+        start_idx, method = _locate_chunk_in_timeline(
+            chunk,
+            timeline_tokens,
+            cursor,
+            fallback_word_index,
+            bloc_word_count,
+        )
+        if method.endswith("fallback"):
+            fallback_count += 1
+        located.append((chunk, start_idx, method))
+        cursor = max(cursor, start_idx + 1)
+
+    timings = []
+    for idx, (chunk, start_idx, method) in enumerate(located):
+        next_start_idx = located[idx + 1][1] if idx + 1 < len(located) else None
+        start_item = timeline[max(0, min(len(timeline) - 1, start_idx))]
+        if next_start_idx is not None:
+            end_item = timeline[max(0, min(len(timeline) - 1, next_start_idx))]
+            end_time = float(end_item.get("start") or end_item.get("end") or 0.0)
+        else:
+            end_item = timeline[-1]
+            end_time = float(
+                end_item.get("end")
+                or actual_reading.get("audio_duration_sec")
+                or end_item.get("start")
+                or 0.0
+            )
+        start_time = float(start_item.get("start") or 0.0)
+        if end_time <= start_time:
+            end_time = float(start_item.get("end") or start_time)
+        timings.append({
+            "slide_id": chunk.get("slide_id"),
+            "audio_filename": filename,
+            "start_time": round(start_time, 3),
+            "end_time": round(end_time, 3),
+            "duration": round(max(0.0, end_time - start_time), 3),
+            "word_start": chunk.get("word_start"),
+            "word_end": chunk.get("word_end"),
+            "repair_method": method,
+        })
+
+    merged_timings = _merge_adjacent_slide_timings(timings)
+    return merged_timings, {
+        "filename": filename,
+        "status": "repaired",
+        "timings": len(merged_timings),
+        "timeline_words": len(timeline_tokens),
+        "fallback_timings": fallback_count,
+    }
+
+
+def _repair_bloc_timings_by_word_ratio(
+    bloc: dict,
+    slides: list,
+    filename: str,
+    *,
+    reason: str,
+) -> tuple[list[dict], dict]:
+    """Fallback when Fish did not persist word timestamps for an existing MP3."""
+    try:
+        duration_sec = float(
+            bloc.get("actual_reading", {}).get("audio_duration_sec")
+            if isinstance(bloc.get("actual_reading"), dict) else 0
+        )
+    except (TypeError, ValueError):
+        duration_sec = 0.0
+    if duration_sec <= 0:
+        for key in ("target_duration_sec", "duration_sec", "expected_duration_sec"):
+            try:
+                duration_sec = float(bloc.get(key) or 0.0)
+            except (TypeError, ValueError):
+                duration_sec = 0.0
+            if duration_sec > 0:
+                break
+
+    if duration_sec <= 0:
+        return [], {"filename": filename, "status": f"{reason}_no_duration", "timings": 0}
+
+    chunks = _build_slide_audio_chunks(bloc, slides)
+    chunks = [chunk for chunk in chunks if chunk.get("slide_id")]
+    if not chunks:
+        return [], {"filename": filename, "status": f"{reason}_no_slide_chunks", "timings": 0}
+
+    bloc_start = int(bloc.get("start_w") or 0)
+    bloc_word_count = max(1, len(_strip_tts_tags_for_sync(bloc.get("text") or "").split()))
+    timings = []
+    for chunk in chunks:
+        local_start = max(0, int(chunk.get("word_start") or bloc_start) - bloc_start)
+        local_end = max(local_start + 1, int(chunk.get("word_end") or bloc_start) - bloc_start)
+        start_time = duration_sec * min(1.0, local_start / bloc_word_count)
+        end_time = duration_sec * min(1.0, local_end / bloc_word_count)
+        if end_time <= start_time:
+            continue
+        timings.append({
+            "slide_id": chunk.get("slide_id"),
+            "audio_filename": filename,
+            "start_time": round(start_time, 3),
+            "end_time": round(end_time, 3),
+            "duration": round(end_time - start_time, 3),
+            "word_start": chunk.get("word_start"),
+            "word_end": chunk.get("word_end"),
+            "repair_method": "word_ratio_no_fish_timeline",
+        })
+
+    merged_timings = _merge_adjacent_slide_timings(timings)
+    return merged_timings, {
+        "filename": filename,
+        "status": "repaired_by_word_ratio",
+        "source_reason": reason,
+        "timings": len(merged_timings),
+        "duration_sec": round(duration_sec, 3),
+        "bloc_words": bloc_word_count,
+    }
+
+
+def repair_audio_sync_from_existing_timelines(folder_id: int, *, dry_run: bool = False) -> dict:
+    """Répare audio_sync_json sans régénérer les MP3, à partir des timelines Fish stockées."""
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError(f"Content job introuvable pour folder {folder_id}")
+    platform_id = int(job.get("platform_id") or 0)
+    if not platform_id:
+        raise ValueError("platform_id introuvable pour ce dossier")
+
+    from services.script_slide_generation_service import (
+        get_latest_script_slide_deck,
+        update_script_slide_deck_audio_sync,
+    )
+
+    deck = get_latest_script_slide_deck(folder_id, content_job_id=job.get("id"))
+    if not deck:
+        raise ValueError("Aucun deck slides trouvé pour ce dossier")
+
+    audio_plan = _load_content_artifact(platform_id, folder_id, _CONTENT_AUDIO_PLAN_BLOB) or {}
+    course_blocs = [
+        bloc for bloc in (audio_plan.get("course_blocs") or [])
+        if isinstance(bloc, dict) and str(bloc.get("filename") or "").endswith(".mp3")
+    ]
+    if not course_blocs:
+        raise ValueError("Aucun content-audio-plan exploitable pour ce dossier")
+
+    slides = deck.get("slides") or []
+    repaired_timings = []
+    repaired_files = []
+    skipped = []
+    details = []
+    cursor = 0
+    for bloc in course_blocs:
+        filename = bloc.get("filename") or f"cours_bloc_{int(bloc.get('bloc_number') or 0)}.mp3"
+        text = _strip_tts_tags_for_sync(bloc.get("text") or "")
+        word_count = len(text.split())
+        working_bloc = dict(bloc)
+        working_bloc["text"] = text
+        working_bloc["word_count"] = word_count
+        working_bloc["start_w"] = cursor
+        working_bloc["end_w"] = cursor + word_count
+        cursor += word_count
+
+        timings, detail = _repair_bloc_timings_from_timeline(working_bloc, slides, filename)
+        details.append(detail)
+        if timings:
+            repaired_timings.extend(timings)
+            repaired_files.append(filename)
+        else:
+            skipped.append({"filename": filename, "reason": detail.get("status") or "unknown"})
+
+    current_sync = deck.get("audio_sync") or {}
+    repaired_set = set(repaired_files)
+    preserved_timings = [
+        timing for timing in (current_sync.get("timings") or [])
+        if timing.get("audio_filename") not in repaired_set
+    ]
+    merged_files = []
+    for filename in list(current_sync.get("generated_files") or []) + repaired_files:
+        if filename and filename not in merged_files:
+            merged_files.append(filename)
+
+    repaired_sync = {
+        **current_sync,
+        "enabled": True,
+        "mode": current_sync.get("mode") or audio_plan.get("mode") or "fish_audio",
+        "folder_id": folder_id,
+        "content_job_id": job.get("id"),
+        "generated_files": merged_files,
+        "timings": preserved_timings + repaired_timings,
+        "repair": {
+            "source": "content-audio-plan.actual_reading.timeline",
+            "dry_run": bool(dry_run),
+            "repaired_files": repaired_files,
+            "skipped": skipped,
+            "details": details,
+            "timings_repaired": len(repaired_timings),
+        },
+    }
+
+    readiness = None
+    if not dry_run:
+        updated_deck = update_script_slide_deck_audio_sync(
+            deck["deck_id"],
+            repaired_sync,
+        )
+        if not updated_deck:
+            raise RuntimeError(
+                f"Échec de persistance de la réparation du deck {deck['deck_id']}"
+            )
+        from services.audio_asset_validation_service import inspect_audio_sync_payload
+
+        expected_files = [
+            str(bloc.get("filename") or "")
+            for bloc in course_blocs
+            if bloc.get("filename")
+        ]
+        readiness = inspect_audio_sync_payload(
+            updated_deck,
+            expected_files,
+            require_all_slides=True,
+        )
+        if not readiness.get("ready"):
+            raise RuntimeError(
+                "Réparation de synchronisation incomplète après persistance: "
+                f"{readiness}"
+            )
+
+    return {
+        "success": True,
+        "dry_run": bool(dry_run),
+        "folder_id": folder_id,
+        "deck_id": deck.get("deck_id"),
+        "repaired_files": repaired_files,
+        "skipped": skipped,
+        "timings_repaired": len(repaired_timings),
+        "timings_preserved": len(preserved_timings),
+        "details": details,
+        "readiness": readiness,
+    }
 
 
 # ── Runtime fit Edge TTS : sub-chunking adaptatif + frontières naturelles ───
@@ -925,51 +4786,44 @@ def _smaller_runtime_fit_word_limit(chunk: dict, available_sec: float, observed_
     return max(8, min(words - 1, fit_words))
 
 
-def _assert_audio_duration_within_slot(filename: str, duration_sec: float, target_sec: int) -> None:
-    """Last safety gate before Azure upload: no generated MP3 may exceed its slot."""
-    if not target_sec or duration_sec is None:
-        return
-    if float(duration_sec) > float(target_sec) + _UPLOAD_DURATION_TOLERANCE_SEC:
-        raise ValueError(
-            f"{filename} dépasse la durée autorisée "
-            f"({float(duration_sec):.1f}s > {int(target_sec)}s). "
-            "Audio non uploadé pour éviter un débord de playlist."
-        )
-
-
-def _assert_audio_duration_fills_slot(filename: str, duration_sec: float, target_sec: int) -> None:
-    """Runtime-fit course files must include real browser-readable padding."""
-    if not target_sec or duration_sec is None:
-        return
-    if float(duration_sec) < float(target_sec) - _TOLERANCE_OVERFLOW_SEC:
-        raise ValueError(
-            f"{filename} est trop court après padding "
-            f"({float(duration_sec):.1f}s < {int(target_sec)}s). "
-            "Audio non uploadé pour éviter une fin de créneau trop précoce."
-        )
-
-
-def _assert_course_voice_duration_within_deadline(
+def _assert_audio_duration_within_slot(
     filename: str,
-    voice_duration_sec: float,
+    duration_sec: float,
     target_sec: int,
     *,
-    has_start_silence: bool,
+    max_duration_sec: float | None = None,
 ) -> None:
-    """Vérifie que la dernière parole du cours respecte le silence final configuré."""
+    """Last upload gate, optionally including the following flexible buffer."""
+    if not target_sec or duration_sec is None:
+        return
+    allowed_duration = float(
+        max_duration_sec if max_duration_sec is not None else target_sec
+    )
+    if float(duration_sec) > allowed_duration + _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"{filename} dépasse la durée autorisée "
+            f"({float(duration_sec):.1f}s > {allowed_duration:.1f}s). "
+            "Audio non uploadé pour préserver le bloc flexible minimal."
+        )
+
+
+def _assert_course_voice_before_final_silence(bloc: dict, voice_duration_sec: float) -> None:
+    """Keep natural speech before the protected break boundary."""
+    target_sec = int(bloc.get("target_sec") or 0)
     if not target_sec or voice_duration_sec is None:
         return
-    final_silence_sec = _course_final_silence_sec()
-    limit_sec = (
-        _course_voice_window_sec(target_sec)
-        if has_start_silence
-        else _course_speech_deadline_sec(target_sec)
-    )
-    if float(voice_duration_sec) > float(limit_sec) + _TOLERANCE_OVERFLOW_SEC:
+    dynamic_schedule = bool(bloc.get("dynamic_schedule"))
+    if dynamic_schedule:
+        # V2 keeps the natural asset intact.  The occurrence playback manifest
+        # performs the exceptional hard stop while preserving the minimum
+        # break; generation must not rewrite or discard the course.
+        return
+    max_voice_sec = _course_voice_window_sec(target_sec, False)
+    if float(voice_duration_sec) > max_voice_sec:
         raise ValueError(
-            f"{filename} dépasse la limite de parole T-{final_silence_sec:.0f}s "
-            f"({float(voice_duration_sec):.1f}s > {float(limit_sec):.1f}s). "
-            "Audio non uploadé pour garder le silence final prévu."
+            f"Bloc {bloc.get('bloc_number')} dépasse la limite de parole avant "
+            f"le silence final ({float(voice_duration_sec):.1f}s > "
+            f"{max_voice_sec:.1f}s). Audio non uploadé."
         )
 
 
@@ -1005,6 +4859,51 @@ def _runtime_ai_decisions_from_attempts(attempts: list) -> list:
     ]
 
 
+def _actual_reading_from_attempts(attempts: list) -> dict | None:
+    """Récupère les métriques Fish timestampées produites pendant le TTS."""
+    actual_items = []
+    for attempt in attempts or []:
+        actual = attempt.get("actual_reading") if isinstance(attempt, dict) else None
+        if isinstance(actual, dict) and actual.get("audio_duration_sec"):
+            actual_items.append(actual)
+    if not actual_items:
+        return None
+    if len(actual_items) == 1:
+        return actual_items[0]
+
+    input_words = sum(int(item.get("input_spoken_word_count") or 0) for item in actual_items)
+    fish_words = sum(int(item.get("fish_segment_word_count") or 0) for item in actual_items)
+    duration_sec = sum(float(item.get("audio_duration_sec") or 0.0) for item in actual_items)
+    wpm = fish_words / (duration_sec / 60.0) if duration_sec > 0 and fish_words > 0 else 0.0
+    timeline = []
+    for item in actual_items:
+        offset = float(item.get("audio_start_sec") or 0.0)
+        for segment in item.get("timeline") or []:
+            clone = dict(segment)
+            clone["start"] = round(float(clone.get("start") or 0.0) + offset, 3)
+            clone["end"] = round(float(clone.get("end") or 0.0) + offset, 3)
+            timeline.append(clone)
+    return {
+        "provider": actual_items[0].get("provider") or "fish_audio",
+        "endpoint": actual_items[0].get("endpoint") or "",
+        "model": actual_items[0].get("model") or "",
+        "format": actual_items[0].get("format") or "",
+        "speed": actual_items[0].get("speed"),
+        "audio_duration_sec": round(duration_sec, 3),
+        "input_spoken_word_count": input_words,
+        "fish_segment_word_count": fish_words,
+        "words_per_minute": round(wpm, 3),
+        "words_per_hour": round(wpm * 60.0, 1) if wpm else 0.0,
+        "text_read": " ".join((item.get("text_read") or "").strip() for item in actual_items if (item.get("text_read") or "").strip()),
+        "timeline": timeline,
+        "chunks": [
+            chunk
+            for item in actual_items
+            for chunk in (item.get("chunks") or [])
+        ],
+    }
+
+
 def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
     """Partition a course bloc into text chunks driven by slide start markers."""
     bloc_start = int(bloc.get("start_w") or 0)
@@ -1014,8 +4913,12 @@ def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
     if not bloc_words:
         return []
 
+    slides = _reproject_slides_to_audio_bloc(slides, bloc)
     relevant = _slides_for_bloc(slides, bloc)
     if not relevant:
+        # Kept as a synthesis fallback for low-level/non-persisting callers.
+        # The production pipeline validates that every course has bound slide
+        # IDs before synthesis and never uploads this unbound fallback.
         return [{
             "slide_id": None,
             "word_start": bloc_start,
@@ -1154,6 +5057,37 @@ def _tail_words(text: str, max_words: int) -> str:
     return " ".join(words[-max_words:]).strip()
 
 
+def _escape_control_chars_in_strings(text: str) -> str:
+    """Échappe les caractères de contrôle littéraux à l'intérieur des strings JSON.
+
+    DeepSeek génère parfois des \\n/\\t/\\r littéraux dans les valeurs string,
+    ce qui produit un JSONDecodeError 'Expecting , delimiter'.
+    """
+    result = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif ch == "\\" and in_string:
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch in "\n\r\t":
+            if ch == "\n":
+                result.append("\\n")
+            elif ch == "\r":
+                result.append("\\r")
+            else:
+                result.append("\\t")
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
 def _extract_llm_json(raw: str) -> dict:
     raw = (raw or "").strip().replace("```json", "```")
     if "```" in raw:
@@ -1161,7 +5095,18 @@ def _extract_llm_json(raw: str) -> dict:
     match = re.search(r"\{[\s\S]*\}", raw)
     if match:
         raw = match.group(0)
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        sanitized = _escape_control_chars_in_strings(raw)
+        try:
+            return json.loads(sanitized)
+        except json.JSONDecodeError:
+            try:
+                from json_repair import repair_json
+                return json.loads(repair_json(raw))
+            except Exception as e:
+                raise ValueError(f"JSON LLM invalide après réparation : {e}")
 
 
 def _course_ai_stop_decision_enabled() -> bool:
@@ -1176,6 +5121,7 @@ def _course_ai_stop_window_sec() -> float:
 def _ai_should_defer_chunk_before_conclusion(
     *,
     bloc_number: int,
+    total_courses: int = 7,
     remaining_before_conclusion_sec: float,
     consumed_chunks: list,
     candidate_chunk: dict,
@@ -1205,7 +5151,7 @@ def _ai_should_defer_chunk_before_conclusion(
 
     prompt = f"""Tu es monteur pédagogique pour un cours audio horodaté.
 
-On approche de la conclusion du bloc {bloc_number}/7. Il reste environ
+On approche de la conclusion du bloc {bloc_number}/{total_courses}. Il reste environ
 {int(max(0, remaining_before_conclusion_sec))} secondes avant la marge réservée
 à la conclusion.
 
@@ -1245,8 +5191,9 @@ Réponds uniquement avec ce JSON valide :
         raw = _llm_post(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=500,
-            model=model or CLAUDE_MODEL,
+            model=model or DEEPSEEK_MODEL,
             timeout=90,
+            http_max_attempts=1,
         )
         data = _extract_llm_json(raw)
         decision = str(data.get("decision") or "").strip().lower()
@@ -1283,10 +5230,18 @@ def _next_playlist_item_after(playlist_items: list | None, item_idx: int):
 
 
 def _break_intro_text_for_playlist_item(item) -> str:
-    """Retourne l'intro prévue du break, à porter par l'audio précédent."""
+    """Retourne l'intro propre du break (jamais portée par le cours)."""
     next_type = _playlist_item_type(item)
     if next_type not in {"qa", "pause", "pause_midi"}:
         return ""
+    try:
+        from services.fixed_break_scripts import get_fixed_break_script
+
+        fixed = get_fixed_break_script(str(item[0] or ""), intro_owned_by_previous=False)
+        if fixed and fixed.get("handoff"):
+            return re.sub(r"\s+", " ", fixed["handoff"].strip())
+    except Exception:
+        pass
     try:
         from services.playlist_tts_service import (
             _get_pause_midi_text,
@@ -1306,39 +5261,7 @@ def _break_intro_text_for_playlist_item(item) -> str:
 
 
 def _course_playlist_handoff_text(next_item) -> str:
-    """Phrase de transition portée par le fichier qui se termine."""
-    next_type = _playlist_item_type(next_item)
-    duration_sec = _playlist_item_duration(next_item)
-    planned_intro = _break_intro_text_for_playlist_item(next_item)
-    if planned_intro:
-        return planned_intro
-    if next_type in {"qa", "pause", "pause_midi"}:
-        try:
-            from services.break_transition_service import duration_label
-            label = duration_label(duration_sec, next_type)
-        except Exception:
-            label = ""
-        if next_type == "qa":
-            return (
-                "On va maintenant prendre un temps pour vos questions. "
-                "Gardez simplement les points importants en tête, et posez ce que vous voulez clarifier."
-            )
-        if next_type == "pause_midi" or label == "pause déjeuner":
-            return (
-                "On va maintenant marquer la pause déjeuner. "
-                "Prenez le temps de souffler, de vous reposer, et on reprendra ensuite calmement."
-            )
-        if label:
-            return (
-                f"On va maintenant prendre une pause de {label}. "
-                "Profitez-en pour souffler un peu avant la suite."
-            )
-        return (
-            "On va maintenant prendre une courte pause. "
-            "Profitez-en pour souffler un peu avant la suite."
-        )
-    if next_type == "cours":
-        return "On enchaînera ensuite avec la suite du parcours, en gardant cette base comme point d'appui."
+    """Le cours clôt son chapitre sans annoncer l'asset suivant."""
     return "On va donc s'arrêter ici pour ce moment, avec ces repères bien en tête."
 
 
@@ -1449,6 +5372,7 @@ def _synthesize_course_audio_synced_to_slides(
     *,
     mock: bool,
     basic_tts: bool,
+    platform_id: int | None = None,
     progress_callback=None,
     prepended_chunks: list = None,
     conclusion_margin_sec: int = None,
@@ -1464,14 +5388,16 @@ def _synthesize_course_audio_synced_to_slides(
           `_mp3_duration_seconds_no_ffprobe`, et calcule un `observed_wpm`
           à mesure (bootstrap _BOOTSTRAP_WPM_EDGE_TTS).
         - Sub-chunke adaptativement (paliers 600/300/150 mots) selon la
-          marge restante avant la deadline parole (`target_sec - silence final`).
-        - Stoppe la génération avant dépassement et reporte les chunks
-          non générés via le retour `unconsumed_chunks` (cascade vers le
-          bloc suivant ou le carryover inter-jours).
-        - Préfixe `prepended_chunks` (carryover intra-jour des blocs
-          précédents) en tête de la file.
+          marge restante avant la deadline parole (`target_sec - marge parole finale`).
+        - Stoppe la génération avant dépassement et retourne les chunks non
+          générés via `unconsumed_chunks`.
+        - Par défaut, ces chunks ne sont PAS préfixés au cours suivant :
+          chaque cours doit rester autonome. Le report intra-jour n'est actif
+          que si `FORMATION_RUNTIME_INTRA_DAY_CARRYOVER=1`.
+        - Si `prepended_chunks` est explicitement fourni, il est préfixé en
+          tête de la file avec une amorce IA.
         - N'ajoute plus de conclusion runtime : la fin du cours appartient au
-          texte calibré en amont, puis à l'humanisation/review.
+          texte calibré en amont, puis à la conformité locale.
 
     Mode classique (Fish Audio sync slides, ou basic_tts sans runtime_fit) :
         - Comportement d'origine inchangé : génère tous les chunks slide.
@@ -1488,33 +5414,28 @@ def _synthesize_course_audio_synced_to_slides(
             consumed_chunks,
         )
     """
-    from services.tts_service import convert_to_speech
+    from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
 
     target_sec = int(bloc["target_sec"])
-    final_silence_sec = _course_final_silence_sec()
-    speech_deadline_sec = _course_speech_deadline_sec(target_sec)
+    total_courses = int(bloc.get("total_courses") or 7)
+    dynamic_schedule = bool(bloc.get("dynamic_schedule"))
+    final_silence_sec = _course_effective_final_silence_sec(dynamic_schedule)
+    speech_deadline_sec = _course_speech_deadline_sec(
+        target_sec,
+        dynamic_schedule,
+    )
     api_speed = _course_tts_speed()
-    word_count = bloc.get("word_count") or len((bloc.get("text") or "").split())
-    word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
-
-    # Garde-fou Fish Audio : préserve le comportement existant.
-    if not mock and not basic_tts and word_budget > 0 and word_count > word_budget:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long avant TTS sync "
-            f"({word_count} mots > budget prudent {word_budget} mots à speed={api_speed})."
-        )
-
+    from services.basic_tts_service import concat_mp3_bytes
     if basic_tts:
-        from services.basic_tts_service import convert_to_speech_basic, concat_mp3_bytes
-    if not basic_tts or mock:
-        from pydub import AudioSegment
+        from services.basic_tts_service import convert_to_speech_basic
 
     base_chunks = _build_slide_audio_chunks(bloc, slides)
     if not base_chunks:
         raise ValueError(f"Bloc {bloc['bloc_number']} vide pour sync slides")
 
-    # Runtime fit n'est supporté qu'en basic_tts (Edge TTS). Sinon ignoré.
-    use_runtime_fit = bool(runtime_fit and basic_tts)
+    # Le TTS doit lire le texte complet. Le runtime-fit coupait/reportait des
+    # chunks pour tenir dans le créneau ; on le désactive pour observer la durée réelle.
+    use_runtime_fit = False
 
     # Le bloc audio est déjà généré/calibré avec sa conclusion. Runtime fit ne
     # réserve donc plus de marge pour fabriquer une conclusion après coup.
@@ -1526,32 +5447,37 @@ def _synthesize_course_audio_synced_to_slides(
             progress_callback(message)
 
     # Préfixer le carryover intra-jour uniquement en runtime_fit. Si du texte a
-    # été reporté du bloc précédent, on l'amorce et on reformule son début avant
+    # été reporté du cours précédent, on l'amorce et on reformule son début avant
     # de l'envoyer au TTS.
     runtime_handoff_meta = {}
     if use_runtime_fit and prepended_chunks:
-        _emit(f"Bloc {bloc['bloc_number']}/7 — rédaction amorce IA du passage reporté...")
+        _emit(f"Bloc {bloc['bloc_number']}/{total_courses} — rédaction amorce IA du passage reporté...")
         rewritten_prepended, runtime_handoff_meta = _rewrite_runtime_carryover_chunks(
             prepended_chunks,
             base_chunks,
             bloc_number=int(bloc.get("bloc_number") or 0),
+            total_courses=total_courses,
             model=llm_model,
         )
         if runtime_handoff_meta:
-            _emit(f"Bloc {bloc['bloc_number']}/7 — amorce IA du passage reporté ajoutée")
+            _emit(f"Bloc {bloc['bloc_number']}/{total_courses} — amorce IA du passage reporté ajoutée")
         chunks = list(rewritten_prepended) + list(base_chunks)
     else:
         chunks = list(base_chunks)
 
     fast_tts_pipeline = bool(fast_tts_pipeline and use_runtime_fit)
 
-    if basic_tts:
-        # Pas de silence d'amorce (cf. fix 302:01 — encodages incompatibles).
-        audio_parts = []
+    audio_parts = []
+    if basic_tts or mock:
+        # Pas de silence d'amorce pour Edge TTS ni pour le mock.
+        voice_start_sec = 0.0
         cursor_sec = 0.0
     else:
-        full_audio = AudioSegment.silent(duration=_COURSE_START_SILENCE_SECONDS * 1000)
-        cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
+        start_bytes, start_duration = _fish_silent_mp3_approx_no_ffmpeg(_COURSE_START_SILENCE_SECONDS)
+        if start_bytes:
+            audio_parts.append(start_bytes)
+        voice_start_sec = start_duration
+        cursor_sec = start_duration
     timings = []
     attempts = []
     if runtime_handoff_meta:
@@ -1641,6 +5567,7 @@ def _synthesize_course_audio_synced_to_slides(
                 ai_stop_checks += 1
                 should_defer, defer_reason = _ai_should_defer_chunk_before_conclusion(
                     bloc_number=int(bloc.get("bloc_number") or 0),
+                    total_courses=int(bloc.get("total_courses") or 7),
                     remaining_before_conclusion_sec=remaining_sec,
                     consumed_chunks=consumed_chunks,
                     candidate_chunk=chunk,
@@ -1658,12 +5585,12 @@ def _synthesize_course_audio_synced_to_slides(
                     stopped_for_runtime_fit = True
                     unconsumed_chunks.extend(chunks[chunk_idx:])
                     _emit(
-                        f"Bloc {bloc['bloc_number']}/7 — décision IA : nouveau pan reporté "
+                        f"Bloc {bloc['bloc_number']}/{total_courses} — décision IA : nouveau pan reporté "
                         f"avant conclusion ({defer_reason or 'raison non fournie'})"
                     )
                     break
                 _emit(
-                    f"Bloc {bloc['bloc_number']}/7 — décision IA : passage gardé "
+                    f"Bloc {bloc['bloc_number']}/{total_courses} — décision IA : passage gardé "
                     f"avant conclusion ({defer_reason or 'continuité pédagogique'})"
                 )
 
@@ -1693,7 +5620,7 @@ def _synthesize_course_audio_synced_to_slides(
                     if len(sub_chunks) > 1:
                         chunks = chunks[:chunk_idx] + list(sub_chunks) + chunks[chunk_idx + 1:]
                         _emit(
-                            f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} "
+                            f"Bloc {bloc['bloc_number']}/{total_courses} — slide audio {chunk_idx + 1}/{len(chunks)} "
                             f"redécoupée en micro-chunks ({smaller_max_words} mots max)"
                         )
                         continue
@@ -1703,24 +5630,58 @@ def _synthesize_course_audio_synced_to_slides(
 
         # ── Génération du chunk (mock / basic_tts / fish_audio) ─────────────
         _emit(
-            f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} "
+            f"Bloc {bloc['bloc_number']}/{total_courses} — slide audio {chunk_idx + 1}/{len(chunks)} "
             f"({len(text.split())} mots)"
         )
 
+        chunk_actual_reading = None
+        timeline_duration_sec = 0.0
+        media_duration_sec = 0.0
         if mock:
-            segment = AudioSegment.silent(duration=1000)
+            audio_bytes, duration_sec = _silent_mp3_approx_no_ffmpeg(1)
             mode = "mock"
         elif basic_tts:
-            progress_prefix = f"Bloc {bloc['bloc_number']}/7 — slide {chunk_idx + 1}/{len(chunks)}"
+            progress_prefix = f"Bloc {bloc['bloc_number']}/{total_courses} — slide {chunk_idx + 1}/{len(chunks)}"
             audio_bytes, duration_sec, cache_hit = _synthesize_basic_measured(text, progress_prefix)
             mode = "gtts_fast_cache" if cache_hit else "gtts_fast" if fast_tts_pipeline else "gtts"
         else:
-            audio_bytes = convert_to_speech(text, speed=api_speed)
-            segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-            mode = f"fish_audio_speed={api_speed}"
-
-        if not basic_tts:
-            duration_sec = len(segment) / 1000
+            if _fish_timestamp_alignment_enabled():
+                audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
+                    text,
+                    speed=api_speed,
+                    format="mp3",
+                    platform_id=platform_id,
+                )
+                chunk_actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=text)
+            else:
+                audio_bytes = convert_to_speech(
+                    text,
+                    speed=api_speed,
+                    platform_id=platform_id,
+                )
+            timeline_duration_sec = float(
+                (chunk_actual_reading or {}).get("audio_duration_sec") or 0.0
+            )
+            try:
+                media_duration_sec = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+            except Exception:
+                logger.warning(
+                    "PIPELINE_AUDIO_SLIDE_MP3_DURATION_FALLBACK filename=%s chunk=%s",
+                    filename,
+                    chunk_idx + 1,
+                    exc_info=True,
+                )
+            # The browser plays MPEG frames, not the provider's text timeline.
+            # A tiny discrepancy on every separately generated slide otherwise
+            # accumulates into a visible drift later in the course.
+            duration_sec = media_duration_sec or timeline_duration_sec
+            if not duration_sec:
+                duration_sec = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+            mode = (
+                f"fish_audio_timestamped_speed={api_speed}"
+                if chunk_actual_reading
+                else f"fish_audio_speed={api_speed}"
+            )
 
         if (
             use_runtime_fit
@@ -1746,7 +5707,7 @@ def _synthesize_course_audio_synced_to_slides(
                         "retry_max_words": smaller_max_words,
                     })
                     _emit(
-                        f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} "
+                        f"Bloc {bloc['bloc_number']}/{total_courses} — slide audio {chunk_idx + 1}/{len(chunks)} "
                         f"trop longue, redécoupage ({smaller_max_words} mots max)"
                     )
                     continue
@@ -1761,40 +5722,26 @@ def _synthesize_course_audio_synced_to_slides(
                 "final_silence_sec": final_silence_sec,
             })
             _emit(
-                f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} "
+                f"Bloc {bloc['bloc_number']}/{total_courses} — slide audio {chunk_idx + 1}/{len(chunks)} "
                 f"reportée ({duration_sec:.1f}s dépasserait la marge T-{final_silence_sec:.0f}s)"
             )
             break
 
-        if (
-            not mock
-            and not use_runtime_fit
-            and cursor_sec + duration_sec > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC
-        ):
-            attempts.append({
-                "kind": f"{mode}_rejected_speech_deadline",
-                "chunk": chunk_idx + 1,
-                "duration": duration_sec,
-                "words": len(text.split()),
-                "limit_sec": speech_deadline_sec,
-                "final_silence_sec": final_silence_sec,
-            })
-            raise ValueError(
-                f"Bloc {bloc['bloc_number']} sync trop long : la parole finirait à "
-                f"{cursor_sec + duration_sec:.1f}s, après la limite T-{final_silence_sec:.0f}s "
-                f"({speech_deadline_sec:.1f}s). Audio non uploadé."
-            )
-
         start_sec = cursor_sec
         end_sec = start_sec + duration_sec
-        if basic_tts:
-            audio_parts.append(audio_bytes)
-        else:
-            full_audio += segment
+        audio_parts.append(audio_bytes)
         cursor_sec = end_sec
-        attempts.append({"kind": mode, "chunk": chunk_idx + 1, "duration": duration_sec})
+        attempt_record = {"kind": mode, "chunk": chunk_idx + 1, "duration": duration_sec}
+        if not basic_tts and not mock and chunk_actual_reading:
+            attempt_record["timeline_duration_sec"] = round(timeline_duration_sec, 3)
+            attempt_record["media_duration_sec"] = round(media_duration_sec, 3)
+            chunk_actual_reading = dict(chunk_actual_reading)
+            chunk_actual_reading["audio_start_sec"] = round(start_sec, 3)
+            chunk_actual_reading["audio_end_sec"] = round(end_sec, 3)
+            attempt_record["actual_reading"] = chunk_actual_reading
+        attempts.append(attempt_record)
         _emit(
-            f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} OK "
+            f"Bloc {bloc['bloc_number']}/{total_courses} — slide audio {chunk_idx + 1}/{len(chunks)} OK "
             f"({duration_sec:.1f}s)"
         )
 
@@ -1823,16 +5770,15 @@ def _synthesize_course_audio_synced_to_slides(
                 "avant le report du texte."
             )
         voice_stop_duration = cursor_sec
-        if target_sec > voice_stop_duration:
-            if use_runtime_fit:
-                silence_bytes, silence_duration = _edge_muted_padding_audio(
-                    target_sec - voice_stop_duration,
-                    on_progress=_emit,
-                )
-            else:
-                silence_bytes, silence_duration = _silent_mp3_approx_no_ffmpeg(
-                    target_sec - voice_stop_duration
-                )
+        if not dynamic_schedule and target_sec > voice_stop_duration:
+            # Toujours produire le remplissage avec Edge lui-même. Le MP3
+            # silencieux embarqué n'a pas le même profil (sample rate/bitrate)
+            # et sa concaténation avec Edge fausse la durée lue par certains
+            # navigateurs.
+            silence_bytes, silence_duration = _edge_muted_padding_audio(
+                target_sec - voice_stop_duration,
+                on_progress=_emit,
+            )
             if silence_bytes and silence_duration > 0:
                 audio_parts.append(silence_bytes)
                 attempts.append({
@@ -1844,44 +5790,38 @@ def _synthesize_course_audio_synced_to_slides(
         output_bytes = concat_mp3_bytes(audio_parts) if audio_parts else b""
         final_duration = voice_stop_duration
     else:
-        final_duration = len(full_audio) / 1000
-        if final_duration > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC and not mock:
-            raise ValueError(
-                f"Bloc {bloc['bloc_number']} sync trop long "
-                f"({final_duration:.1f}s > limite parole {speech_deadline_sec:.1f}s, "
-                f"silence final {final_silence_sec:.0f}s)."
-            )
-        if final_duration < target_sec:
-            full_audio += AudioSegment.silent(duration=int((target_sec - final_duration) * 1000))
-        elif final_duration > target_sec and not mock:
-            raise ValueError(
-                f"Bloc {bloc['bloc_number']} sync trop long "
-                f"({final_duration:.1f}s > cible {target_sec}s)."
-            )
+        voice_stop_duration = cursor_sec
+        final_duration = voice_stop_duration
+        output_duration = voice_stop_duration
+        if not dynamic_schedule and output_duration < target_sec:
+            silence_bytes, silence_duration = _fish_silent_mp3_approx_no_ffmpeg(target_sec - output_duration)
+            if silence_bytes and silence_duration > 0:
+                audio_parts.append(silence_bytes)
+                output_duration += silence_duration
+                attempts.append({
+                    "kind": "final_silence_padding",
+                    "chunk": "end",
+                    "duration": silence_duration,
+                    "target_sec": target_sec,
+                })
 
-        output = io.BytesIO()
-        full_audio.export(output, format="mp3", bitrate="128k")
-        output_bytes = output.getvalue()
+        output_bytes = concat_mp3_bytes(audio_parts)
 
-    if not mock and final_duration > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long : la parole finirait à "
-            f"{final_duration:.1f}s, après la limite T-{final_silence_sec:.0f}s "
-            f"({speech_deadline_sec:.1f}s)."
+    if mock:
+        fit_method = "slide_sync_mock"
+    elif use_runtime_fit and fast_tts_pipeline:
+        fit_method = "slide_sync_edge_runtime_fit_fast"
+    elif use_runtime_fit:
+        fit_method = "slide_sync_edge_runtime_fit"
+    elif basic_tts:
+        fit_method = (
+            "slide_sync_edge_natural"
+            if dynamic_schedule
+            else "slide_sync_edge_no_padding"
         )
-
-    fit_method = (
-        "slide_sync_mock"
-        if mock
-        else "slide_sync_edge_runtime_fit_fast"
-        if use_runtime_fit and fast_tts_pipeline
-        else "slide_sync_edge_runtime_fit"
-        if use_runtime_fit
-        else "slide_sync_edge_no_padding"
-        if basic_tts
-        else f"slide_sync_fish_speed={api_speed}"
-    )
-    voice_start_sec = 0.0 if basic_tts else _COURSE_START_SILENCE_SECONDS
+    else:
+        natural_marker = "_natural" if dynamic_schedule else ""
+        fit_method = f"slide_sync_fish{natural_marker}_speed={api_speed}"
     return (
         output_bytes,
         cursor_sec - voice_start_sec,
@@ -1906,186 +5846,55 @@ def _ensure_carryover_columns() -> None:
     global _CARRYOVER_COLUMNS_READY
     if _CARRYOVER_COLUMNS_READY:
         return
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(content_generation_jobs)")
-    cols = {row[1] for row in cursor.fetchall()}
-    wanted = {
-        "carryover_in_text": "TEXT DEFAULT ''",
-        "carryover_in_source_folder_id": "INTEGER",
-        "carryover_out_text": "TEXT DEFAULT ''",
-        "carryover_out_target_folder_id": "INTEGER",
-    }
-    for col, col_type in wanted.items():
-        if col not in cols:
-            cursor.execute(f"ALTER TABLE content_generation_jobs ADD COLUMN {col} {col_type}")
-    conn.commit()
-    conn.close()
+    ensure_content_generation_carryover_columns()
     _CARRYOVER_COLUMNS_READY = True
 
 
 def _find_next_folder_id(platform_id: int, folder_id: int) -> int | None:
     """Retourne le dossier suivant de la même plateforme, selon position/id."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT position, id FROM cours_folders WHERE id = ? AND platform_id = ?",
-        (folder_id, platform_id),
-    )
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return None
-    position, current_id = row
-    cursor.execute(
-        """
-        SELECT id FROM cours_folders
-        WHERE platform_id = ?
-          AND (position > ? OR (position = ? AND id > ?))
-        ORDER BY position ASC, id ASC
-        LIMIT 1
-        """,
-        (platform_id, position, position, current_id),
-    )
-    next_row = cursor.fetchone()
-    conn.close()
-    return next_row[0] if next_row else None
+    return find_next_course_folder_id(platform_id, folder_id)
 
 
 def _store_cross_day_carryover(source_folder_id: int, target_folder_id: int, text: str) -> None:
     """Persiste le report J→J+1 de manière idempotente."""
-    _ensure_carryover_columns()
     clean = (text or "").strip()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET carryover_out_text = ?, carryover_out_target_folder_id = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE folder_id = ?
-        """,
-        (clean, target_folder_id if clean else None, source_folder_id),
+    store_cross_day_carryover(
+        source_folder_id=source_folder_id,
+        target_folder_id=target_folder_id,
+        carryover_out_text=clean,
+        carryover_in_text=_format_carryover_for_next_course(clean) if clean else "",
     )
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET carryover_in_text = ?, carryover_in_source_folder_id = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE folder_id = ?
-        """,
-        (_format_carryover_for_next_course(clean) if clean else "", source_folder_id if clean else None, target_folder_id),
-    )
-    cursor.execute(
-        """
-        UPDATE content_generation_segments
-        SET dirty = 1
-        WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
-          AND sub_part_index = 0 AND passe = 1
-        """,
-        (target_folder_id,),
-    )
-    conn.commit()
-    conn.close()
 
 
 def _clear_cross_day_carryover_from_source(source_folder_id: int, target_folder_id: int | None = None) -> None:
     """Nettoie un ancien report si le nouveau découpage n'en produit plus."""
-    _ensure_carryover_columns()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET carryover_out_text = '', carryover_out_target_folder_id = NULL,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE folder_id = ?
-        """,
-        (source_folder_id,),
+    clear_cross_day_carryover(
+        source_folder_id=source_folder_id,
+        target_folder_id=target_folder_id,
     )
-    if target_folder_id:
-        cursor.execute(
-            """
-            UPDATE content_generation_jobs
-            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE folder_id = ? AND carryover_in_source_folder_id = ?
-            """,
-            (target_folder_id, source_folder_id),
-        )
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET dirty = 1
-            WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
-              AND sub_part_index = 0 AND passe = 1
-            """,
-            (target_folder_id,),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT folder_id FROM content_generation_jobs
-            WHERE carryover_in_source_folder_id = ?
-            """,
-            (source_folder_id,),
-        )
-        target_rows = cursor.fetchall()
-        cursor.execute(
-            """
-            UPDATE content_generation_jobs
-            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE carryover_in_source_folder_id = ?
-            """,
-            (source_folder_id,),
-        )
-        for (target_id,) in target_rows:
-            cursor.execute(
-                """
-                UPDATE content_generation_segments
-                SET dirty = 1
-                WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
-                  AND sub_part_index = 0 AND passe = 1
-                """,
-                (target_id,),
-            )
-    conn.commit()
-    conn.close()
 
 
 def _get_existing_carryover_out(source_folder_id: int, target_folder_id: int | None) -> str:
-    _ensure_carryover_columns()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT carryover_out_text, carryover_out_target_folder_id
-        FROM content_generation_jobs
-        WHERE folder_id = ?
-        """,
-        (source_folder_id,),
-    )
-    row = cursor.fetchone()
-    conn.close()
+    row = get_existing_carryover_out_row(source_folder_id)
     if not row:
         return ""
-    text, stored_target = row
+    text = row.get("carryover_out_text")
+    stored_target = row.get("carryover_out_target_folder_id")
     if target_folder_id is not None and stored_target != target_folder_id:
         return ""
     return (text or "").strip()
 
 
 def _reduce_last_bloc_to_budget(bloc: dict, model=None) -> str:
-    """Réduit le dernier bloc avant TTS si aucun jour suivant ne peut absorber le surplus."""
+    """Réduit le dernier cours interne avant TTS si aucun jour suivant ne peut absorber le surplus."""
     budget = int(bloc.get("main_word_budget") or bloc.get("word_budget") or 0)
     if budget <= 0:
         raise ValueError("Budget TTS indisponible pour réduction du dernier bloc")
 
     # On vise plus bas que le cap prudent pour absorber l'écart de calibration Fish.
     target_words = max(800, int(budget * 0.90))
-    prompt = f"""Tu es un formateur expert. Tu dois REMANIER le dernier bloc d'un cours audio
-pour qu'il tienne dans son créneau TTS, sans jouer sur la vitesse de la voix.
+    prompt = f"""Tu es un formateur expert. Tu dois REMANIER le dernier cours audio interne
+pour qu'il tienne dans sa contrainte TTS, sans jouer sur la vitesse de la voix.
 
 OBJECTIF :
 - Réduis le texte à environ {target_words} mots.
@@ -2096,6 +5905,8 @@ OBJECTIF :
   précédente, dis "la dernière fois" ou "lors du dernier cours".
 - Termine par une vraie conclusion de cours.
 - Texte oral fluide, naturel, prêt pour TTS.
+- Ne mentionne jamais côté apprenant les mots "bloc", "créneau", "horaire",
+  "planning", une heure précise, une durée de fichier ou un budget mots.
 
 TEXTE À REMANIER :
 ---
@@ -2108,6 +5919,7 @@ Réponds uniquement avec le texte remanié, sans commentaire."""
         messages=[{"role": "user", "content": prompt}],
         max_tokens=min(12000, int(target_words * 2.2) + 500),
         model=model or default_model(),
+        http_max_attempts=1,
     )
     reduced = (reduced or "").replace("```", "").strip()
     if not reduced:
@@ -2347,8 +6159,16 @@ def _build_course_blocs_from_marked_blocks(
     segments,
     force_all=False,
     folder_position=None,
+    platform_id=None,
 ):
     api_speed = _course_tts_speed()
+    dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
+    total_courses = sum(
+        1
+        for item in playlist_spec
+        if len(item) >= 3 and item[2] == "cours"
+    )
     any_dirty = force_all or any(bool(seg.get("dirty")) for seg in segments)
     blocs = []
     cursor_w = 0
@@ -2359,8 +6179,22 @@ def _build_course_blocs_from_marked_blocks(
         target_sec = int(duration_sec or 0)
         text = marked_blocks.get(bloc_num, "").strip()
         words = count_tts_spoken_words(text)
-        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
-        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed)
+        word_budget = _playlist_course_word_budget(
+            target_sec,
+            api_speed,
+            bloc_num,
+            dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
+        )
+        main_word_budget = (
+            word_budget
+            if dynamic_schedule
+            else _estimated_main_words_budget_for_course(
+                target_sec,
+                api_speed,
+                bloc_num,
+            )
+        )
         blocs.append({
             "bloc_number": bloc_num,
             "text": text,
@@ -2377,8 +6211,10 @@ def _build_course_blocs_from_marked_blocks(
                 bloc_num,
                 folder_position=folder_position,
                 next_item=_next_playlist_item_after_index(playlist_spec, item_idx),
+                total_courses=total_courses,
             ),
             "audio_block_marked": True,
+            "dynamic_schedule": dynamic_schedule,
         })
         cursor_w += words
     return blocs, cursor_w
@@ -2394,8 +6230,10 @@ def _build_course_blocs_from_segments(
     is_last_folder=False,
     model=None,
     preview=False,
+    platform_id=None,
+    folder_position=None,
 ):
-    """Découpe le script en 7 blocs en respectant les fins d'idées ET le budget TTS.
+    """Découpe le script selon les cours de la playlist effective.
 
     Chaque bloc reçoit un budget calibré Fish Audio. `main_word_budget` et
     `word_budget` restent deux champs pour compatibilité interne, mais ils
@@ -2403,13 +6241,24 @@ def _build_course_blocs_from_segments(
     comprise.
     Tout paragraphe en surplus cascade automatiquement vers le bloc suivant.
     """
+    course_specs = [
+        item
+        for item in (playlist_spec or [])
+        if len(item) >= 4 and item[2] == "cours"
+    ]
+    course_numbers = [int(item[3]) for item in course_specs]
+    if not course_numbers:
+        raise ValueError("La playlist ne contient aucun bloc de cours")
+
     marked_blocks = _extract_marked_audio_blocks_from_segments(segments)
-    if marked_blocks and all(i in marked_blocks for i in range(1, 8)):
+    if marked_blocks and all(number in marked_blocks for number in course_numbers):
         blocs, total_marked_words = _build_course_blocs_from_marked_blocks(
             marked_blocks,
             playlist_spec,
             segments=segments,
             force_all=force_all,
+            folder_position=folder_position,
+            platform_id=platform_id,
         )
         logger.info("   🎚️ Découpage blocs audio persisté détecté (%s mots)", total_marked_words)
         return blocs, total_marked_words, ""
@@ -2417,7 +6266,12 @@ def _build_course_blocs_from_segments(
     full_words, word_to_seg_idx, units = _build_course_text_units(segments)
 
     total_words = len(full_words)
-    total_duration = sum(cours_durations_min.values())
+    total_duration = sum(
+        float(cours_durations_min[number])
+        for number in course_numbers
+    )
+    if total_duration <= 0:
+        raise ValueError("La durée totale des cours doit être positive")
     sentence_boundaries = _sentence_boundary_positions(full_words)
     paragraph_boundaries = [u["end"] for u in units if u["end"] < total_words]
     section_boundaries = _section_boundary_positions(units)
@@ -2425,19 +6279,37 @@ def _build_course_blocs_from_segments(
     blocs = []
     cursor_w = 0
     cumulative_duration = 0
+    course_count = len(course_numbers)
+    dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_spec)
+    calibrated_wpm = _platform_calibrated_words_per_minute(platform_id)
 
-    for bloc_num in range(1, 8):
-        duration = cours_durations_min[bloc_num]
+    for course_position, bloc_num in enumerate(course_numbers, start=1):
+        duration = float(cours_durations_min[bloc_num])
         cumulative_duration += duration
         target_sec = next(
             (spec[1] for spec in playlist_spec if spec[3] == bloc_num and spec[2] == "cours"),
             duration * 60
         )
-        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed)
-        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+        word_budget = _playlist_course_word_budget(
+            target_sec,
+            api_speed,
+            bloc_num,
+            dynamic_schedule=dynamic_schedule,
+            calibrated_wpm=calibrated_wpm,
+        )
+        main_word_budget = (
+            word_budget
+            if dynamic_schedule
+            else _estimated_main_words_budget_for_course(
+                target_sec,
+                api_speed,
+                bloc_num,
+            )
+        )
 
-        if bloc_num == 7:
-            # Bloc 7 absorbe le reste : si ça dépasse son budget, c'est volume_safety qui doit alerter
+        if course_position == course_count:
+            # Le dernier cours absorbe le reste : si ça dépasse son budget, le calibrage
+            # budget texte en amont doit corriger avant conformité et audio.
             end_w = total_words
         else:
             target_w = round(total_words * cumulative_duration / total_duration)
@@ -2445,7 +6317,7 @@ def _build_course_blocs_from_segments(
                 cursor_w=cursor_w,
                 target_w=target_w,
                 total_words=total_words,
-                remaining_blocks=7 - bloc_num,
+                remaining_blocks=course_count - course_position,
                 paragraph_boundaries=paragraph_boundaries,
                 sentence_boundaries=sentence_boundaries,
                 word_budget_max=main_word_budget,
@@ -2469,6 +6341,7 @@ def _build_course_blocs_from_segments(
             "target_sec": target_sec,
             "word_budget": word_budget,
             "main_word_budget": main_word_budget,
+            "dynamic_schedule": dynamic_schedule,
             "filename": next(
                 (spec[0] for spec in playlist_spec if spec[3] == bloc_num and spec[2] == "cours"),
                 f"cours_bloc{bloc_num}.mp3"
@@ -2479,7 +6352,11 @@ def _build_course_blocs_from_segments(
             f"budget principal {main_word_budget}, total {word_budget}"
             if main_word_budget > 0 else "budget n/a"
         )
-        if main_word_budget > 0 and block_words > main_word_budget and bloc_num != 7:
+        if (
+            main_word_budget > 0
+            and block_words > main_word_budget
+            and course_position != course_count
+        ):
             logger.warning(
                 f"   ⚠️ Bloc {bloc_num}: {block_words} mots > {budget_str} (cascade attendue)"
             )
@@ -2589,102 +6466,18 @@ def _clean_audio_block_rewrite(raw: str) -> str:
     return text.strip()
 
 
-def _trim_text_to_max_spoken_words(text: str, max_words: int) -> str:
-    """Raccourcit proprement en visant une frontière de paragraphe/phrase."""
-    text = (text or "").strip()
-    max_words = max(0, int(max_words or 0))
-    if max_words <= 0 or count_tts_spoken_words(text) <= max_words:
-        return text
-
-    kept = []
-    kept_words = 0
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
-    for paragraph in paragraphs:
-        para_words = count_tts_spoken_words(paragraph)
-        if kept_words + para_words <= max_words:
-            kept.append(paragraph)
-            kept_words += para_words
-            continue
-
-        sentences = [
-            s.strip()
-            for s in re.split(r"(?<=[.!?…])\s+", paragraph)
-            if s.strip()
-        ]
-        sentence_added = False
-        for sentence in sentences:
-            sent_words = count_tts_spoken_words(sentence)
-            if kept_words + sent_words <= max_words:
-                kept.append(sentence)
-                kept_words += sent_words
-                sentence_added = True
-            else:
-                break
-        if sentence_added or kept_words >= max_words:
-            break
-
-        # Dernier recours : coupe au mot si aucune phrase complète ne rentre.
-        remaining = max_words - kept_words
-        if remaining > 0:
-            raw_tokens = paragraph.split()
-            candidate = []
-            for token in raw_tokens:
-                candidate.append(token)
-                if count_tts_spoken_words(" ".join(candidate)) >= remaining:
-                    break
-            if candidate:
-                fragment = " ".join(candidate).strip()
-                if fragment and fragment[-1] not in ".!?…":
-                    fragment += "."
-                kept.append(fragment)
-        break
-
-    trimmed = "\n\n".join(kept).strip()
-    return trimmed or " ".join(text.split()[:max_words]).strip()
-
-
 _AUDIO_BLOCK_FILLERS = [
-    (
-        "Prenons quelques secondes pour ancrer cette idée. [pause]\n\n"
-        "Dans une situation réelle, ce point ne reste jamais théorique. Il se voit "
-        "dans la manière d'accueillir, de questionner, de reformuler et de sécuriser "
-        "l'échange. L'objectif, ici, c'est de transformer une notion en réflexe simple, "
-        "utilisable sans avoir besoin d'y réfléchir longtemps. [pause]\n\n"
-        "Retenez surtout ceci : une posture professionnelle se construit par petites "
-        "décisions répétées. On écoute mieux, on clarifie plus tôt, et on évite de "
-        "laisser l'autre dans le flou."
-    ),
-    (
-        "On peut aussi le voir avec un exemple très courant. [pause]\n\n"
-        "Un client arrive avec une demande qui paraît simple, mais derrière cette demande, "
-        "il y a souvent une attente implicite : être compris, être orienté et sentir que "
-        "quelqu'un tient le fil. Le rôle professionnel consiste donc à ralentir juste assez "
-        "pour vérifier la demande, puis à proposer une suite claire. [pause]\n\n"
-        "Ce n'est pas spectaculaire, mais c'est précisément ce qui rend l'échange fiable."
-    ),
-    (
-        "Avant d'avancer, faisons une mini-synthèse. [pause]\n\n"
-        "Ce qu'il faut garder en tête, c'est que la compétence ne se limite pas à connaître "
-        "une procédure. Il faut aussi savoir quand l'appliquer, comment l'expliquer, et comment "
-        "adapter son rythme à la personne en face. [pause]\n\n"
-        "C'est cette combinaison entre méthode et présence qui donne de la qualité au travail."
-    ),
 ]
 
 
 def _expand_text_to_min_spoken_words(text: str, min_words: int, max_words: int) -> str:
-    """Ajoute des respirations pédagogiques déterministes si l'IA reste trop courte."""
-    result = (text or "").strip()
-    min_words = max(0, int(min_words or 0))
-    max_words = max(min_words, int(max_words or min_words))
-    idx = 0
-    while count_tts_spoken_words(result) < min_words and idx < 80:
-        filler = _AUDIO_BLOCK_FILLERS[idx % len(_AUDIO_BLOCK_FILLERS)]
-        result = (result + "\n\n" + filler).strip() if result else filler
-        idx += 1
-    if count_tts_spoken_words(result) > max_words:
-        result = _trim_text_to_max_spoken_words(result, max_words)
-    return result.strip()
+    """Dernier recours sans remplissage générique.
+
+    Le sous-budget doit être corrigé par l'IA dans les itérations de calibrage.
+    Si l'IA n'y arrive pas ou échoue, on conserve le texte existant plutôt que
+    d'ajouter des paragraphes génériques qui dégradent la formation.
+    """
+    return (text or "").strip()
 
 
 def _build_audio_block_calibration_prompt(
@@ -2695,6 +6488,7 @@ def _build_audio_block_calibration_prompt(
     direction: str,
     day_context: str,
 ) -> str:
+    budget_contract = load_budget_rewrite_contract()
     target_words = min(
         int(status.get("max_words") or 0),
         max(int(status.get("min_words") or 0), int(status.get("target_words") or 0) - 40),
@@ -2702,9 +6496,30 @@ def _build_audio_block_calibration_prompt(
     action = (
         "raccourcir sans perdre les idées essentielles"
         if direction == "shorten"
-        else "enrichir avec des exemples, respirations, transitions et mini-synthèses utiles"
+        else "enrichir avec du contenu pédagogique pertinent, directement lié au plan et au sujet"
+    )
+    if direction == "shorten":
+        direction_rules = (
+            "- Réduis prioritairement les répétitions, les reformulations faibles, les exemples trop longs et les développements après conclusion.\n"
+            "- Si une conclusion est suivie d'un nouveau développement, supprime ou fusionne ce débordement pour que la fin reste propre.\n"
+        )
+    else:
+        direction_rules = (
+            "- Le texte est trop court : tu dois l'enrichir en intégrant de vrais apports pédagogiques dans les parties de développement, jamais en ajoutant un appendice à la fin.\n"
+            "- Ajoute une idée utile à la fois : nuance terrain, contre-exemple, mini-cas fictif, clarification méthodologique, erreur fréquente ou lien concret avec un teaching beat existant.\n"
+            "- Ne rends pas simplement les phrases plus verbeuses. Chaque ajout doit apporter une valeur pédagogique identifiable.\n"
+            "- Insère les enrichissements AVANT la conclusion du chapitre.\n"
+            "- Respecte les slides/anchors prévus : les enrichissements doivent soutenir les moments pédagogiques existants, pas créer une trajectoire parallèle.\n"
+            "- Les exemples ajoutés doivent être fictifs ou hypothétiques et aider une idée précise du plan verrouillé.\n"
+        )
+    direction_rules += (
+        "- Si le texte contient déjà une conclusion, elle doit rester la dernière partie du texte final. Aucun nouveau développement après cette conclusion.\n"
+        "- N'ajoute jamais de remplissage générique, de répétition automatique ou de paragraphe passe-partout.\n"
     )
     return f"""Tu es directeur éditorial d'un cours audio TTS Fish Audio.
+
+CONTRAT DE RÉÉCRITURE BUDGET :
+{budget_contract}
 
 Objectif : réécrire UN bloc de cours pour qu'il tombe dans son budget de mots parlé.
 Ce texte sera lu tel quel. Il ne faut PAS répondre en JSON, PAS ajouter de titre,
@@ -2713,23 +6528,30 @@ PAS ajouter de markdown, PAS ajouter de marqueur technique.
 Contexte journée :
 {day_context}
 
-Bloc audio :
-- Bloc cours {block.get('bloc_number')} · fichier {block.get('filename')}
-- Durée slot : {block.get('duration_min')} min
+Cours audio interne :
+- Cours {block.get('bloc_number')} · fichier {block.get('filename')}
+- Durée interne : {block.get('duration_min')} min
 - Budget accepté : {status.get('min_words')} à {status.get('max_words')} mots parlés
 - Cible pratique : environ {target_words} mots parlés
 - Texte actuel : {status.get('words')} mots
+- Écart à corriger : {status.get('delta')} mots
 - Direction artistique : {block.get('role') or 'continuité pédagogique orale'}
 
 Mission :
 - Tu dois {action}.
 - Le texte final doit rester oral, fluide, humain, TTS-ready.
 - Garde les tags TTS utiles comme [pause] ou [calm], mais n'en abuse pas.
+- Respecte le plan et la fonction pédagogique du cours.
 - Ne change pas le niveau RNCP, ne rajoute pas de promesse ou contenu sensible.
-- Respecte la logique playlist : si ce bloc annonce une pause ou un Q&A, cette annonce
-  reste dans l'outro du bloc précédent, pas dans le fichier pause/Q&A.
+- Respecte la logique playlist : le cours ne doit jamais annoncer une pause ou un Q&A ;
+  le fichier pause/Q&A porte sa propre intro.
+- Les mots "bloc", "créneau", "horaire", "planning", les durées, les fichiers et
+  les budgets sont internes : ne les mentionne jamais dans le texte final.
 - Ne gonfle pas hors budget : le résultat doit finir entre {status.get('min_words')}
   et {status.get('max_words')} mots parlés.
+- Si tu enrichis, garde l'ordre du texte existant : introduction, développement,
+  conclusion. Ne prolonge jamais le développement après la fin de partie.
+{direction_rules}
 
 Texte actuel à réécrire :
 {current_text}
@@ -2744,7 +6566,7 @@ def _calibrate_single_audio_block(
     max_iterations: int = 4,
     day_context: str = "",
 ) -> tuple[str, dict]:
-    """Ajuste un bloc par IA puis fallback déterministe pour garantir le budget."""
+    """Ajuste un bloc par IA sans tronquer mécaniquement les fins de texte."""
     current_text = (text or "").strip()
     history = []
     changed = False
@@ -2775,7 +6597,7 @@ def _calibrate_single_audio_block(
             day_context=day_context,
         )
         try:
-            raw = _anthropic_post(
+            raw = _deepseek_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=16000,
                 model=model,
@@ -2812,9 +6634,13 @@ def _calibrate_single_audio_block(
     final_status = _audio_block_word_status(current_text, block)
     fallback = None
     if final_status["status"] == "over_budget":
-        current_text = _trim_text_to_max_spoken_words(current_text, final_status["max_words"])
-        changed = True
-        fallback = "trim_to_max_words"
+        fallback = "llm_only_over_budget_kept_untrimmed"
+        logger.warning(
+            "PIPELINE_AUDIO_BLOCK_CALIBRATION_OVER_BUDGET_UNTRIMMED bloc=%s words=%s max_words=%s",
+            block.get("bloc_number"),
+            final_status.get("words"),
+            final_status.get("max_words"),
+        )
     elif final_status["status"] == "under_budget":
         current_text = _expand_text_to_min_spoken_words(
             current_text,
@@ -2835,25 +6661,12 @@ def _calibrate_single_audio_block(
 
 
 def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -> int:
-    """Persiste les 7 blocs audio comme source canonique du script TTS prévu."""
+    """Persiste les blocs audio comme source canonique du script TTS prévu."""
     if not calibrated_blocks:
         return 0
 
-    review_signature = _current_humanization_review_signature()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, sub_part_index, sub_part_name, passe
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
-        (job["id"],),
-    )
-    rows = cursor.fetchall()
+    rows = list_completed_content_segment_rows(job["id"])
     if len(rows) < len(calibrated_blocks):
-        conn.close()
         raise ValueError(
             f"Calibrage blocs impossible : {len(rows)} segment(s) disponibles "
             f"pour {len(calibrated_blocks)} bloc(s) audio"
@@ -2861,45 +6674,26 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
 
     total_words = 0
     for idx, block in enumerate(calibrated_blocks):
-        seg_id = rows[idx][0]
+        seg_id = rows[idx]["id"]
         bloc_num = int(block["bloc_number"])
         text = (block.get("text") or "").strip()
         stored_text = f"<<<BLOC_AUDIO_{bloc_num}>>>\n\n{text}".strip()
         words = count_tts_spoken_words(text)
         total_words += words
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET text_content = ?, word_count = ?, dirty = 1,
-                humanized = 1, humanization_error = NULL, humanization_signature = ?,
-                reviewed = 0, review_error = NULL, review_signature = NULL
-            WHERE id = ?
-            """,
-            (stored_text, words, review_signature, seg_id),
+        update_content_segment_audio_calibration(
+            segment_id=seg_id,
+            text_content=stored_text,
+            word_count=words,
         )
 
     for row in rows[len(calibrated_blocks):]:
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET text_content = '', word_count = 0, dirty = 1,
-                humanized = 1, humanization_error = NULL, humanization_signature = ?,
-                reviewed = 0, review_error = NULL, review_signature = NULL
-            WHERE id = ?
-            """,
-            (review_signature, row[0]),
+        update_content_segment_audio_calibration(
+            segment_id=row["id"],
+            text_content="",
+            word_count=0,
         )
 
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET total_words = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (total_words, job["id"]),
-    )
-    conn.commit()
-    conn.close()
+    update_content_generation_job(job["id"], total_words=total_words)
     return total_words
 
 
@@ -2912,10 +6706,10 @@ def run_audio_block_word_calibration(
     force: bool = False,
     stage: str = "",
 ) -> dict:
-    """Calibre les 7 blocs audio au nombre de mots prévu au lieu de bloquer.
+    """Legacy : calibre les 7 blocs audio au nombre de mots prévu.
 
-    Cette passe est volontairement entre humanisation et conformité stricte :
-    elle peut modifier le texte, donc elle invalide ensuite la conformité.
+    Cette passe n'est plus appelée par le flux API actif. Le calibrage de volume
+    se fait désormais avant conformité, directement dans la génération structurée.
     """
     from services.playlist_tts_service import PLAYLIST_SPEC
 
@@ -2925,11 +6719,21 @@ def run_audio_block_word_calibration(
     if max_iterations is None:
         max_iterations = int(os.getenv("FORMATION_TTS_BLOCK_CALIBRATION_MAX_ITERATIONS", "4") or "4")
 
-    playlist_spec = _playlist_items_for_platform(job["platform_id"]) or list(PLAYLIST_SPEC)
+    playlist_spec = _playlist_items_for_platform(
+        job["platform_id"],
+        folder_id=int(folder_id),
+    ) or list(PLAYLIST_SPEC)
     cours_durations_min = _course_durations_min_from_playlist(playlist_spec)
-    plan = _course_audio_block_plan(playlist_spec, folder_position=job.get("folder_position"))
+    plan = _course_audio_block_plan(
+        playlist_spec,
+        folder_position=job.get("folder_position"),
+        platform_id=job.get("platform_id"),
+    )
     plan_by_bloc = {int(block["bloc_number"]): block for block in plan}
-    day_context = _build_audio_day_plan_context({"folder_position": job.get("folder_position")})
+    day_context = _build_audio_day_plan_context({
+        "folder_position": job.get("folder_position"),
+        "platform_id": job.get("platform_id"),
+    })
 
     segments = _load_segments_for_course_plan(job, sync_slides=False)
     if not segments:
@@ -2946,6 +6750,8 @@ def run_audio_block_word_calibration(
         is_last_folder=next_folder_id is None,
         model=model,
         preview=True,
+        platform_id=job.get("platform_id"),
+        folder_position=job.get("folder_position"),
     )
 
     total = len(blocs)
@@ -3112,7 +6918,7 @@ def _handle_last_bloc_overflow(
     preview=False,
     section_boundaries=None,
 ):
-    """Si le bloc 7 dépasse, reporte vers le cours suivant ou réduit le dernier jour."""
+    """Si le dernier bloc dépasse, reporte vers le cours suivant ou le réduit."""
     if not blocs:
         return ""
 
@@ -3158,7 +6964,8 @@ def _handle_last_bloc_overflow(
         if source_folder_id and not same_clean_carryover and not preview:
             _store_cross_day_carryover(source_folder_id, next_folder_id, carryover_text)
         logger.warning(
-            f"   🔁 Bloc 7 trop chargé : {len(carryover_text.split())} mots reportés "
+            f"   🔁 Bloc {last['bloc_number']} trop chargé : "
+            f"{len(carryover_text.split())} mots reportés "
             f"vers folder {next_folder_id}"
         )
         return carryover_text
@@ -3214,7 +7021,10 @@ def _apply_closing_transitions(blocs, api_speed, model=None, playlist_items=None
         if not (bloc.get("text") or "").strip():
             continue  # bloc vide : rien à clore
 
-        voice_stop_sec = bloc["target_sec"] - _course_final_silence_sec()
+        voice_stop_sec = _course_speech_deadline_sec(
+            bloc["target_sec"],
+            bool(bloc.get("dynamic_schedule")),
+        )
         raw_gap_sec = voice_stop_sec - _estimated_audio_seconds_for_words(
             bloc["word_count"], api_speed
         )
@@ -3264,122 +7074,158 @@ def _apply_closing_transitions(blocs, api_speed, model=None, playlist_items=None
             bloc["word_count"] = new_word_count
 
 
-def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms, pad_audio_to_duration):
+def _fish_actual_reading_summary(metadata: dict | None, *, input_text: str = "") -> dict:
+    """Résumé compact de l'alignement Fish, stockable dans le plan audio."""
+    metadata = metadata or {}
+    duration_sec = float(metadata.get("audio_duration_sec") or 0.0)
+    spoken_words = int(metadata.get("spoken_word_count") or 0)
+    input_words = count_tts_spoken_words(input_text)
+    wpm = float(metadata.get("words_per_minute") or 0.0)
+    if not wpm and duration_sec > 0 and input_words > 0:
+        wpm = input_words / (duration_sec / 60.0)
+    return {
+        "provider": metadata.get("provider") or "fish_audio",
+        "endpoint": metadata.get("endpoint") or "",
+        "model": metadata.get("model") or "",
+        "format": metadata.get("format") or "",
+        "speed": metadata.get("speed"),
+        "audio_duration_sec": round(duration_sec, 3),
+        "input_spoken_word_count": int(input_words),
+        "fish_segment_word_count": int(spoken_words),
+        "words_per_minute": round(wpm, 3),
+        "words_per_hour": round(wpm * 60.0, 1) if wpm else 0.0,
+        "text_read": metadata.get("text_read") or "",
+        "timeline": metadata.get("timeline") or [],
+        "chunks": metadata.get("chunks") or [],
+    }
+
+
+def _synthesize_course_audio_to_fit(
+    bloc,
+    convert_to_speech,
+    measure_duration_ms,
+    pad_audio_to_duration,
+    convert_to_speech_with_timestamps=None,
+):
     """
-    Génère un bloc cours sans troncature brutale.
-    Par défaut, on n'accélère pas la voix : si le texte est manifestement trop
-    long, on échoue avant l'appel Fish Audio pour éviter de payer un TTS inutilisable.
-    Un speedup local reste possible seulement si FORMATION_TTS_LOCAL_MAX_SPEEDUP > 1.
+    Génère un bloc cours tel quel et refuse une voix qui empiète sur la
+    fenêtre de silence final réservée par la playlist.
     """
     target_sec = int(bloc["target_sec"])
-    final_silence_sec = _course_final_silence_sec()
-    max_voice_sec = _course_voice_window_sec(target_sec)
+    max_voice_sec = _course_voice_window_sec(
+        target_sec,
+        bool(bloc.get("dynamic_schedule")),
+    )
     if max_voice_sec <= 0:
         raise ValueError(
             f"Bloc {bloc['bloc_number']} impossible à synthétiser : cible {target_sec}s "
-            f"trop courte pour garder {final_silence_sec:.0f}s de silence final."
+            "invalide."
         )
     api_speed = _course_tts_speed()
     attempts = []
-    word_count = bloc.get("word_count") or len(bloc["text"].split())
-    word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
 
-    if word_budget > 0 and word_count > word_budget:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long avant TTS "
-            f"({word_count} mots > budget prudent {word_budget} mots à speed={api_speed}). "
-            "Aucun appel Fish Audio lancé. Il faut générer moins de mots en amont "
-            "ou réduire ce bloc avant synthèse."
+    actual_reading = None
+    if convert_to_speech_with_timestamps and _fish_timestamp_alignment_enabled():
+        audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
+            bloc["text"],
+            speed=api_speed,
+            format="mp3",
         )
+        actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=bloc["text"])
+    else:
+        audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
+    raw_duration = float((actual_reading or {}).get("audio_duration_sec") or 0.0)
+    if not raw_duration:
+        try:
+            raw_duration = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+        except Exception:
+            raw_duration = measure_duration_ms(audio_bytes) / 1000
+    _assert_course_voice_before_final_silence(bloc, raw_duration)
+    attempts.append({
+        "kind": "api_timestamped" if actual_reading else "api",
+        "speed": api_speed,
+        "duration": raw_duration,
+        "actual_reading": actual_reading,
+    })
 
-    audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
-    raw_duration = measure_duration_ms(audio_bytes) / 1000
-    attempts.append({"kind": "api", "speed": api_speed, "duration": raw_duration})
+    return audio_bytes, raw_duration, f"api_speed={api_speed}", attempts
 
-    if raw_duration <= max_voice_sec:
-        final_bytes = pad_audio_to_duration(
-            audio_bytes,
-            target_sec,
-            truncate_overflow=False,
-        )
-        return final_bytes, raw_duration, f"api_speed={api_speed}", attempts
 
-    required_speedup = raw_duration / max_voice_sec
-    max_speedup = _course_local_max_speedup()
-    if max_speedup <= 1.0:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s à speed={api_speed}, "
-            f"silence final {final_silence_sec:.0f}s). "
-            "Speedup local désactivé par défaut pour préserver la voix. "
-            "Audio non uploadé pour éviter une coupure en pleine phrase."
-        )
-
-    if required_speedup > max_speedup:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s, "
-            f"speedup requis x{required_speedup:.3f} > limite x{max_speedup:.3f}, "
-            f"silence final {final_silence_sec:.0f}s). "
-            "Audio non uploadé pour éviter une coupure en pleine phrase."
-        )
-
-    import io
-    from pydub import AudioSegment, effects
-
-    source_audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-    # Petite marge parce que pydub.effects.speedup est approximatif.
-    factors = [min(max_speedup, required_speedup * 1.005)]
-    if factors[0] < max_speedup:
-        factors.append(min(max_speedup, required_speedup * 1.02))
-
-    for factor in factors:
-        sped_audio = effects.speedup(
-            source_audio,
-            playback_speed=factor,
-            chunk_size=150,
-            crossfade=25,
-        )
-        out = io.BytesIO()
-        sped_audio.export(out, format="mp3", bitrate="128k")
-        sped_bytes = out.getvalue()
-        sped_duration = measure_duration_ms(sped_bytes) / 1000
-        attempts.append({"kind": "local_speedup", "factor": factor, "duration": sped_duration})
-
-        if sped_duration <= max_voice_sec:
-            final_bytes = pad_audio_to_duration(
-                sped_bytes,
-                target_sec,
-                truncate_overflow=False,
+def _synthesize_fish_course_audio_observe(
+    bloc,
+    convert_to_speech,
+    measure_duration_ms,
+    convert_to_speech_with_timestamps=None,
+):
+    """
+    Génère Fish Audio tel quel et mesure la durée réelle, avec la même
+    garde de silence final que le chemin séquentiel.
+    """
+    api_speed = _course_tts_speed()
+    actual_reading = None
+    retry_config = _fish_audio_429_retry_config()
+    retry_attempt = 0
+    while True:
+        try:
+            if convert_to_speech_with_timestamps and _fish_timestamp_alignment_enabled():
+                audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
+                    bloc["text"],
+                    speed=api_speed,
+                    format="mp3",
+                )
+                actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=bloc["text"])
+            else:
+                audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
+            break
+        except Exception as exc:
+            error_text = str(exc)
+            is_rate_limited = "429" in error_text or "too many requests" in error_text.lower()
+            if not is_rate_limited or retry_attempt >= retry_config["max_retries"]:
+                raise
+            retry_attempt += 1
+            wait_sec = min(
+                retry_config["max_wait_sec"],
+                retry_config["base_wait_sec"] * (2 ** (retry_attempt - 1)),
             )
-            return final_bytes, sped_duration, f"api_speed={api_speed}, local_x{factor:.3f}", attempts
+            logger.warning(
+                "PIPELINE_AUDIO_FISH_429_RETRY bloc=%s attempt=%s/%s wait_sec=%.1f error=%s",
+                bloc.get("bloc_number"),
+                retry_attempt,
+                retry_config["max_retries"],
+                wait_sec,
+                error_text[:220],
+            )
+            time.sleep(wait_sec)
 
-    attempts_str = ", ".join(
-        f"{a['kind']}={a.get('speed', a.get('factor'))}: {a['duration']:.1f}s"
-        for a in attempts
-    )
-    raise ValueError(
-        f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-        f"(max voix {max_voice_sec:.1f}s, silence final {final_silence_sec:.0f}s). "
-        f"Tentatives locales: {attempts_str}. "
-        "Audio non uploadé pour éviter une coupure en pleine phrase."
-    )
+    raw_duration = float((actual_reading or {}).get("audio_duration_sec") or 0.0)
+    if not raw_duration:
+        try:
+            raw_duration = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+        except Exception:
+            raw_duration = measure_duration_ms(audio_bytes) / 1000
+    _assert_course_voice_before_final_silence(bloc, raw_duration)
 
-# Chemins vers les fichiers de prompts (dans backend/prompts/ pour qu'ils soient
-# embarqués dans l'artifact de déploiement backend — le workflow ne package que
-# ./backend/, donc des fichiers à la racine du repo seraient introuvables en prod).
-_PROMPT_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-direct.md"
-)
-_PROMPT_FILE_SCRATCH = os.path.join(
-    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+    attempts = [{
+        "kind": "api_observe_timestamped" if actual_reading else "api_observe",
+        "speed": api_speed,
+        "duration": raw_duration,
+        "actual_reading": actual_reading,
+        "rate_limit_retries": retry_attempt,
+    }]
+    return audio_bytes, raw_duration, f"fish_observe_speed={api_speed}", attempts
+
+
+# Prompt général de génération du contenu de formation.
+# Il reste dans backend/prompts/ pour être embarqué dans l'artifact de déploiement
+# backend — le workflow ne package que ./backend/.
+_GENERAL_FORMATION_PROMPTS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
 )
 
 # Cache des prompts invalidé sur mtime du fichier source — permet d'éditer
 # les prompts .md sans redémarrer le backend (watchmedo ne watch que *.py).
 # Structure : (prompts_list, mtime) ou None.
-_PASSE_PROMPTS = None           # mode expansion
-_PASSE_PROMPTS_SCRATCH = None   # mode from_scratch
+_PASSE_PROMPTS = None
 
 
 def _parse_passe_prompts_from_file(path: str) -> list:
@@ -3395,34 +7241,326 @@ def _parse_passe_prompts_from_file(path: str) -> list:
 
 def _get_passe_prompts(from_scratch=False):
     """
-    Retourne les 3 prompts (Passe 1/2/3) depuis le bon fichier .md.
+    Retourne les 3 prompts généraux (Passe 1/2/3) depuis le fichier .md.
     Recharge automatiquement si le fichier a été modifié depuis la dernière lecture.
     """
-    global _PASSE_PROMPTS, _PASSE_PROMPTS_SCRATCH
-    path = _PROMPT_FILE_SCRATCH if from_scratch else _PROMPT_FILE
+    global _PASSE_PROMPTS
+    path = _GENERAL_FORMATION_PROMPTS_FILE
     mtime = os.path.getmtime(path)
 
-    cached = _PASSE_PROMPTS_SCRATCH if from_scratch else _PASSE_PROMPTS
-    if cached is not None and cached[1] == mtime:
-        return cached[0]
+    if _PASSE_PROMPTS is not None and _PASSE_PROMPTS[1] == mtime:
+        return _PASSE_PROMPTS[0]
 
     prompts = _parse_passe_prompts_from_file(path)
-    if from_scratch:
-        _PASSE_PROMPTS_SCRATCH = (prompts, mtime)
-    else:
-        _PASSE_PROMPTS = (prompts, mtime)
+    _PASSE_PROMPTS = (prompts, mtime)
     logger.info(f"📖 Prompts rechargés depuis {os.path.basename(path)}")
     return prompts
 
 
+_FRENCH_UNITS = (
+    "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept",
+    "huit", "neuf", "dix", "onze", "douze", "treize", "quatorze",
+    "quinze", "seize",
+)
+_FRENCH_TENS = {20: "vingt", 30: "trente", 40: "quarante", 50: "cinquante", 60: "soixante"}
+_FRENCH_WEEKDAYS = (
+    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+)
+_FRENCH_MONTHS = (
+    "janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+    "août", "septembre", "octobre", "novembre", "décembre",
+)
+
+
+def _french_number(value: int) -> str:
+    """Petit convertisseur déterministe pour dates/heures TTS."""
+    number = int(value)
+    if number < 0:
+        return f"moins {_french_number(-number)}"
+    if number < len(_FRENCH_UNITS):
+        return _FRENCH_UNITS[number]
+    if number < 20:
+        return f"dix-{_FRENCH_UNITS[number - 10]}"
+    if number < 70:
+        tens = (number // 10) * 10
+        unit = number % 10
+        if not unit:
+            return _FRENCH_TENS[tens]
+        connector = " et " if unit == 1 else "-"
+        return f"{_FRENCH_TENS[tens]}{connector}{_FRENCH_UNITS[unit]}"
+    if number < 80:
+        return f"soixante-{_french_number(number - 60)}"
+    if number < 100:
+        if number == 80:
+            return "quatre-vingts"
+        return f"quatre-vingt-{_french_number(number - 80)}"
+    if number < 1000:
+        hundreds, remainder = divmod(number, 100)
+        prefix = "cent" if hundreds == 1 else f"{_french_number(hundreds)} cent"
+        if not remainder:
+            return prefix + ("s" if hundreds > 1 else "")
+        return f"{prefix} {_french_number(remainder)}"
+    if number < 1_000_000:
+        thousands, remainder = divmod(number, 1000)
+        prefix = "mille" if thousands == 1 else f"{_french_number(thousands)} mille"
+        return prefix if not remainder else f"{prefix} {_french_number(remainder)}"
+    return str(number)
+
+
+def _spoken_french_date(value: str) -> str:
+    parsed = datetime.fromisoformat(str(value)).date()
+    day = "premier" if parsed.day == 1 else _french_number(parsed.day)
+    return (
+        f"{_FRENCH_WEEKDAYS[parsed.weekday()]} {day} "
+        f"{_FRENCH_MONTHS[parsed.month - 1]} {_french_number(parsed.year)}"
+    )
+
+
+def _spoken_french_time(minute: int) -> str:
+    hour, remainder = divmod(int(minute), 60)
+    if remainder:
+        return f"{_french_number(hour)} heures {_french_number(remainder)}"
+    return f"{_french_number(hour)} heures"
+
+
+def _temporal_gap_label(current_date: str, target_date: str) -> str:
+    current = datetime.fromisoformat(current_date).date()
+    target = datetime.fromisoformat(target_date).date()
+    gap = (target - current).days
+    if gap == 1:
+        return "demain"
+    if gap == 2:
+        return "après-demain"
+    return _spoken_french_date(target_date)
+
+
+def _build_day_temporal_closing(
+    *,
+    formation_job_id=None,
+    folder_position=None,
+) -> str:
+    """Clôture orale tardive d'une journée terminée par un Q&R.
+
+    Le texte est calculé au moment de l'audio à partir du planning verrouillé :
+    il ne peut donc pas conserver une ancienne date après replanification.
+    """
+    if not formation_job_id:
+        return ""
+    try:
+        from repositories.pipeline_repository import get_pipeline_job
+
+        pipeline_job = get_pipeline_job(int(formation_job_id)) or {}
+        snapshot = pipeline_job.get("schedule_snapshot_json") or {}
+        if isinstance(snapshot, str):
+            snapshot = json.loads(snapshot)
+        days = [
+            dict(day)
+            for day in snapshot.get("days") or []
+            if isinstance(day, dict) and day.get("date")
+        ]
+        days.sort(
+            key=lambda item: int(
+                item.get("day_index") or item.get("day_number") or 0
+            )
+        )
+        day_index = int(folder_position or 0)
+        if not (0 <= day_index < len(days)):
+            return ""
+
+        current_date = str(days[day_index]["date"])
+        if day_index + 1 >= len(days):
+            return (
+                "Cette séance est terminée. "
+                "Nous arrivons au terme de cette formation."
+            )
+
+        next_date = str(days[day_index + 1]["date"])
+        relative_label = _temporal_gap_label(current_date, next_date)
+        spoken_date = _spoken_french_date(next_date)
+        if relative_label in {"demain", "après-demain"}:
+            return (
+                "Cette séance est terminée. Nous nous retrouverons "
+                f"{relative_label}, le {spoken_date}, pour poursuivre la formation."
+            )
+        return (
+            "Cette séance est terminée. Nous nous retrouverons le "
+            f"{spoken_date} pour poursuivre la formation."
+        )
+    except Exception as exc:
+        logger.warning("Clôture temporelle indisponible: %s", exc)
+        return ""
+
+
+def _apply_late_temporal_closing_to_final_course(
+    blocs: list[dict],
+    playlist_items: list,
+    temporal_closing: str,
+) -> bool:
+    """Ajoute la clôture datée au TTS seulement si un cours finit la journée."""
+    if not temporal_closing or not playlist_items or playlist_items[-1][2] != "cours":
+        return False
+    final_bloc_number = int(playlist_items[-1][3] or 0)
+    final_bloc = next(
+        (
+            bloc
+            for bloc in blocs
+            if int(bloc.get("bloc_number") or 0) == final_bloc_number
+        ),
+        None,
+    )
+    if not final_bloc:
+        return False
+    current_text = (final_bloc.get("text") or "").strip()
+    if temporal_closing not in current_text:
+        final_bloc["text"] = "\n\n".join(
+            part for part in (current_text, temporal_closing.strip()) if part
+        )
+        final_bloc["word_count"] = len(final_bloc["text"].split())
+    final_bloc["late_temporal_closing"] = temporal_closing.strip()
+    # La phrase appartient à l'occurrence planifiée, pas au script durable.
+    final_bloc["dirty"] = True
+    return True
+
+
+def _build_course_temporal_card(
+    *,
+    formation_job_id=None,
+    folder_position=None,
+    sub_part_index=None,
+    total_courses=None,
+    playlist_spec=None,
+) -> str:
+    """Fiche temporelle concise, exacte et réutilisable dans chaque prompt."""
+    if not formation_job_id:
+        return ""
+    try:
+        from repositories.pipeline_repository import get_pipeline_job
+
+        pipeline_job = get_pipeline_job(int(formation_job_id)) or {}
+        snapshot = pipeline_job.get("schedule_snapshot_json") or {}
+        if isinstance(snapshot, str):
+            snapshot = json.loads(snapshot)
+        days = [dict(day) for day in snapshot.get("days") or [] if isinstance(day, dict)]
+        days.sort(key=lambda item: int(item.get("day_index") or item.get("day_number") or 0))
+        day_index = int(folder_position or 0)
+        if not (0 <= day_index < len(days)):
+            return ""
+        day = days[day_index]
+        current_date = str(day.get("date") or "")
+        if not current_date:
+            return ""
+        day_courses = [
+            block for block in day.get("blocks") or []
+            if isinstance(block, dict)
+            and str(block.get("block_type") or block.get("type")) == "course"
+        ]
+        course_index = max(0, int(sub_part_index or 0))
+        if course_index >= len(day_courses):
+            return ""
+        course = day_courses[course_index]
+        start_minute = int(course.get("start_minute") or 0)
+        duration_minutes = int(
+            course.get("duration_minutes")
+            or course.get("duration_min")
+            or 0
+        )
+
+        all_courses = []
+        total_course_minutes = 0
+        for indexed_day, scheduled_day in enumerate(days):
+            scheduled_date = str(scheduled_day.get("date") or "")
+            for scheduled_course in scheduled_day.get("blocks") or []:
+                if not isinstance(scheduled_course, dict) or str(
+                    scheduled_course.get("block_type") or scheduled_course.get("type")
+                ) != "course":
+                    continue
+                duration = int(
+                    scheduled_course.get("duration_minutes")
+                    or scheduled_course.get("duration_min")
+                    or 0
+                )
+                total_course_minutes += duration
+                all_courses.append({
+                    "day_index": indexed_day,
+                    "date": scheduled_date,
+                    "start_minute": int(scheduled_course.get("start_minute") or 0),
+                    "duration_minutes": duration,
+                })
+        global_index = sum(
+            1
+            for item in all_courses
+            if item["day_index"] < day_index
+        ) + course_index
+        previous_course = all_courses[global_index - 1] if global_index > 0 else None
+        next_course = (
+            all_courses[global_index + 1]
+            if global_index + 1 < len(all_courses)
+            else None
+        )
+        dated_days = [str(item.get("date") or "") for item in days if item.get("date")]
+        formation_weeks = 1
+        if dated_days:
+            first = datetime.fromisoformat(dated_days[0]).date()
+            last = datetime.fromisoformat(dated_days[-1]).date()
+            formation_weeks = max(1, math.ceil(((last - first).days + 1) / 7))
+
+        lines = [
+            "FICHE TEMPORELLE CONCISE — données internes exactes",
+            f"- Formation : {_french_number(formation_weeks)} semaine{'s' if formation_weeks > 1 else ''}, "
+            f"{_french_number(len(all_courses))} chapitre{'s' if len(all_courses) > 1 else ''}, "
+            f"{_french_number(total_course_minutes)} minutes de cours au total.",
+            f"- Aujourd'hui : {_spoken_french_date(current_date)}.",
+            f"- Chapitre courant : {_french_number(course_index + 1)} sur "
+            f"{_french_number(len(day_courses))} dans cette journée, "
+            f"{_french_number(global_index + 1)} sur {_french_number(len(all_courses))} dans la formation.",
+            f"- Début planifié : {_spoken_french_time(start_minute)} ; durée : "
+            f"{_french_number(duration_minutes)} minutes.",
+        ]
+        if previous_course:
+            lines.append(
+                f"- Séquence précédente : {_spoken_french_date(previous_course['date'])} "
+                f"à {_spoken_french_time(previous_course['start_minute'])}."
+            )
+        else:
+            lines.append("- Séquence précédente : aucune, ouverture de la formation.")
+        if next_course:
+            if next_course["date"] == current_date:
+                next_oral_label = (
+                    "juste après"
+                    if next_course["start_minute"] == start_minute + duration_minutes
+                    else "plus tard dans cette même journée"
+                )
+            else:
+                next_oral_label = _temporal_gap_label(
+                    current_date, next_course["date"]
+                )
+            lines.append(
+                f"- Prochaine séquence : {_spoken_french_date(next_course['date'])} "
+                f"à {_spoken_french_time(next_course['start_minute'])} ; formulation orale "
+                f"autorisée : {next_oral_label}."
+            )
+        else:
+            lines.append("- Prochaine séquence : aucune, clôture finale de la formation.")
+        lines.append(
+            "- Toute date ou heure prononcée doit rester écrite entièrement en lettres."
+        )
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.warning("Fiche temporelle indisponible: %s", exc)
+        return ""
+
+
 def _build_course_position_context(
     *,
+    formation_job_id=None,
     folder_position=None,
     nb_days=None,
     total_hours=None,
     folder_name="",
     sub_part_index=None,
     passe=None,
+    total_courses=None,
+    playlist_spec=None,
 ) -> str:
     """Ajoute au prompt le contexte qui permet de traiter correctement les ouvertures."""
     try:
@@ -3437,6 +7575,18 @@ def _build_course_position_context(
         passe_number = int(passe) if passe is not None else None
     except Exception:
         passe_number = None
+    try:
+        resolved_total_courses = int(total_courses) if total_courses is not None else None
+    except (TypeError, ValueError):
+        resolved_total_courses = None
+    if not resolved_total_courses and playlist_spec:
+        resolved_total_courses = sum(
+            1
+            for item in playlist_spec
+            if len(item) >= 3 and item[2] == "cours"
+        )
+    if not resolved_total_courses:
+        resolved_total_courses = NUM_SUB_PARTS
 
     is_first_annual_course = day_number == 1 and sub_number == 1 and passe_number == 1
     is_day_opening = sub_number == 1 and passe_number == 1
@@ -3454,9 +7604,18 @@ def _build_course_position_context(
     if folder_name:
         lines.append(f"Intitulé de journée : {folder_name}.")
     if sub_number:
-        lines.append(f"Sous-partie : {sub_number}/6.")
+        lines.append(f"Cours de la journée : {sub_number}/{resolved_total_courses}.")
     if passe_number:
         lines.append(f"Passe : {passe_number}/3.")
+    temporal_card = _build_course_temporal_card(
+        formation_job_id=formation_job_id,
+        folder_position=folder_position,
+        sub_part_index=sub_part_index,
+        total_courses=resolved_total_courses,
+        playlist_spec=playlist_spec,
+    )
+    if temporal_card:
+        lines.extend(["", temporal_card])
 
     if is_first_annual_course:
         lines.extend([
@@ -3465,10 +7624,14 @@ def _build_course_position_context(
             "Avant toute notion métier, écris une vraie introduction de formation",
             "de 220 à 380 mots. Elle doit accueillir, raconter pourquoi cette",
             "formation existe, expliquer en quoi elle sera utile concrètement",
-            "dans le métier, présenter le parcours global, annoncer les grandes",
-            "familles de compétences qui seront travaillées, donner envie de",
-            "s'engager, rassurer les apprenants sur le rythme, puis seulement",
-            "faire une transition douce vers le premier sujet.",
+            "dans le métier, présenter synthétiquement le parcours global de",
+            "l'année, annoncer les grandes familles de compétences qui seront",
+            "travaillées, donner envie de s'engager et rassurer les apprenants",
+            "sur le rythme.",
+            "Ensuite, annonce les thèmes de la journée dans leur ordre",
+            "pédagogique, puis bascule vers le premier grand thème, son objectif",
+            "et son plan oral en 2 à 4 axes. Les exemples, cas clients et",
+            "métaphores ne doivent venir qu'après cette carte mentale.",
             "Cette ouverture doit ressembler au début d'une année de formation,",
             "pas au début d'un chapitre isolé.",
             "Interdiction de commencer par : \"Bon, on va aborder...\",",
@@ -3481,7 +7644,10 @@ def _build_course_position_context(
             "CETTE PASSE EST LE DÉBUT D'UNE JOURNÉE DE FORMATION.",
             "Tu dois commencer par une vraie amorce de journée : accueil,",
             "remise en route, lien avec la progression globale, intention du jour,",
-            "puis transition progressive vers le premier sujet.",
+            "thèmes de la journée dans leur ordre pédagogique, puis transition",
+            "progressive vers le premier sujet.",
+            "Côté apprenant, parle de premier grand thème, première partie ou",
+            "chapitre, pas de 'premier cours', 'ce cours' ou 'cours actuel'.",
             "Interdiction de démarrer brutalement par \"Bon, on va aborder...\",",
             "\"nouvelle partie du cours\" ou une phrase de conférence.",
         ])
@@ -3498,81 +7664,95 @@ def _build_course_position_context(
 # ─── Extraction des sous-parties ─────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """Tu analyses un programme de formation professionnelle.
-Ton rôle : identifier exactement 6 sous-parties distinctes qui couvriront une journée complète de formation.
+Ton rôle : identifier exactement {COURSE_COUNT} cours distincts qui couvrent une journée complète de formation, dans l'ordre pédagogique de la journée.
 
 Réponds UNIQUEMENT en JSON valide, sans aucun texte avant ou après :
 {{
   "title": "Nom exact du titre professionnel préparé",
   "sub_parts": [
-    "Nom précis de la sous-partie 1",
-    "Nom précis de la sous-partie 2",
-    "Nom précis de la sous-partie 3",
-    "Nom précis de la sous-partie 4",
-    "Nom précis de la sous-partie 5",
-    "Nom précis de la sous-partie 6"
+{COURSE_EXAMPLES}
   ]
 }}
 
 Règles :
-- Exactement 6 sous-parties (ni plus ni moins)
+- Exactement {COURSE_COUNT} cours, dans l'ordre pédagogique de la journée.
+- Ne mets jamais d'heure, de durée, de créneau, de planning ou de mention de fichier dans les noms.
 - Chaque nom doit être suffisamment précis pour orienter la génération au budget audio injecté
-- Couvrir l'essentiel du programme sans répétition entre sous-parties
+- Couvrir l'essentiel du programme sans répétition entre cours
 - Si le programme couvre 2 journées, prendre uniquement les sous-parties de la première moitié
 
 PROGRAMME :
-{program_text}"""
+{PROGRAM_TEXT}"""
 
 
-def _anthropic_post(messages, max_tokens, model=None):
-    """Appel LLM compatible Anthropic (Anthropic ou DeepSeek selon config)."""
+def _deepseek_post(messages, max_tokens, model=None):
+    """Un seul appel HTTP ; la file durable possède la politique de retry."""
     return _llm_post(
         messages=messages,
         max_tokens=max_tokens,
-        model=model or CLAUDE_MODEL,
+        model=model or DEEPSEEK_MODEL,
         timeout=600,
+        http_max_attempts=1,
     )
 
 
-def extract_sub_parts(program_text):
+def extract_sub_parts(program_text, course_count=NUM_SUB_PARTS):
     """
-    Appelle Claude pour extraire 6 sous-parties depuis le programme.
-    Synchrone — retourne {"title": str, "sub_parts": [str×6]} ou lève une exception.
+    Appelle DeepSeek pour extraire les cours depuis le programme.
+    V1 conserve 7 cours par défaut ; V2 fournit le nombre exact de son manifeste.
     """
-    prompt = _EXTRACT_PROMPT.replace("{program_text}", program_text[:15000])
+    try:
+        course_count = int(course_count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Le nombre de cours doit être un entier entre 1 et 10") from exc
+    if not 1 <= course_count <= 10:
+        raise ValueError("Le nombre de cours doit être compris entre 1 et 10")
 
-    logger.info("🔍 Extraction des sous-parties avec Claude...")
+    course_examples = ",\n".join(
+        f'    "Cours {index} — Nom précis du thème"'
+        for index in range(1, course_count + 1)
+    )
+    prompt = (
+        _EXTRACT_PROMPT
+        .replace("{COURSE_COUNT}", str(course_count))
+        .replace("{COURSE_EXAMPLES}", course_examples)
+        .replace("{PROGRAM_TEXT}", str(program_text or "")[:15000])
+    )
 
-    for attempt in range(3):
-        try:
-            raw = _anthropic_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500,
-            ).strip()
+    logger.info("🔍 Extraction des sous-parties avec DeepSeek...")
 
-            # Nettoyer au cas où Claude ajoute du texte avant/après le JSON
-            json_match = re.search(r"\{[\s\S]*\}", raw)
-            if not json_match:
-                raise ValueError("Pas de JSON valide dans la réponse")
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1500,
+    ).strip()
 
-            data = json.loads(json_match.group())
-            if "sub_parts" not in data or len(data["sub_parts"]) < 1:
-                raise ValueError(f"Format incorrect : {list(data.keys())}")
+    # Nettoyer au cas où DeepSeek ajoute du texte avant/après le JSON.
+    json_match = re.search(r"\{[\s\S]*\}", raw)
+    if not json_match:
+        raise ValueError("Pas de JSON valide dans la réponse")
 
-            # Forcer exactement 6 sous-parties
-            sub_parts = data["sub_parts"][:NUM_SUB_PARTS]
-            while len(sub_parts) < NUM_SUB_PARTS:
-                sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
+    data = json.loads(json_match.group())
+    if "sub_parts" not in data or len(data["sub_parts"]) < 1:
+        raise ValueError(f"Format incorrect : {list(data.keys())}")
 
-            result = {"title": data.get("title", "Formation professionnelle"), "sub_parts": sub_parts}
-            logger.info(f"✅ {len(result['sub_parts'])} sous-parties extraites pour : {result['title']}")
-            return result
+    # Verrouiller le nombre exact attendu par le manifeste de journée.
+    sub_parts = [
+        _strip_internal_schedule_from_label(item)
+        for item in data["sub_parts"][:course_count]
+    ]
+    while len(sub_parts) < course_count:
+        sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
 
-        except Exception as e:
-            if attempt < 2:
-                logger.warning(f"⚠️ Tentative extraction {attempt+1}/3 échouée : {e}, retry...")
-                time.sleep(3)
-            else:
-                raise ValueError(f"Extraction échouée après 3 tentatives : {e}")
+    result = {
+        "title": data.get("title", "Formation professionnelle"),
+        "sub_parts": sub_parts,
+    }
+    logger.info(
+        "✅ %s sous-parties extraites pour : %s",
+        len(result["sub_parts"]),
+        result["title"],
+    )
+    return result
 
 
 # ─── Génération d'un segment (une passe) ─────────────────────────────────────
@@ -3581,7 +7761,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
                            from_scratch=False, module_content="", model=None,
                            generation_context=None):
     """
-    Génère le texte d'un segment via Claude.
+    Génère le texte d'un segment via DeepSeek.
     passe : 1, 2 ou 3
 
     Mode expansion (from_scratch=False) — comportement historique :
@@ -3591,64 +7771,48 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
       - Chaque passe génère depuis module_content (pas du texte précédent)
       - Passe 1 = Fondation, Passe 2 = Pratique, Passe 3 = Maîtrise
 
-    Retourne le texte généré avec un volume calibré sur les créneaux cours.
+    Retourne le texte généré avec un volume calibré sur les cours audio internes.
     """
     prompts = _get_passe_prompts(from_scratch=from_scratch)
     template = prompts[passe - 1]
+    learner_safe_sub_part_name = _strip_internal_schedule_from_label(sub_part_name)
 
-    if from_scratch:
-        # Mode from_scratch : toutes les passes reçoivent le contenu du module
-        prompt = template
-        prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-        prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-        prompt = prompt.replace("{CONTENU_DU_MODULE}", (module_content or program_text)[:15000])
-    else:
-        # Mode expansion (comportement historique)
-        if passe == 1:
-            prompt = template
-            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-            prompt = prompt.replace("{COLLER_LE_PROGRAMME_ICI}", program_text[:12000])
-        elif passe == 2:
-            prompt = template
-            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-            prompt = prompt.replace("{COLLER_LE_TEXTE_DE_LA_PASSE_1}", prev_text[:40000])
-        else:  # passe 3
-            prompt = template
-            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-            prompt = prompt.replace("{COLLER_LE_TEXTE_COMPLET_PASSE_1_ET_2}", prev_text[:60000])
+    prompt = template
+    prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
+    prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", learner_safe_sub_part_name)
+    prompt = prompt.replace("{CONTENU_DU_MODULE}", (module_content or program_text)[:15000])
+    # Compatibilité avec d'anciens placeholders encore présents dans certaines
+    # sections documentaires du prompt.
+    prompt = prompt.replace("{COLLER_LE_PROGRAMME_ICI}", program_text[:12000])
+    prompt = prompt.replace("{COLLER_LE_TEXTE_DE_LA_PASSE_1}", prev_text[:40000])
+    prompt = prompt.replace("{COLLER_LE_TEXTE_COMPLET_PASSE_1_ET_2}", prev_text[:60000])
 
     if generation_context:
         prompt += "\n\n" + _build_course_position_context(**generation_context)
-    prompt += "\n\n" + _build_generation_volume_context()
+    prompt += "\n\n" + _build_course_slot_generation_context(
+        generation_context,
+        sub_part_name=learner_safe_sub_part_name,
+        module_content=module_content,
+        program_text=program_text,
+    )
+    prompt += "\n\n" + _build_generation_volume_context(generation_context)
     prompt += "\n\n" + _build_audio_day_plan_context(generation_context)
 
     mode_label = "from_scratch" if from_scratch else "expansion"
     logger.info(f"  📝 Génération passe {passe} [{mode_label}] pour '{sub_part_name}'...")
 
-    generated = None
-    for attempt in range(3):
-        try:
-            generated = _anthropic_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=16000,
-                model=model,
-            )
-            break
-        except Exception as e:
-            if attempt < 2:
-                wait = 15 * (attempt + 1)
-                logger.warning(f"  ⚠️ Retry {attempt+1}/3 dans {wait}s : {e}")
-                time.sleep(wait)
-            else:
-                raise
+    generated = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=16000,
+        model=model,
+    )
 
     # Couche 2 — Boucle de continuation si volume insuffisant.
     # Le volume est dérivé des créneaux `cours` uniquement, à la cadence TTS
     # calibrée, pour éviter les anciennes journées artificiellement à 90k mots.
-    volume_budget = get_course_segment_generation_budget()
+    volume_budget = get_course_segment_generation_budget(
+        generation_context=generation_context,
+    )
     MIN_WORDS = int(volume_budget["min_words"])
     TARGET_WORDS = int(volume_budget["target_words"])
     MAX_WORDS = int(volume_budget["max_words"])
@@ -3685,7 +7849,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
         )
 
         try:
-            additional = _anthropic_post(
+            additional = _deepseek_post(
                 messages=[{"role": "user", "content": continuation_prompt}],
                 max_tokens=16000,
                 model=model,
@@ -3703,176 +7867,83 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
 
 # ─── Helpers DB ──────────────────────────────────────────────────────────────
 
-def start_generation_job(folder_id: int, platform_id: int, program_text: str,
-                         program_title: str, sub_parts_override: list = None,
-                         module_contents: dict = None, from_scratch: bool = False,
-                         model: str = None):
-    """
-    Crée le job DB et lance la génération en background thread.
-    Utilisé par le pipeline formation automatisé.
+def resolve_folder_content_course_count(folder_id: int) -> int:
+    """Retourne le nombre de cours porté par le manifeste exact du dossier."""
+    from services.day_playlist_service import resolve_folder_playlist
 
-    sub_parts_override : liste de noms de sous-parties (bypass extraction Claude)
-    module_contents    : dict {sub_part_name: contenu_module} pour le mode from_scratch
-    from_scratch       : True = passes indépendantes depuis module_content (nouveau paradigme)
-    """
-    import threading
-
-    # Extraction des sous-parties si pas fournie
-    if sub_parts_override:
-        sub_parts = sub_parts_override[:NUM_SUB_PARTS]
-        while len(sub_parts) < NUM_SUB_PARTS:
-            sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
-        title = program_title
-    else:
-        extracted = extract_sub_parts(program_text)
-        sub_parts = extracted["sub_parts"]
-        title = extracted.get("title", program_title) or program_title
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Supprimer anciens segments si réinitialisation
-    cursor.execute("""
-        DELETE FROM content_generation_segments WHERE job_id IN (
-            SELECT id FROM content_generation_jobs WHERE folder_id = ?
+    resolved_playlist = resolve_folder_playlist(int(folder_id))
+    course_count = sum(
+        1
+        for item in resolved_playlist.get("playlist_items") or []
+        if len(item) >= 3 and item[2] == "cours"
+    )
+    if not 1 <= course_count <= 10:
+        raise ValueError(
+            "Le manifeste audio doit contenir entre 1 et 10 cours "
+            f"(reçu : {course_count})"
         )
-    """, (folder_id,))
-    cursor.execute("""
-        INSERT OR REPLACE INTO content_generation_jobs
-            (folder_id, platform_id, program_text, program_title, sub_parts,
-             from_scratch, module_contents,
-             status, current_sub_part, current_passe, total_words, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
-    """, (
-        folder_id, platform_id, program_text, title,
-        json.dumps(sub_parts, ensure_ascii=False),
-        1 if from_scratch else 0,
-        json.dumps(module_contents or {}, ensure_ascii=False),
-    ))
-    conn.commit()
-    conn.close()
-
-    # Lancer génération en background
-    def _run():
-        try:
-            run_content_generation(folder_id, mode="normal", model=model)
-        except Exception as e:
-            logger.error(f"❌ Génération background dossier {folder_id} : {e}")
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    logger.info(f"🚀 Génération lancée en background pour dossier {folder_id} (from_scratch={from_scratch})")
+    return course_count
 
 
 def get_job_from_db(folder_id):
     """Retourne le job DB pour un dossier, ou None."""
-    _ensure_carryover_columns()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT cgj.id, cgj.platform_id, cgj.program_text, cgj.program_title,
-               cgj.sub_parts, cgj.status, cgj.current_sub_part,
-               cgj.current_passe, cgj.total_words, cgj.error_message,
-               cgj.from_scratch, cgj.module_contents,
-               cgj.carryover_in_text, cgj.carryover_in_source_folder_id,
-               cgj.carryover_out_text, cgj.carryover_out_target_folder_id,
-               cf.formation_job_id, cf.name, cf.position,
-               fpj.nb_days, fpj.total_hours
-        FROM content_generation_jobs cgj
-        LEFT JOIN cours_folders cf ON cf.id = cgj.folder_id
-        LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = cf.formation_job_id
-        WHERE cgj.folder_id = ?
-    """, (folder_id,))
-    row = cursor.fetchone()
-    conn.close()
+    row = get_content_generation_job_by_folder(folder_id)
     if not row:
         return None
     return {
-        "id": row[0], "platform_id": row[1], "program_text": row[2],
-        "program_title": row[3], "sub_parts": json.loads(row[4] or "[]"),
-        "status": row[5], "current_sub_part": row[6], "current_passe": row[7],
-        "total_words": row[8], "error_message": row[9],
-        "from_scratch": bool(row[10]),
-        "module_contents": json.loads(row[11] or "{}"),
-        "carryover_in_text": row[12] or "",
-        "carryover_in_source_folder_id": row[13],
-        "carryover_out_text": row[14] or "",
-        "carryover_out_target_folder_id": row[15],
-        "formation_job_id": row[16],
-        "folder_name": row[17],
-        "folder_position": row[18],
-        "nb_days": row[19],
-        "total_hours": row[20],
+        "id": row["id"], "folder_id": folder_id, "platform_id": row["platform_id"], "program_text": row["program_text"],
+        "program_title": row["program_title"], "sub_parts": json.loads(row["sub_parts"] or "[]"),
+        "status": row["status"], "current_sub_part": row["current_sub_part"], "current_passe": row["current_passe"],
+        "total_words": row["total_words"], "error_message": row["error_message"],
+        "from_scratch": bool(row["from_scratch"]),
+        "module_contents": json.loads(row["module_contents"] or "{}"),
+        "carryover_in_text": row["carryover_in_text"] or "",
+        "carryover_in_source_folder_id": row["carryover_in_source_folder_id"],
+        "carryover_out_text": row["carryover_out_text"] or "",
+        "carryover_out_target_folder_id": row["carryover_out_target_folder_id"],
+        "formation_job_id": row["formation_job_id"],
+        "folder_name": row["name"],
+        "folder_position": row["position"],
+        "nb_days": row["nb_days"],
+        "total_hours": row["total_hours"],
     }
 
 
 def get_segments_status(job_id):
     """Retourne la liste des segments avec leur statut."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, sub_part_name, passe, status, word_count
-        FROM content_generation_segments
-        WHERE job_id = ?
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_content_segment_status_rows(job_id)
     return [
-        {"sub_part_index": r[0], "sub_part_name": r[1], "passe": r[2],
-         "status": r[3], "word_count": r[4]}
+        {"sub_part_index": r["sub_part_index"], "sub_part_name": r["sub_part_name"], "passe": r["passe"],
+         "status": r["status"], "word_count": r["word_count"]}
         for r in rows
     ]
 
 
 def _update_job_db(job_id, **kwargs):
-    if not kwargs:
-        return
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [job_id]
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"UPDATE content_generation_jobs SET {fields}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        values,
-    )
-    conn.commit()
-    conn.close()
+    update_content_generation_job(job_id, **kwargs)
 
 
 def _get_completed_segments(job_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-    """, (job_id,))
-    done = set((r[0], r[1]) for r in cursor.fetchall())
-    conn.close()
-    return done
+    return completed_content_segment_keys(job_id)
 
 
 def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
     word_count = len(text.split())
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Un texte nouveau/réécrit doit repasser par humanisation + conformité.
-    cursor.execute("""
-        INSERT OR REPLACE INTO content_generation_segments
-            (job_id, sub_part_index, sub_part_name, passe, status,
-             text_content, word_count, dirty,
-             humanized, humanization_error, humanization_signature,
-             reviewed, review_error, review_signature)
-        VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
-    """, (job_id, sub_idx, sub_part_name, passe, text, word_count))
-    conn.commit()
-    conn.close()
+    save_completed_content_segment(
+        job_id=job_id,
+        sub_part_index=sub_idx,
+        sub_part_name=sub_part_name,
+        passe=passe,
+        text_content=text,
+        word_count=word_count,
+    )
     logger.info(f"  💾 Checkpoint : sous-partie {sub_idx+1}, passe {passe} ({word_count} mots)")
 
 
 def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
     """
     Marque un segment comme modifié : doit être re-synthétisé par le TTS
-    (dirty=1), re-passé par humanisation + conformité, et ses anciennes erreurs
+    (dirty=1), re-passé par conformité locale, et ses anciennes erreurs
     reviewer invalidées.
 
     À appeler depuis TOUS les endroits où `text_content` change :
@@ -3880,29 +7951,69 @@ def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
     - route d'édition UI d'un segment — à appeler explicitement
     - apply_review_patch ci-dessous — à appeler explicitement
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE content_generation_segments
-        SET dirty = 1,
-            humanized = 0, humanization_error = NULL, humanization_signature = NULL,
-            reviewed = 0, review_error = NULL, review_signature = NULL
-        WHERE job_id = ? AND sub_part_index = ? AND passe = ?
-    """, (job_id, sub_idx, passe))
-    conn.commit()
-    conn.close()
+    mark_content_segment_modified(job_id, sub_idx, passe)
 
 
 def _get_segment_text(job_id, sub_idx, passe):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT text_content FROM content_generation_segments
-        WHERE job_id = ? AND sub_part_index = ? AND passe = ?
-    """, (job_id, sub_idx, passe))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else ""
+    return get_content_segment_text(job_id, sub_idx, passe)
+
+
+def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
+    rows = list_completed_content_segment_rows(job_id)
+
+    courses = []
+    for row in rows:
+        sub_idx = row["sub_part_index"]
+        sub_name = row["sub_part_name"]
+        passe = row["passe"]
+        text = row["text_content"]
+        word_count = row["word_count"]
+        dirty = row["dirty"]
+        reviewed = row["reviewed"]
+        review_error = row["review_error"]
+        marker_course_number = _extract_audio_block_number(text or "")
+        course_number = marker_course_number or int(sub_idx or 0) + 1
+        clean_text = _strip_audio_block_markers(text or "")
+        courses.append({
+            "course_number": int(course_number),
+            "sub_part_index": int(sub_idx or 0),
+            "sub_part_name": sub_name or f"Cours {course_number}",
+            "passe": int(passe or 0),
+            "word_count": count_tts_spoken_words(clean_text),
+            "stored_word_count": int(word_count or 0),
+            "dirty": bool(dirty),
+            "reviewed": bool(reviewed),
+            "review_error": review_error or "",
+            "text": clean_text,
+            "has_audio_marker": bool(marker_course_number),
+        })
+    return courses
+
+
+def _save_reviewed_scripts_artifact(
+    job: dict,
+    folder_id: int,
+    *,
+    review_kind: str,
+    review_label: str,
+    summary: dict,
+) -> None:
+    artifact_job = {**(job or {}), "folder_id": folder_id}
+    _save_content_artifact(
+        job["platform_id"],
+        folder_id,
+        _CONTENT_REVIEWED_SCRIPTS_BLOB,
+        _artifact_payload(
+            artifact_job,
+            "content_reviewed_scripts",
+            {
+                "last_review_kind": review_kind,
+                "last_review_label": review_label,
+                "review_summary": summary,
+                "courses": _content_segments_artifact_snapshot(job["id"]),
+            },
+        ),
+    )
 
 
 # ─── Assemblage final ─────────────────────────────────────────────────────────
@@ -3913,22 +8024,21 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
     vers Azure comme document .txt dans le dossier.
     Retourne le nombre total de mots.
     """
-    from services.azure_blob_service import upload_blob, CONTAINER_DOCUMENTS
+    from services.azure_blob_service import (
+        CONTAINER_AUDIOS,
+        CONTAINER_DOCUMENTS,
+        delete_blob,
+        upload_blob,
+    )
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, text_content
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job_id)
 
     # Assembler dans l'ordre sous-partie → passe
     parts_by_idx = {}
-    for sub_idx, passe, text in rows:
+    for row in rows:
+        sub_idx = row["sub_part_index"]
+        passe = row["passe"]
+        text = row.get("text_content") or ""
         parts_by_idx.setdefault(sub_idx, {})[passe] = text
 
     final_parts = []
@@ -3939,25 +8049,5315 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
     full_text = _strip_audio_block_markers("\n\n".join(final_parts))
     total_words = count_tts_spoken_words(full_text)
 
-    # Chemin blob unique
+    # Chemin blob unique pour éviter de laisser une version partielle écraser
+    # la dernière version valide en cas d'échec d'upload.
     file_uuid = uuid_mod.uuid4()
     blob_path = f"platform-{platform_id}/folder-{folder_id}/{file_uuid}.txt"
-    original_name = f"cours_genere_{uuid_mod.uuid4().hex[:6]}.txt"
+    original_name = "script_tts_final.txt"
 
     upload_blob(CONTAINER_DOCUMENTS, blob_path, full_text.encode("utf-8"))
 
-    # Enregistrer comme document dans la DB
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO cours_documents (folder_id, filename, original_name, status)
-        VALUES (?, ?, ?, 'uploaded')
-    """, (folder_id, blob_path, original_name))
-    conn.commit()
-    conn.close()
+    # Remplacer les anciennes versions finales du script TTS pour garder un seul
+    # document exploitable par cours.
+    old_final_docs = list_final_script_document_rows(folder_id)
+    for old_doc in old_final_docs:
+        old_filename = old_doc.get("filename")
+        old_audio_filename = old_doc.get("audio_filename")
+        try:
+            delete_blob(CONTAINER_DOCUMENTS, old_filename)
+        except Exception as e:
+            logger.warning(f"⚠️ Ancien script final non supprimé ({old_filename}): {e}")
+        if old_audio_filename:
+            try:
+                delete_blob(CONTAINER_AUDIOS, old_audio_filename)
+            except Exception as e:
+                logger.warning(f"⚠️ Ancien audio final non supprimé ({old_audio_filename}): {e}")
+    replace_final_script_document_record(
+        folder_id=folder_id,
+        filename=blob_path,
+        original_name=original_name,
+    )
 
     logger.info(f"✅ Texte final : {total_words} mots → {blob_path}")
     return total_words, original_name
+
+
+def _build_structured_section_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+) -> str:
+    prompt_parts = load_section_prompt_parts()
+    base_style = prompt_parts["base_style"]
+    section_contract = prompt_parts["section_contract"]
+    target_words = int(section.get("target_words") or 500)
+    if section.get("single_course_light") and section.get("kind") == "day_conclusion":
+        min_words = max(25, int(target_words * 0.70))
+        max_words = max(min_words + 20, int(target_words * 1.15))
+    else:
+        min_words = max(120, int(target_words * 0.82))
+        max_words = max(min_words + 50, int(target_words * 1.10))
+    if section.get("kind") == "opening" and (generated_so_far or "").strip():
+        generated_context_label = "Contenu principal déjà généré à cadrer dans cette ouverture"
+        generated_context = _compact_words(generated_so_far, 900) or "(aucun)"
+    else:
+        generated_context_label = "Texte déjà généré dans cette partie interne"
+        generated_context = _compact_words(generated_so_far, 900) or "(début de la partie)"
+    scope_guard = _structured_section_scope_guard(section)
+    temporal_card = _build_course_temporal_card(
+        formation_job_id=job.get("formation_job_id"),
+        folder_position=job.get("folder_position"),
+        sub_part_index=max(0, int(course_plan.get("course_number") or 1) - 1),
+        total_courses=course_plan.get("total_courses"),
+    )
+    teaching_beats_context = _section_teaching_beats_prompt(section)
+    has_slide_display_map = bool(_display_map_expected_beats(section))
+    response_instruction = (
+        "Réponds avec le texte oral de cette section, puis le bloc technique "
+        "ORDRE_AFFICHAGE_SLIDES / CARTE_AFFICHAGE_SLIDES demandé par le contrat de section. "
+        "Le bloc technique doit venir après le texte oral."
+        if has_slide_display_map
+        else "Réponds uniquement avec le texte oral de cette section."
+    )
+    return f"""Tu écris UNE SECTION d'une partie audio professionnelle TTS-ready.
+
+SOCLE GÉNÉRAL À RESPECTER :
+{base_style}
+
+CONTRAT DE SECTION :
+{section_contract}
+
+Tu dois respecter le plan verrouillé. N'écris que la section demandée : {_section_label(section)}.
+
+Budget section :
+- cible : {target_words} mots
+- plage acceptable : {min_words} à {max_words} mots
+
+Plan complet verrouillé de la partie interne :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section à écrire :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte de cette section :
+{scope_guard}
+
+Moments pédagogiques internes à couvrir :
+{teaching_beats_context}
+
+Contexte utile :
+- Titre professionnel : {job.get('program_title') or ''}
+- Intitulé journée : {job.get('folder_name') or ''}
+- Rappel cours précédent : {previous_course_summary or '(aucun)'}
+- {generated_context_label} : {generated_context}
+
+{temporal_card}
+
+Contenu source à utiliser :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Contraintes absolues :
+- N'utilise jamais le mot "bloc" devant les élèves.
+- N'utilise jamais les mots "horaire", "créneau" ou "planning" devant les élèves.
+- Ne formule pas l'unité interne comme "ce cours", "premier cours", "cours actuel" ou "le cours qui nous occupe".
+- Préfère "premier grand thème", "cette première partie", "ce chapitre", "cette séquence", "ce point" ou "cet axe" selon le contexte.
+- Ne dis jamais "trois quarts d'heure", "45 minutes" ou une durée équivalente pour situer la séquence.
+- Dans le texte oral, ne mentionne jamais d'heure précise, de durée de fichier, de budget mots, de nom de fichier ou de découpage technique. Le bloc technique final demandé pour les slides est la seule exception, et il reste hors oral.
+- Ne dis jamais aux apprenants de ne pas se soucier des horaires : présente seulement la progression pédagogique.
+- Pour une introduction seulement : ton naturel, posé, proche de "Bien. Maintenant que le cadre général est posé, on peut entrer dans le premier grand thème." Ne recopie pas cette phrase systématiquement. Pour une partie de développement, n'utilise pas ce modèle : entre directement dans l'axe demandé.
+- Oral professionnel, clair, chaleureux, sans vocabulaire littéraire excessif.
+- Pas de markdown, pas de titre écrit, pas de liste administrative froide.
+- Les exemples non sourcés doivent être présentés comme fictifs ou hypothétiques
+  avec une formulation naturelle. Si le texte dit déjà "Imaginons..." ou
+  "Supposons que...", n'ajoute pas de phrase méta lourde.
+- Ne fabrique pas de punchline artificielle et ne durcis pas une formulation
+  prudente simplement pour produire plus d'impact. Une nuance comme "peut
+  paraître" ou "peut donner l'impression" est correcte si elle sert le sens.
+- Ne termine jamais le cours précédent.
+- Ne devance pas une section suivante.
+- Si cette section est une introduction, elle doit annoncer le plan avant tout exemple, avec une formulation naturelle du type : "Pour avancer progressivement, on va suivre trois grands axes. D'abord... Ensuite... Et enfin...".
+- Si cette introduction est générée après le contenu principal, écris-la quand même comme le tout début de la partie, jamais comme une suite.
+- Si cette section est une partie, elle doit développer seulement cette partie et apporter une idée nouvelle identifiable. Elle ne doit jamais refaire l'accueil, le cadrage de la journée, l'annonce des thèmes de la journée ou le plan global déjà porté par l'introduction.
+- Si cette section contient des teaching_beats, couvre-les avec naturel. Tu peux choisir l'ordre narratif qui sert le mieux la prose, mais chaque beat ancré doit avoir un seul moment de développement principal. Ne les nomme jamais comme des beats, slides, anchors, PowerPoint ou templates.
+- Si cette section est une conclusion, elle doit récapituler sans ouvrir un nouveau développement.
+- La conclusion du cours ne doit jamais annoncer un Q&R ou une pause : le bloc suivant possède sa propre intro.
+
+{response_instruction}"""
+
+
+def _structured_section_scope_guard(section: dict) -> str:
+    kind = section.get("kind")
+    if kind == "opening":
+        return (
+            "- Tu écris l'unique ouverture de cette partie interne.\n"
+            "- C'est le seul endroit où tu peux accueillir, cadrer la journée, "
+            "annoncer le nouveau thème, l'objectif et les axes.\n"
+            "- Après cette ouverture, le développement commencera directement : "
+            "n'écris pas une ouverture qui appelle une seconde ouverture."
+        )
+    if kind == "part":
+        part_number = int(section.get("part_number") or 0)
+        if part_number == 1:
+            return (
+                "- Tu écris le premier axe de développement, pas l'ouverture.\n"
+                "- L'ouverture a déjà accueilli, cadré la journée, présenté le thème, "
+                "l'objectif et le plan. Ne répète aucun de ces éléments.\n"
+                "- Ne commence pas par 'Bien, maintenant que le cadre général est posé', "
+                "'on peut entrer dans le premier grand thème', 'cette journée est cruciale', "
+                "ou une formule équivalente.\n"
+                "- Commence directement par le contenu du premier axe : une phrase courte "
+                "du type 'Commençons par ce qui change concrètement...' suffit."
+            )
+        return (
+            f"- Tu écris l'axe {part_number} de développement, pas une nouvelle introduction.\n"
+            "- Fais une transition courte depuis l'axe précédent, puis développe l'idée prévue.\n"
+            "- Ne réannonce pas le thème général, la journée, l'objectif global ou le plan complet."
+        )
+    if kind == "course_conclusion":
+        must_include = section.get("must_include") or []
+        if isinstance(must_include, str):
+            must_include_text = must_include.lower()
+        elif isinstance(must_include, list):
+            must_include_text = " ".join(str(item) for item in must_include).lower()
+        else:
+            must_include_text = ""
+        if section.get("single_course_light"):
+            return (
+                "- Tu écris la conclusion légère du chapitre unique de la journée.\n"
+                "- Rappelle seulement deux ou trois repères essentiels, sans reprendre le plan complet.\n"
+                "- Ferme ensuite brièvement le chapitre ; la fermeture de journée séparée ne fera aucun autre récapitulatif.\n"
+                "- N'annonce ni Q&R, ni pause, ni chapitre suivant.\n"
+                "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
+            )
+        return (
+            "- Tu écris seulement la conclusion de cette partie interne.\n"
+            "- Commence toujours par un récapitulatif bref de ce qui a été vu dans le cours.\n"
+            "- Ensuite seulement, ferme proprement ce chapitre.\n"
+            "- N'annonce ni Q&R, ni pause, ni chapitre suivant : chaque audio porte sa propre transition.\n"
+            "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
+        )
+    if kind == "day_conclusion":
+        if section.get("single_course_light"):
+            return (
+                "- Tu écris uniquement une fermeture légère de journée en une à trois phrases.\n"
+                "- Le chapitre unique vient déjà d'être résumé et conclu : ne récapitule aucun contenu.\n"
+                "- N'ajoute ni liste, ni points à retenir, ni nouvelle synthèse, ni nouveau développement.\n"
+                "- Termine simplement et chaleureusement la séance."
+            )
+        return (
+            "- Tu écris seulement la conclusion globale de journée.\n"
+            "- Fais une synthèse de journée, puis ferme. Ne crée pas un nouveau développement."
+        )
+    return "- Respecte strictement le périmètre de la section demandée."
+
+
+def _section_teaching_beats_prompt(section: dict) -> str:
+    beats = section.get("teaching_beats") if isinstance(section.get("teaching_beats"), list) else []
+    if not beats:
+        return "- Aucun teaching beat spécifique pour cette section."
+    compact = []
+    for beat in beats:
+        if not isinstance(beat, dict):
+            continue
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        compact.append({
+            "beat_id": beat.get("beat_id"),
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "slide_anchor": {
+                "enabled": bool(anchor.get("enabled")),
+                "template_type": anchor.get("template_type"),
+                "pedagogical_shape": _pedagogical_shape_for_template(
+                    anchor.get("pedagogical_shape"),
+                    anchor.get("template_type"),
+                ),
+                "visual_goal": anchor.get("visual_goal"),
+                "items_expected": anchor.get("items_expected"),
+                "must_cover": anchor.get("must_cover"),
+                "must_not_cover": anchor.get("must_not_cover"),
+            },
+        })
+    return json.dumps(compact, ensure_ascii=False, indent=2)
+
+
+def _section_teaching_beats(section: dict) -> list[dict]:
+    beats = section.get("teaching_beats") if isinstance(section.get("teaching_beats"), list) else []
+    return [beat for beat in beats if isinstance(beat, dict)]
+
+
+def _beat_label(beat: dict, index: int) -> str:
+    role = str(beat.get("role") or "").strip()
+    spoken = str(beat.get("spoken_requirement") or "").strip()
+    return role or spoken or f"moment pédagogique {index + 1}"
+
+
+def _beat_word_budgets(section: dict, beats: list[dict]) -> list[int]:
+    target_words = max(160, int(section.get("target_words") or 500))
+    if not beats:
+        return []
+    weights = []
+    for beat in beats:
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        weight = 1.0
+        beat_type = str(beat.get("type") or "").lower()
+        if anchor.get("enabled"):
+            weight += 0.25
+        if beat_type in {"example", "story", "analogy", "case", "comparison"}:
+            weight += 0.2
+        if beat_type in {"transition", "recap"}:
+            weight -= 0.15
+        weights.append(max(0.55, weight))
+    total_weight = sum(weights) or len(beats)
+    raw = [max(80, int(round(target_words * weight / total_weight))) for weight in weights]
+    delta = target_words - sum(raw)
+    if raw:
+        raw[-1] = max(80, raw[-1] + delta)
+    return raw
+
+
+def _build_structured_beat_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    beat: dict,
+    beat_index: int,
+    beats: list[dict],
+    target_words: int,
+    previous_course_summary: str,
+    generated_so_far: str,
+    section_so_far: str,
+    module_content: str,
+) -> str:
+    prompt_parts = load_section_prompt_parts()
+    base_style = prompt_parts["base_style"]
+    section_contract = prompt_parts["section_contract"]
+    min_words = max(60, int(target_words * 0.72))
+    max_words = max(min_words + 35, int(target_words * 1.18))
+    previous_beat = beats[beat_index - 1] if beat_index > 0 else None
+    next_beat = beats[beat_index + 1] if beat_index + 1 < len(beats) else None
+    anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+    scope_guard = _structured_section_scope_guard(section)
+    temporal_card = _build_course_temporal_card(
+        formation_job_id=job.get("formation_job_id"),
+        folder_position=job.get("folder_position"),
+        sub_part_index=max(0, int(course_plan.get("course_number") or 1) - 1),
+        total_courses=course_plan.get("total_courses"),
+    )
+    return f"""Tu écris UN MOMENT PÉDAGOGIQUE d'une section audio TTS-ready.
+
+Ce moment est une partie d'une section plus grande. Il doit s'enchaîner naturellement avec ce qui précède et préparer ce qui suit.
+
+SOCLE GÉNÉRAL À RESPECTER :
+{base_style}
+
+CONTRAT DE SECTION :
+{section_contract}
+
+Section complète demandée : {_section_label(section)}
+Frontière stricte de la section :
+{scope_guard}
+
+Moment pédagogique à écrire maintenant :
+{json.dumps({
+    "beat_index": beat_index + 1,
+    "beats_count": len(beats),
+    "beat_id": beat.get("beat_id"),
+    "type": beat.get("type"),
+    "role": beat.get("role"),
+    "spoken_requirement": beat.get("spoken_requirement"),
+    "slide_anchor": {
+        "enabled": bool(anchor.get("enabled")),
+        "template_type": anchor.get("template_type"),
+        "pedagogical_shape": _pedagogical_shape_for_template(
+            anchor.get("pedagogical_shape"),
+            anchor.get("template_type"),
+        ),
+        "visual_goal": anchor.get("visual_goal"),
+        "items_expected": anchor.get("items_expected"),
+        "must_cover": anchor.get("must_cover"),
+        "must_not_cover": anchor.get("must_not_cover"),
+    },
+}, ensure_ascii=False, indent=2)}
+
+Budget de ce moment :
+- cible : {target_words} mots
+- plage acceptable : {min_words} à {max_words} mots
+
+Progression locale :
+- Moment précédent : {_beat_label(previous_beat, beat_index - 1) if previous_beat else "(début de section)"}
+- Moment suivant : {_beat_label(next_beat, beat_index + 1) if next_beat else "(fin de section)"}
+
+Contexte utile :
+- Titre professionnel : {job.get('program_title') or ''}
+- Intitulé journée : {job.get('folder_name') or ''}
+- Rappel cours précédent : {previous_course_summary or '(aucun)'}
+- Texte déjà généré avant cette section : {_compact_words(generated_so_far, 700) or '(début de la partie)'}
+- Texte déjà généré dans cette section : {_compact_words(section_so_far, 700) or '(début de section)'}
+
+{temporal_card}
+
+Plan complet verrouillé de la partie interne :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section à laquelle appartient ce moment :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Contenu source à utiliser :
+{_compact_words(module_content or job.get('program_text') or '', 3600)}
+
+Contraintes absolues :
+- Écris seulement le texte oral de ce moment pédagogique.
+- Ne commence pas comme une nouvelle mini-introduction si ce n'est pas le premier moment.
+- Si ce moment suit un texte déjà généré, commence par une transition courte et naturelle, pas par un recap complet.
+- Ne termine pas toute la section si un moment suivant existe.
+- Ne mentionne jamais slide, PowerPoint, template, anchor ou teaching beat.
+- Ne mentionne jamais horaire, créneau, planning, durée, budget mots ou nom de fichier.
+- Oral professionnel, clair, fluide, sans markdown ni titre écrit.
+- Les exemples non sourcés doivent être explicitement fictifs ou hypothétiques, mais sans formule méta lourde.
+- Si le moment porte une slide, le texte doit couvrir précisément l'idée que la slide doit aider à retenir.
+
+Réponds uniquement avec le texte oral de ce moment."""
+
+
+def _generate_structured_beat_text(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    beat: dict,
+    beat_index: int,
+    beats: list[dict],
+    target_words: int,
+    previous_course_summary: str,
+    generated_so_far: str,
+    section_so_far: str,
+    module_content: str,
+    model=None,
+) -> str:
+    prompt = _build_structured_beat_prompt(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        beat=beat,
+        beat_index=beat_index,
+        beats=beats,
+        target_words=target_words,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        section_so_far=section_so_far,
+        module_content=module_content,
+    )
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_structured_generation_max_tokens(target_words),
+        model=model,
+    )
+    return _fit_generated_section_to_budget(raw, target_words)
+
+
+def _generate_structured_section_beat_first(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> dict:
+    beats = _section_teaching_beats(section)
+    budgets = _beat_word_budgets(section, beats)
+    beat_records = []
+    section_texts = []
+    for index, beat in enumerate(beats):
+        beat_text = _generate_structured_beat_text(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            beat=beat,
+            beat_index=index,
+            beats=beats,
+            target_words=budgets[index],
+            previous_course_summary=previous_course_summary,
+            generated_so_far=generated_so_far,
+            section_so_far="\n\n".join(section_texts),
+            module_content=module_content,
+            model=model,
+        )
+        section_texts.append(beat_text)
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        beat_records.append({
+            "order": index + 1,
+            "beat_id": beat.get("beat_id"),
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "target_words": budgets[index],
+            "word_count": count_tts_spoken_words(beat_text),
+            "text": beat_text,
+            "slide_anchor": anchor if isinstance(anchor, dict) else {},
+            "slide_anchor_id": anchor.get("anchor_id") if isinstance(anchor, dict) and anchor.get("enabled") else None,
+            "template_type": anchor.get("template_type") if isinstance(anchor, dict) and anchor.get("enabled") else None,
+        })
+    section_text = "\n\n".join(text for text in section_texts if text.strip()).strip()
+    return {
+        "text": section_text,
+        "beat_texts": beat_records,
+        "generation_mode": "beat_first",
+        "beat_count": len(beat_records),
+        "slide_display_map": [],
+        "display_order_declared": [],
+        "display_map_status": "none",
+        "display_map_errors": [],
+    }
+
+
+def _generate_structured_section_record(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> dict:
+    beats = _section_teaching_beats(section)
+    if _structured_beat_first_enabled() and beats:
+        try:
+            result = _generate_structured_section_beat_first(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                previous_course_summary=previous_course_summary,
+                generated_so_far=generated_so_far,
+                module_content=module_content,
+                model=model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "⚠️ Génération beat-first ignorée course=%s section=%s: %s",
+                course_plan.get("course_number"),
+                _section_label(section),
+                str(exc)[:240],
+            )
+        else:
+            section_text = result["text"]
+            if _part_section_opening_leak_evidence(section, section_text):
+                repaired = _repair_part_section_opening_leak(
+                    job=job,
+                    course_plan=course_plan,
+                    section=section,
+                    section_text=section_text,
+                    module_content=module_content,
+                    model=model,
+                )
+                result["text"] = repaired
+                result["beat_alignment_status"] = (
+                    "lost_after_scope_repair"
+                    if repaired.strip() != section_text.strip()
+                    else "aligned"
+                )
+            else:
+                result["beat_alignment_status"] = "aligned"
+            return result
+
+    section_payload = _generate_structured_section_payload(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        module_content=module_content,
+        model=model,
+    )
+    return {
+        "text": section_payload["text"],
+        "beat_texts": [],
+        "generation_mode": "section_full",
+        "beat_alignment_status": "not_applicable",
+        **_slide_display_generation_fields(section_payload),
+    }
+
+
+def _part_section_opening_leak_evidence(section: dict, text: str) -> str:
+    if section.get("kind") != "part":
+        return ""
+    opening_window = _compact_words(text or "", 220)
+    if not opening_window:
+        return ""
+    match = _PART_SECTION_OPENING_LEAK_RE.search(opening_window)
+    if not match:
+        return ""
+    return _compact_words(opening_window[max(0, match.start() - 90):match.end() + 130], 42)
+
+
+def _repair_part_section_opening_leak(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    module_content: str,
+    model=None,
+) -> str:
+    target_words = int(section.get("target_words") or 500)
+    prompt = f"""Tu corriges une section de développement audio.
+
+Problème : cette section refait une ouverture de journée ou de thème alors que l'ouverture existe déjà.
+
+Objectif :
+- garder le fond utile ;
+- supprimer l'accueil, le cadrage de journée, l'annonce des thèmes de la journée, le programme annuel et le plan global répété ;
+- commencer directement par le contenu de l'axe demandé ;
+- ne pas ajouter de markdown ni de titre écrit ;
+- ne pas mentionner horaires, créneaux, planning, durée ou budget mots.
+
+Section demandée :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Plan verrouillé :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Titre professionnel : {job.get('program_title') or ''}
+Intitulé journée : {job.get('folder_name') or ''}
+
+Contenu source utile :
+{_compact_words(module_content or job.get('program_text') or '', 2500)}
+
+Texte à corriger :
+{section_text}
+
+Réponds uniquement avec la section corrigée."""
+    try:
+        raw = _deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=_structured_generation_max_tokens(target_words),
+            model=model,
+        )
+        repaired = _fit_generated_section_to_budget(raw, target_words)
+        if _part_section_opening_leak_evidence(section, repaired):
+            return section_text
+        return repaired
+    except Exception as exc:
+        logger.warning(
+            "⚠️ Réparation de double ouverture ignorée course=%s part=%s: %s",
+            course_plan.get("course_number"),
+            section.get("part_number"),
+            str(exc)[:220],
+        )
+        return section_text
+
+
+def _fit_generated_section_to_budget(text: str, target_words: int) -> str:
+    text = _sanitize_learner_facing_text(_clean_llm_text(text))
+    text = _strip_residual_slide_display_map_leaks(text)
+    target_words = int(target_words or 0)
+    if target_words <= 0:
+        return text
+    max_words = int(target_words * 1.14)
+    words = count_tts_spoken_words(text)
+    if words > max_words:
+        logger.warning(
+            "PIPELINE_SECTION_FIT_OVER_BUDGET_UNTRIMMED words=%s max_words=%s target_words=%s",
+            words,
+            max_words,
+            target_words,
+        )
+    return text.strip()
+
+
+def _generate_structured_section_payload(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> dict:
+    target_words = int(section.get("target_words") or 500)
+    prompt = _build_structured_section_prompt(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        module_content=module_content,
+    )
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_structured_generation_max_tokens(target_words),
+        model=model,
+    )
+    display_payload = _prepare_slide_display_map_for_section(section, raw, model=model)
+    section_text = _fit_generated_section_to_budget(display_payload["text"], target_words)
+    if section_text.strip() != display_payload["text"].strip():
+        display_payload = _revalidate_slide_display_payload(
+            section,
+            display_payload,
+            section_text,
+            "section_sanitize",
+        )
+    if _part_section_opening_leak_evidence(section, section_text):
+        logger.info(
+            "PIPELINE_STRUCTURED_SECTION_SCOPE_REPAIR formation_job_id=%s content_job_id=%s course=%s part=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            section.get("part_number"),
+        )
+        section_text = _repair_part_section_opening_leak(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            section_text=section_text,
+            module_content=module_content,
+            model=model,
+        )
+        if section_text.strip() != display_payload["text"].strip():
+            display_payload = _revalidate_slide_display_payload(
+                section,
+                display_payload,
+                section_text,
+                "scope_repair",
+            )
+    return {
+        **display_payload,
+        "text": section_text,
+    }
+
+
+def _generate_structured_section(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> str:
+    return _generate_structured_section_payload(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        module_content=module_content,
+        model=model,
+    )["text"]
+
+
+def _ethical_micro_review_enabled() -> bool:
+    value = str(os.getenv("FORMATION_ETHICAL_MICRO_REVIEW_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _load_ethical_lexical_rules_text_for_micro_review() -> str:
+    path = _prompt_file_path("reviews", "ethical-lexical-terms.json")
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    blocks = []
+    for rule in data.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        try:
+            rule_id = int(rule.get("rule_id") or 0)
+        except Exception:
+            continue
+        if rule_id not in _ETHICAL_MICRO_RULE_IDS:
+            continue
+        terms = [str(term).strip() for term in (rule.get("terms") or []) if str(term).strip()]
+        label = str(rule.get("label") or f"Règle #{rule_id}").strip()
+        body = (
+            f"RÈGLE #{rule_id} — {label}\n"
+            "Le texte entendu par les apprenants ne doit pas employer ces termes, "
+            "même dans une métaphore ou un exemple descriptif. Si l'idée est utile, "
+            "reformuler naturellement avec un équivalent neutre.\n"
+            f"Termes et familles à éviter : {', '.join(terms)}."
+        )
+        blocks.append(body)
+    if not blocks:
+        raise ValueError("aucune règle lexicale micro-éthique trouvée")
+    exceptions = data.get("exceptions") or []
+    exception_lines = []
+    for exc in exceptions:
+        if not isinstance(exc, dict):
+            continue
+        term = str(exc.get("term") or "").strip()
+        allow_when = str(exc.get("allow_when") or "").strip()
+        if term and allow_when:
+            exception_lines.append(f"- {term}: {allow_when}")
+    exception_text = "\n\nExceptions autorisées :\n" + "\n".join(exception_lines) if exception_lines else ""
+    return (
+        f"SOURCE LEXICALE: ethical-lexical-terms.json · version {data.get('version') or 'unknown'} "
+        f"· micro-review {_ETHICAL_MICRO_RULESET_VERSION}\n\n"
+        + "\n\n".join(blocks)
+        + exception_text
+    )
+
+
+def _load_ethical_micro_rules_text() -> str:
+    path = _prompt_file_path("reviews", "compliance-rules.json")
+    try:
+        mtime = os.path.getmtime(path)
+        lexical_mtime = os.path.getmtime(_prompt_file_path("reviews", "ethical-lexical-terms.json"))
+        cache_key = (mtime, lexical_mtime)
+        if _ETHICAL_MICRO_RULES_CACHE["mtime"] == cache_key and _ETHICAL_MICRO_RULES_CACHE["text"]:
+            return _ETHICAL_MICRO_RULES_CACHE["text"]
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        blocks = []
+        for rule in data.get("rules") or []:
+            if not isinstance(rule, dict):
+                continue
+            if rule.get("scope") != "ethics_compliance":
+                continue
+            body = str(rule.get("body") or "").strip()
+            if body:
+                blocks.append(body)
+        if not blocks:
+            raise ValueError("aucune règle ethics_compliance trouvée")
+        rules_text = (
+            f"SOURCE MODULAIRE: compliance-rules.json · version {data.get('version') or 'unknown'} "
+            f"· scope ethics_compliance · micro-review {_ETHICAL_MICRO_RULESET_VERSION}\n\n"
+            + "\n\n".join(blocks)
+            + "\n\n"
+            + _load_ethical_lexical_rules_text_for_micro_review()
+        )
+        _ETHICAL_MICRO_RULES_CACHE["mtime"] = cache_key
+        _ETHICAL_MICRO_RULES_CACHE["text"] = rules_text
+        return rules_text
+    except Exception as exc:
+        logger.warning("⚠️ Règles micro-éthique JSON indisponibles, fallback règles #1-#16: %s", exc)
+        return _extract_rules_for_group(_load_review_rules(), _ETHICAL_MICRO_RULE_IDS)
+
+
+def _ethical_micro_max_patches(section: dict) -> int:
+    default = 16 if (section or {}).get("kind") == "course_calibrated" else 8
+    return _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_PATCHES", default, min_value=1)
+
+
+def _build_ethical_micro_review_prompt(*, course_plan: dict, section: dict, section_text: str, rules_text: str) -> str:
+    contract = _load_prompt_file("reviews", "ethical-micro-review.md")
+    max_patches = _ethical_micro_max_patches(section)
+    rules_list = ", ".join(f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS)
+    return f"""Tu es reviewer de conformité ÉTHIQUE en micro-passe.
+
+CONTRAT :
+{contract}
+
+Tu vérifies toutes les règles micro-éthiques {rules_list}.
+Tu traites chaque section comme un moment pédagogique autonome : si une phrase
+peut être entendue par les apprenants, elle doit respecter littéralement ces
+règles. Les interdits lexicaux comptent même quand le mot est utilisé comme
+métaphore ou description neutre.
+
+Ignore tout le reste : style oral, humanisation, plan, budget, structure, slides,
+anchors, templates, horaires, transitions, répétitions ou préférence éditoriale.
+
+Contexte pédagogique minimal :
+- Cours interne : {course_plan.get('course_number')} / {course_plan.get('total_courses') or 7}
+- Titre : {course_plan.get('course_title') or ''}
+- Section : {_section_label(section)}
+
+Section JSON :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Format de sortie strict, JSON valide uniquement :
+{{
+  "patches": [
+    {{
+      "original": "phrase EXACTE à remplacer, copie verbatim",
+      "replacement": "correction minimale, même sens pédagogique",
+      "rule_violated": "#14",
+      "reason": "raison brève"
+    }}
+  ]
+}}
+
+Contraintes impératives :
+- Maximum {max_patches} patches.
+- `original` doit être trouvable tel quel dans le texte, une seule fois.
+- `replacement` corrige uniquement la violation éthique, sans enrichir, sans restructurer, sans changer la pédagogie.
+- N'ajoute pas de nouvelle idée, pas de nouveau chapitre, pas de mention de slide/PowerPoint/template/anchor/teaching beat.
+- Si la section est conforme pour les règles {rules_list}, renvoie exactement {{"patches": []}}.
+- `rule_violated` doit être un numéro parmi {rules_list}.
+- Pour les règles lexicales, remplace par un équivalent neutre et naturel sans citer le mot interdit ni expliquer qu'il est interdit.
+
+RÈGLES ÉTHIQUES À VÉRIFIER :
+{rules_text}
+
+TEXTE DE LA SECTION :
+{section_text}
+
+JSON :"""
+
+
+def _ethical_lexical_scan_enabled() -> bool:
+    value = str(os.getenv("FORMATION_ETHICAL_LEXICAL_SCAN_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _ethical_lexical_strict_enabled() -> bool:
+    value = str(os.getenv("FORMATION_ETHICAL_LEXICAL_STRICT", "0")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _ethical_lexical_rule_ids() -> set[int]:
+    raw = str(os.getenv("FORMATION_ETHICAL_LEXICAL_RULE_IDS", "") or "").strip().lower()
+    if not raw or raw in {"all", "*"}:
+        return set(_ETHICAL_LEXICAL_RULE_IDS)
+    rule_ids = set()
+    for part in re.split(r"[,;\s]+", raw):
+        if not part:
+            continue
+        try:
+            rule_ids.add(int(part.lstrip("#")))
+        except Exception:
+            logger.warning("⚠️ Rule id lexical invalide ignoré: %s", part)
+    return rule_ids or set(_ETHICAL_LEXICAL_RULE_IDS)
+
+
+def _ethical_lexical_max_findings() -> int:
+    return _env_int("FORMATION_ETHICAL_LEXICAL_MAX_FINDINGS", 48, min_value=1)
+
+
+def _ethical_lexical_max_patches(section: dict, findings_count: int) -> int:
+    default = 24 if (section or {}).get("kind") == "course_calibrated" else 16
+    return min(
+        max(0, int(findings_count or 0)),
+        _env_int("FORMATION_ETHICAL_LEXICAL_MAX_PATCHES", default, min_value=1),
+    )
+
+
+def _ethical_lexical_max_iterations() -> int:
+    return _env_int("FORMATION_ETHICAL_LEXICAL_MAX_ITERATIONS", 2, min_value=1)
+
+
+def _load_ethical_lexical_terms() -> dict:
+    path = _prompt_file_path("reviews", "ethical-lexical-terms.json")
+    try:
+        mtime = os.path.getmtime(path)
+        if _ETHICAL_LEXICAL_TERMS_CACHE["mtime"] == mtime and _ETHICAL_LEXICAL_TERMS_CACHE["data"]:
+            return _ETHICAL_LEXICAL_TERMS_CACHE["data"]
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data.get("rules"), list):
+            raise ValueError("clé rules absente")
+        _ETHICAL_LEXICAL_TERMS_CACHE["mtime"] = mtime
+        _ETHICAL_LEXICAL_TERMS_CACHE["data"] = data
+        return data
+    except Exception as exc:
+        logger.warning("⚠️ Liste lexicale éthique indisponible: %s", exc)
+        return {"version": "missing", "rules": []}
+
+
+def _ethical_lexical_pattern(term: str):
+    normalized = re.sub(r"\s+", " ", str(term or "").strip().lower())
+    prefix_pattern = _ETHICAL_LEXICAL_PREFIX_PATTERNS.get(normalized)
+    if prefix_pattern:
+        return re.compile(
+            r"(?<![\wÀ-ÿ-])" + prefix_pattern + r"(?![\wÀ-ÿ-])",
+            re.IGNORECASE,
+        )
+
+    escaped = re.escape(str(term or "").strip())
+    if not escaped:
+        return None
+    escaped = escaped.replace(r"\ ", r"\s+")
+    if " " not in normalized and not normalized.endswith("s"):
+        escaped += "s?"
+    return re.compile(r"(?<![\wÀ-ÿ-])" + escaped + r"(?![\wÀ-ÿ-])", re.IGNORECASE)
+
+
+def _ethical_lexical_excerpt(text: str, start: int, end: int, window: int = 170) -> str:
+    source = text or ""
+    left = max(0, int(start or 0) - window)
+    right = min(len(source), int(end or 0) + window)
+    excerpt = re.sub(r"\s+", " ", source[left:right]).strip()
+    return _compact_words(excerpt, 58)
+
+
+def _ethical_lexical_assurance_allowed(text: str, start: int, end: int) -> bool:
+    window = (text or "")[max(0, start - 90): min(len(text or ""), end + 90)].lower()
+    confidence_markers = [
+        "prendre de l'assurance",
+        "prend de l'assurance",
+        "gagner en assurance",
+        "gagne en assurance",
+        "avec assurance",
+        "avoir de l'assurance",
+        "a de l'assurance",
+        "manque d'assurance",
+        "assurance personnelle",
+        "parler avec assurance",
+        "répondre avec assurance",
+        "plus d'assurance",
+        "son assurance",
+        "ton assurance",
+    ]
+    sector_markers = [
+        "contrat",
+        "souscrire",
+        "prime",
+        "police",
+        "sinistre",
+        "assureur",
+        "assuré",
+        "assurantiel",
+        "banque",
+        "bancaire",
+        "crédit",
+        "emprunt",
+    ]
+    return any(marker in window for marker in confidence_markers) and not any(
+        marker in window for marker in sector_markers
+    )
+
+
+def _ethical_lexical_match_allowed(term: str, text: str, start: int, end: int) -> bool:
+    normalized = re.sub(r"\s+", " ", str(term or "").strip().lower())
+    if normalized == "assurance":
+        return _ethical_lexical_assurance_allowed(text, start, end)
+    return False
+
+
+def _scan_ethical_lexical_findings(text: str, *, max_findings: int | None = None) -> list[dict]:
+    if not _ethical_lexical_scan_enabled() or not (text or "").strip():
+        return []
+    data = _load_ethical_lexical_terms()
+    limit = int(max_findings) if max_findings is not None else _ethical_lexical_max_findings()
+    allowed_rule_ids = _ethical_lexical_rule_ids()
+    findings = []
+    seen = set()
+    for rule in data.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        try:
+            rule_id = int(rule.get("rule_id") or 0)
+        except Exception:
+            continue
+        if rule_id not in allowed_rule_ids:
+            continue
+        label = str(rule.get("label") or f"Règle #{rule_id}").strip()
+        for term in rule.get("terms") or []:
+            pattern = _ethical_lexical_pattern(str(term or ""))
+            if pattern is None:
+                continue
+            for match in pattern.finditer(text or ""):
+                if _ethical_lexical_match_allowed(str(term), text, match.start(), match.end()):
+                    continue
+                key = (rule_id, match.start(), match.end(), match.group(0).lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                findings.append({
+                    "rule_id": rule_id,
+                    "rule": f"#{rule_id}",
+                    "rule_label": label,
+                    "term": str(term),
+                    "match": match.group(0),
+                    "start": match.start(),
+                    "end": match.end(),
+                    "excerpt": _ethical_lexical_excerpt(text, match.start(), match.end()),
+                })
+                if len(findings) >= limit:
+                    return findings
+    return findings
+
+
+def _build_ethical_lexical_rewrite_prompt(
+    *,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    findings: list[dict],
+) -> str:
+    max_patches = _ethical_lexical_max_patches(section, len(findings))
+    rules_context = _ethical_lexical_rules_context(findings[:max_patches])
+    return f"""Tu es reviewer de conformité ÉTHIQUE en passe lexicale déterministe.
+
+La micro-conformité IA a déjà été passée. Le scan déterministe a ensuite trouvé
+des termes interdits qui restent dans le texte oral. Tu dois corriger les
+passages détectés en reformulant la situation, l'exemple ou l'explication.
+
+Important :
+- Ne supprime jamais seulement le mot interdit.
+- Remplace le passage par une formulation naturelle qui change le contexte si nécessaire.
+- Garde le même objectif pédagogique.
+- Ne crée pas de nouvelle partie, slide, ancre, template ou métadonnée.
+- `original` doit être une phrase ou un court passage EXACT, copié du texte.
+- `replacement` doit être entendable par les apprenants et conforme aux catégories lexicales signalées.
+- Même un usage métaphorique reste interdit : par exemple "musique de la voix" doit être reformulé.
+- Le remplacement ne doit contenir aucun terme listé dans les détections.
+- `rule_violated` doit reprendre la règle lexicale de la détection traitée, par exemple "#2".
+- Maximum {max_patches} patches.
+
+Contexte pédagogique :
+- Cours interne : {course_plan.get('course_number')} / {course_plan.get('total_courses') or 7}
+- Titre : {course_plan.get('course_title') or ''}
+- Section : {_section_label(section)}
+
+Détections lexicales à traiter :
+{json.dumps(findings[:max_patches], ensure_ascii=False, indent=2)}
+
+Catégories lexicales concernées :
+{rules_context}
+
+Format de sortie strict, JSON valide uniquement :
+{{
+  "patches": [
+    {{
+      "original": "phrase ou passage EXACT à remplacer",
+      "replacement": "reformulation contextuelle conforme",
+      "rule_violated": "#2",
+      "reason": "terme interdit détecté et contexte reformulé"
+    }}
+  ]
+}}
+
+TEXTE DE LA SECTION :
+{section_text}
+
+JSON :"""
+
+
+def _ethical_lexical_rules_context(findings: list[dict]) -> str:
+    grouped = {}
+    for finding in findings or []:
+        try:
+            rule_id = int(finding.get("rule_id") or 0)
+        except Exception:
+            continue
+        if not rule_id:
+            continue
+        item = grouped.setdefault(
+            rule_id,
+            {
+                "rule": f"#{rule_id}",
+                "label": finding.get("rule_label") or f"Règle #{rule_id}",
+                "detected_terms": [],
+            },
+        )
+        term = str(finding.get("match") or finding.get("term") or "").strip()
+        if term and term not in item["detected_terms"]:
+            item["detected_terms"].append(term)
+    return json.dumps(list(grouped.values()), ensure_ascii=False, indent=2)
+
+
+def _lexical_patch_meta(patch: dict, findings: list[dict]) -> dict:
+    enriched = {**(patch or {})}
+    enriched["source"] = "ethical_lexical_scan"
+    original = str(enriched.get("original") or "")
+    matched_finding = None
+    for finding in findings:
+        if str(finding.get("match") or "").lower() in original.lower():
+            matched_finding = finding
+            break
+    if matched_finding:
+        enriched["term"] = matched_finding.get("match") or matched_finding.get("term")
+        enriched["lexical_rule_id"] = matched_finding.get("rule_id")
+    return enriched
+
+
+def _residual_lexical_rejection(finding: dict) -> dict:
+    return {
+        "original": finding.get("excerpt") or finding.get("match") or "",
+        "replacement": "",
+        "rule_violated": finding.get("rule") or f"#{finding.get('rule_id') or '?'}",
+        "reason": (
+            f"Terme lexical interdit encore détecté après repasse : "
+            f"{finding.get('match') or finding.get('term')}"
+        ),
+        "source": "ethical_lexical_scan",
+        "term": finding.get("match") or finding.get("term"),
+        "lexical_rule_id": finding.get("rule_id"),
+        "reject_reason": "residual_after_lexical_rewrite",
+    }
+
+
+def _ethical_lexical_finding_key(finding: dict) -> tuple:
+    return (
+        int(finding.get("rule_id") or 0),
+        str(finding.get("match") or finding.get("term") or "").lower(),
+        int(finding.get("start") or 0),
+        int(finding.get("end") or 0),
+    )
+
+
+def _append_unique_ethical_lexical_findings(target: list[dict], findings: list[dict]) -> None:
+    seen = {_ethical_lexical_finding_key(item) for item in target}
+    for finding in findings or []:
+        key = _ethical_lexical_finding_key(finding)
+        if key in seen:
+            continue
+        target.append(finding)
+        seen.add(key)
+
+
+def _ethical_lexical_residual_error(findings: list[dict], *, context: str = "") -> str:
+    samples = []
+    for finding in (findings or [])[:6]:
+        match = finding.get("match") or finding.get("term") or "?"
+        rule = finding.get("rule") or f"#{finding.get('rule_id') or '?'}"
+        samples.append(f"{match} ({rule})")
+    suffix = f" — {context}" if context else ""
+    return (
+        "Termes lexicaux interdits encore présents après reformulation"
+        f"{suffix}: " + ", ".join(samples)
+    )
+
+
+def _run_ethical_lexical_rewrite_for_section(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    model=None,
+) -> dict:
+    candidate = section_text
+    all_findings = []
+    all_applied = []
+    all_rejected = []
+    errors = []
+    residual_findings = []
+
+    max_iterations = _ethical_lexical_max_iterations()
+    for iteration in range(1, max_iterations + 1):
+        findings = _scan_ethical_lexical_findings(candidate)
+        residual_findings = findings
+        if not findings:
+            break
+        _append_unique_ethical_lexical_findings(all_findings, findings)
+
+        prompt = _build_ethical_lexical_rewrite_prompt(
+            course_plan=course_plan,
+            section=section,
+            section_text=candidate,
+            findings=findings,
+        )
+        max_patches = _ethical_lexical_max_patches(section, len(findings))
+        default_max_tokens = min(7000, max(1800, 600 + max_patches * 220))
+        max_tokens = _env_int("FORMATION_ETHICAL_LEXICAL_REWRITE_MAX_TOKENS", default_max_tokens, min_value=500)
+        try:
+            raw = _deepseek_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                model=model,
+            )
+        except Exception as exc:
+            rejected = [_residual_lexical_rejection(f) for f in findings]
+            for item in rejected:
+                item["reject_reason"] = f"lexical_rewrite_error: {str(exc)[:180]}"
+                item["lexical_iteration"] = iteration
+            all_rejected.extend(rejected)
+            errors.append(str(exc))
+            logger.warning(
+                "PIPELINE_ETHICAL_LEXICAL_REWRITE_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s iteration=%s error=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                course_plan.get("course_number"),
+                _section_label(section),
+                iteration,
+                str(exc)[:220],
+            )
+            break
+
+        patches, parse_error = _parse_patches_response(raw)
+        if parse_error:
+            rejected = [_residual_lexical_rejection(f) for f in findings]
+            for item in rejected:
+                item["reject_reason"] = f"lexical_parse_error: {parse_error[:180]}"
+                item["lexical_iteration"] = iteration
+            all_rejected.extend(rejected)
+            errors.append(parse_error)
+            break
+
+        scoped_patches = [
+            _lexical_patch_meta(patch, findings)
+            for patch in patches
+            if (_patch_rule_number(patch) in _ethical_lexical_rule_ids())
+        ][:max_patches]
+        for patch in scoped_patches:
+            patch["lexical_iteration"] = iteration
+
+        before_candidate = candidate
+        candidate, applied, rejected = _apply_patches(candidate, scoped_patches)
+        candidate, applied, budget_rejected = _apply_review_budget_guard(
+            before_candidate,
+            candidate,
+            applied,
+            "compliance",
+        )
+        for patch in applied:
+            patch["lexical_iteration"] = iteration
+        for patch in rejected + budget_rejected:
+            patch["lexical_iteration"] = iteration
+        all_applied.extend(applied)
+        all_rejected.extend(rejected + budget_rejected)
+
+        residual_findings = _scan_ethical_lexical_findings(candidate)
+        if not residual_findings:
+            break
+        if not applied or candidate.strip() == before_candidate.strip():
+            break
+
+    else:
+        residual_findings = _scan_ethical_lexical_findings(candidate)
+
+    if not all_findings:
+        return {
+            "text": section_text,
+            "findings": [],
+            "residual_findings": [],
+            "applied": [],
+            "rejected": [],
+            "error": "",
+        }
+
+    if residual_findings:
+        all_rejected.extend([_residual_lexical_rejection(f) for f in residual_findings])
+    return {
+        "text": candidate,
+        "findings": all_findings,
+        "residual_findings": residual_findings,
+        "applied": all_applied,
+        "rejected": all_rejected,
+        "error": "; ".join(errors)[:700],
+    }
+
+
+def _patch_rule_number(patch: dict) -> int | None:
+    match = _re.search(r"#?\s*(\d+)", str((patch or {}).get("rule_violated") or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _micro_review_patch_for_report(patch: dict, status: str) -> dict:
+    return {
+        "rule": str((patch or {}).get("rule_violated") or (patch or {}).get("rule") or "?"),
+        "reason": str((patch or {}).get("reason") or "")[:500],
+        "original": str((patch or {}).get("original") or ""),
+        "replacement": str((patch or {}).get("replacement") or ""),
+        "status": status,
+        "reject_reason": (patch or {}).get("reject_reason"),
+        "source": (patch or {}).get("source") or "ethical_micro_review",
+        "term": (patch or {}).get("term"),
+        "lexical_rule_id": (patch or {}).get("lexical_rule_id"),
+    }
+
+
+def _record_ethical_micro_review(job: dict, record: dict) -> None:
+    try:
+        records = job.setdefault("_ethical_micro_review_records", [])
+        records.append(record)
+    except Exception:
+        pass
+
+
+def _ethical_micro_review_record(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    status: str,
+    original_text: str,
+    final_text: str | None = None,
+    proposed: int = 0,
+    applied: list | None = None,
+    rejected: list | None = None,
+    lexical_findings: list | None = None,
+    lexical_residual_findings: list | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+) -> dict:
+    applied = applied or []
+    rejected = rejected or []
+    lexical_findings = lexical_findings or []
+    lexical_residual_findings = lexical_residual_findings or []
+    return {
+        "course_number": int(course_plan.get("course_number") or 0),
+        "course_title": course_plan.get("course_title") or f"Cours {course_plan.get('course_number') or '?'}",
+        "section_label": _section_label(section),
+        "section": section,
+        "status": status,
+        "proposed": int(proposed or 0),
+        "patches_applied": len(applied),
+        "patches_rejected": len(rejected),
+        "patches_detail": (
+            [_micro_review_patch_for_report(p, "applied") for p in applied]
+            + [_micro_review_patch_for_report(p, "rejected") for p in rejected]
+        ),
+        "original_text": original_text or "",
+        "final_text": final_text if final_text is not None else (original_text or ""),
+        "error": str(error or "")[:700],
+        "lexical_findings": lexical_findings,
+        "lexical_findings_count": len(lexical_findings),
+        "lexical_residual_findings": lexical_residual_findings,
+        "lexical_residual_count": len(lexical_residual_findings),
+        "duration_ms": duration_ms,
+        "rules_scope": "ethics_compliance",
+        "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
+        "ruleset_version": _ETHICAL_MICRO_RULESET_VERSION,
+    }
+
+
+def _ethical_micro_review_summary(records: list[dict]) -> dict:
+    residual_records = [r for r in records if int(r.get("lexical_residual_count") or 0) > 0]
+    return {
+        "sections_reviewed": len(records),
+        "sections_clean": sum(1 for r in records if r.get("status") == "clean"),
+        "sections_patched": sum(1 for r in records if r.get("status") == "patched"),
+        "sections_rejected": sum(1 for r in records if r.get("status") == "rejected"),
+        "sections_failed": sum(1 for r in records if r.get("status") in {"error", "parse_error"}),
+        "patches_proposed": sum(int(r.get("proposed") or 0) for r in records),
+        "patches_applied": sum(int(r.get("patches_applied") or 0) for r in records),
+        "patches_rejected": sum(int(r.get("patches_rejected") or 0) for r in records),
+        "lexical_findings": sum(int(r.get("lexical_findings_count") or 0) for r in records),
+        "lexical_residual_findings": sum(int(r.get("lexical_residual_count") or 0) for r in records),
+        "lexical_residual_sections": len(residual_records),
+        "lexical_residual_non_blocking": not _ethical_lexical_strict_enabled(),
+        "lexical_rewrite_max_iterations": _ethical_lexical_max_iterations(),
+    }
+
+
+def _sorted_ethical_micro_review_records(job: dict) -> list[dict]:
+    records = list(job.get("_ethical_micro_review_records") or [])
+    return sorted(
+        records,
+        key=lambda r: (
+            int(r.get("course_number") or 0),
+            int(((r.get("section") or {}).get("part_number") or 0)),
+            str((r.get("section") or {}).get("section_kind") or ""),
+            str(r.get("section_label") or ""),
+        ),
+    )
+
+
+def _run_ethical_micro_review_for_section(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    model=None,
+    return_details: bool = False,
+) -> str | dict:
+    def _return(text: str, *, applied=None, rejected=None, status: str = ""):
+        if return_details:
+            return {
+                "text": text,
+                "applied": list(applied or []),
+                "rejected": list(rejected or []),
+                "status": status,
+            }
+        return text
+
+    if not _ethical_micro_review_enabled() or not (section_text or "").strip():
+        return _return(section_text, status="skipped")
+
+    rules_text = _load_ethical_micro_rules_text()
+    if not rules_text.strip():
+        return _return(section_text, status="skipped")
+
+    prompt = _build_ethical_micro_review_prompt(
+        course_plan=course_plan,
+        section=section,
+        section_text=section_text,
+        rules_text=rules_text,
+    )
+    default_max_tokens = 2600 if section.get("kind") == "course_calibrated" else 1600
+    max_tokens = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_TOKENS", default_max_tokens, min_value=400)
+    started = time.time()
+    try:
+        raw = _deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            model=model,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            str(exc)[:220],
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="error",
+                original_text=section_text,
+                error=str(exc),
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
+        return _return(section_text, status="error")
+
+    patches, parse_error = _parse_patches_response(raw)
+    if parse_error:
+        logger.warning(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_PARSE_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            parse_error,
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="parse_error",
+                original_text=section_text,
+                error=parse_error,
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
+        return _return(section_text, status="parse_error")
+
+    max_patches = _ethical_micro_max_patches(section)
+    scoped_patches = [
+        patch
+        for patch in patches
+        if (_patch_rule_number(patch) in _ETHICAL_MICRO_RULE_IDS)
+    ][:max_patches]
+    candidate = section_text
+    applied = []
+    rejected = []
+    if scoped_patches:
+        candidate, applied, rejected = _apply_patches(section_text, scoped_patches)
+        candidate, applied, budget_rejected = _apply_review_budget_guard(
+            section_text,
+            candidate,
+            applied,
+            "compliance",
+        )
+        rejected = rejected + budget_rejected
+
+    lexical_result = _run_ethical_lexical_rewrite_for_section(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        section_text=candidate,
+        model=model,
+    )
+    lexical_findings = lexical_result.get("findings") or []
+    lexical_residual_findings = lexical_result.get("residual_findings") or []
+    if lexical_result.get("applied"):
+        candidate = lexical_result.get("text") or candidate
+    applied = applied + list(lexical_result.get("applied") or [])
+    rejected = rejected + list(lexical_result.get("rejected") or [])
+    proposed_count = len(scoped_patches) + len(lexical_findings)
+
+    if lexical_residual_findings and _ethical_lexical_strict_enabled():
+        strict_error = _ethical_lexical_residual_error(
+            lexical_residual_findings,
+            context=f"cours={course_plan.get('course_number')} section={_section_label(section)}",
+        )
+        logger.warning(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_LEXICAL_RESIDUAL formation_job_id=%s content_job_id=%s course=%s section=%s residual=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            len(lexical_residual_findings),
+            strict_error[:300],
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="error",
+                original_text=section_text,
+                final_text=candidate,
+                proposed=proposed_count,
+                applied=applied,
+                rejected=rejected,
+                lexical_findings=lexical_findings,
+                lexical_residual_findings=lexical_residual_findings,
+                error=(lexical_result.get("error") or strict_error),
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
+        raise ValueError(strict_error)
+
+    if applied:
+        logger.info(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_PATCHED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s applied=%s rejected=%s lexical=%s residual=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            proposed_count,
+            len(applied),
+            len(rejected),
+            len(lexical_findings),
+            len(lexical_residual_findings),
+            int((time.time() - started) * 1000),
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="patched",
+                original_text=section_text,
+                final_text=candidate,
+                proposed=proposed_count,
+                applied=applied,
+                rejected=rejected,
+                lexical_findings=lexical_findings,
+                lexical_residual_findings=lexical_residual_findings,
+                error=lexical_result.get("error") or "",
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
+        return _return(
+            _sanitize_learner_facing_text(candidate),
+            applied=applied,
+            rejected=rejected,
+            status="patched",
+        )
+
+    if not rejected and not proposed_count:
+        logger.info(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_CLEAN formation_job_id=%s content_job_id=%s course=%s section=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            int((time.time() - started) * 1000),
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="clean",
+                original_text=section_text,
+                proposed=0,
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
+        return _return(section_text, status="clean")
+
+    logger.info(
+        "PIPELINE_ETHICAL_MICRO_REVIEW_REJECTED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s rejected=%s lexical=%s residual=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_plan.get("course_number"),
+        _section_label(section),
+        proposed_count,
+        len(rejected),
+        len(lexical_findings),
+        len(lexical_residual_findings),
+        int((time.time() - started) * 1000),
+    )
+    _record_ethical_micro_review(
+        job,
+        _ethical_micro_review_record(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            status="rejected",
+            original_text=section_text,
+            proposed=proposed_count,
+            rejected=rejected,
+            lexical_findings=lexical_findings,
+            lexical_residual_findings=lexical_residual_findings,
+            error=lexical_result.get("error") or "",
+            duration_ms=int((time.time() - started) * 1000),
+        ),
+    )
+    return _return(section_text, rejected=rejected, status="rejected")
+
+
+def _summarize_previous_course_for_structured(course_text: str, model=None) -> str:
+    text = _compact_words(course_text or "", 900)
+    if not text:
+        return ""
+    prompt = f"""Résume en 2 phrases maximum cette partie pour permettre à la partie suivante de faire un rappel bref.
+Ne parle pas de fichier, d'audio ou de bloc.
+
+COURS :
+{text}
+
+Réponds uniquement avec le résumé oral court."""
+    try:
+        return _sanitize_learner_facing_text(_clean_llm_text(_deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=350,
+            model=model,
+        )))
+    except Exception:
+        return _compact_words(course_text, 80)
+
+
+def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) -> tuple[str, dict]:
+    target_words = int(course_plan.get("target_words") or 0)
+    block = {
+        "bloc_number": int(course_plan.get("course_number") or 0),
+        "filename": course_plan.get("filename"),
+        "duration_min": course_plan.get("duration_minutes"),
+        "target_words": target_words,
+        "min_words": _structured_course_min_words(target_words),
+        "max_words": _structured_course_max_words(course_plan),
+        "word_budget": target_words,
+        "role": course_plan.get("pedagogical_role") or "",
+    }
+    calibrated, result = _calibrate_single_audio_block(
+        block=block,
+        text=_sanitize_learner_facing_text(text),
+        model=model,
+        max_iterations=int(os.getenv("FORMATION_STRUCTURED_COURSE_CALIBRATION_ITERATIONS", "6") or "6"),
+        day_context=(
+            "Plan structuré verrouillé : respecter l'architecture du cours, "
+            "compléter/réduire uniquement avec du contenu pertinent, et ne "
+            "jamais utiliser le mot bloc devant les élèves.\n\n"
+            f"{json.dumps(course_plan, ensure_ascii=False, indent=2)}"
+        ),
+    )
+    return _sanitize_learner_facing_text(calibrated), result
+
+
+_PLAN_ADHERENCE_REVIEW_VERSION = "2026-05-28-plan-adherence-v6-early"
+
+
+def _structured_course_max_words(course_plan: dict) -> int:
+    """Align the per-course ceiling with the final day audio budget.
+
+    The final day guard allows a small scheduling margin (2% or 350 words per
+    day).  Keeping the structured course ceiling at the exact target made a
+    valid one-course day fail before it could reach that authoritative guard.
+    The fixed daily margin is shared across the day's courses.
+    """
+    target_words = int(course_plan.get("target_words") or 0)
+    if target_words <= 0:
+        return 0
+    try:
+        total_courses = max(1, int(course_plan.get("total_courses") or 1))
+    except (TypeError, ValueError):
+        total_courses = 1
+    max_ratio = _env_float(
+        "FORMATION_TTS_DAY_WORD_MAX_RATIO",
+        1.02,
+        min_value=1.0,
+        max_value=1.20,
+    )
+    try:
+        day_max_extra = max(0, int(os.getenv("FORMATION_TTS_DAY_WORD_MAX_EXTRA", "350")))
+    except (TypeError, ValueError):
+        day_max_extra = 350
+    course_extra = (day_max_extra + total_courses - 1) // total_courses
+    return max(int(target_words * max_ratio), target_words + course_extra)
+
+
+def _structured_course_budget_status(course_plan: dict, text: str) -> dict:
+    target_words = int(course_plan.get("target_words") or 0)
+    words = count_tts_spoken_words(text)
+    min_words = _structured_course_min_words(target_words) if target_words else 0
+    max_words = _structured_course_max_words(course_plan)
+    if target_words <= 0:
+        status = "unknown"
+        ok = True
+    elif words < min_words:
+        status = "too_short"
+        ok = False
+    elif words > max_words:
+        status = "too_long"
+        ok = False
+    else:
+        status = "ok"
+        ok = True
+    return {
+        "ok": ok,
+        "status": status,
+        "words": words,
+        "min_words": min_words,
+        "max_words": max_words,
+        "target_words": target_words,
+    }
+
+
+def _structured_section_budget_status(section: dict, text: str) -> dict:
+    target_words = int(section.get("target_words") or 0)
+    words = count_tts_spoken_words(text)
+    min_words = _structured_section_min_words(target_words) if target_words else 0
+    max_words = target_words
+    if target_words <= 0:
+        status = "unknown"
+        ok = True
+        delta = 0
+    elif words < min_words:
+        status = "too_short"
+        ok = False
+        delta = min_words - words
+    elif words > max_words:
+        status = "too_long"
+        ok = False
+        delta = words - max_words
+    else:
+        status = "ok"
+        ok = True
+        delta = 0
+    return {
+        "ok": ok,
+        "status": status,
+        "words": words,
+        "min_words": min_words,
+        "max_words": max_words,
+        "target_words": target_words,
+        "delta": delta,
+    }
+
+
+def _build_structured_section_budget_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    current_text: str,
+    status: dict,
+    module_content: str,
+    direction: str,
+) -> str:
+    budget_contract = load_budget_rewrite_contract()
+    section_label = _section_label(section)
+    action = (
+        "réduire cette section sans perdre ses idées essentielles"
+        if direction == "shorten"
+        else "enrichir cette section avec de vraies valeurs ajoutées pédagogiques"
+    )
+    if direction == "shorten":
+        direction_rules = (
+            "- Supprime les répétitions, les reformulations faibles et les exemples trop longs.\n"
+            "- Préserve les notions, les transitions utiles et la fonction de la section.\n"
+        )
+    else:
+        direction_rules = (
+            "- Ajoute de vraies notions utiles : nuance métier, méthode concrète, erreur fréquente, contre-exemple, mini-cas fictif, clarification ou lien terrain.\n"
+            "- Ne rends pas le texte simplement plus verbeux : chaque ajout doit avoir une valeur pédagogique identifiable.\n"
+            "- Respecte les teaching beats et les anchors/slides du plan : enrichis ce qui est prévu, ne crée pas une trajectoire parallèle.\n"
+            "- Ne modifie pas le plan JSON et ne déplace pas le rôle de cette section vers une autre section.\n"
+        )
+    return f"""Tu calibres une section d'un cours audio TTS Fish Audio.
+
+CONTRAT DE RÉÉCRITURE BUDGET :
+{budget_contract}
+
+Mission : {action}.
+Tu dois réécrire uniquement la section demandée, pas le cours complet.
+Le texte final doit être oral, fluide, TTS-ready, sans markdown ni titre écrit.
+
+Budget section :
+- Section : {section_label}
+- Cible : {status.get('target_words')} mots parlés
+- Plage acceptée : {status.get('min_words')} à {status.get('max_words')} mots parlés
+- Texte actuel : {status.get('words')} mots
+- Écart à corriger : {status.get('delta')} mots
+
+Plan complet verrouillé :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section verrouillée à calibrer :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte de cette section :
+{_structured_section_scope_guard(section)}
+
+Moments pédagogiques internes à couvrir :
+{_section_teaching_beats_prompt(section)}
+
+Contexte utile :
+- Titre professionnel : {job.get('program_title') or ''}
+- Intitulé journée : {job.get('folder_name') or ''}
+
+Contenu source à utiliser si tu ajoutes des notions :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Contraintes absolues :
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Les exemples non sourcés doivent être fictifs ou hypothétiques avec une
+  formulation naturelle. Si le texte dit déjà "Imaginons..." ou "Supposons que...",
+  n'ajoute pas de phrase méta lourde.
+- Pour une partie de développement, ne refais pas l'accueil, le cadrage de journée ou le plan global.
+- Pour une conclusion, récapitule sans ouvrir un nouveau développement.
+- Après la conclusion de partie, aucun nouveau développement.
+- Le résultat doit finir entre {status.get('min_words')} et {status.get('max_words')} mots parlés.
+{direction_rules}
+
+Texte actuel de la section :
+{current_text}
+
+Réponds uniquement avec le texte oral calibré de cette section."""
+
+
+def _calibrate_structured_section_text(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    text: str,
+    module_content: str,
+    model=None,
+) -> tuple[str, dict]:
+    current_text = _sanitize_learner_facing_text(text)
+    history = []
+    changed = False
+    max_iterations = _env_int("FORMATION_STRUCTURED_SECTION_CALIBRATION_ITERATIONS", 4, min_value=1)
+    max_iterations = min(8, max_iterations)
+
+    for iteration in range(1, max_iterations + 1):
+        status = _structured_section_budget_status(section, current_text)
+        history.append({
+            "iteration": iteration,
+            "status": status["status"],
+            "words": status["words"],
+            "delta": status["delta"],
+        })
+        if status["ok"]:
+            return current_text, {
+                **status,
+                "changed": changed,
+                "iterations": iteration - 1,
+                "fallback": None,
+                "history": history,
+            }
+
+        direction = "shorten" if status["status"] == "too_long" else "expand"
+        prompt = _build_structured_section_budget_prompt(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            current_text=current_text,
+            status=status,
+            module_content=module_content,
+            direction=direction,
+        )
+        try:
+            raw = _deepseek_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=_structured_generation_max_tokens(int(section.get("target_words") or 600)),
+                model=model,
+            )
+            candidate = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            candidate_words = count_tts_spoken_words(candidate)
+            current_words = count_tts_spoken_words(current_text)
+            min_candidate_words = min(120, max(20, int(current_words * 0.45)))
+            if not candidate or candidate_words < min_candidate_words:
+                logger.warning(
+                    "PIPELINE_SECTION_BUDGET_CALIBRATION_REJECTED_EMPTY course=%s section=%s iteration=%s",
+                    course_plan.get("course_number"),
+                    _section_label(section),
+                    iteration,
+                )
+                break
+            if direction == "expand" and candidate_words <= current_words:
+                logger.warning(
+                    "PIPELINE_SECTION_BUDGET_CALIBRATION_NO_EXPANSION course=%s section=%s iteration=%s before=%s after=%s",
+                    course_plan.get("course_number"),
+                    _section_label(section),
+                    iteration,
+                    current_words,
+                    candidate_words,
+                )
+                break
+            if candidate.strip() != current_text.strip():
+                current_text = candidate
+                changed = True
+                logger.info(
+                    "PIPELINE_SECTION_BUDGET_CALIBRATION_ITER course=%s section=%s iteration=%s direction=%s words=%s",
+                    course_plan.get("course_number"),
+                    _section_label(section),
+                    iteration,
+                    direction,
+                    candidate_words,
+                )
+                continue
+            break
+        except Exception as exc:
+            logger.warning(
+                "PIPELINE_SECTION_BUDGET_CALIBRATION_LLM_FAILED course=%s section=%s iteration=%s error=%s",
+                course_plan.get("course_number"),
+                _section_label(section),
+                iteration,
+                str(exc)[:300],
+            )
+            break
+
+    final_status = _structured_section_budget_status(section, current_text)
+    fallback = None
+    if final_status["status"] == "too_long":
+        fallback = "llm_only_over_budget_kept_untrimmed"
+        logger.warning(
+            "PIPELINE_SECTION_BUDGET_CALIBRATION_OVER_BUDGET_UNTRIMMED course=%s section=%s words=%s max_words=%s",
+            course_plan.get("course_number"),
+            _section_label(section),
+            final_status.get("words"),
+            final_status.get("max_words"),
+        )
+
+    return current_text, {
+        **final_status,
+        "changed": changed,
+        "iterations": len(history),
+        "fallback": fallback,
+        "history": history,
+    }
+
+
+def _section_key(section: dict) -> tuple:
+    return (section.get("kind"), int(section.get("part_number") or 0))
+
+
+def _section_plan_by_key(course_plan: dict) -> dict[tuple, dict]:
+    return {_section_key(section): section for section in _structured_sections_for_course(course_plan)}
+
+
+def _join_structured_section_records(sections: list[dict]) -> str:
+    return "\n\n".join((section.get("text") or "").strip() for section in sections if (section.get("text") or "").strip()).strip()
+
+
+def _insert_before_final_paragraph(text: str, addition: str) -> str:
+    """Insert a top-up before the local closing paragraph when one exists."""
+    text = (text or "").strip()
+    addition = (addition or "").strip()
+    if not addition:
+        return text
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+    if len(paragraphs) <= 1:
+        return f"{text}\n\n{addition}".strip()
+    return "\n\n".join([*paragraphs[:-1], addition, paragraphs[-1]]).strip()
+
+
+def _build_structured_course_topup_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    current_text: str,
+    module_content: str,
+    desired_words: int,
+    max_words: int,
+) -> str:
+    return f"""Tu ajoutes un complément pédagogique dans un cours audio professionnel.
+
+Mission : produire UNIQUEMENT un ajout pédagogique autonome compatible avec le cours.
+Ne réécris pas le cours complet.
+
+Ajout attendu : environ {desired_words} mots parlés utiles.
+Maximum absolu pour ton ajout : {max_words} mots parlés.
+
+Plan verrouillé du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Contenu source exploitable :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Texte actuel du cours :
+{_compact_words(current_text, 5000)}
+
+Contraintes :
+- L'ajout doit apporter de la vraie valeur : nuance métier, méthode, erreur fréquente, mini-cas fictif, clarification ou contre-exemple.
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Ne refais pas l'accueil, le plan de journée ou la conclusion.
+- Ne crée pas de nouveau thème hors du plan.
+- L'ajout doit pouvoir être placé dans une transition de fin de cours, sans refaire la conclusion.
+- Oral fluide, TTS-ready, sans markdown, sans titre écrit.
+
+Réponds uniquement avec l'ajout."""
+
+
+def _build_structured_topup_rewrite_prompt(
+    *,
+    addition: str,
+    max_words: int,
+    context_label: str,
+) -> str:
+    return f"""Reformule un ajout pédagogique oral pour qu'il rentre dans une marge stricte.
+
+Contexte d'insertion : {context_label}
+Maximum absolu : {max_words} mots parlés.
+
+Texte à reformuler :
+{addition}
+
+Contraintes :
+- Ne tronque pas. Réécris proprement avec des phrases complètes.
+- Garde la valeur pédagogique principale : méthode, nuance métier, exemple, clarification ou erreur fréquente.
+- Supprime les détours, les répétitions et les formules d'introduction inutiles.
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Oral fluide, TTS-ready, sans markdown, sans titre écrit.
+
+Réponds uniquement avec l'ajout reformulé."""
+
+
+def _fit_structured_topup_addition_to_room(
+    *,
+    addition: str,
+    max_words: int,
+    context_label: str,
+    model=None,
+) -> tuple[str, dict]:
+    """Ask the LLM to rewrite oversized top-ups instead of truncating them."""
+    max_words = int(max_words or 0)
+    addition = _sanitize_learner_facing_text(addition or "")
+    raw_words = count_tts_spoken_words(addition)
+    result = {
+        "raw_words": raw_words,
+        "max_words": max_words,
+        "rephrased": False,
+        "attempts": [],
+    }
+    if max_words <= 0 or raw_words <= 0:
+        result["status"] = "empty"
+        return "", result
+    if raw_words <= max_words:
+        result["status"] = "ok"
+        return addition, result
+
+    max_rewrites = _env_int("FORMATION_STRUCTURED_TOPUP_REWRITE_MAX_ATTEMPTS", 3, min_value=1)
+    max_rewrites = min(6, max_rewrites)
+    current = addition
+    for attempt_no in range(1, max_rewrites + 1):
+        try:
+            raw = _deepseek_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_topup_rewrite_prompt(
+                        addition=current,
+                        max_words=max_words,
+                        context_label=context_label,
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(max_words),
+                model=model,
+            )
+            candidate = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            candidate_words = count_tts_spoken_words(candidate)
+            result["attempts"].append({
+                "attempt": attempt_no,
+                "words": candidate_words,
+                "ok": 0 < candidate_words <= max_words,
+            })
+            if 0 < candidate_words <= max_words:
+                result["status"] = "ok"
+                result["rephrased"] = True
+                result["final_words"] = candidate_words
+                return candidate, result
+            if candidate_words > 0:
+                current = candidate
+        except Exception as exc:
+            result["attempts"].append({
+                "attempt": attempt_no,
+                "error": str(exc)[:300],
+            })
+            break
+
+    result["status"] = "too_long"
+    result["final_words"] = count_tts_spoken_words(current)
+    return "", result
+
+
+def _refresh_structured_section_results_from_records(
+    section_results: list[dict],
+    sections: list[dict],
+) -> None:
+    sections_by_key = {_section_key(section): section for section in sections}
+    for section_result in section_results:
+        section = sections_by_key.get(
+            (section_result.get("kind"), int(section_result.get("part_number") or 0))
+        )
+        if not section:
+            continue
+        text = section.get("text") or ""
+        after_words = count_tts_spoken_words(text)
+        status = _structured_section_budget_status(section, text)
+        before_words = int(section_result.get("before_words") or 0)
+        section_result["after_words"] = after_words
+        section_result["delta_words"] = after_words - before_words
+        section_result["status"] = status.get("status")
+        section_result["min_words"] = status.get("min_words")
+        section_result["max_words"] = status.get("max_words")
+        section_result["changed"] = bool(section_result.get("changed") or section_result["delta_words"])
+        if section.get("deficit_repair_before_words") is not None:
+            section_result["deficit_repaired"] = True
+        if section.get("topup_before_words") is not None:
+            section_result["section_topup_repaired"] = True
+            section_result["section_topup_before_words"] = section.get("topup_before_words")
+            section_result["section_topup_addition_words"] = section.get("topup_addition_words")
+
+
+def _build_structured_section_topup_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    current_section_text: str,
+    module_content: str,
+    desired_words: int,
+    max_words: int,
+) -> str:
+    return f"""Tu ajoutes un complément pédagogique dans UNE section précise d'un cours audio professionnel.
+
+Mission : produire UNIQUEMENT un ajout à intégrer dans cette section.
+Ne réécris pas la section complète. Ne réécris pas le cours complet.
+
+Section à enrichir : {_section_label(section)}
+Ajout attendu : environ {desired_words} mots parlés utiles.
+Maximum absolu pour ton ajout : {max_words} mots parlés.
+
+Plan verrouillé du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section verrouillée :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte de la section :
+{_structured_section_scope_guard(section)}
+
+Moments pédagogiques de cette section :
+{_section_teaching_beats_prompt(section)}
+
+Contenu source exploitable :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Texte actuel de la section :
+{current_section_text}
+
+Contraintes :
+- Ajoute de la vraie valeur dans CETTE section : nuance métier, méthode, erreur fréquente, mini-cas fictif, clarification, contre-exemple ou lien terrain.
+- Ne crée pas un nouveau thème hors du plan.
+- Ne refais pas l'accueil, le plan de journée ou la conclusion.
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- L'ajout doit s'insérer naturellement dans la progression locale de la section.
+- Oral fluide, TTS-ready, sans markdown, sans titre écrit.
+
+Réponds uniquement avec l'ajout."""
+
+
+def _repair_structured_course_sections_to_budget(
+    *,
+    job: dict,
+    course_plan: dict,
+    sections: list[dict],
+    module_content: str,
+    model=None,
+) -> tuple[str, list[dict], dict]:
+    """Top up a course by enriching underfilled development sections."""
+    current_sections = [dict(section) for section in sections]
+    attempts = []
+    max_attempts = _env_int("FORMATION_STRUCTURED_SECTION_TOPUP_MAX_ATTEMPTS", 12, min_value=1)
+    max_attempts = min(30, max_attempts)
+    stalled_by_key = {}
+
+    for attempt_no in range(1, max_attempts + 1):
+        course_text = _join_structured_section_records(current_sections)
+        status = _structured_course_budget_status(course_plan, course_text)
+        if status.get("ok"):
+            return course_text, current_sections, {
+                "mode": "section_budget_topup",
+                "changed": course_text.strip() != _join_structured_section_records(sections).strip(),
+                "status": status.get("status"),
+                "words": status.get("words"),
+                "min_words": status.get("min_words"),
+                "target_words": status.get("target_words"),
+                "attempts": attempts,
+            }
+        if status.get("status") != "too_short":
+            break
+
+        missing = int(status.get("min_words") or 0) - int(status.get("words") or 0)
+        if missing <= 0:
+            break
+
+        candidates = []
+        for idx, record in enumerate(current_sections):
+            kind = record.get("kind")
+            if kind not in {"part", "opening"}:
+                continue
+            current_words = count_tts_spoken_words(record.get("text") or "")
+            max_words = int(record.get("target_words") or record.get("max_words") or 0)
+            if max_words <= 0:
+                continue
+            room = max_words - current_words
+            if room < 25:
+                continue
+            key = _section_key(record)
+            if stalled_by_key.get(key, 0) >= 2:
+                continue
+            priority = 0 if kind == "part" else 1
+            candidates.append({
+                "idx": idx,
+                "key": key,
+                "record": record,
+                "current_words": current_words,
+                "max_words": max_words,
+                "room": room,
+                "priority": priority,
+                "fill_ratio": current_words / max_words if max_words else 1.0,
+            })
+
+        if not candidates:
+            attempts.append({
+                "attempt": attempt_no,
+                "status": status,
+                "missing_words": missing,
+                "error": "no_section_with_remaining_room",
+            })
+            break
+
+        candidates.sort(key=lambda item: (item["priority"], item["fill_ratio"], -item["room"]))
+        candidate = candidates[0]
+        record = candidate["record"]
+        section_plan = _section_plan_by_key(course_plan).get(_section_key(record), {})
+        section = {**section_plan, **record}
+        before_text = record.get("text") or ""
+        desired_words = min(candidate["room"], max(35, min(missing + 30, int(missing * 1.2))))
+        try:
+            raw = _deepseek_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_section_topup_prompt(
+                        job=job,
+                        course_plan=course_plan,
+                        section=section,
+                        current_section_text=before_text,
+                        module_content=module_content,
+                        desired_words=desired_words,
+                        max_words=candidate["room"],
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(desired_words),
+                model=model,
+            )
+            addition = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            fitted_addition, fit_result = _fit_structured_topup_addition_to_room(
+                addition=addition,
+                max_words=candidate["room"],
+                context_label=record.get("label") or _section_label(section),
+                model=model,
+            )
+            addition_words = count_tts_spoken_words(fitted_addition)
+            if addition_words <= 0:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempts.append({
+                    "attempt": attempt_no,
+                    "status_before": status,
+                    "section": record.get("label") or _section_label(section),
+                    "desired_words": desired_words,
+                    "raw_addition_words": fit_result.get("raw_words"),
+                    "fit": fit_result,
+                    "error": "addition_did_not_fit_room",
+                })
+                continue
+
+            after_text = _insert_before_final_paragraph(before_text, fitted_addition)
+            after_words = count_tts_spoken_words(after_text)
+            if after_words <= candidate["current_words"]:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempts.append({
+                    "attempt": attempt_no,
+                    "status_before": status,
+                    "section": record.get("label") or _section_label(section),
+                    "before_words": candidate["current_words"],
+                    "after_words": after_words,
+                    "error": "section_not_expanded",
+                })
+                continue
+
+            updated = {
+                **record,
+                "text": after_text,
+                "word_count": after_words,
+                "topup_before_words": candidate["current_words"],
+                "topup_addition_words": addition_words,
+            }
+            current_sections[candidate["idx"]] = updated
+            next_status = _structured_course_budget_status(
+                course_plan,
+                _join_structured_section_records(current_sections),
+            )
+            attempts.append({
+                "attempt": attempt_no,
+                "status_before": status,
+                "status_after": next_status,
+                "section": record.get("label") or _section_label(section),
+                "desired_words": desired_words,
+                "raw_addition_words": fit_result.get("raw_words"),
+                "addition_words": addition_words,
+                "before_words": candidate["current_words"],
+                "after_words": after_words,
+                "rephrased_to_fit": bool(fit_result.get("rephrased")),
+                "fit": fit_result,
+            })
+        except Exception as exc:
+            stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+            attempts.append({
+                "attempt": attempt_no,
+                "status_before": status,
+                "section": record.get("label") or _section_label(section),
+                "desired_words": desired_words,
+                "error": str(exc)[:300],
+            })
+            logger.warning(
+                "PIPELINE_SECTION_TOPUP_FAILED course=%s section=%s attempt=%s error=%s",
+                course_plan.get("course_number"),
+                record.get("label") or _section_label(section),
+                attempt_no,
+                str(exc)[:300],
+            )
+
+    final_text = _join_structured_section_records(current_sections)
+    final_status = _structured_course_budget_status(course_plan, final_text)
+    return final_text, current_sections, {
+        "mode": "section_budget_topup",
+        "changed": final_text.strip() != _join_structured_section_records(sections).strip(),
+        "status": final_status.get("status"),
+        "words": final_status.get("words"),
+        "min_words": final_status.get("min_words"),
+        "target_words": final_status.get("target_words"),
+        "attempts": attempts,
+    }
+
+
+def _repair_structured_course_text_to_budget(
+    *,
+    job: dict,
+    course_plan: dict,
+    text: str,
+    module_content: str,
+    model=None,
+) -> tuple[str, dict]:
+    """Repair a course-level budget by adding bounded LLM top-ups.
+
+    The LLM writes additions, but the backend owns the word count: oversized
+    outputs are rewritten by the LLM to fit the remaining room, then rechecked.
+    """
+    current_text = _sanitize_learner_facing_text(text)
+    attempts = []
+    max_attempts = _env_int("FORMATION_STRUCTURED_COURSE_TOPUP_MAX_ATTEMPTS", 8, min_value=1)
+    max_attempts = min(20, max_attempts)
+
+    for attempt_no in range(1, max_attempts + 1):
+        status = _structured_course_budget_status(course_plan, current_text)
+        if status.get("ok"):
+            return current_text, {
+                "mode": "course_budget_topup",
+                "changed": current_text.strip() != (text or "").strip(),
+                "status": status.get("status"),
+                "words": status.get("words"),
+                "min_words": status.get("min_words"),
+                "target_words": status.get("target_words"),
+                "attempts": attempts,
+            }
+
+        if status.get("status") == "too_long":
+            repaired, calibration = _calibrate_structured_course_text(course_plan, current_text, model=model)
+            repaired_status = _structured_course_budget_status(course_plan, repaired)
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "shorten",
+                "status_before": status,
+                "status_after": repaired_status,
+                "calibration": calibration,
+            })
+            if repaired.strip() == current_text.strip():
+                break
+            current_text = repaired
+            continue
+
+        missing = int(status.get("min_words") or 0) - int(status.get("words") or 0)
+        room = int(status.get("max_words") or 0) - int(status.get("words") or 0)
+        if missing <= 0:
+            break
+        if room <= 0:
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "expand",
+                "status_before": status,
+                "error": "no_remaining_room",
+            })
+            break
+
+        desired_words = min(room, max(50, min(missing + 35, int(missing * 1.25))))
+        try:
+            raw = _deepseek_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_course_topup_prompt(
+                        job=job,
+                        course_plan=course_plan,
+                        current_text=current_text,
+                        module_content=module_content,
+                        desired_words=desired_words,
+                        max_words=room,
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(desired_words),
+                model=model,
+            )
+            addition = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            fitted_addition, fit_result = _fit_structured_topup_addition_to_room(
+                addition=addition,
+                max_words=room,
+                context_label=f"cours {course_plan.get('course_number') or '?'}",
+                model=model,
+            )
+            addition_words = count_tts_spoken_words(fitted_addition)
+            if addition_words <= 0:
+                attempts.append({
+                    "attempt": attempt_no,
+                    "direction": "expand",
+                    "status_before": status,
+                    "desired_words": desired_words,
+                    "raw_addition_words": fit_result.get("raw_words"),
+                    "fit": fit_result,
+                    "error": "addition_did_not_fit_room",
+                })
+                break
+            candidate_text = _insert_before_final_paragraph(current_text, fitted_addition)
+            candidate_status = _structured_course_budget_status(course_plan, candidate_text)
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "expand",
+                "status_before": status,
+                "desired_words": desired_words,
+                "room": room,
+                "raw_addition_words": fit_result.get("raw_words"),
+                "addition_words": addition_words,
+                "status_after": candidate_status,
+                "rephrased_to_fit": bool(fit_result.get("rephrased")),
+                "fit": fit_result,
+            })
+            current_text = candidate_text
+        except Exception as exc:
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "expand",
+                "status_before": status,
+                "desired_words": desired_words,
+                "error": str(exc)[:300],
+            })
+            logger.warning(
+                "PIPELINE_COURSE_TOPUP_FAILED course=%s attempt=%s error=%s",
+                course_plan.get("course_number"),
+                attempt_no,
+                str(exc)[:300],
+            )
+            break
+
+    final_status = _structured_course_budget_status(course_plan, current_text)
+    return current_text, {
+        "mode": "course_budget_topup",
+        "changed": current_text.strip() != (text or "").strip(),
+        "status": final_status.get("status"),
+        "words": final_status.get("words"),
+        "min_words": final_status.get("min_words"),
+        "target_words": final_status.get("target_words"),
+        "attempts": attempts,
+    }
+
+
+def _build_structured_course_deficit_repair_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    current_text: str,
+    module_content: str,
+    additional_words: int,
+    max_words: int,
+) -> str:
+    target_after = min(max_words, count_tts_spoken_words(current_text) + max(0, additional_words))
+    min_after = max(1, min(max_words, int(target_after * 0.94)))
+    return f"""Tu répares une section trop courte d'un cours audio professionnel.
+
+Objectif : enrichir la section avec de nouvelles idées utiles, sans changer son périmètre.
+Tu dois réécrire la section complète, pas seulement ajouter un paragraphe.
+
+Section à enrichir : {_section_label(section)}
+Ajout attendu : environ {additional_words} mots parlés utiles.
+Plage finale visée pour cette section : {min_after} à {max_words} mots parlés.
+
+Plan verrouillé du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section verrouillée :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte :
+{_structured_section_scope_guard(section)}
+
+Moments pédagogiques à couvrir :
+{_section_teaching_beats_prompt(section)}
+
+Contenu source à exploiter :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Ajoute seulement des éléments pertinents parmi :
+- une nuance métier concrète ;
+- une erreur fréquente et sa correction ;
+- un mini-cas fictif ou hypothétique ;
+- un contre-exemple ;
+- une méthode opérationnelle ;
+- une clarification de vocabulaire ;
+- un lien avec les pratiques terrain.
+
+Contraintes :
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Ne refais pas l'accueil, l'introduction globale, le plan de journée ou la conclusion.
+- Ne crée pas de nouveau thème hors du plan.
+- Ne remplis pas avec du bavardage : chaque ajout doit apporter une valeur pédagogique identifiable.
+- Oral fluide, TTS-ready, sans markdown ni titre écrit.
+
+Texte actuel :
+{current_text}
+
+Réponds uniquement avec la section complète enrichie."""
+
+
+def _repair_structured_course_word_deficit(
+    *,
+    job: dict,
+    course_plan: dict,
+    calibrated_sections: list[dict],
+    module_content: str,
+    model=None,
+) -> tuple[str, list[dict], dict | None]:
+    """Rattrape un cours encore trop court après le calibrage standard.
+
+    La réparation est volontairement ciblée sur les sections de développement :
+    on préfère ajouter de la valeur pédagogique dans les axes plutôt que gonfler
+    artificiellement l'ouverture ou la conclusion.
+    """
+    current_sections = [dict(section) for section in calibrated_sections]
+    attempts = []
+    max_attempts = _env_int("FORMATION_STRUCTURED_COURSE_DEFICIT_REPAIR_MAX_ATTEMPTS", 10, min_value=0)
+    max_attempts = min(20, max_attempts)
+    max_stalled_per_section = _env_int("FORMATION_STRUCTURED_COURSE_DEFICIT_REPAIR_MAX_STALLED_PER_SECTION", 2, min_value=1)
+    if max_attempts <= 0:
+        return _join_structured_section_records(current_sections), current_sections, None
+
+    stalled_by_key = {}
+    for attempt_no in range(1, max_attempts + 1):
+        course_text = _join_structured_section_records(current_sections)
+        status = _structured_course_budget_status(course_plan, course_text)
+        if status.get("status") != "too_short":
+            break
+
+        missing = int(status.get("min_words") or 0) - int(status.get("words") or 0)
+        if missing <= 0:
+            break
+
+        candidates = []
+        for idx, record in enumerate(current_sections):
+            if record.get("kind") != "part":
+                continue
+            current_words = count_tts_spoken_words(record.get("text") or "")
+            max_words = int(record.get("target_words") or record.get("max_words") or 0)
+            if max_words <= 0:
+                continue
+            room = max_words - current_words
+            if room >= 60:
+                key = _section_key(record)
+                if stalled_by_key.get(key, 0) >= max_stalled_per_section:
+                    continue
+                candidates.append({
+                    "idx": idx,
+                    "key": key,
+                    "record": record,
+                    "current_words": current_words,
+                    "max_words": max_words,
+                    "room": room,
+                    "stalled": stalled_by_key.get(key, 0),
+                    "fill_ratio": current_words / max_words if max_words else 1.0,
+                })
+
+        if not candidates:
+            attempts.append({
+                "attempt": attempt_no,
+                "status": status,
+                "missing_words": missing,
+                "error": "no_expandable_part_section",
+            })
+            break
+
+        candidates.sort(key=lambda item: (item["stalled"], item["fill_ratio"], -item["room"]))
+        candidate = candidates[0]
+        planned_words = min(candidate["room"], max(120, int(missing * 1.18) + 30))
+        attempt = {
+            "attempt": attempt_no,
+            "status_before": status,
+            "missing_words": missing,
+            "planned_words": planned_words,
+            "sections": [],
+        }
+
+        record = candidate["record"]
+        section_plan = _section_plan_by_key(course_plan).get(_section_key(record), {})
+        section = {**section_plan, **record}
+        before_text = record.get("text") or ""
+        before_words = count_tts_spoken_words(before_text)
+        try:
+            raw = _deepseek_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_course_deficit_repair_prompt(
+                        job=job,
+                        course_plan=course_plan,
+                        section=section,
+                        current_text=before_text,
+                        module_content=module_content,
+                        additional_words=planned_words,
+                        max_words=candidate["max_words"],
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(candidate["max_words"]),
+                model=model,
+            )
+            repaired = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            after_words = count_tts_spoken_words(repaired)
+            min_gain = max(20, min(80, int(planned_words * 0.18)))
+            if candidate["max_words"] > 0 and after_words > candidate["max_words"]:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempt["sections"].append({
+                    "label": record.get("label") or _section_label(section),
+                    "before_words": before_words,
+                    "after_words": after_words,
+                    "changed": False,
+                    "reason": "over_budget_repair_rejected_untrimmed",
+                    "max_words": candidate["max_words"],
+                })
+            elif not repaired or after_words <= before_words or (after_words - before_words) < min_gain:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempt["sections"].append({
+                    "label": record.get("label") or _section_label(section),
+                    "before_words": before_words,
+                    "after_words": after_words,
+                    "changed": False,
+                    "reason": "insufficient_growth",
+                    "min_gain": min_gain,
+                })
+            else:
+                updated = {
+                    **record,
+                    "text": repaired,
+                    "word_count": after_words,
+                    "deficit_repair_before_words": before_words,
+                }
+                current_sections[candidate["idx"]] = updated
+                gained = after_words - before_words
+                attempt["sections"].append({
+                    "label": record.get("label") or _section_label(section),
+                    "before_words": before_words,
+                    "after_words": after_words,
+                    "gained_words": gained,
+                    "changed": True,
+                })
+                logger.info(
+                    "PIPELINE_COURSE_DEFICIT_REPAIR_ATTEMPT course=%s attempt=%s section=%s before=%s after=%s missing=%s",
+                    course_plan.get("course_number"),
+                    attempt_no,
+                    record.get("label") or _section_label(section),
+                    before_words,
+                    after_words,
+                    missing,
+                )
+        except Exception as exc:
+            stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+            attempt["sections"].append({
+                "label": record.get("label") or _section_label(section),
+                "before_words": before_words,
+                "changed": False,
+                "error": str(exc)[:300],
+            })
+            logger.warning(
+                "PIPELINE_COURSE_DEFICIT_REPAIR_FAILED course=%s attempt=%s section=%s error=%s",
+                course_plan.get("course_number"),
+                attempt_no,
+                record.get("label") or _section_label(section),
+                str(exc)[:300],
+            )
+
+        attempt["status_after"] = _structured_course_budget_status(
+            course_plan,
+            _join_structured_section_records(current_sections),
+        )
+        attempts.append(attempt)
+        if attempt["status_after"].get("ok"):
+            break
+
+    final_text = _join_structured_section_records(current_sections)
+    final_status = _structured_course_budget_status(course_plan, final_text)
+    repair = {
+        "mode": "course_deficit_repair",
+        "changed": final_text.strip() != _join_structured_section_records(calibrated_sections).strip(),
+        "status": final_status.get("status"),
+        "words": final_status.get("words"),
+        "min_words": final_status.get("min_words"),
+        "target_words": final_status.get("target_words"),
+        "attempts": attempts,
+    }
+    return final_text, current_sections, repair
+
+
+def _calibrate_structured_course_sections(
+    *,
+    job: dict,
+    course_plan: dict,
+    draft: dict,
+    module_content: str,
+    model=None,
+) -> tuple[str, dict]:
+    plan_sections = _section_plan_by_key(course_plan)
+    calibrated_sections = []
+    section_results = []
+    changed = False
+
+    for record in draft.get("sections") or []:
+        section = {**plan_sections.get(_section_key(record), {}), **record}
+        before_text = record.get("text") or ""
+        before_words = count_tts_spoken_words(before_text)
+        calibrated_text, calibration = _calibrate_structured_section_text(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            text=before_text,
+            module_content=module_content,
+            model=model,
+        )
+        after_words = count_tts_spoken_words(calibrated_text)
+        text_changed = calibrated_text.strip() != before_text.strip()
+        changed = changed or text_changed or bool(calibration.get("changed"))
+        beat_alignment_status = record.get("beat_alignment_status")
+        if record.get("beat_texts") and text_changed:
+            beat_alignment_status = "lost_after_budget_calibration"
+        calibrated_record = {
+            **record,
+            "text": calibrated_text,
+            "word_count": after_words,
+            "before_word_count": before_words,
+            "calibration": calibration,
+            "beat_alignment_status": beat_alignment_status,
+        }
+        calibrated_sections.append(calibrated_record)
+        section_results.append({
+            "kind": record.get("kind"),
+            "label": record.get("label") or _section_label(section),
+            "part_number": record.get("part_number"),
+            "title": record.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "before_words": before_words,
+            "after_words": after_words,
+            "delta_words": after_words - before_words,
+            "status": calibration.get("status"),
+            "min_words": calibration.get("min_words"),
+            "max_words": calibration.get("max_words"),
+            "changed": bool(calibrated_text.strip() != before_text.strip() or calibration.get("changed")),
+            "calibration": calibration,
+        })
+
+    course_text = _join_structured_section_records(calibrated_sections)
+    course_status = _structured_course_budget_status(course_plan, course_text)
+    deficit_repair = None
+    section_topup_repair = None
+    if course_status.get("status") == "too_short":
+        repaired_text, repaired_sections, deficit_repair = _repair_structured_course_word_deficit(
+            job=job,
+            course_plan=course_plan,
+            calibrated_sections=calibrated_sections,
+            module_content=module_content,
+            model=model,
+        )
+        repaired_status = _structured_course_budget_status(course_plan, repaired_text)
+        if repaired_text.strip() != course_text.strip():
+            changed = True
+            calibrated_sections = repaired_sections
+            course_text = repaired_text
+            course_status = repaired_status
+            _refresh_structured_section_results_from_records(section_results, calibrated_sections)
+
+    if course_status.get("status") == "too_short":
+        topped_text, topped_sections, section_topup_repair = _repair_structured_course_sections_to_budget(
+            job=job,
+            course_plan=course_plan,
+            sections=calibrated_sections,
+            module_content=module_content,
+            model=model,
+        )
+        topped_status = _structured_course_budget_status(course_plan, topped_text)
+        if topped_text.strip() != course_text.strip():
+            changed = True
+            calibrated_sections = topped_sections
+            course_text = topped_text
+            course_status = topped_status
+            _refresh_structured_section_results_from_records(section_results, calibrated_sections)
+
+    return course_text, {
+        **course_status,
+        "changed": changed,
+        "mode": "section_budget_calibration",
+        "sections": section_results,
+        "calibrated_sections": calibrated_sections,
+        "deficit_repair": deficit_repair,
+        "section_topup_repair": section_topup_repair,
+    }
+
+
+def _exact_repetition_issues(text: str, *, max_issues: int = 3) -> list[dict]:
+    paragraphs = [
+        p.strip()
+        for p in re.split(r"\n\s*\n+", text or "")
+        if len((p or "").split()) >= 22
+    ]
+    seen = {}
+    issues = []
+    for idx, paragraph in enumerate(paragraphs, start=1):
+        key = re.sub(r"\s+", " ", paragraph).strip().lower()
+        if key in seen:
+            issues.append({
+                "type": "repetition",
+                "severity": "major",
+                "section": "whole_course",
+                "evidence": _compact_words(paragraph, 32),
+                "problem": f"Paragraphe répété presque à l'identique aux positions {seen[key]} et {idx}.",
+                "fix_instruction": "Supprimer la redite et recoller naturellement les paragraphes autour.",
+            })
+            if len(issues) >= max_issues:
+                break
+        else:
+            seen[key] = idx
+    return issues
+
+
+def _learner_schedule_leakage_issues(text: str, *, max_issues: int = 4) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    issues = []
+    seen = set()
+    for match in _LEARNER_FACING_SCHEDULE_LEAK_RE.finditer(clean_text):
+        leak = re.sub(r"\s+", " ", match.group(0)).strip()
+        key = leak.lower()
+        if not leak or key in seen:
+            continue
+        seen.add(key)
+        start = max(0, match.start() - 120)
+        end = min(len(clean_text), match.end() + 120)
+        evidence = _compact_words(clean_text[start:end], 42)
+        issues.append({
+            "type": "schedule_leakage",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": evidence,
+            "problem": (
+                "Le texte fait entendre une contrainte interne de planning "
+                f"({leak!r}) au lieu de parler seulement de progression pédagogique."
+            ),
+            "fix_instruction": (
+                "Supprimer la mention d'horaire, créneau, durée ou planning. "
+                "Reformuler naturellement : thèmes de la journée dans l'ordre, "
+                "reprise après pause, rappel bref, nouveau thème, objectif et plan."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
+def _learner_internal_course_framing_issues(text: str, *, max_issues: int = 4) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    issues = []
+    seen = set()
+    for match in _LEARNER_FACING_INTERNAL_COURSE_RE.finditer(clean_text):
+        phrase = re.sub(r"\s+", " ", match.group(0)).strip()
+        key = phrase.lower()
+        if not phrase or key in seen:
+            continue
+        seen.add(key)
+        start = max(0, match.start() - 120)
+        end = min(len(clean_text), match.end() + 140)
+        issues.append({
+            "type": "internal_course_framing",
+            "severity": "major",
+            "section": "opening",
+            "evidence": _compact_words(clean_text[start:end], 48),
+            "problem": (
+                "Le texte présente une unité interne comme un cours autonome "
+                f"({phrase!r}) au lieu d'un thème ou chapitre naturel de la journée."
+            ),
+            "fix_instruction": (
+                "Reformuler avec une voix plus naturelle : 'premier grand thème', "
+                "'cette première partie', 'ce chapitre', 'cette séquence', puis "
+                "annoncer les axes avec d'abord, ensuite, enfin."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
+def _duplicate_opening_issues(text: str, *, max_issues: int = 2) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    paragraphs = [
+        re.sub(r"\s+", " ", p).strip()
+        for p in re.split(r"\n\s*\n+", clean_text)
+        if len((p or "").split()) >= 14
+    ]
+    category_hits: dict[str, list[tuple[int, str]]] = {}
+    for idx, paragraph in enumerate(paragraphs[:12], start=1):
+        for category, pattern in _DUPLICATE_OPENING_CATEGORY_PATTERNS.items():
+            if pattern.search(paragraph):
+                category_hits.setdefault(category, []).append((idx, _compact_words(paragraph, 44)))
+
+    issues = []
+    labels = {
+        "annual_overview": "l'introduction annuelle",
+        "day_overview": "le cadrage de la journée",
+        "theme_opening": "l'ouverture du premier thème",
+    }
+    for category, hits in category_hits.items():
+        if len(hits) < 2:
+            continue
+        first, second = hits[0], hits[1]
+        issues.append({
+            "type": "duplicate_opening",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": f"Paragraphe {first[0]}: {first[1]} / Paragraphe {second[0]}: {second[1]}",
+            "problem": (
+                f"Le texte semble répéter {labels.get(category, 'une ouverture')} "
+                "au lieu de l'annoncer une seule fois puis d'entrer dans le développement."
+            ),
+            "fix_instruction": (
+                "Garder une seule ouverture. Supprimer la deuxième annonce de journée/thème "
+                "et commencer directement le développement de l'axe concerné."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
+def _slide_meta_leakage_issues(text: str, *, max_issues: int = 3) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    issues = []
+    seen = set()
+    for match in _SLIDE_META_LEAK_RE.finditer(clean_text):
+        leak = re.sub(r"\s+", " ", match.group(0)).strip()
+        key = leak.lower()
+        if not leak or key in seen:
+            continue
+        seen.add(key)
+        start = max(0, match.start() - 120)
+        end = min(len(clean_text), match.end() + 120)
+        issues.append({
+            "type": "slide_meta_leakage",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": _compact_words(clean_text[start:end], 42),
+            "problem": (
+                "Le texte verbalise une mécanique interne de slides ou de templates "
+                f"({leak!r}) qui ne doit pas être entendue par les apprenants."
+            ),
+            "fix_instruction": (
+                "Supprimer la méta-formulation slide/template/anchor et garder seulement "
+                "l'idée pédagogique naturelle."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
+def _quality_signature(course_plan: dict, text: str) -> str:
+    payload = json.dumps(
+        {
+            "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+            "course_plan": course_plan,
+            "text": text or "",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _normalize_plan_adherence_audit(
+    raw_audit: dict,
+    course_plan: dict,
+    text: str,
+    *,
+    include_budget_issues: bool = True,
+) -> dict:
+    issues = []
+    for issue in (raw_audit or {}).get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        issue_type = str(issue.get("type") or "other")[:80]
+        severity = str(issue.get("severity") or "major").lower()
+        if severity not in {"minor", "major", "critical"}:
+            severity = "major"
+        issues.append({
+            "type": issue_type,
+            "severity": severity,
+            "section": str(issue.get("section") or "whole_course")[:80],
+            "evidence": str(issue.get("evidence") or "")[:500],
+            "problem": str(issue.get("problem") or "")[:500],
+            "fix_instruction": str(issue.get("fix_instruction") or "")[:700],
+        })
+
+    budget_status = _structured_course_budget_status(course_plan, text)
+    if include_budget_issues and budget_status["status"] == "too_short":
+        issues.append({
+            "type": "budget",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": f"{budget_status['words']} mots pour une plage {budget_status['min_words']}-{budget_status['max_words']}",
+            "problem": "Le cours est trop court pour le budget audio prévu.",
+            "fix_instruction": "Enrichir avec du contenu pédagogique pertinent lié au plan, sans remplissage.",
+        })
+    elif include_budget_issues and budget_status["status"] == "too_long":
+        issues.append({
+            "type": "budget",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": f"{budget_status['words']} mots pour une plage {budget_status['min_words']}-{budget_status['max_words']}",
+            "problem": "Le cours dépasse le budget audio prévu.",
+            "fix_instruction": "Réduire proprement les répétitions, digressions et développements faibles.",
+        })
+
+    issues.extend(_exact_repetition_issues(text))
+    issues.extend(_duplicate_opening_issues(text))
+    issues.extend(_slide_meta_leakage_issues(text))
+    issues.extend(_learner_schedule_leakage_issues(text))
+    issues.extend(_learner_internal_course_framing_issues(text))
+    ok = not any(issue.get("severity") in {"major", "critical"} for issue in issues)
+    return {
+        "ok": ok,
+        "summary": str((raw_audit or {}).get("summary") or ("Conforme" if ok else "Réparation ciblée requise"))[:700],
+        "issues": issues,
+        "budget_status": budget_status,
+    }
+
+
+def _build_plan_adherence_audit_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    text: str,
+    previous_course_summary: str,
+    include_budget_issues: bool = True,
+) -> str:
+    contract = _load_prompt_file("reviews", "plan-adherence-audit.md")
+    budget_status = _structured_course_budget_status(course_plan, text)
+    budget_instruction = (
+        "Le budget mots fait partie de l'audit : signale too_short/too_long si nécessaire."
+        if include_budget_issues
+        else (
+            "Le budget mots est seulement informatif ici. Ne signale pas de problème "
+            "de volume : le calibrage budget texte est l'étape suivante dédiée."
+        )
+    )
+    return f"""Tu audites l'adhérence pédagogique d'un cours audio à son plan verrouillé.
+
+CONTRAT D'AUDIT :
+{contract}
+
+Contexte :
+- Titre professionnel : {job.get('program_title') or ''}
+- Journée : {job.get('folder_name') or ''}
+- Cours : {course_plan.get('course_number')} / {course_plan.get('total_courses') or 7}
+- Rappel très bref de la partie précédente : {previous_course_summary or '(aucun)'}
+- Portée budget : {budget_instruction}
+
+Statut budget mots :
+{json.dumps(budget_status, ensure_ascii=False, indent=2)}
+
+Plan JSON verrouillé :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Texte de la partie à auditer :
+{text}
+
+Réponds uniquement avec le JSON d'audit."""
+
+
+def _run_plan_adherence_audit(
+    *,
+    job: dict,
+    course_plan: dict,
+    text: str,
+    previous_course_summary: str,
+    model=None,
+    include_budget_issues: bool = True,
+) -> dict:
+    prompt = _build_plan_adherence_audit_prompt(
+        job=job,
+        course_plan=course_plan,
+        text=text,
+        previous_course_summary=previous_course_summary,
+        include_budget_issues=include_budget_issues,
+    )
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=2200,
+        model=model,
+    )
+    return _normalize_plan_adherence_audit(
+        _extract_llm_json(raw),
+        course_plan,
+        text,
+        include_budget_issues=include_budget_issues,
+    )
+
+
+def _build_plan_adherence_repair_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    text: str,
+    audit: dict,
+    previous_course_summary: str,
+) -> str:
+    contract = _load_prompt_file("reviews", "plan-adherence-repair.md")
+    budget_status = _structured_course_budget_status(course_plan, text)
+    return f"""Tu vas réparer un cours audio à partir d'un audit ciblé.
+
+CONTRAT DE RÉPARATION :
+{contract}
+
+Contexte :
+- Titre professionnel : {job.get('program_title') or ''}
+- Journée : {job.get('folder_name') or ''}
+- Cours : {course_plan.get('course_number')} / {course_plan.get('total_courses') or 7}
+- Rappel très bref de la partie précédente : {previous_course_summary or '(aucun)'}
+
+Budget à respecter :
+{json.dumps(budget_status, ensure_ascii=False, indent=2)}
+
+Audit à corriger :
+{json.dumps(audit, ensure_ascii=False, indent=2)}
+
+Plan JSON verrouillé :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Texte actuel de la partie :
+{text}
+
+Texte complet corrigé :"""
+
+
+def _repair_plan_adherence_course(
+    *,
+    job: dict,
+    course_plan: dict,
+    text: str,
+    audit: dict,
+    previous_course_summary: str,
+    model=None,
+) -> str:
+    prompt = _build_plan_adherence_repair_prompt(
+        job=job,
+        course_plan=course_plan,
+        text=text,
+        audit=audit,
+        previous_course_summary=previous_course_summary,
+    )
+    target_words = max(
+        int(course_plan.get("target_words") or 0),
+        count_tts_spoken_words(text),
+    )
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_structured_generation_max_tokens(target_words),
+        model=model,
+    )
+    candidate = _sanitize_learner_facing_text(_clean_llm_text(raw))
+    candidate_words = count_tts_spoken_words(candidate)
+    current_words = count_tts_spoken_words(text)
+    if not candidate or candidate_words < max(250, int(current_words * 0.45)):
+        raise ValueError("Réparation plan-adherence vide ou trop courte")
+    return candidate
+
+
+def _run_plan_adherence_quality_loop(
+    *,
+    job: dict,
+    course_plan: dict,
+    text: str,
+    previous_course_summary: str,
+    model=None,
+    max_repairs: int | None = None,
+    include_budget_issues: bool = True,
+    allow_post_calibration: bool = True,
+    review_timing: str | None = None,
+) -> tuple[str, dict]:
+    if max_repairs is None:
+        max_repairs = int(os.getenv("FORMATION_PLAN_ADHERENCE_REPAIR_ITERATIONS", "1") or "1")
+    max_repairs = max(0, min(3, int(max_repairs)))
+    course_number = int(course_plan.get("course_number") or 0)
+    if not review_timing:
+        review_timing = (
+            "manual_before_humanization"
+            if include_budget_issues or allow_post_calibration
+            else "after_section_generation_before_budget_calibration"
+        )
+    current_text = _sanitize_learner_facing_text(text)
+    initial_text = current_text
+    attempts = []
+    changed = False
+    final_audit = None
+
+    for attempt in range(1, max_repairs + 1):
+        audit = _run_plan_adherence_audit(
+            job=job,
+            course_plan=course_plan,
+            text=current_text,
+            previous_course_summary=previous_course_summary,
+            model=model,
+            include_budget_issues=include_budget_issues,
+        )
+        final_audit = audit
+        record = {
+            "attempt": attempt,
+            "audit": audit,
+            "before_words": count_tts_spoken_words(current_text),
+            "repair": None,
+        }
+        if audit.get("ok"):
+            attempts.append(record)
+            break
+        repaired = _repair_plan_adherence_course(
+            job=job,
+            course_plan=course_plan,
+            text=current_text,
+            audit=audit,
+            previous_course_summary=previous_course_summary,
+            model=model,
+        )
+        repaired_words = count_tts_spoken_words(repaired)
+        record["repair"] = {
+            "applied": repaired.strip() != current_text.strip(),
+            "after_words": repaired_words,
+        }
+        attempts.append(record)
+        if repaired.strip() != current_text.strip():
+            current_text = repaired
+            changed = True
+        else:
+            break
+
+    if changed or final_audit is None:
+        final_audit = _run_plan_adherence_audit(
+            job=job,
+            course_plan=course_plan,
+            text=current_text,
+            previous_course_summary=previous_course_summary,
+            model=model,
+            include_budget_issues=include_budget_issues,
+        )
+
+    post_calibration = None
+    budget_status = _structured_course_budget_status(course_plan, current_text)
+    if allow_post_calibration and changed and budget_status.get("status") in {"too_short", "too_long"}:
+        calibrated, post_calibration = _calibrate_structured_course_text(course_plan, current_text, model=model)
+        if calibrated.strip() != current_text.strip():
+            current_text = calibrated
+            changed = True
+            final_audit = _run_plan_adherence_audit(
+                job=job,
+                course_plan=course_plan,
+                text=current_text,
+                previous_course_summary=previous_course_summary,
+                model=model,
+                include_budget_issues=include_budget_issues,
+            )
+
+    result = {
+        "course_number": course_number,
+        "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+        "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+        "changed": bool(changed),
+        "initial_words": count_tts_spoken_words(initial_text),
+        "final_words": count_tts_spoken_words(current_text),
+        "initial_signature": _quality_signature(course_plan, initial_text),
+        "final_signature": _quality_signature(course_plan, current_text),
+        "review_timing": review_timing,
+        "budget_issues_included": bool(include_budget_issues),
+        "post_calibration_allowed": bool(allow_post_calibration),
+        "attempts": attempts,
+        "final_audit": final_audit,
+        "post_calibration": post_calibration,
+    }
+    return current_text, result
+
+
+def _run_plan_adherence_on_generated_drafts(
+    *,
+    job: dict,
+    platform_id: int,
+    folder_id: int,
+    plan: dict,
+    body_results: list[dict],
+    course_summaries: dict[int, str],
+    workers: int,
+    total_words: int,
+    on_progress=None,
+    model=None,
+) -> list[dict]:
+    """Corrige l'adhérence au plan juste après génération, avant budget/conformité."""
+    started_at = time.time()
+    generation_strategy = (
+        "parallel_body_then_late_opening_beat_first"
+        if _structured_beat_first_enabled()
+        else "parallel_body_then_late_opening"
+    )
+    sorted_results = sorted(body_results, key=lambda item: int(item.get("course_number") or 0))
+    total = len(sorted_results)
+    course_records = []
+    details = []
+    total_proposed = 0
+    total_applied = 0
+    total_rejected = 0
+    total_failed = 0
+
+    logger.info(
+        "PIPELINE_EARLY_PLAN_ADHERENCE_START formation_job_id=%s content_job_id=%s folder_id=%s courses=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        total,
+    )
+
+    for step, body_result in enumerate(sorted_results, start=1):
+        draft = body_result.get("draft") or {}
+        course_plan = draft.get("course_plan") or body_result.get("course_plan") or {}
+        course_number = int(course_plan.get("course_number") or body_result.get("course_number") or step)
+        before_text = draft.get("course_text") or ""
+        previous_summary = course_summaries.get(course_number - 1, "")
+        if on_progress:
+            on_progress(
+                0,
+                total or NUM_SUB_PARTS,
+                1,
+                total_words,
+                f"Adhérence au plan après génération cours {course_number}/{total}",
+            )
+        try:
+            final_text, quality_result = _run_plan_adherence_quality_loop(
+                job=job,
+                course_plan=course_plan,
+                text=before_text,
+                previous_course_summary=previous_summary,
+                model=model,
+                include_budget_issues=False,
+                allow_post_calibration=False,
+                review_timing="after_section_generation_before_budget_calibration",
+            )
+            before_words = count_tts_spoken_words(before_text)
+            final_words = count_tts_spoken_words(final_text)
+            changed = final_text.strip() != before_text.strip() or bool(quality_result.get("changed"))
+            if changed:
+                draft["course_text"] = final_text
+                draft["draft_word_count"] = final_words
+                body_result["draft"] = draft
+            body_result["plan_adherence"] = quality_result
+            quality_result.update({
+                "changed": bool(changed),
+                "initial_words": before_words,
+                "final_words": final_words,
+                "before_text": before_text,
+                "after_text": final_text,
+                "delta_words": final_words - before_words,
+            })
+            detail = _quality_detail_from_result(0, max(0, course_number - 1), 1, quality_result)
+            details.append(detail)
+            total_proposed += int(detail.get("proposed") or 0)
+            total_applied += len(detail.get("applied") or [])
+            total_rejected += len(detail.get("rejected") or [])
+            course_records.append(quality_result)
+        except Exception as e:
+            total_failed += 1
+            logger.warning(
+                "PIPELINE_EARLY_PLAN_ADHERENCE_COURSE_FAILED formation_job_id=%s content_job_id=%s folder_id=%s course=%s error=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                folder_id,
+                course_number,
+                str(e)[:300],
+            )
+            details.append({
+                "segment_id": 0,
+                "sub_idx": max(0, course_number - 1),
+                "passe": 1,
+                "proposed": 0,
+                "applied": [],
+                "rejected": [],
+                "error": str(e)[:500],
+            })
+            course_records.append({
+                "course_number": course_number,
+                "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+                "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                "changed": False,
+                "failed": True,
+                "error": str(e)[:500],
+                "initial_words": count_tts_spoken_words(before_text),
+                "final_words": count_tts_spoken_words(before_text),
+                "before_text": before_text,
+                "after_text": before_text,
+                "review_timing": "after_section_generation_before_budget_calibration",
+                "budget_issues_included": False,
+                "post_calibration_allowed": False,
+            })
+            body_result["plan_adherence"] = course_records[-1]
+
+        _save_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_QUALITY_REVIEWS_BLOB,
+            _artifact_payload(
+                job,
+                "content_quality_reviews",
+                {
+                    "review_kind": "plan_adherence",
+                    "review_label": "Adhérence au plan après génération par section",
+                    "review_timing": "after_section_generation_before_budget_calibration",
+                    "budget_scope": "ignored_here_budget_calibration_runs_next",
+                    "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                    "structured_course_plan_version": plan.get("version"),
+                    "generation_strategy": generation_strategy,
+                    "parallel_workers": workers,
+                    "courses": course_records,
+                },
+            ),
+        )
+
+    duration_ms = int((time.time() - started_at) * 1000)
+    summary = {
+        "segments_reviewed": total - total_failed,
+        "segments_failed": total_failed,
+        "segments_total_completed": total,
+        "segments_already_current": 0,
+        "patches_proposed": total_proposed,
+        "patches_applied": total_applied,
+        "patches_rejected": total_rejected,
+        "review_signature": _PLAN_ADHERENCE_REVIEW_VERSION,
+        "review_kind": "plan_adherence",
+        "review_label": "Adhérence au plan après génération par section",
+        "review_timing": "after_section_generation_before_budget_calibration",
+        "budget_scope": "ignored_here_budget_calibration_runs_next",
+        "force": True,
+        "duration_ms": duration_ms,
+        "details": details,
+    }
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_QUALITY_REVIEWS_BLOB,
+        _artifact_payload(
+            job,
+            "content_quality_reviews",
+            {
+                "review_summary": summary,
+                "review_kind": "plan_adherence",
+                "review_label": "Adhérence au plan après génération par section",
+                "review_timing": "after_section_generation_before_budget_calibration",
+                "budget_scope": "ignored_here_budget_calibration_runs_next",
+                "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": generation_strategy,
+                "parallel_workers": workers,
+                "duration_ms": duration_ms,
+                "courses": course_records,
+            },
+        ),
+    )
+    logger.info(
+        "PIPELINE_EARLY_PLAN_ADHERENCE_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=%s failed=%s applied=%s rejected=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        summary["segments_reviewed"],
+        total_failed,
+        total_applied,
+        total_rejected,
+        duration_ms,
+    )
+    return sorted_results
+
+
+def _stable_structured_signature(payload: dict) -> str:
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _structured_plan_input_signature(
+    *,
+    job: dict,
+    playlist_items: list,
+    sub_parts: list,
+    module_contents: dict,
+    model=None,
+) -> str:
+    return _stable_structured_signature({
+        "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+        "content_job_id": int(job.get("id") or 0),
+        "program_title": job.get("program_title") or "",
+        "program_text": job.get("program_text") or "",
+        "folder_position": job.get("folder_position"),
+        "nb_days": job.get("nb_days"),
+        "total_hours": job.get("total_hours"),
+        "playlist_items": playlist_items or [],
+        "sub_parts": sub_parts or [],
+        "module_contents": module_contents or {},
+        "model": model or DEEPSEEK_MODEL,
+        "two_stage_plan": _structured_plan_two_stage_enabled(),
+    })
+
+
+def _structured_generation_signature(
+    *,
+    plan: dict,
+    plan_input_signature: str,
+    model=None,
+) -> str:
+    return _stable_structured_signature({
+        "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+        "plan_input_signature": plan_input_signature,
+        "structured_course_plan": plan,
+        "model": model or DEEPSEEK_MODEL,
+        "beat_first": _structured_beat_first_enabled(),
+        "plan_adherence_version": _PLAN_ADHERENCE_REVIEW_VERSION,
+        "ethical_micro_version": _ETHICAL_MICRO_RULESET_VERSION,
+        "calibration_strict": str(
+            os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")
+        ).strip().lower(),
+        "allow_residual_too_short": _structured_allow_residual_too_short(),
+    })
+
+
+def _load_reusable_structured_plan(
+    *,
+    job: dict,
+    platform_id: int,
+    folder_id: int,
+    plan_input_signature: str,
+) -> dict | None:
+    database_checkpoint = load_structured_content_plan_checkpoint(
+        int(job.get("id") or 0)
+    ) or {}
+    database_plan = database_checkpoint.get("structured_course_plan")
+    if (
+        database_checkpoint.get("plan_input_signature") == plan_input_signature
+        and isinstance(database_plan, dict)
+        and isinstance(database_plan.get("courses"), list)
+    ):
+        return database_plan
+
+    artifact = _load_content_artifact(platform_id, folder_id, _CONTENT_PLAN_BLOB) or {}
+    if int(artifact.get("content_job_id") or 0) != int(job.get("id") or 0):
+        return None
+    if artifact.get("plan_input_signature") != plan_input_signature:
+        return None
+    plan = artifact.get("structured_course_plan")
+    if not isinstance(plan, dict) or not isinstance(plan.get("courses"), list):
+        return None
+    return plan
+
+
+def _structured_course_plan_signature(course_plan: dict) -> str:
+    return _stable_structured_signature({"course_plan": course_plan})
+
+
+def _structured_calibration_checkpoint_summary(calibration: dict) -> dict:
+    keys = (
+        "status",
+        "mode",
+        "changed",
+        "words",
+        "before_words",
+        "after_words",
+        "target_words",
+        "min_words",
+        "max_words",
+        "accepted_residual_shortfall",
+        "accepted_residual_shortfall_words",
+        "source_sections_drifted_from_course_text",
+    )
+    return {
+        key: calibration.get(key)
+        for key in keys
+        if calibration.get(key) is not None
+    }
+
+
+def _structured_micro_records_for_checkpoint(records: list[dict]) -> list[dict]:
+    compact_records = []
+    for record in records or []:
+        section = record.get("section") or {}
+        compact_records.append({
+            **{
+                key: value
+                for key, value in record.items()
+                if key not in {"section", "original_text", "final_text"}
+            },
+            "section": {
+                key: value
+                for key, value in section.items()
+                if key not in {"text", "beat_texts", "slide_display_map"}
+            },
+        })
+    return compact_records
+
+
+def _structured_final_result_for_checkpoint(result: dict) -> dict:
+    """Keep only data needed to finish the day without duplicating drafts."""
+    return {
+        "course_number": int(result.get("course_number") or 0),
+        "course_text": result.get("course_text") or "",
+        "words": int(result.get("words") or 0),
+        "calibrated_words": int(result.get("calibrated_words") or 0),
+        "calibration": _structured_calibration_checkpoint_summary(
+            result.get("calibration") or {}
+        ),
+        "plan_adherence": _compact_plan_adherence_result(
+            result.get("plan_adherence")
+        ),
+        "micro_changed": bool(result.get("micro_changed")),
+        "post_micro_budget_status": result.get("post_micro_budget_status"),
+        "sections": result.get("sections") or [],
+        "resumed_from_checkpoint": True,
+    }
+
+
+def _load_reusable_structured_course_checkpoints(
+    *,
+    job_id: int,
+    course_plans: list[dict],
+    generation_signature: str,
+) -> dict[int, dict]:
+    plans_by_number = {
+        int(course_plan.get("course_number") or 0): course_plan
+        for course_plan in course_plans
+    }
+    reusable: dict[int, dict] = {}
+    for row in list_structured_content_checkpoint_rows(job_id):
+        if row.get("structured_checkpoint_signature") != generation_signature:
+            continue
+        if int(row.get("passe") or 0) != 1:
+            continue
+        course_number = int(row.get("sub_part_index") or 0) + 1
+        course_plan = plans_by_number.get(course_number)
+        payload = row.get("checkpoint_payload") or {}
+        phase = payload.get("phase")
+        if not course_plan or phase not in {
+            "body_generated",
+            "body_completed",
+            "final_completed",
+        }:
+            continue
+        if payload.get("course_plan_signature") != _structured_course_plan_signature(course_plan):
+            continue
+        body_result = payload.get("body_result")
+        if phase != "final_completed":
+            if not isinstance(body_result, dict):
+                continue
+            if int(body_result.get("course_number") or 0) != course_number:
+                continue
+        if phase in {"body_completed", "final_completed"} and not isinstance(
+            payload.get("course_summary"), str
+        ):
+            continue
+        final_result = None
+        if phase == "final_completed":
+            final_result = payload.get("final_result")
+            if row.get("status") != "completed" or not isinstance(final_result, dict):
+                continue
+            final_result = {
+                **final_result,
+                "course_plan": course_plan,
+            }
+            course_text = final_result.get("course_text") or ""
+            expected_stored_text = f"<<<BLOC_AUDIO_{course_number}>>>\n\n{course_text}".strip()
+            if (row.get("text_content") or "").strip() != expected_stored_text:
+                continue
+        reusable[course_number] = {
+            "phase": phase,
+            "body_result": body_result,
+            "course_summary": payload.get("course_summary"),
+            "final_result": final_result,
+            "micro_records": payload.get("micro_records") or [],
+        }
+    return reusable
+
+
+def _save_structured_body_checkpoint(
+    *,
+    job_id: int,
+    course_plan: dict,
+    generation_signature: str,
+    body_result: dict,
+    course_summary: str | None = None,
+) -> None:
+    course_number = int(course_plan.get("course_number") or 0)
+    save_structured_content_checkpoint(
+        job_id=job_id,
+        sub_part_index=course_number - 1,
+        sub_part_name=course_plan.get("course_title") or f"Cours {course_number}",
+        passe=1,
+        checkpoint_signature=generation_signature,
+        checkpoint_phase=(
+            "body_completed" if course_summary is not None else "body_generated"
+        ),
+        checkpoint_payload={
+            "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+            "course_plan_signature": _structured_course_plan_signature(course_plan),
+            "body_result": body_result,
+            **({"course_summary": course_summary} if course_summary is not None else {}),
+        },
+    )
+
+
+def _save_structured_course_segment(
+    *,
+    job_id: int,
+    course_plan: dict,
+    text: str,
+    generation_signature: str,
+    course_summary: str,
+    final_result: dict,
+    micro_records: list[dict],
+) -> None:
+    course_number = int(course_plan.get("course_number") or 0)
+    stored_text = f"<<<BLOC_AUDIO_{course_number}>>>\n\n{text}".strip()
+    save_structured_content_checkpoint(
+        job_id=job_id,
+        sub_part_index=course_number - 1,
+        sub_part_name=course_plan.get("course_title") or f"Cours {course_number}",
+        passe=1,
+        text_content=stored_text,
+        word_count=len(stored_text.split()),
+        checkpoint_signature=generation_signature,
+        checkpoint_phase="final_completed",
+        checkpoint_payload={
+            "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+            "course_plan_signature": _structured_course_plan_signature(course_plan),
+            "course_summary": course_summary,
+            "final_result": _structured_final_result_for_checkpoint(final_result),
+            "micro_records": _structured_micro_records_for_checkpoint(micro_records),
+        },
+    )
+
+
+def _module_content_for_structured_course(
+    course_plan: dict,
+    course_number: int,
+    sub_parts: list,
+    module_contents: dict,
+) -> str:
+    module_content = module_contents.get(course_plan.get("course_title") or "", "")
+    if not module_content and course_number - 1 < len(sub_parts or []):
+        module_content = module_contents.get(sub_parts[course_number - 1], "")
+    return module_content or ""
+
+
+def _structured_opening_section_for_course(course_plan: dict) -> dict:
+    return {"kind": "opening", **(course_plan.get("opening") or {})}
+
+
+def _structured_body_sections_for_course(course_plan: dict) -> list[dict]:
+    return [
+        section
+        for section in _structured_sections_for_course(course_plan)
+        if section.get("kind") not in {"opening", "day_conclusion"}
+    ]
+
+
+def _structured_day_conclusion_section_for_course(course_plan: dict) -> dict | None:
+    if not course_plan.get("day_conclusion"):
+        return None
+    return {"kind": "day_conclusion", **course_plan["day_conclusion"]}
+
+
+def _ethical_micro_section_for_calibrated_course(course_plan: dict) -> dict:
+    return {
+        "kind": "course_calibrated",
+        "title": course_plan.get("course_title") or f"Cours {course_plan.get('course_number') or '?'}",
+        "target_words": int(course_plan.get("target_words") or 0),
+        "review_scope": "full_course_after_budget_calibration",
+        "course_kind": course_plan.get("course_kind"),
+        "learning_objectives": course_plan.get("learning_objectives") or [],
+        "global_constraints": course_plan.get("global_constraints") or {},
+    }
+
+
+def _run_structured_parallel(items: list, worker, *, workers: int) -> list:
+    if not items:
+        return []
+    workers = max(1, min(int(workers or 1), len(items)))
+    if workers <= 1:
+        return [worker(item) for item in items]
+    return run_parallel_ordered(
+        items,
+        worker,
+        max_workers=workers,
+        thread_name_prefix="structured-course",
+    )
+
+
+def _generate_structured_course_body(
+    *,
+    job: dict,
+    course_plan: dict,
+    sub_parts: list,
+    module_contents: dict,
+    model=None,
+) -> dict:
+    course_number = int(course_plan.get("course_number") or 0)
+    module_content = _module_content_for_structured_course(
+        course_plan,
+        course_number,
+        sub_parts,
+        module_contents,
+    )
+    section_texts = []
+    section_records = []
+    logger.info(
+        "PIPELINE_STRUCTURED_BODY_START formation_job_id=%s content_job_id=%s course=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_number,
+    )
+    for section in _structured_body_sections_for_course(course_plan):
+        label = _section_label(section)
+        section_started_at = time.time()
+        logger.info(
+            "PIPELINE_STRUCTURED_SECTION_START formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s target_words=%s beats=%s generated_so_far_words=%s module_chars=%s model=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            label,
+            section.get("kind"),
+            section.get("part_number"),
+            int(section.get("target_words") or 0),
+            len(_section_teaching_beats(section)),
+            count_tts_spoken_words("\n\n".join(section_texts)),
+            len(module_content or ""),
+            model or DEEPSEEK_MODEL,
+        )
+        try:
+            section_generation = _generate_structured_section_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                previous_course_summary="",
+                generated_so_far="\n\n".join(section_texts),
+                module_content=module_content,
+                model=model,
+            )
+        except Exception as exc:
+            logger.exception(
+                "PIPELINE_STRUCTURED_SECTION_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s duration_ms=%s error=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                course_number,
+                label,
+                section.get("kind"),
+                section.get("part_number"),
+                int((time.time() - section_started_at) * 1000),
+                str(exc)[:300],
+            )
+            raise
+        section_text = section_generation["text"]
+        section_texts.append(section_text)
+        section_records.append({
+            "kind": section.get("kind"),
+            "label": label,
+            "part_number": section.get("part_number"),
+            "title": section.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "word_count": count_tts_spoken_words(section_text),
+            "text": section_text,
+            "generation_mode": section_generation.get("generation_mode"),
+            "beat_alignment_status": section_generation.get("beat_alignment_status"),
+            "beat_texts": section_generation.get("beat_texts") or [],
+            **_slide_display_generation_fields(section_generation),
+            **_section_artifact_metadata(section),
+        })
+        logger.info(
+            "PIPELINE_STRUCTURED_SECTION_DONE formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s words=%s mode=%s beat_status=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            label,
+            section.get("kind"),
+            section.get("part_number"),
+            count_tts_spoken_words(section_text),
+            section_generation.get("generation_mode"),
+            section_generation.get("beat_alignment_status"),
+            int((time.time() - section_started_at) * 1000),
+        )
+    body_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
+    logger.info(
+        "PIPELINE_STRUCTURED_BODY_DONE formation_job_id=%s content_job_id=%s course=%s words=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_number,
+        count_tts_spoken_words(body_text),
+    )
+    return {
+        "course_number": course_number,
+        "course_plan": course_plan,
+        "module_content": module_content,
+        "body_text": body_text,
+        "body_sections": section_records,
+    }
+
+
+def _summarize_structured_course_body(body_result: dict, model=None) -> tuple[int, str]:
+    course_number = int(body_result.get("course_number") or 0)
+    summary = _summarize_previous_course_for_structured(body_result.get("body_text") or "", model=model)
+    return course_number, summary
+
+
+def _generate_late_opening_for_structured_course(
+    *,
+    job: dict,
+    body_result: dict,
+    previous_course_summary: str,
+    model=None,
+) -> dict:
+    course_plan = body_result["course_plan"]
+    course_number = int(body_result.get("course_number") or 0)
+    section = _structured_opening_section_for_course(course_plan)
+    section_generation = _generate_structured_section_record(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=body_result.get("body_text") or "",
+        module_content=body_result.get("module_content") or "",
+        model=model,
+    )
+    opening_text = section_generation["text"]
+    return {
+        "course_number": course_number,
+        "record": {
+            "kind": section.get("kind"),
+            "label": _section_label(section),
+            "part_number": section.get("part_number"),
+            "title": section.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "word_count": count_tts_spoken_words(opening_text),
+            "text": opening_text,
+            "generated_late": True,
+            "generation_mode": section_generation.get("generation_mode"),
+            "beat_alignment_status": section_generation.get("beat_alignment_status"),
+            "beat_texts": section_generation.get("beat_texts") or [],
+            **_slide_display_generation_fields(section_generation),
+            **_section_artifact_metadata(section),
+        },
+        "text": opening_text,
+    }
+
+
+def _generate_late_day_conclusion_for_structured_course(
+    *,
+    job: dict,
+    body_result: dict,
+    day_summary_context: str,
+    model=None,
+) -> dict | None:
+    course_plan = body_result["course_plan"]
+    section = _structured_day_conclusion_section_for_course(course_plan)
+    if not section:
+        return None
+    course_number = int(body_result.get("course_number") or 0)
+    section_generation = _generate_structured_section_record(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=day_summary_context,
+        generated_so_far=body_result.get("body_text") or "",
+        module_content=body_result.get("module_content") or "",
+        model=model,
+    )
+    day_conclusion_text = section_generation["text"]
+    return {
+        "course_number": course_number,
+        "record": {
+            "kind": section.get("kind"),
+            "label": _section_label(section),
+            "part_number": section.get("part_number"),
+            "title": section.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "word_count": count_tts_spoken_words(day_conclusion_text),
+            "text": day_conclusion_text,
+            "generated_late": True,
+            "generation_mode": section_generation.get("generation_mode"),
+            "beat_alignment_status": section_generation.get("beat_alignment_status"),
+            "beat_texts": section_generation.get("beat_texts") or [],
+            **_slide_display_generation_fields(section_generation),
+            **_section_artifact_metadata(section),
+        },
+        "text": day_conclusion_text,
+    }
+
+
+def _assemble_structured_course_draft(body_result: dict, opening_result: dict, day_conclusion_result: dict | None) -> dict:
+    section_records = [opening_result["record"], *body_result.get("body_sections", [])]
+    section_texts = [opening_result.get("text") or "", body_result.get("body_text") or ""]
+    if day_conclusion_result:
+        section_records.append(day_conclusion_result["record"])
+        section_texts.append(day_conclusion_result.get("text") or "")
+    course_text = "\n\n".join(s for s in section_texts if (s or "").strip()).strip()
+    return {
+        "course_number": int(body_result.get("course_number") or 0),
+        "course_plan": body_result["course_plan"],
+        "course_text": course_text,
+        "sections": section_records,
+        "draft_word_count": count_tts_spoken_words(course_text),
+    }
+
+
+def _run_structured_content_generation(
+    *,
+    job: dict,
+    folder_id: int,
+    platform_id: int,
+    sub_parts: list,
+    module_contents: dict,
+    on_progress=None,
+    model=None,
+) -> tuple[int, str, dict]:
+    playlist_items = _playlist_items_for_platform(
+        platform_id,
+        folder_id=int(folder_id),
+    )
+    job["_ethical_micro_review_records"] = []
+    structured_started_at = time.time()
+
+    def _phase_start(phase: str, message: str, data: dict | None = None) -> float:
+        phase_started_at = time.time()
+        logger.info(
+            "PIPELINE_STRUCTURED_PHASE_START formation_job_id=%s content_job_id=%s folder_id=%s phase=%s model=%s data=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            folder_id,
+            phase,
+            model or DEEPSEEK_MODEL,
+            json.dumps(data or {}, ensure_ascii=False, default=str, sort_keys=True)[:1200],
+        )
+        _log_content_pipeline_event(
+            job,
+            "content_phase_started",
+            folder_id=folder_id,
+            status="running",
+            message=message,
+            model=model,
+            data={"phase": phase, **(data or {})},
+        )
+        return phase_started_at
+
+    def _phase_done(phase: str, phase_started_at: float, message: str, data: dict | None = None) -> None:
+        duration_ms = int((time.time() - phase_started_at) * 1000)
+        logger.info(
+            "PIPELINE_STRUCTURED_PHASE_DONE formation_job_id=%s content_job_id=%s folder_id=%s phase=%s duration_ms=%s data=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            folder_id,
+            phase,
+            duration_ms,
+            json.dumps(data or {}, ensure_ascii=False, default=str, sort_keys=True)[:1200],
+        )
+        _log_content_pipeline_event(
+            job,
+            "content_phase_completed",
+            folder_id=folder_id,
+            status="completed",
+            message=message,
+            model=model,
+            duration_ms=duration_ms,
+            data={"phase": phase, **(data or {})},
+        )
+
+    logger.info(
+        "PIPELINE_STRUCTURED_RUN_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s model=%s playlist_items=%s sub_parts=%s module_parts=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        platform_id,
+        model or DEEPSEEK_MODEL,
+        len(playlist_items or []),
+        len(sub_parts or []),
+        len(module_contents or {}),
+    )
+    _log_content_pipeline_event(
+        job,
+        "content_structured_started",
+        folder_id=folder_id,
+        status="running",
+        message="Génération structurée démarrée",
+        model=model,
+        data={
+            "playlist_items": len(playlist_items or []),
+            "sub_parts": len(sub_parts or []),
+            "module_parts": len(module_contents or {}),
+        },
+    )
+
+    plan_input_signature = _structured_plan_input_signature(
+        job=job,
+        playlist_items=playlist_items,
+        sub_parts=sub_parts,
+        module_contents=module_contents,
+        model=model,
+    )
+    plan_phase = _phase_start(
+        "plan_json",
+        "Plan JSON verrouillé — génération du plan structuré",
+        {
+            "playlist_items": len(playlist_items or []),
+            "sub_parts": len(sub_parts or []),
+        },
+    )
+    plan = _load_reusable_structured_plan(
+        job=job,
+        platform_id=platform_id,
+        folder_id=folder_id,
+        plan_input_signature=plan_input_signature,
+    )
+    plan_source = "checkpoint" if plan is not None else "generated"
+    if plan is None:
+        plan = _generate_structured_course_plan(
+            job,
+            playlist_items,
+            sub_parts,
+            module_contents,
+            model=model,
+        )
+    save_structured_content_plan_checkpoint(
+        job_id=job["id"],
+        plan_input_signature=plan_input_signature,
+        structured_plan=plan,
+    )
+    expected_courses = sum(1 for item in playlist_items if item[2] == "cours")
+    plan_validation = _validate_structured_course_plan(
+        plan,
+        expected_courses=expected_courses,
+    )
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_PLAN_BLOB,
+        _artifact_payload(
+            job,
+            "content_plan",
+            {
+                "structured_course_plan": plan,
+                "validation": plan_validation,
+                "plan_input_signature": plan_input_signature,
+                "checkpoint_version": _STRUCTURED_CHECKPOINT_VERSION,
+            },
+        ),
+    )
+    if not plan_validation["ok"]:
+        logger.warning(
+            "PIPELINE_STRUCTURED_PLAN_VALIDATION_WARN content_job_id=%s folder_id=%s errors=%s warnings=%s",
+            job["id"],
+            folder_id,
+            plan_validation.get("errors"),
+            plan_validation.get("warnings"),
+        )
+    _phase_done(
+        "plan_json",
+        plan_phase,
+        "Plan JSON verrouillé terminé",
+        {
+            "courses": len(plan.get("courses") or []),
+            "validation_ok": bool(plan_validation.get("ok")),
+            "validation_errors": len(plan_validation.get("errors") or []),
+            "validation_warnings": len(plan_validation.get("warnings") or []),
+            "source": plan_source,
+        },
+    )
+
+    generated_blocks = []
+    course_scripts = []
+    total_words = 0
+    course_plans = sorted(
+        list(plan.get("courses") or []),
+        key=lambda course: int(course.get("course_number") or 0),
+    )
+    total_courses = len(course_plans)
+    generation_signature = _structured_generation_signature(
+        plan=plan,
+        plan_input_signature=plan_input_signature,
+        model=model,
+    )
+    stale_checkpoints_deleted = delete_stale_structured_content_checkpoints(
+        job_id=job["id"],
+        checkpoint_signature=generation_signature,
+        valid_sub_part_indexes=[
+            int(course_plan.get("course_number") or 0) - 1
+            for course_plan in course_plans
+        ],
+    )
+    reusable_checkpoints = _load_reusable_structured_course_checkpoints(
+        job_id=job["id"],
+        course_plans=course_plans,
+        generation_signature=generation_signature,
+    )
+    reusable_final_results = {
+        course_number: checkpoint["final_result"]
+        for course_number, checkpoint in reusable_checkpoints.items()
+        if checkpoint.get("phase") == "final_completed"
+    }
+    total_words = sum(
+        int(result.get("words") or 0)
+        for result in reusable_final_results.values()
+    )
+    if reusable_final_results:
+        _update_job_db(job["id"], total_words=total_words)
+    for checkpoint in reusable_checkpoints.values():
+        if checkpoint.get("phase") == "final_completed":
+            job["_ethical_micro_review_records"].extend(
+                checkpoint.get("micro_records") or []
+            )
+    workers = _structured_course_parallel_workers()
+    generation_strategy = (
+        "parallel_body_then_late_opening_beat_first"
+        if _structured_beat_first_enabled()
+        else "parallel_body_then_late_opening"
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PARALLEL_CONFIG formation_job_id=%s content_job_id=%s folder_id=%s workers=%s courses=%s strategy=%s",
+        job.get("formation_job_id"),
+        job["id"],
+        folder_id,
+        workers,
+        total_courses,
+        generation_strategy,
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_RESUME_STATE formation_job_id=%s content_job_id=%s folder_id=%s "
+        "checkpoints=%s final_courses=%s pending_courses=%s signature=%s",
+        job.get("formation_job_id"),
+        job["id"],
+        folder_id,
+        len(reusable_checkpoints),
+        len(reusable_final_results),
+        max(0, total_courses - len(reusable_final_results)),
+        generation_signature[:12],
+    )
+    if stale_checkpoints_deleted:
+        logger.info(
+            "PIPELINE_STRUCTURED_STALE_CHECKPOINTS_DELETED "
+            "formation_job_id=%s content_job_id=%s folder_id=%s deleted=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            stale_checkpoints_deleted,
+        )
+
+    if on_progress:
+        on_progress(
+            len(reusable_final_results),
+            total_courses,
+            1,
+            total_words,
+            f"Génération parallèle des contenus principaux ({workers} cours à la fois)",
+        )
+    body_phase = _phase_start(
+        "body_sections",
+        "Génération des sections principales",
+        {
+            "workers": workers,
+            "courses": total_courses,
+            "resumed": len(reusable_checkpoints),
+        },
+    )
+
+    def _generate_and_checkpoint_body(course_plan: dict) -> dict:
+        body_result = _generate_structured_course_body(
+            job=job,
+            course_plan=course_plan,
+            sub_parts=sub_parts,
+            module_contents=module_contents,
+            model=model,
+        )
+        _save_structured_body_checkpoint(
+            job_id=job["id"],
+            course_plan=course_plan,
+            generation_signature=generation_signature,
+            body_result=body_result,
+        )
+        return body_result
+
+    body_results_by_course = {
+        course_number: checkpoint["body_result"]
+        for course_number, checkpoint in reusable_checkpoints.items()
+        if isinstance(checkpoint.get("body_result"), dict)
+    }
+    course_plans_without_body = [
+        course_plan
+        for course_plan in course_plans
+        if (
+            int(course_plan.get("course_number") or 0)
+            not in body_results_by_course
+            and int(course_plan.get("course_number") or 0)
+            not in reusable_final_results
+        )
+    ]
+    generated_body_results = _run_structured_parallel(
+        course_plans_without_body,
+        _generate_and_checkpoint_body,
+        workers=workers,
+    )
+    for body_result in generated_body_results:
+        body_results_by_course[int(body_result.get("course_number") or 0)] = body_result
+    body_results = sorted(
+        body_results_by_course.values(),
+        key=lambda item: int(item.get("course_number") or 0),
+    )
+    _phase_done(
+        "body_sections",
+        body_phase,
+        "Sections principales générées",
+        {
+            "courses": len(body_results),
+            "generated": len(generated_body_results),
+            "resumed": len(body_results) - len(generated_body_results),
+            "body_words": sum(count_tts_spoken_words(result.get("body_text") or "") for result in body_results),
+        },
+    )
+
+    if on_progress:
+        on_progress(0, total_courses, 1, total_words, "Résumés courts des cours pour les reprises tardives")
+    summary_phase = _phase_start(
+        "summaries",
+        "Résumés courts pour les transitions",
+        {"courses": len(body_results), "workers": workers},
+    )
+    course_summaries = {
+        course_number: checkpoint["course_summary"]
+        for course_number, checkpoint in reusable_checkpoints.items()
+        if isinstance(checkpoint.get("course_summary"), str)
+    }
+
+    def _summarize_and_checkpoint_body(body_result: dict) -> tuple[int, str]:
+        course_number, summary = _summarize_structured_course_body(
+            body_result,
+            model=model,
+        )
+        _save_structured_body_checkpoint(
+            job_id=job["id"],
+            course_plan=body_result["course_plan"],
+            generation_signature=generation_signature,
+            body_result=body_result,
+            course_summary=summary,
+        )
+        return int(course_number), summary
+
+    bodies_without_summary = [
+        body_result
+        for body_result in body_results
+        if int(body_result.get("course_number") or 0) not in course_summaries
+    ]
+    summary_pairs = _run_structured_parallel(
+        bodies_without_summary,
+        _summarize_and_checkpoint_body,
+        workers=workers,
+    )
+    course_summaries.update({
+        int(course_number): summary
+        for course_number, summary in summary_pairs
+    })
+    day_summary_context = "\n".join(
+        f"Cours {course_number}: {course_summaries.get(course_number) or ''}"
+        for course_number in sorted(course_summaries)
+    )
+    _phase_done(
+        "summaries",
+        summary_phase,
+        "Résumés courts terminés",
+        {
+            "summaries": len(course_summaries),
+            "generated": len(summary_pairs),
+            "resumed": len(course_summaries) - len(summary_pairs),
+            "summary_chars": sum(len(summary or "") for summary in course_summaries.values()),
+        },
+    )
+
+    body_results = [
+        body_result
+        for body_result in body_results
+        if int(body_result.get("course_number") or 0) not in reusable_final_results
+    ]
+
+    if on_progress:
+        on_progress(0, total_courses, 1, total_words, "Génération tardive des introductions et raccords")
+    openings_phase = _phase_start(
+        "late_openings",
+        "Génération tardive des introductions",
+        {"courses": len(body_results), "workers": workers},
+    )
+    opening_results = _run_structured_parallel(
+        body_results,
+        lambda body_result: _generate_late_opening_for_structured_course(
+            job=job,
+            body_result=body_result,
+            previous_course_summary=course_summaries.get(int(body_result.get("course_number") or 0) - 1, ""),
+            model=model,
+        ),
+        workers=workers,
+    )
+    openings_by_course = {
+        int(opening.get("course_number") or 0): opening
+        for opening in opening_results
+    }
+    _phase_done(
+        "late_openings",
+        openings_phase,
+        "Introductions tardives terminées",
+        {"openings": len(openings_by_course)},
+    )
+    day_conclusion_tasks = [
+        body_result
+        for body_result in body_results
+        if _structured_day_conclusion_section_for_course(body_result["course_plan"])
+    ]
+    conclusions_phase = _phase_start(
+        "day_conclusions",
+        "Génération des conclusions de journée",
+        {"courses": len(day_conclusion_tasks), "workers": max(1, min(workers, len(day_conclusion_tasks) or 1))},
+    )
+    day_conclusion_results = _run_structured_parallel(
+        day_conclusion_tasks,
+        lambda body_result: _generate_late_day_conclusion_for_structured_course(
+            job=job,
+            body_result=body_result,
+            day_summary_context=day_summary_context,
+            model=model,
+        ),
+        workers=max(1, min(workers, len(day_conclusion_tasks) or 1)),
+    )
+    day_conclusions_by_course = {
+        int(result.get("course_number") or 0): result
+        for result in day_conclusion_results
+        if result
+    }
+    _phase_done(
+        "day_conclusions",
+        conclusions_phase,
+        "Conclusions de journée terminées",
+        {"conclusions": len(day_conclusions_by_course)},
+    )
+
+    drafts_phase = _phase_start(
+        "draft_artifacts",
+        "Assemblage des brouillons structurés",
+        {"courses": len(body_results)},
+    )
+    draft_courses = []
+    existing_draft_artifact = (
+        _load_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_DRAFT_SECTIONS_BLOB,
+        )
+        or {}
+    )
+    existing_drafts_by_course = {}
+    if existing_draft_artifact.get("generation_signature") == generation_signature:
+        existing_drafts_by_course = {
+            int(record.get("course_number") or 0): record
+            for record in existing_draft_artifact.get("courses") or []
+        }
+    for body_result in body_results:
+        course_number = int(body_result.get("course_number") or 0)
+        draft = _assemble_structured_course_draft(
+            body_result,
+            openings_by_course[course_number],
+            day_conclusions_by_course.get(course_number),
+        )
+        course_plan = draft["course_plan"]
+        draft_courses.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "target_words": int(course_plan.get("target_words") or 0),
+            "draft_word_count": draft["draft_word_count"],
+            "sections": draft["sections"],
+            "generation_strategy": generation_strategy,
+        })
+        body_result["draft"] = draft
+    for course_number, result in reusable_final_results.items():
+        existing_draft = existing_drafts_by_course.get(course_number)
+        if existing_draft:
+            draft_courses.append({
+                **existing_draft,
+                "resumed_from_checkpoint": True,
+            })
+            continue
+        course_plan = result.get("course_plan") or {}
+        draft_courses.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "target_words": int(course_plan.get("target_words") or 0),
+            "draft_word_count": int(result.get("words") or 0),
+            "sections": result.get("sections") or [],
+            "generation_strategy": generation_strategy,
+            "resumed_from_checkpoint": True,
+        })
+    draft_courses.sort(key=lambda item: int(item.get("course_number") or 0))
+
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_DRAFT_SECTIONS_BLOB,
+        _artifact_payload(
+            job,
+            "content_draft_sections",
+            {
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": generation_strategy,
+                "generation_signature": generation_signature,
+                "parallel_workers": workers,
+                "course_summaries": course_summaries,
+                "courses": draft_courses,
+            },
+        ),
+    )
+    _phase_done(
+        "draft_artifacts",
+        drafts_phase,
+        "Brouillons structurés sauvegardés",
+        {
+            "courses": len(draft_courses),
+            "draft_words": sum(int(course.get("draft_word_count") or 0) for course in draft_courses),
+        },
+    )
+
+    if on_progress:
+        on_progress(0, total_courses, 1, total_words, "Adhérence au plan après génération par section")
+    adherence_phase = _phase_start(
+        "plan_adherence",
+        "Review adhérence au plan",
+        {"courses": len(body_results), "workers": workers},
+    )
+    if body_results:
+        body_results = _run_plan_adherence_on_generated_drafts(
+            job=job,
+            platform_id=platform_id,
+            folder_id=folder_id,
+            plan=plan,
+            body_results=body_results,
+            course_summaries=course_summaries,
+            workers=workers,
+            total_words=total_words,
+            on_progress=on_progress,
+            model=model,
+        )
+    _phase_done(
+        "plan_adherence",
+        adherence_phase,
+        "Review adhérence au plan terminée",
+        {"courses": len(body_results)},
+    )
+
+    if on_progress:
+        on_progress(0, total_courses, 1, total_words, "Calibrage parallèle des budgets mots par cours")
+
+    def _calibrate_draft(body_result: dict) -> dict:
+        draft = body_result["draft"]
+        course_plan = draft["course_plan"]
+        module_content = body_result.get("module_content") or ""
+        draft_sections_text = _join_structured_section_records(draft.get("sections") or [])
+        source_drift = bool(
+            draft_sections_text
+            and (draft.get("course_text") or "").strip()
+            and draft_sections_text.strip() != (draft.get("course_text") or "").strip()
+        )
+        if draft.get("sections"):
+            calibrated_text, calibration = _calibrate_structured_course_sections(
+                job=job,
+                course_plan=course_plan,
+                draft=draft,
+                module_content=module_content,
+                model=model,
+            )
+            calibration["source_sections_drifted_from_course_text"] = source_drift
+        else:
+            calibrated_text, calibration = _calibrate_structured_course_text(
+                course_plan,
+                draft["course_text"],
+                model=model,
+            )
+        if calibration.get("status") in {"too_short", "too_long"}:
+            fallback_text, fallback_calibration = _calibrate_structured_course_text(
+                course_plan,
+                calibrated_text,
+                model=model,
+            )
+            fallback_calibration["mode"] = "course_budget_safety_net"
+            calibration["course_safety_net"] = fallback_calibration
+            if fallback_text.strip() != calibrated_text.strip():
+                calibrated_text = fallback_text
+                calibration = {
+                    **fallback_calibration,
+                    "primary_section_calibration": calibration,
+                    "source_sections_drifted_from_course_text": source_drift,
+                }
+        final_status = _structured_course_budget_status(course_plan, calibrated_text)
+        if not final_status.get("ok"):
+            section_records = calibration.get("calibrated_sections") or []
+            sections_text = _join_structured_section_records(section_records)
+            if (
+                final_status.get("status") == "too_short"
+                and section_records
+                and sections_text.strip() == (calibrated_text or "").strip()
+            ):
+                repaired_text, repaired_sections, final_section_topup_repair = _repair_structured_course_sections_to_budget(
+                    job=job,
+                    course_plan=course_plan,
+                    sections=section_records,
+                    module_content=module_content,
+                    model=model,
+                )
+                calibration["final_section_topup_repair"] = final_section_topup_repair
+                if repaired_text.strip() != calibrated_text.strip():
+                    calibrated_text = repaired_text
+                    calibration["calibrated_sections"] = repaired_sections
+                    final_status = _structured_course_budget_status(course_plan, calibrated_text)
+            if not final_status.get("ok"):
+                repaired_text, final_budget_repair = _repair_structured_course_text_to_budget(
+                    job=job,
+                    course_plan=course_plan,
+                    text=calibrated_text,
+                    module_content=module_content,
+                    model=model,
+                )
+                calibration["final_budget_repair"] = final_budget_repair
+                if repaired_text.strip() != calibrated_text.strip():
+                    calibrated_text = repaired_text
+                    final_status = _structured_course_budget_status(course_plan, calibrated_text)
+        if not final_status.get("ok") and str(os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}:
+            if final_status.get("status") == "too_short" and _structured_allow_residual_too_short():
+                calibration["accepted_residual_shortfall"] = True
+                calibration["accepted_residual_shortfall_words"] = max(
+                    0,
+                    int(final_status.get("min_words") or 0) - int(final_status.get("words") or 0),
+                )
+                logger.warning(
+                    "PIPELINE_COURSE_BUDGET_SHORTFALL_ACCEPTED formation_job_id=%s content_job_id=%s course=%s words=%s min=%s target=%s",
+                    job.get("formation_job_id"),
+                    job.get("id"),
+                    course_plan.get("course_number"),
+                    final_status.get("words"),
+                    final_status.get("min_words"),
+                    final_status.get("target_words"),
+                )
+            else:
+                deficit_repair = (
+                    calibration.get("final_section_topup_repair")
+                    or calibration.get("section_topup_repair")
+                    or calibration.get("final_budget_repair")
+                    or calibration.get("deficit_repair")
+                    or {}
+                )
+                attempts = deficit_repair.get("attempts") if isinstance(deficit_repair, dict) else []
+                last_attempt = attempts[-1] if attempts else {}
+                last_reason = ""
+                sections = last_attempt.get("sections") if isinstance(last_attempt, dict) else []
+                if sections:
+                    last_section = sections[-1] or {}
+                    last_reason = (
+                        last_section.get("reason")
+                        or last_section.get("error")
+                        or last_attempt.get("error")
+                        or ""
+                    )
+                elif isinstance(last_attempt, dict):
+                    last_reason = last_attempt.get("error") or ""
+                reason = f" reason={str(last_reason)[:180]}" if last_reason else ""
+                raise ValueError(
+                    "Calibrage budget texte insuffisant "
+                    f"cours={course_plan.get('course_number')} "
+                    f"status={final_status.get('status')} "
+                    f"words={final_status.get('words')} "
+                    f"target={final_status.get('target_words')} "
+                    f"min={final_status.get('min_words')}"
+                    f"{reason}"
+                )
+        calibrated_words = count_tts_spoken_words(calibrated_text)
+        course_number = int(course_plan.get("course_number") or body_result.get("course_number") or 0)
+        return {
+            "course_number": course_number,
+            "course_plan": course_plan,
+            "calibrated_text": calibrated_text,
+            "calibrated_words": calibrated_words,
+            "course_text": calibrated_text,
+            "words": calibrated_words,
+            "calibration": calibration,
+            "sections": calibration.get("calibrated_sections") or draft.get("sections") or [],
+            "plan_adherence": body_result.get("plan_adherence"),
+            "draft": draft,
+            "module_content": module_content,
+        }
+
+    calibration_phase = _phase_start(
+        "budget_calibration",
+        "Calibrage des budgets texte",
+        {"courses": len(body_results), "workers": workers},
+    )
+    calibrated_results = _run_structured_parallel(
+        body_results,
+        _calibrate_draft,
+        workers=workers,
+    )
+    calibrated_results = sorted(calibrated_results, key=lambda item: int(item.get("course_number") or 0))
+    _phase_done(
+        "budget_calibration",
+        calibration_phase,
+        "Calibrage budgets texte terminé",
+        {
+            "courses": len(calibrated_results),
+            "words": sum(int(result.get("calibrated_words") or result.get("words") or 0) for result in calibrated_results),
+        },
+    )
+
+    def _budget_calibration_record(result: dict, *, resumed: bool = False) -> dict:
+        course_number = int(result.get("course_number") or 0)
+        course_plan = result["course_plan"]
+        calibrated_text = result.get("calibrated_text") or result.get("course_text") or ""
+        calibrated_words = int(result.get("calibrated_words") or count_tts_spoken_words(calibrated_text))
+        calibration = result.get("calibration") or {}
+        draft = result.get("draft") or {}
+        before_text = draft.get("course_text") or ""
+        before_words = int(draft.get("draft_word_count") or count_tts_spoken_words(before_text))
+        return {
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "filename": course_plan.get("filename"),
+            "target_words": int(course_plan.get("target_words") or 0),
+            "min_words": calibration.get("min_words"),
+            "max_words": calibration.get("max_words"),
+            "before_words": before_words,
+            "after_words": calibrated_words,
+            "delta_words": calibrated_words - before_words,
+            "changed": bool((calibrated_text or "").strip() != (before_text or "").strip() or calibration.get("changed")),
+            "calibration": calibration,
+            "plan_adherence": _compact_plan_adherence_result(result.get("plan_adherence")),
+            "before_text": before_text,
+            "after_text": calibrated_text,
+            "sections": result.get("sections") or draft.get("sections") or [],
+            "structured_plan": course_plan,
+            "resumed_from_checkpoint": resumed,
+        }
+
+    budget_calibration_records = [
+        _budget_calibration_record(result)
+        for result in calibrated_results
+    ]
+    existing_budget_artifact = (
+        _load_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_BUDGET_CALIBRATION_BLOB,
+        )
+        or {}
+    )
+    existing_budget_by_course = {}
+    if existing_budget_artifact.get("generation_signature") == generation_signature:
+        existing_budget_by_course = {
+            int(record.get("course_number") or 0): record
+            for record in existing_budget_artifact.get("courses") or []
+        }
+    for course_number, result in reusable_final_results.items():
+        existing_budget = existing_budget_by_course.get(course_number)
+        if existing_budget:
+            budget_calibration_records.append({
+                **existing_budget,
+                "resumed_from_checkpoint": True,
+            })
+        else:
+            budget_calibration_records.append(
+                _budget_calibration_record(result, resumed=True)
+            )
+    budget_calibration_records.sort(
+        key=lambda item: int(item.get("course_number") or 0)
+    )
+
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_BUDGET_CALIBRATION_BLOB,
+        _artifact_payload(
+            job,
+            "content_budget_calibration",
+            {
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": generation_strategy,
+                "generation_signature": generation_signature,
+                "parallel_workers": workers,
+                "summary": {
+                    "courses": len(budget_calibration_records),
+                    "changed": sum(1 for record in budget_calibration_records if record.get("changed")),
+                    "target_words": sum(int(record.get("target_words") or 0) for record in budget_calibration_records),
+                    "before_words": sum(int(record.get("before_words") or 0) for record in budget_calibration_records),
+                    "after_words": sum(int(record.get("after_words") or 0) for record in budget_calibration_records),
+                },
+                "courses": budget_calibration_records,
+            },
+        ),
+    )
+
+    if on_progress:
+        on_progress(0, total_courses, 1, total_words, "Micro-conformité éthique après calibrage budget")
+
+    def _micro_review_calibrated_course(result: dict) -> dict:
+        course_plan = result["course_plan"]
+        calibrated_text = result.get("calibrated_text") or result.get("course_text") or ""
+        sections = result.get("sections") or []
+
+        def _review_section_records(section_records: list[dict]) -> tuple[str, list[dict]]:
+            reviewed_sections = []
+            for section in section_records:
+                before_text = section.get("text") or ""
+                review_result = _run_ethical_micro_review_for_section(
+                    job=job,
+                    course_plan=course_plan,
+                    section=section,
+                    section_text=before_text,
+                    model=model,
+                    return_details=True,
+                )
+                reviewed_text = review_result.get("text") or before_text
+                reviewed = {
+                    **section,
+                    "text": reviewed_text,
+                    "word_count": count_tts_spoken_words(reviewed_text),
+                }
+                reviewed = _thread_slide_display_map_through_patches(
+                    reviewed,
+                    before_text=before_text,
+                    after_text=reviewed_text,
+                    applied_patches=review_result.get("applied") or [],
+                    pass_name="micro_review",
+                )
+                if reviewed_text.strip() != before_text.strip():
+                    reviewed["micro_review_before_words"] = count_tts_spoken_words(before_text)
+                reviewed_sections.append(reviewed)
+            return _join_structured_section_records(reviewed_sections), reviewed_sections
+
+        sections_text = _join_structured_section_records(sections)
+        if sections and sections_text.strip() == calibrated_text.strip():
+            final_text, sections = _review_section_records(sections)
+        else:
+            final_text = _run_ethical_micro_review_for_section(
+                job=job,
+                course_plan=course_plan,
+                section=_ethical_micro_section_for_calibrated_course(course_plan),
+                section_text=calibrated_text,
+                model=model,
+            )
+        post_micro_budget_status = _structured_course_budget_status(course_plan, final_text)
+        post_micro_budget_repair = None
+
+        if (
+            not post_micro_budget_status.get("ok")
+            and post_micro_budget_status.get("status") == "too_short"
+            and sections
+        ):
+            section_repairs = []
+            repaired_sections = [dict(section) for section in sections]
+            for repair_round in range(1, 3):
+                before_sections_text = _join_structured_section_records(repaired_sections)
+                repaired_text, repaired_sections, section_repair = _repair_structured_course_sections_to_budget(
+                    job=job,
+                    course_plan=course_plan,
+                    sections=repaired_sections,
+                    module_content=result.get("module_content") or "",
+                    model=model,
+                )
+                section_repairs.append({
+                    **section_repair,
+                    "repair_round": repair_round,
+                    "reviewed_after_topup": True,
+                })
+                if repaired_text.strip() == before_sections_text.strip():
+                    break
+                final_text, repaired_sections = _review_section_records(repaired_sections)
+                post_micro_budget_status = _structured_course_budget_status(course_plan, final_text)
+                sections = repaired_sections
+                if post_micro_budget_status.get("ok") or post_micro_budget_status.get("status") != "too_short":
+                    break
+            if section_repairs:
+                post_micro_budget_repair = {
+                    "mode": "post_micro_section_topup",
+                    "status": post_micro_budget_status.get("status"),
+                    "words": post_micro_budget_status.get("words"),
+                    "min_words": post_micro_budget_status.get("min_words"),
+                    "target_words": post_micro_budget_status.get("target_words"),
+                    "attempts": section_repairs,
+                }
+
+        if not post_micro_budget_status.get("ok"):
+            before_course_budget_repair = final_text
+            final_text, course_budget_repair = _repair_structured_course_text_to_budget(
+                job=job,
+                course_plan=course_plan,
+                text=final_text,
+                module_content=result.get("module_content") or "",
+                model=model,
+            )
+            if post_micro_budget_repair:
+                post_micro_budget_repair["course_budget_fallback"] = course_budget_repair
+            else:
+                post_micro_budget_repair = course_budget_repair
+            if final_text.strip() != before_course_budget_repair.strip():
+                final_text = _run_ethical_micro_review_for_section(
+                    job=job,
+                    course_plan=course_plan,
+                    section=_ethical_micro_section_for_calibrated_course(course_plan),
+                    section_text=final_text,
+                    model=model,
+                )
+            post_micro_budget_status = _structured_course_budget_status(course_plan, final_text)
+        if (
+            not post_micro_budget_status.get("ok")
+            and str(os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")).strip().lower()
+            not in {"0", "false", "no", "off"}
+        ):
+            raise ValueError(
+                "Budget texte invalide après micro-review "
+                f"cours={course_plan.get('course_number')} "
+                f"status={post_micro_budget_status.get('status')} "
+                f"words={post_micro_budget_status.get('words')} "
+                f"target={post_micro_budget_status.get('target_words')} "
+                f"min={post_micro_budget_status.get('min_words')}"
+            )
+        micro_changed = (final_text or "").strip() != (calibrated_text or "").strip()
+        if micro_changed:
+            sections = [
+                {
+                    **section,
+                    "beat_alignment_status": (
+                        "lost_after_micro_review"
+                        if section.get("beat_texts")
+                        else section.get("beat_alignment_status")
+                    ),
+                }
+                for section in sections
+            ]
+        final_result = {
+            **result,
+            "course_text": final_text,
+            "words": count_tts_spoken_words(final_text),
+            "micro_changed": micro_changed,
+            "sections": sections,
+            "post_micro_budget_status": post_micro_budget_status,
+            "post_micro_budget_repair": post_micro_budget_repair,
+        }
+        course_number = int(course_plan.get("course_number") or 0)
+        course_micro_records = [
+            record
+            for record in job.get("_ethical_micro_review_records") or []
+            if int(record.get("course_number") or 0) == course_number
+        ]
+        _save_structured_course_segment(
+            job_id=job["id"],
+            course_plan=course_plan,
+            text=final_text,
+            generation_signature=generation_signature,
+            course_summary=course_summaries.get(course_number, ""),
+            final_result=final_result,
+            micro_records=course_micro_records,
+        )
+        logger.info(
+            "PIPELINE_STRUCTURED_COURSE_CHECKPOINTED formation_job_id=%s "
+            "content_job_id=%s folder_id=%s course=%s words=%s signature=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            final_result["words"],
+            generation_signature[:12],
+        )
+        return final_result
+
+    micro_phase = _phase_start(
+        "ethical_micro_review",
+        "Micro-conformité éthique",
+        {"courses": len(calibrated_results), "workers": workers},
+    )
+    final_course_results = _run_structured_parallel(
+        calibrated_results,
+        _micro_review_calibrated_course,
+        workers=workers,
+    )
+    final_course_results.extend(reusable_final_results.values())
+    final_course_results = sorted(
+        final_course_results,
+        key=lambda item: int(item.get("course_number") or 0),
+    )
+    final_course_numbers = {
+        int(result.get("course_number") or 0)
+        for result in final_course_results
+    }
+    expected_course_numbers = {
+        int(course_plan.get("course_number") or 0)
+        for course_plan in course_plans
+    }
+    if final_course_numbers != expected_course_numbers:
+        missing = sorted(expected_course_numbers - final_course_numbers)
+        raise RuntimeError(
+            "Checkpoints cours incomplets après génération structurée: "
+            f"cours manquants={missing}"
+        )
+    _phase_done(
+        "ethical_micro_review",
+        micro_phase,
+        "Micro-conformité éthique terminée",
+        {
+            "courses": len(final_course_results),
+            "generated": len(final_course_results) - len(reusable_final_results),
+            "resumed": len(reusable_final_results),
+            "words": sum(int(result.get("words") or 0) for result in final_course_results),
+            "changed": sum(1 for result in final_course_results if result.get("micro_changed")),
+        },
+    )
+
+    micro_records = _sorted_ethical_micro_review_records(job)
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
+        _artifact_payload(
+            job,
+            "content_ethical_micro_review",
+            {
+                "review_kind": "ethical_micro",
+                "review_label": "Micro-conformité éthique après calibrage budget",
+                "rules_scope": "ethics_compliance",
+                "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
+                "version": _ETHICAL_MICRO_RULESET_VERSION,
+                "generation_signature": generation_signature,
+                "structured_course_plan_version": plan.get("version"),
+                "review_timing": "after_budget_calibration",
+                "summary": _ethical_micro_review_summary(micro_records),
+                "records": micro_records,
+            },
+        ),
+    )
+
+    persist_phase = _phase_start(
+        "materialize_courses",
+        "Consolidation des checkpoints cours",
+        {"courses": len(final_course_results)},
+    )
+    total_words = 0
+    for result in final_course_results:
+        course_number = int(result.get("course_number") or 0)
+        course_plan = result["course_plan"]
+        course_text = result["course_text"]
+        words = int(result.get("words") or 0)
+        calibration = result.get("calibration") or {}
+        segment_started_at = time.time()
+        logger.info(
+            "PIPELINE_STRUCTURED_COURSE_MATERIALIZE_START formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            total_courses,
+            words,
+        )
+        logger.info(
+            "PIPELINE_STRUCTURED_SEGMENT_CHECKPOINT_READY formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            total_courses,
+            words,
+            int((time.time() - segment_started_at) * 1000),
+        )
+        total_words += words
+        generated_block = {
+            "bloc_number": course_number,
+            "filename": course_plan.get("filename"),
+            "duration_sec": _course_duration_for_bloc(playlist_items, course_number),
+            "duration_min": course_plan.get("duration_minutes"),
+            "status": "planned",
+            "text": course_text,
+            "word_count": words,
+            "planned_word_count": words,
+            "word_budget": int(course_plan.get("target_words") or 0),
+            "main_word_budget": int(course_plan.get("target_words") or 0),
+            "dirty": True,
+            "structured_plan": course_plan,
+            "calibration": calibration,
+            "plan_adherence": _compact_plan_adherence_result(result.get("plan_adherence")),
+            "calibrated_word_count": int(result.get("calibrated_words") or 0),
+            "micro_changed": bool(result.get("micro_changed")),
+            "post_micro_budget_status": result.get("post_micro_budget_status"),
+            "generation_strategy": generation_strategy,
+            "dynamic_schedule": _playlist_uses_dynamic_schedule(playlist_items),
+        }
+        generated_blocks.append(generated_block)
+        course_scripts.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "filename": course_plan.get("filename"),
+            "target_words": int(course_plan.get("target_words") or 0),
+            "word_count": words,
+            "text": course_text,
+            "plan_adherence": _compact_plan_adherence_result(result.get("plan_adherence")),
+            "calibration": calibration,
+            "calibrated_word_count": int(result.get("calibrated_words") or 0),
+            "micro_changed": bool(result.get("micro_changed")),
+            "post_micro_budget_status": result.get("post_micro_budget_status"),
+            "sections": result.get("sections") or [],
+            "structured_plan": course_plan,
+            "generation_strategy": generation_strategy,
+            "previous_course_summary_used": course_summaries.get(course_number - 1, ""),
+        })
+        _update_job_db(job["id"], total_words=total_words, current_sub_part=course_number - 1, current_passe=1)
+        if on_progress:
+            on_progress(
+                course_number,
+                total_courses,
+                1,
+                total_words,
+                f"Cours {course_number}/{total_courses} calibré et contrôlé "
+                f"({words} mots)",
+            )
+        logger.info(
+            "PIPELINE_STRUCTURED_COURSE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s target=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            total_courses,
+            words,
+            course_plan.get("target_words"),
+        )
+    _phase_done(
+        "materialize_courses",
+        persist_phase,
+        "Checkpoints cours consolidés",
+        {"courses": len(final_course_results), "total_words": total_words},
+    )
+
+    course_scripts_phase = _phase_start(
+        "course_scripts_artifact",
+        "Sauvegarde de l'artefact scripts cours",
+        {"courses": len(course_scripts)},
+    )
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_COURSE_SCRIPTS_BLOB,
+        _artifact_payload(
+            job,
+            "content_course_scripts",
+            {
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": generation_strategy,
+                "generation_signature": generation_signature,
+                "parallel_workers": workers,
+                "course_summaries": course_summaries,
+                "courses": course_scripts,
+            },
+        ),
+    )
+    _phase_done(
+        "course_scripts_artifact",
+        course_scripts_phase,
+        "Artefact scripts cours sauvegardé",
+        {"courses": len(course_scripts)},
+    )
+
+    final_phase = _phase_start(
+        "final_assembly",
+        "Assemblage et upload du texte final",
+        {"total_words_before_assembly": total_words},
+    )
+    final_words, filename = _assemble_and_upload(folder_id, platform_id, job["id"])
+    payload = {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "mode": "structured_content_generation",
+        "generation_strategy": generation_strategy,
+        "generation_signature": generation_signature,
+        "parallel_workers": workers,
+        "structured_course_plan": plan,
+        "planned_course_blocs": generated_blocks,
+        "course_blocs": [],
+    }
+    _save_course_script_plan(platform_id, folder_id, payload)
+    _phase_done(
+        "final_assembly",
+        final_phase,
+        "Assemblage final terminé",
+        {"final_words": final_words, "filename": filename},
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_RUN_DONE formation_job_id=%s content_job_id=%s folder_id=%s final_words=%s filename=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        final_words,
+        filename,
+        int((time.time() - structured_started_at) * 1000),
+    )
+    _log_content_pipeline_event(
+        job,
+        "content_structured_completed",
+        folder_id=folder_id,
+        status="completed",
+        message="Génération structurée terminée",
+        model=model,
+        duration_ms=int((time.time() - structured_started_at) * 1000),
+        data={"final_words": final_words, "filename": filename},
+    )
+    return final_words, filename, payload
 
 
 # ─── Pipeline principale ──────────────────────────────────────────────────────
@@ -3965,19 +13365,21 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
 def run_content_generation(folder_id, on_progress=None, mode="normal", model=None):
     """
     Lance ou reprend la génération de contenu pour un dossier.
-    Doit être appelé dans un greenlet eventlet (non-bloquant).
+    Peut être appelé par un work item durable ou un thread administratif.
 
     on_progress(sub_idx, total_sub_parts, passe, total_words, message) — callback optionnel.
 
     mode :
-      "normal" — génération complète via Claude (volume calibré audio)
-      "mock"   — texte factice instantané, 0 appel Claude (pour tests)
+      "normal" — génération complète via DeepSeek (volume calibré audio)
+      "mock"   — texte factice instantané, 0 appel DeepSeek (pour tests)
       "mini"   — 1 seule sous-partie × 1 seule passe, max_tokens 300 (~0.02€)
     """
 
+    progress_total = NUM_SUB_PARTS
+
     def _progress(sub_idx, passe, total_words, message):
         if on_progress:
-            on_progress(sub_idx, NUM_SUB_PARTS, passe, total_words, message)
+            on_progress(sub_idx, progress_total, passe, total_words, message)
 
     job = get_job_from_db(folder_id)
     if not job:
@@ -3991,6 +13393,20 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
     sub_parts = job["sub_parts"]
     from_scratch = job.get("from_scratch", False)
     module_contents = job.get("module_contents", {})
+    effective_playlist = _playlist_items_for_platform(
+        platform_id,
+        folder_id=int(folder_id),
+    )
+    manifest_course_count = sum(
+        1
+        for item in effective_playlist
+        if len(item) >= 3 and item[2] == "cours"
+    )
+    progress_total = (
+        manifest_course_count
+        or len(sub_parts or [])
+        or NUM_SUB_PARTS
+    )
 
     is_mock = mode == "mock"
     is_mini = mode == "mini"
@@ -4004,7 +13420,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         folder_id,
         platform_id,
         mode,
-        model or CLAUDE_MODEL,
+        model or DEEPSEEK_MODEL,
         bool(from_scratch),
         len(sub_parts or []),
         job.get("total_words") or 0,
@@ -4043,6 +13459,49 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
     _update_job_db(job_id, status="running", error_message=None)
 
     try:
+        if _structured_content_generation_enabled() and not is_mock and not is_mini:
+            structured_job = dict(job)
+            structured_job["folder_id"] = folder_id
+            structured_playlist = _playlist_items_for_platform(
+                platform_id,
+                folder_id=int(folder_id),
+            )
+            structured_course_count = sum(
+                1 for item in structured_playlist if item[2] == "cours"
+            )
+            _progress(
+                0,
+                1,
+                job["total_words"] or 0,
+                "Plan JSON structuré — génération de "
+                f"{structured_course_count} cours",
+            )
+            total_words, filename, _payload = _run_structured_content_generation(
+                job=structured_job,
+                folder_id=folder_id,
+                platform_id=platform_id,
+                sub_parts=sub_parts,
+                module_contents=module_contents,
+                on_progress=on_progress,
+                model=model,
+            )
+            _update_job_db(job_id, status="completed", total_words=total_words)
+            _progress(
+                structured_course_count,
+                1,
+                total_words,
+                f"✅ Génération structurée terminée : {filename}",
+            )
+            logger.info(
+                "PIPELINE_CONTENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s mode=structured total_words=%s duration_ms=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                total_words,
+                int((time.time() - started_at) * 1000),
+            )
+            return
+
         done_set = _get_completed_segments(job_id)
         total_words = job["total_words"] or 0
         logger.info(
@@ -4057,8 +13516,26 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         # En mode mini : seulement la première sous-partie, passe 1
         sub_parts_to_run = [sub_parts[0]] if is_mini else sub_parts
         passes_to_run = [1] if is_mini else [1, 2, 3]
+        parallel_workers = (
+            1 if is_mini
+            else min(len(sub_parts_to_run), _content_parallel_subpart_workers())
+        )
+        logger.info(
+            "PIPELINE_CONTENT_PARALLEL_CONFIG formation_job_id=%s content_job_id=%s folder_id=%s workers=%s sub_parts=%s passes=%s",
+            formation_job_id,
+            job_id,
+            folder_id,
+            parallel_workers,
+            len(sub_parts_to_run),
+            len(passes_to_run),
+        )
 
-        for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
+        import threading
+
+        total_words_lock = threading.Lock()
+
+        def _generate_sub_part(sub_idx, sub_part_name):
+            nonlocal total_words
             logger.info(
                 "PIPELINE_CONTENT_SUBPART_START formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s/%s name=%s",
                 formation_job_id,
@@ -4073,6 +13550,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                 passe1_text + "\n\n" + _get_segment_text(job_id, sub_idx, 2)
                 if (sub_idx, 2) in done_set else ""
             )
+            subpart_words = 0
 
             for passe in passes_to_run:
                 if (sub_idx, passe) in done_set:
@@ -4086,10 +13564,12 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     )
                     continue
 
-                msg = f"Sous-partie {sub_idx + 1}/{NUM_SUB_PARTS} · Passe {passe}/3 — {sub_part_name}"
+                msg = f"Sous-partie {sub_idx + 1}/{progress_total} · Passe {passe}/3 — {sub_part_name}"
                 if is_mock:
                     msg = f"[MOCK] {msg}"
-                _progress(sub_idx, passe, total_words, msg)
+                with total_words_lock:
+                    current_total_words = total_words
+                _progress(sub_idx, passe, current_total_words, msg)
                 _update_job_db(job_id, current_sub_part=sub_idx, current_passe=passe)
                 segment_started_at = time.time()
                 logger.info(
@@ -4102,7 +13582,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     passe,
                     len(passes_to_run),
                     mode,
-                    total_words,
+                    current_total_words,
                 )
 
                 if is_mock:
@@ -4118,12 +13598,16 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                         prev_text="", from_scratch=True, module_content=module_content,
                         model=model,
                         generation_context={
+                            "formation_job_id": job.get("formation_job_id"),
                             "folder_position": job.get("folder_position"),
                             "nb_days": job.get("nb_days"),
                             "total_hours": job.get("total_hours"),
                             "folder_name": job.get("folder_name") or "",
                             "sub_part_index": sub_idx,
                             "passe": passe,
+                            "total_courses": progress_total,
+                            "playlist_spec": effective_playlist,
+                            "platform_id": job.get("platform_id"),
                         },
                     )
                 else:
@@ -4132,19 +13616,26 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                         passe, sub_part_name, program_title, program_text, prev,
                         model=model,
                         generation_context={
+                            "formation_job_id": job.get("formation_job_id"),
                             "folder_position": job.get("folder_position"),
                             "nb_days": job.get("nb_days"),
                             "total_hours": job.get("total_hours"),
                             "folder_name": job.get("folder_name") or "",
                             "sub_part_index": sub_idx,
                             "passe": passe,
+                            "total_courses": progress_total,
+                            "playlist_spec": effective_playlist,
+                            "platform_id": job.get("platform_id"),
                         },
                     )
 
                 _save_segment_db(job_id, sub_idx, sub_part_name, passe, text)
                 words_added = len(text.split())
-                total_words += words_added
-                _update_job_db(job_id, total_words=total_words)
+                with total_words_lock:
+                    total_words += words_added
+                    current_total_words = total_words
+                subpart_words += words_added
+                _update_job_db(job_id, total_words=current_total_words)
                 logger.info(
                     "PIPELINE_CONTENT_SEGMENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s passe=%s "
                     "words_added=%s total_words=%s duration_ms=%s",
@@ -4154,7 +13645,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     sub_idx + 1,
                     passe,
                     words_added,
-                    total_words,
+                    current_total_words,
                     int((time.time() - segment_started_at) * 1000),
                 )
 
@@ -4162,6 +13653,28 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     passe1_text = text
                 elif passe == 2:
                     passe1_2_text = passe1_text + "\n\n" + text
+            logger.info(
+                "PIPELINE_CONTENT_SUBPART_DONE formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s/%s words=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                sub_idx + 1,
+                len(sub_parts_to_run),
+                subpart_words,
+            )
+            return subpart_words
+
+        if parallel_workers <= 1:
+            for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
+                _generate_sub_part(sub_idx, sub_part_name)
+        else:
+            sub_part_items = list(enumerate(sub_parts_to_run))
+            run_parallel_ordered(
+                sub_part_items,
+                lambda item: _generate_sub_part(*item),
+                max_workers=parallel_workers,
+                thread_name_prefix=f"content-{job_id}",
+            )
 
         # En mode mini : marquer completed sans upload (pas de texte complet)
         if is_mini:
@@ -4178,7 +13691,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             return
 
         # Assemblage + upload
-        _progress(NUM_SUB_PARTS, 3, total_words, "Assemblage et upload du texte final...")
+        _progress(progress_total, 3, total_words, "Assemblage et upload du texte final...")
         logger.info(
             "PIPELINE_CONTENT_ASSEMBLY_START formation_job_id=%s content_job_id=%s folder_id=%s words_before_assembly=%s",
             formation_job_id,
@@ -4189,7 +13702,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         final_words, filename = _assemble_and_upload(folder_id, platform_id, job_id)
 
         _update_job_db(job_id, status="completed", total_words=final_words)
-        _progress(NUM_SUB_PARTS, 3, final_words, f"✅ Terminé : {final_words} mots — fichier {filename} ajouté aux sources")
+        _progress(progress_total, 3, final_words, f"✅ Terminé : {final_words} mots — fichier {filename} ajouté aux sources")
         logger.info(
             "PIPELINE_CONTENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s final_words=%s filename=%s duration_ms=%s",
             formation_job_id,
@@ -4209,12 +13722,40 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             int((time.time() - started_at) * 1000),
             e,
         )
+        _log_content_pipeline_event(
+            job,
+            "content_generation_error",
+            folder_id=folder_id,
+            status="error",
+            message="Génération contenu échouée",
+            model=model,
+            duration_ms=int((time.time() - started_at) * 1000),
+            data={"mode": mode},
+            error=str(e)[:1000],
+        )
         _update_job_db(job_id, status="error", error_message=str(e))
         raise
 
 
-def _playlist_items_for_platform(platform_id: int) -> list:
-    """Retourne la playlist effective de la plateforme au format PLAYLIST_SPEC."""
+def _playlist_items_for_platform(platform_id: int, *, folder_id: int | None = None) -> list:
+    """Retourne la playlist effective au format PLAYLIST_SPEC.
+
+    Un dossier rattaché à un planning V2 possède son propre manifeste immuable.
+    Sans planning V2 (ou sans ``folder_id``), le comportement historique de la
+    plateforme reste strictement inchangé.
+    """
+    if folder_id is not None:
+        try:
+            from services.day_playlist_service import resolve_folder_playlist
+
+            resolved = resolve_folder_playlist(int(folder_id))
+            if resolved.get("schema_version") == 2:
+                return list(resolved["playlist_items"])
+        except ImportError:
+            # Déploiement progressif : le lecteur V1 reste disponible avant la
+            # migration additive du planning V2.
+            pass
+
     from services.playlist_tts_service import PLAYLIST_SPEC
     bloc_by_filename = {spec[0]: spec[3] for spec in PLAYLIST_SPEC}
 
@@ -4222,6 +13763,17 @@ def _playlist_items_for_platform(platform_id: int) -> list:
         from services.audio_service import get_playlist
         playlist = get_playlist(platform_id)
     except Exception as e:
+        if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
+            logger.error(
+                "PIPELINE_PLAYLIST_CONFIG_REQUIRED platform_id=%s backend=%s error=%s",
+                platform_id,
+                PIPELINE_DATABASE_BACKEND,
+                str(e)[:500],
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Configuration playlist PostgreSQL indisponible pour la plateforme {platform_id}"
+            ) from e
         logger.warning(f"⚠️ Playlist plateforme indisponible, fallback PLAYLIST_SPEC : {e}")
         return list(PLAYLIST_SPEC)
 
@@ -4257,12 +13809,23 @@ def _build_edge_muted_filler_audio(duration_sec: float, on_progress=None) -> tup
     if on_progress:
         on_progress(f"filler muet Edge TTS ({duration_sec:.1f}s cible)")
 
-    seed = convert_to_speech_basic(
-        filler_text,
-        volume=filler_volume,
-        **_basic_tts_pipeline_retry_kwargs(),
-    )
-    seed_duration = _mp3_duration_seconds_no_ffprobe(seed)
+    try:
+        seed = convert_to_speech_basic(
+            filler_text,
+            volume=filler_volume,
+            max_429_retries=0,
+            retry_base_wait_sec=1,
+        )
+        seed_duration = _mp3_duration_seconds_no_ffprobe(seed)
+    except Exception as exc:
+        logger.warning(
+            "EDGE_TTS_MUTED_FILLER_SKIPPED duration_sec=%.1f error=%s",
+            duration_sec,
+            str(exc)[:240],
+        )
+        if on_progress:
+            on_progress("filler muet Edge TTS ignoré")
+        return b"", 0.0
     if seed_duration <= 0:
         return b"", 0.0
 
@@ -4290,7 +13853,7 @@ def _build_timed_edge_break_audio(
     *,
     on_progress=None,
 ) -> tuple[bytes, float]:
-    """Build an Edge TTS break with intro at start and outro at slot end."""
+    """Build an Edge TTS break with intro at start and outro ending 2s before slot end."""
     from services.basic_tts_service import convert_to_speech_basic, concat_mp3_bytes
 
     intro_text = (intro_text or "").strip()
@@ -4300,7 +13863,7 @@ def _build_timed_edge_break_audio(
 
     parts = []
     cursor_sec = 0.0
-    lead_in_sec = _env_float("EDGE_TTS_BREAK_LEAD_IN_SEC", 5.0, min_value=0.0, max_value=30.0)
+    lead_in_sec = _env_float("EDGE_TTS_BREAK_LEAD_IN_SEC", 0.0, min_value=0.0, max_value=30.0)
 
     lead_bytes, lead_duration = _build_edge_muted_filler_audio(
         lead_in_sec,
@@ -4334,7 +13897,8 @@ def _build_timed_edge_break_audio(
         outro_duration = _mp3_duration_seconds_no_ffprobe(outro_bytes)
 
     target = float(max(int(duration_sec or 0), 0))
-    filler_target = max(0.0, target - cursor_sec - outro_duration)
+    outro_tail_sec = 2.0 if target >= 2.0 else 0.0
+    filler_target = max(0.0, target - cursor_sec - outro_duration - outro_tail_sec)
     filler_bytes, filler_duration = _build_edge_muted_filler_audio(
         filler_target,
         on_progress=on_progress,
@@ -4347,11 +13911,130 @@ def _build_timed_edge_break_audio(
         parts.append(outro_bytes)
         cursor_sec += outro_duration
 
+    trailing_target = max(0.0, target - cursor_sec)
+    trailing_bytes, trailing_duration = _build_edge_muted_filler_audio(
+        trailing_target,
+        on_progress=on_progress,
+    )
+    if trailing_bytes:
+        parts.append(trailing_bytes)
+        cursor_sec += trailing_duration
+
+    if cursor_sec < target - _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"Break Edge trop court ({cursor_sec:.1f}s < {target:.1f}s), filler indisponible"
+        )
+
     return concat_mp3_bytes(parts), cursor_sec
 
 
+def _build_end_only_fish_break_audio_no_ffmpeg(
+    outro_text: str,
+    duration_sec: int,
+    *,
+    on_progress=None,
+) -> tuple[bytes, float]:
+    """Build a long Q&A/pause with Fish audio, without pydub/ffmpeg.
+
+    Fish break assembly cannot rely on pydub in Azure App Service because the
+    ffmpeg binaries are not installed. Fish-compatible silent MP3 frames make
+    the file genuinely playable from t=0 without an audible primer; the outro
+    remains aligned near the end of the slot.
+    """
+    from services.basic_tts_service import concat_mp3_bytes
+    from services.tts_service import convert_to_speech
+
+    outro_text = (outro_text or "").strip()
+    if not outro_text:
+        raise ValueError("Break Fish end-only vide")
+
+    if on_progress:
+        on_progress("Fish Audio outro")
+    outro_bytes = convert_to_speech(outro_text)
+    outro_duration = _mp3_duration_seconds_no_ffprobe(outro_bytes)
+
+    target = float(max(int(duration_sec or 0), 0))
+    outro_tail_sec = 2.0 if target >= 2.0 else 0.0
+    pre_target = max(0.0, target - outro_duration - outro_tail_sec)
+    pre_bytes, pre_duration = _fish_silent_mp3_approx_no_ffmpeg(pre_target)
+    tail_target = max(0.0, target - pre_duration - outro_duration)
+    tail_bytes, tail_duration = _fish_silent_mp3_approx_no_ffmpeg(tail_target)
+
+    final_duration = pre_duration + outro_duration + tail_duration
+    if final_duration < target - _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"Fallback Fish end-only trop court ({final_duration:.1f}s < {target:.1f}s)"
+        )
+
+    return concat_mp3_bytes([pre_bytes, outro_bytes, tail_bytes]), final_duration
+
+
+def _build_two_sided_fish_break_audio_no_ffmpeg(
+    intro_text: str,
+    outro_text: str,
+    duration_sec: int,
+    *,
+    on_progress=None,
+) -> tuple[bytes, float]:
+    """Assemble intro au début et outro à la fin sans dépendre de ffmpeg."""
+    from services.basic_tts_service import concat_mp3_bytes
+    from services.tts_service import convert_to_speech
+
+    intro_text = (intro_text or "").strip()
+    outro_text = (outro_text or "").strip()
+    if not intro_text and not outro_text:
+        raise ValueError("Break Fish vide")
+
+    intro_bytes = b""
+    intro_duration = 0.0
+    if intro_text:
+        if on_progress:
+            on_progress("Fish Audio intro")
+        intro_bytes = convert_to_speech(intro_text)
+        intro_duration = _mp3_duration_seconds_no_ffprobe(intro_bytes)
+
+    outro_bytes = b""
+    outro_duration = 0.0
+    if outro_text:
+        if on_progress:
+            on_progress("Fish Audio outro")
+        outro_bytes = convert_to_speech(outro_text)
+        outro_duration = _mp3_duration_seconds_no_ffprobe(outro_bytes)
+
+    target = float(max(int(duration_sec or 0), 0))
+    tail_target = 2.0 if target >= 2.0 else 0.0
+    middle_target = max(
+        0.0,
+        target - intro_duration - outro_duration - tail_target,
+    )
+    middle_bytes, middle_duration = _fish_silent_mp3_approx_no_ffmpeg(
+        middle_target
+    )
+    final_tail_target = max(
+        0.0,
+        target - intro_duration - middle_duration - outro_duration,
+    )
+    tail_bytes, tail_duration = _fish_silent_mp3_approx_no_ffmpeg(
+        final_tail_target
+    )
+    parts = [part for part in (
+        intro_bytes,
+        middle_bytes,
+        outro_bytes,
+        tail_bytes,
+    ) if part]
+    final_duration = (
+        intro_duration + middle_duration + outro_duration + tail_duration
+    )
+    if final_duration < target - _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"Fallback Fish intro/outro trop court ({final_duration:.1f}s < {target:.1f}s)"
+        )
+    return concat_mp3_bytes(parts), final_duration
+
+
 def _course_opening_transitions_enabled() -> bool:
-    value = (os.getenv("COURSE_OPENING_TRANSITIONS", "true") or "").strip().lower()
+    value = (os.getenv("COURSE_OPENING_TRANSITIONS", "false") or "").strip().lower()
     return value not in {"0", "false", "no", "off"}
 
 
@@ -4420,6 +14103,7 @@ def _rewrite_course_opening_for_audio(
     """Build an oral handoff and rewrite the first sentences of a course audio."""
     text = (bloc.get("text") or "").strip()
     bloc_number = int(bloc.get("bloc_number") or 0)
+    total_courses = int(bloc.get("total_courses") or 7)
     if not text or not _course_opening_transitions_enabled():
         return text, {}
 
@@ -4432,15 +14116,15 @@ def _rewrite_course_opening_for_audio(
         "qa": "une séance de questions-réponses",
         "pause": "une pause courte",
         "pause_midi": "la pause déjeuner",
-        "cours": "un cours",
+        "cours": "une partie précédente",
         None: "le début de journée",
     }.get(previous_item_type, str(previous_item_type))
 
     rest_preview = " ".join(rest.split()[:90])
-    prompt = f"""Tu écris l'amorce audio d'un bloc de cours pour une classe virtuelle.
+    prompt = f"""Tu écris l'amorce audio d'une partie de journée pour une classe virtuelle.
 
-BLOC COURS : {bloc_number}/7
-ÉLÉMENT JUSTE AVANT CE COURS : {previous_label}
+PARTIE INTERNE : {bloc_number}/{total_courses}
+ÉLÉMENT JUSTE AVANT CETTE PARTIE : {previous_label}
 
 CONTEXTE PRÉCÉDENT DISPONIBLE :
 ---
@@ -4472,13 +14156,13 @@ CONSIGNES STRICTES :
 - Tu peux situer brièvement le fil, mais ne fais pas un résumé long du cours précédent.
 - Ne répète pas la conclusion, le Q&A ou la pause qui viennent déjà d'avoir lieu.
 - Si l'élément précédent est une pause, ne dis pas "la pause est terminée".
-- Ne spoile pas tout le bloc : ouvre seulement la porte du sujet.
+- Ne spoile pas tout le cours : ouvre seulement la porte du sujet.
 - Ne change pas le fond : conserve les idées du début actuel.
 - Ne recopie pas littéralement le début actuel : reformule sur le vif, naturellement.
 - L'amorce doit faire 25 à 55 mots.
 - Le début reformulé doit faire 35 à 85 mots.
 - Termine le début reformulé de façon à enchaîner naturellement avec la suite immédiate.
-- Pas d'horaires, pas de markdown, pas de guillemets.
+- Pas d'horaires, pas de créneau, pas de planning, pas de markdown, pas de guillemets.
 
 Réponds uniquement avec ce JSON valide :
 {{
@@ -4490,8 +14174,9 @@ Réponds uniquement avec ce JSON valide :
         raw = _llm_post(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=700,
-            model=model or CLAUDE_MODEL,
+            model=model or DEEPSEEK_MODEL,
             timeout=90,
+            http_max_attempts=1,
         )
         opening_text, rewritten_start = _parse_course_handoff_json(raw)
     except Exception as e:
@@ -4520,6 +14205,7 @@ def _rewrite_runtime_carryover_chunks(
     base_chunks: list,
     *,
     bloc_number: int,
+    total_courses: int = 7,
     model: str | None = None,
 ) -> tuple[list, dict]:
     """Amorce and lightly rewrites text carried from the previous audio block."""
@@ -4547,11 +14233,11 @@ def _rewrite_runtime_carryover_chunks(
         if (chunk.get("text") or "").strip()
     )
 
-    prompt = f"""Tu écris l'amorce d'un cours audio qui reprend un passage reporté
+    prompt = f"""Tu écris l'amorce d'une partie audio qui reprend un passage reporté
 depuis le fichier audio précédent.
 
 CONTEXTE :
-- Bloc cours actuel : {bloc_number}/7.
+- Partie interne actuelle : {bloc_number}/{total_courses}.
 - Le début ci-dessous n'est pas un nouveau texte indépendant : c'est un passage
   qui n'a pas été lu dans le cours précédent, et qui doit maintenant être relancé
   proprement.
@@ -4566,7 +14252,7 @@ PASSAGE REPORTÉ AUTOUR :
 {_compact_words(carried_preview, 320)}
 ---
 
-DÉBUT DU BLOC PRÉVU APRÈS LE REPORT :
+DÉBUT DU COURS PRÉVU APRÈS LE REPORT :
 ---
 {_compact_words(base_preview, 180) or "(indisponible)"}
 ---
@@ -4581,12 +14267,13 @@ CONSIGNES :
   humain, pas de reprise sèche au milieu d'un exemple.
 - Ne fais pas semblant de répondre à des questions.
 - Ne parle pas de fichier audio, de découpage technique, de chunk ou de report.
+- Ne parle pas d'horaire, de créneau, de planning, de durée ou de budget.
 - Tu peux dire sobrement qu'on reprend le fil ou qu'on pose le point proprement.
 - Ne change pas le fond.
 - Ne recopie pas littéralement le début reporté.
 - "opening" : 25 à 55 mots.
 - "rewritten_start" : 35 à 85 mots.
-- Pas d'horaires, pas de markdown, pas de guillemets.
+- Pas d'horaires, pas de créneau, pas de markdown, pas de guillemets.
 
 Réponds uniquement avec ce JSON valide :
 {{
@@ -4598,8 +14285,9 @@ Réponds uniquement avec ce JSON valide :
         raw = _llm_post(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=700,
-            model=model or CLAUDE_MODEL,
+            model=model or DEEPSEEK_MODEL,
             timeout=90,
+            http_max_attempts=1,
         )
         opening_text, rewritten_start = _parse_course_handoff_json(raw)
     except Exception as e:
@@ -4639,6 +14327,8 @@ def _build_contextual_break_audio(
     llm_model: str | None = None,
     on_progress=None,
     use_runtime_consumed_text: bool = False,
+    break_overrides: dict | None = None,
+    temporal_outro: str = "",
 ):
     """Génère un Q&A/pause contextuel, fallback vers audioqapause si nécessaire."""
     from services.playlist_tts_service import (
@@ -4646,6 +14336,8 @@ def _build_contextual_break_audio(
         _generate_silence_mp3,
         _get_recycled_qa_pause,
     )
+    dynamic_schedule = _playlist_uses_dynamic_schedule(playlist_items)
+    lead_in_seconds = 0 if dynamic_schedule else 17
 
     def _emit(message: str):
         if on_progress:
@@ -4661,57 +14353,26 @@ def _build_contextual_break_audio(
                 "silence de secours"
             )
             _emit(f"{filename} — audio pause réutilisable indisponible, silence de secours")
-            return _generate_silence_mp3(min(max(int(duration_sec or 1), 1), 10)), "silence_fallback"
+            fallback_duration = max(int(duration_sec or 1), 1)
+            return _generate_silence_mp3(fallback_duration), "silence_fallback"
 
     def _generic_break_texts():
-        from services.playlist_tts_service import (
-            _get_pause_midi_text,
-            _get_pause_text,
-            _get_qa_text,
-        )
         from services.break_transition_service import (
-            break_intro_owned_by_previous,
-            duration_label,
-            is_schedule_neutral_break,
+            fallback_break_transition,
             next_item_type,
         )
-        intro_owned = break_intro_owned_by_previous(playlist_items, item_idx, file_type)
-        if file_type == "qa":
-            intro, outro = _get_qa_text(bloc_num)
-            ntype = next_item_type(playlist_items, item_idx)
-            if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
-                next_item = _next_playlist_item_after(playlist_items, item_idx)
-                next_intro = _break_intro_text_for_playlist_item(next_item)
-                label = duration_label(_playlist_item_duration(next_item), ntype)
-                if next_intro:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        f"{next_intro}"
-                    )
-                elif ntype == "pause_midi" or label == "pause déjeuner":
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
-                    )
-                elif label:
-                    outro = (
-                        f"Très bien, on clôt ce temps de questions. "
-                        f"On va maintenant prendre une pause de {label}."
-                    )
-                else:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant prendre une courte pause."
-                    )
-            if intro_owned:
-                intro = ""
-            return intro, outro
-        if file_type == "pause_midi" or filename.startswith("pause_midi_"):
-            intro, outro = _get_pause_midi_text()
-        else:
-            intro, outro = _get_pause_text(bloc_num)
-        if intro_owned:
-            intro = ""
+        intro, outro = fallback_break_transition(
+            file_type,
+            bloc_num,
+            duration_sec,
+            next_item_type=next_item_type(playlist_items, item_idx),
+        )
+        return _apply_temporal_outro(intro, outro)
+
+    def _apply_temporal_outro(intro: str, outro: str) -> tuple[str, str]:
+        """Le dernier Q&R possède la clôture temporelle de la journée."""
+        if temporal_outro and file_type == "qa" and item_idx == len(playlist_items) - 1:
+            return intro, temporal_outro.strip()
         return intro, outro
 
     def _generic_basic_tts_break():
@@ -4729,6 +14390,135 @@ def _build_contextual_break_audio(
 
     if mock:
         return _generate_silence_mp3(1), "mock"
+
+    if file_type == "jointure":
+        jointure_text = (
+            "Nous allons maintenant poursuivre avec la partie suivante, "
+            "dans le prolongement direct de ce que nous venons de voir."
+        )
+        _emit(f"{filename} — jointure entre deux cours...")
+        if basic_tts:
+            audio_bytes, _final_duration = _build_timed_edge_break_audio(
+                jointure_text,
+                "",
+                min(10, max(1, int(duration_sec))),
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            return audio_bytes, "jointure_edge_timed"
+        try:
+            return _build_pause_audio(
+                jointure_text,
+                "",
+                min(10, max(1, int(duration_sec))),
+                lead_in_seconds=0,
+            ), "jointure_fish"
+        except Exception:
+            audio_bytes, _final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                jointure_text,
+                "",
+                min(10, max(1, int(duration_sec))),
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            return audio_bytes, "jointure_fish_no_ffmpeg"
+
+    manual_break = (break_overrides or {}).get(filename)
+    if manual_break:
+        intro = (manual_break.get("intro") or "").strip()
+        outro = (manual_break.get("outro") or "").strip()
+        intro, outro = _apply_temporal_outro(intro, outro)
+        _emit(f"{filename} — texte manuel...")
+        if basic_tts:
+            audio_bytes, final_duration = _build_timed_edge_break_audio(
+                intro,
+                outro,
+                duration_sec,
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            _emit(
+                f"{filename} — Edge TTS manuel calé ({final_duration:.1f}s/{duration_sec}s)"
+            )
+            return audio_bytes, "manual_edge_timed"
+        try:
+            return _build_pause_audio(
+                intro,
+                outro,
+                duration_sec,
+                lead_in_seconds=lead_in_seconds,
+            ), "manual_fish"
+        except Exception as fish_break_error:
+            logger.warning(
+                "⚠️ Break Fish manuel %s impossible à assembler (%s); "
+                "fallback Fish end-only sans ffmpeg",
+                filename,
+                str(fish_break_error)[:240],
+            )
+            audio_bytes, final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                intro,
+                outro,
+                duration_sec,
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            _emit(
+                f"{filename} — fallback Fish manuel calé "
+                f"({final_duration:.1f}s/{duration_sec}s)"
+            )
+            return audio_bytes, "manual_fish_two_sided_fallback"
+
+    try:
+        from services.break_transition_service import break_intro_owned_by_previous
+        from services.fixed_break_scripts import get_fixed_break_script
+
+        fixed_break = get_fixed_break_script(
+            filename,
+            intro_owned_by_previous=break_intro_owned_by_previous(
+                playlist_items,
+                item_idx,
+                file_type,
+            ),
+        )
+        if fixed_break:
+            intro = fixed_break["intro"]
+            outro = fixed_break["outro"]
+            intro, outro = _apply_temporal_outro(intro, outro)
+            _emit(f"{filename} — script fixe...")
+            if basic_tts:
+                audio_bytes, final_duration = _build_timed_edge_break_audio(
+                    intro,
+                    outro,
+                    duration_sec,
+                    on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+                )
+                _emit(
+                    f"{filename} — Edge TTS fixe calé ({final_duration:.1f}s/{duration_sec}s)"
+                )
+                return audio_bytes, "fixed_edge_timed"
+            try:
+                return _build_pause_audio(
+                    intro,
+                    outro,
+                    duration_sec,
+                    lead_in_seconds=lead_in_seconds,
+                ), "fixed_fish"
+            except Exception as fish_break_error:
+                logger.warning(
+                    "⚠️ Break Fish fixe %s impossible à assembler (%s); "
+                    "fallback Fish end-only sans ffmpeg",
+                    filename,
+                    str(fish_break_error)[:240],
+                )
+                audio_bytes, final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                    intro,
+                    outro,
+                    duration_sec,
+                    on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+                )
+                _emit(
+                    f"{filename} — fallback Fish fixe calé "
+                    f"({final_duration:.1f}s/{duration_sec}s)"
+                )
+                return audio_bytes, "fixed_fish_two_sided_fallback"
+    except Exception as e:
+        logger.warning(f"⚠️ Script fixe {filename} indisponible : {e}")
 
     contextual_basic_tts = os.getenv("BASIC_TTS_CONTEXTUAL_BREAKS", "false").lower() in {
         "1",
@@ -4765,6 +14555,7 @@ def _build_contextual_break_audio(
             get_bloc_text=_get_bloc_text_for_break,
             model=llm_model,
         )
+        intro, outro = _apply_temporal_outro(intro, outro)
         _emit(f"{filename} — synthèse audio transition...")
         if basic_tts:
             audio_bytes, final_duration = _build_timed_edge_break_audio(
@@ -4778,29 +14569,38 @@ def _build_contextual_break_audio(
                 f"({final_duration:.1f}s/{duration_sec}s)"
             )
             return audio_bytes, "contextual_edge_timed"
-        return _build_pause_audio(intro, outro, duration_sec), "contextual_fish"
+        try:
+            return _build_pause_audio(
+                intro,
+                outro,
+                duration_sec,
+                lead_in_seconds=lead_in_seconds,
+            ), "contextual_fish"
+        except Exception as fish_break_error:
+            logger.warning(
+                "⚠️ Break Fish contextuel %s impossible à assembler (%s); "
+                "fallback Fish end-only sans ffmpeg",
+                filename,
+                str(fish_break_error)[:240],
+            )
+            audio_bytes, final_duration = _build_two_sided_fish_break_audio_no_ffmpeg(
+                intro,
+                outro,
+                duration_sec,
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            _emit(
+                f"{filename} — fallback Fish contextuel calé "
+                f"({final_duration:.1f}s/{duration_sec}s)"
+            )
+            return audio_bytes, "contextual_fish_two_sided_fallback"
     except Exception as e:
         logger.warning(f"⚠️ Break contextuel {filename} échoué : {e}; fallback audioqapause")
         return _fallback(type(e).__name__)
 
 
 def _mark_content_segments_clean(job_id: int, seg_keys) -> None:
-    unique_keys = sorted(set(seg_keys or []))
-    if not unique_keys:
-        return
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        for sub_idx, passe in unique_keys:
-            cur.execute("""
-                UPDATE content_generation_segments
-                SET dirty = 0
-                WHERE job_id = ? AND sub_part_index = ? AND passe = ?
-            """, (job_id, sub_idx, passe))
-        conn.commit()
-    finally:
-        conn.close()
+    mark_content_segments_clean(job_id, seg_keys)
 
 
 def _allow_audio_overflow_lost() -> bool:
@@ -4871,10 +14671,15 @@ def generate_audio_from_script(
     slide_model=None,
     llm_model=None,
     fast_tts_pipeline=False,
+    target_filename=None,
+    include_breaks=True,
+    parallel_breaks=False,
+    preserve_existing=False,
+    _allow_unsynced_course_audio_for_tests=False,
 ):
     """
     Génère (ou régénère) la playlist MP3 depuis le script TTS stocké en DB :
-    7 blocs cours + Q&A/pauses contextuels quand le mode n'est pas mock.
+    X blocs cours + Q&A/pauses contextuels quand le mode n'est pas mock.
 
     3 modes possibles (priorité décroissante) :
     - mock=True        → MP3 silence 1s, test gratuit (pas d'audio réel)
@@ -4883,9 +14688,11 @@ def generate_audio_from_script(
 
     Logique de régénération sélective :
     - Assemble les segments en ordre (sub_part × passe)
-    - Découpe le texte total en 7 blocs proportionnels, sur fins de paragraphes/phrases
+    - Découpe le texte selon les X cours réels, sur fins de paragraphes/phrases
     - Pour chaque bloc, vérifie si au moins un segment contributeur est dirty=1
     - Si dirty (ou force_all=True) → génère le TTS + upload Azure
+    - Si preserve_existing=True → conserve tout MP3 déjà présent dans Azure,
+      même si le bloc serait dirty ou force_all.
     - sync_slides=True découpe les blocs cours selon le dernier deck de slides
       persistant, puis stocke les timings slide → audio.
     - Si propre → conserve l'ancien MP3
@@ -4893,35 +14700,111 @@ def generate_audio_from_script(
     Après génération réussie d'un bloc : marque ses segments dirty=0.
     """
     from services.playlist_tts_service import (
-        COURS_DURATIONS_MIN, PLAYLIST_SPEC, _pad_audio_to_duration, _measure_duration_ms
+        _pad_audio_to_duration,
+        _measure_duration_ms,
     )
-    from services.tts_service import convert_to_speech
-    from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
+    from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
+    from services.azure_blob_service import (
+        blob_exists,
+        download_blob,
+        upload_blob,
+        CONTAINER_AUDIOS,
+    )
 
     def _progress(step, total, msg):
         if on_progress:
             on_progress(step, total, msg)
 
-    # 1er event audio_progress émis dès l'entrée pour que la barre
-    # « Playlist TTS X/19 » apparaisse côté frontend, avant les ~6 min de
-    # préparation (chargement segments, découpage en blocs, transitions,
-    # slides). Sinon l'utilisateur voit « Aucun événement audio reçu »
-    # tout le temps de la préparation et croit que rien ne tourne.
-    # `total` corrigera tout seul plus bas une fois `playlist_items` calculé.
-    _progress(0, len(PLAYLIST_SPEC), "Préparation TTS — chargement du script et découpage…")
+    def _measure_duration_ms_safe(audio_bytes):
+        try:
+            return int(round(_mp3_duration_seconds_no_ffprobe(audio_bytes) * 1000))
+        except Exception:
+            try:
+                return _measure_duration_ms(audio_bytes)
+            except Exception:
+                return int(max(0.0, len(audio_bytes or b"") / 4.0))
 
     job = get_job_from_db(folder_id)
     if not job:
         raise ValueError(f"Aucun script TTS pour le dossier {folder_id}")
 
     platform_id = job["platform_id"]
+    base_convert_to_speech = convert_to_speech
+    base_convert_to_speech_with_timestamps = convert_to_speech_with_timestamps
+
+    def convert_to_speech(text, *args, **kwargs):
+        kwargs["platform_id"] = platform_id
+        return base_convert_to_speech(text, *args, **kwargs)
+
+    def convert_to_speech_with_timestamps(text, *args, **kwargs):
+        kwargs["platform_id"] = platform_id
+        return base_convert_to_speech_with_timestamps(text, *args, **kwargs)
+
     job_id = job["id"]
     formation_job_id = job.get("formation_job_id")
-    assert_course_day_word_budget(folder_id, context="audio_generation")
+    day_temporal_closing = _build_day_temporal_closing(
+        formation_job_id=formation_job_id,
+        folder_position=job.get("folder_position"),
+    )
+    playlist_items = _playlist_items_for_platform(
+        platform_id,
+        folder_id=int(folder_id),
+    )
+    cours_durations_min = _course_durations_min_from_playlist(playlist_items)
+    course_count = sum(1 for item in playlist_items if item[2] == "cours")
+    if course_count <= 0:
+        raise ValueError("La journée ne contient aucun cours à synthétiser")
+    _progress(
+        0,
+        len(playlist_items),
+        "Préparation TTS — "
+        f"{course_count} cours, {len(playlist_items)} fichiers · "
+        "chargement du script et découpage…",
+    )
+    saved_script_plan = _load_saved_course_script_plan(platform_id, folder_id) or {}
+    target_filename = os.path.basename((target_filename or "").split("?", 1)[0]) or None
+    target_playlist_item = next(
+        (item for item in playlist_items if item[0] == target_filename),
+        None,
+    ) if target_filename else None
+    generates_course_audio = bool(
+        not mock
+        and (
+            target_filename is None
+            or (target_playlist_item and target_playlist_item[2] == "cours")
+        )
+    )
+    if generates_course_audio and not _allow_unsynced_course_audio_for_tests:
+        if not sync_slides or not auto_generate_slides:
+            logger.warning(
+                "PIPELINE_AUDIO_SYNC_FORCED folder_id=%s target_filename=%s "
+                "requested_sync_slides=%s requested_auto_generate_slides=%s",
+                folder_id,
+                target_filename,
+                bool(sync_slides),
+                bool(auto_generate_slides),
+            )
+        # Enforce the invariant at the service boundary as well as in HTTP and
+        # queue callers.  A future caller cannot accidentally create a real
+        # course MP3 without a slide deck and persisted timings.
+        sync_slides = True
+        auto_generate_slides = True
+    try:
+        audio_budget_audit = assert_course_day_word_budget(folder_id, context="audio_generation")
+    except Exception as exc:
+        audio_budget_audit = None
+        logger.warning(
+            "PIPELINE_AUDIO_WORD_BUDGET_OVERFLOW_NON_BLOCKING "
+            "formation_job_id=%s content_job_id=%s folder_id=%s error=%s",
+            formation_job_id,
+            job_id,
+            folder_id,
+            str(exc)[:220],
+        )
     started_at = time.time()
     logger.info(
         "PIPELINE_AUDIO_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s force_all=%s mock=%s basic_tts=%s "
-        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s",
+        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s target_filename=%s include_breaks=%s parallel_breaks=%s preserve_existing=%s",
         formation_job_id,
         job_id,
         folder_id,
@@ -4935,6 +14818,10 @@ def generate_audio_from_script(
         slide_pace,
         llm_model,
         bool(fast_tts_pipeline),
+        target_filename,
+        bool(include_breaks),
+        bool(parallel_breaks),
+        bool(preserve_existing),
     )
     if next_folder_id is None:
         next_folder_id = _find_next_folder_id(platform_id, folder_id)
@@ -4946,11 +14833,12 @@ def generate_audio_from_script(
         from services.script_slide_generation_service import (
             generate_slides_from_script,
             get_latest_script_slide_deck,
+            is_script_slide_deck_usable,
         )
         slide_deck = get_latest_script_slide_deck(folder_id, content_job_id=job_id)
-        if not slide_deck and auto_generate_slides:
+        if not is_script_slide_deck_usable(slide_deck) and auto_generate_slides:
             logger.info(
-                f"🖼️ Folder {folder_id}: aucun deck slides, génération automatique avant TTS sync"
+                f"🖼️ Folder {folder_id}: aucun deck slides valide, génération automatique avant TTS sync"
             )
             generate_slides_from_script(
                 folder_id=folder_id,
@@ -4958,11 +14846,12 @@ def generate_audio_from_script(
                 max_slides=slide_max_slides,
                 pace=slide_pace,
                 model=slide_model,
+                repair_existing_audio_sync=False,
             )
             slide_deck = get_latest_script_slide_deck(folder_id, content_job_id=job_id)
-        if not slide_deck:
+        if not is_script_slide_deck_usable(slide_deck):
             raise ValueError(
-                f"Aucun deck de slides persistant pour le dossier {folder_id}. "
+                f"Aucun deck de slides valide pour le dossier {folder_id}. "
                 "Générez les slides d'abord ou relancez avec auto_generate_slides=true."
             )
         logger.info(
@@ -4971,16 +14860,7 @@ def generate_audio_from_script(
         )
 
     # ── 1. Charger tous les segments complétés dans l'ordre ──
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, text_content, word_count, dirty
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job_id)
 
     if not rows:
         raise ValueError("Aucun segment généré — lancez d'abord la génération du script")
@@ -4988,15 +14868,15 @@ def generate_audio_from_script(
     # Construire la liste ordonnée des segments avec leur index global
     segments = []
     for r in rows:
-        text = r[2] or ""
+        text = r.get("text_content") or ""
         if sync_slides:
             text = _strip_tts_tags_for_sync(text)
         segments.append({
-            "sub_idx": r[0],
-            "passe": r[1],
+            "sub_idx": r["sub_part_index"],
+            "passe": r["passe"],
             "text": text,
-            "word_count": len(text.split()) if sync_slides else r[3],
-            "dirty": bool(r[4]),
+            "word_count": len(text.split()) if sync_slides else r["word_count"],
+            "dirty": bool(r["dirty"]),
         })
 
     carryover_in = (job.get("carryover_in_text") or "").strip()
@@ -5025,33 +14905,168 @@ def generate_audio_from_script(
     total_words = sum(len(seg["text"].split()) for seg in segments)
     logger.info(f"📝 Script total : {total_words} mots, {len(segments)} segments")
 
-    # ── 3. Découper en 7 blocs proportionnels, sur fins d'idées + redistribution ──
+    # ── 3. Découper selon les cours réels, sur fins d'idées + redistribution ──
     # Passe 1 (forward cascade) + Passe 2 (backward redistribution) sont dans la fonction.
     blocs, _, carryover_out = _build_course_blocs_from_segments(
         segments,
-        COURS_DURATIONS_MIN,
-        PLAYLIST_SPEC,
+        cours_durations_min,
+        playlist_items,
         force_all=force_all,
         source_folder_id=folder_id,
         next_folder_id=next_folder_id,
         is_last_folder=is_last_folder,
         model=llm_model,
+        platform_id=platform_id,
+        folder_position=job.get("folder_position"),
     )
+    from services.adaptive_playback_service import course_playback_cap_seconds
+
+    playback_cap_by_bloc = {
+        int(item[3]): course_playback_cap_seconds(playlist_items, item_index)
+        for item_index, item in enumerate(playlist_items)
+        if item[2] == "cours"
+    }
+    for bloc in blocs:
+        bloc["total_courses"] = course_count
+        if bloc.get("dynamic_schedule"):
+            bloc["max_playback_sec"] = playback_cap_by_bloc.get(
+                int(bloc.get("bloc_number") or 0),
+                int(bloc.get("target_sec") or 0),
+            )
+    _apply_course_bloc_overrides(blocs, saved_script_plan.get("course_bloc_overrides"))
+    if _apply_late_temporal_closing_to_final_course(
+        blocs,
+        playlist_items,
+        day_temporal_closing,
+    ):
+        logger.info(
+            "PIPELINE_AUDIO_LATE_TEMPORAL_CLOSING formation_job_id=%s "
+            "content_job_id=%s folder_id=%s owner=final_course",
+            formation_job_id,
+            job_id,
+            folder_id,
+        )
+    if target_filename:
+        matching_item = next((item for item in playlist_items if item[0] == target_filename), None)
+        if not matching_item:
+            raise ValueError(f"Fichier audio introuvable dans la playlist : {target_filename}")
+        if matching_item[2] == "cours":
+            selected_bloc = next((b for b in blocs if int(b.get("bloc_number") or 0) == int(matching_item[3] or 0)), None)
+            if selected_bloc:
+                selected_bloc["dirty"] = True
     if carryover_out:
         logger.info(
             f"🔁 Folder {folder_id} : {len(carryover_out.split())} mots reportés "
             f"vers folder {next_folder_id}"
         )
 
-    playlist_items = _playlist_items_for_platform(platform_id)
-
-    # Les fins de blocs sont désormais portées par le texte calibré en amont.
-    # On n'ajoute plus de closing au moment de l'audio.
+    # Les conclusions pédagogiques restent dans le texte calibré. Seule la
+    # courte projection temporelle, propre à cette occurrence, est ajoutée ici.
 
     blocs_by_number = {b["bloc_number"]: b for b in blocs}
+    existing_audio_sync = (
+        (slide_deck.get("audio_sync") or {})
+        if sync_slides and slide_deck
+        else {}
+    )
+    expected_sync_slide_ids_by_file = {}
+    existing_sync_slide_ids_by_file = {}
+    existing_synced_courses = set()
+    if sync_slides and slide_deck:
+        sync_course_items = [
+            item for item in playlist_items
+            if item[2] == "cours"
+            and (not target_filename or item[0] == target_filename)
+        ]
+        deck_slide_ids = {
+            str(slide.get("slide_id"))
+            for slide in (slide_deck.get("slides") or [])
+            if slide.get("slide_id")
+        }
+        for item_filename, _duration_sec, _file_type, item_bloc_num in sync_course_items:
+            sync_bloc = blocs_by_number.get(item_bloc_num)
+            if not sync_bloc:
+                raise ValueError(
+                    f"Synchronisation impossible pour {item_filename}: bloc cours introuvable"
+                )
+            expected_ids = {
+                str(chunk.get("slide_id"))
+                for chunk in _build_slide_audio_chunks(
+                    sync_bloc,
+                    slide_deck.get("slides") or [],
+                )
+                if chunk.get("slide_id")
+            }
+            if not expected_ids:
+                raise ValueError(
+                    f"Synchronisation impossible pour {item_filename}: "
+                    "aucune diapositive ne correspond à ce bloc cours"
+                )
+            expected_sync_slide_ids_by_file[item_filename] = expected_ids
+
+        if not target_filename:
+            planned_slide_ids = set().union(
+                *expected_sync_slide_ids_by_file.values()
+            ) if expected_sync_slide_ids_by_file else set()
+            uncovered_slide_ids = sorted(deck_slide_ids - planned_slide_ids)
+            if uncovered_slide_ids:
+                raise ValueError(
+                    "Synchronisation impossible: certaines diapositives ne sont "
+                    f"rattachées à aucun cours ({uncovered_slide_ids[:8]})"
+                )
+
+        for timing in existing_audio_sync.get("timings") or []:
+            if not isinstance(timing, dict):
+                continue
+            timing_filename = os.path.basename(str(
+                timing.get("audio_filename") or timing.get("filename") or ""
+            ).split("?", 1)[0])
+            slide_id = str(timing.get("slide_id") or "")
+            try:
+                start_time = float(timing.get("start_time"))
+                end_time = float(timing.get("end_time"))
+            except (TypeError, ValueError):
+                continue
+            if (
+                timing_filename
+                and slide_id in deck_slide_ids
+                and math.isfinite(start_time)
+                and math.isfinite(end_time)
+                and end_time > start_time
+            ):
+                existing_sync_slide_ids_by_file.setdefault(
+                    timing_filename,
+                    set(),
+                ).add(slide_id)
+
+        for item_filename, expected_ids in expected_sync_slide_ids_by_file.items():
+            actual_ids = existing_sync_slide_ids_by_file.get(item_filename, set())
+            if expected_ids.issubset(actual_ids):
+                existing_synced_courses.add(item_filename)
+                continue
+            sync_bloc_num = next(
+                item[3] for item in sync_course_items if item[0] == item_filename
+            )
+            blocs_by_number[sync_bloc_num]["dirty"] = True
+            logger.warning(
+                "PIPELINE_AUDIO_SYNC_MISSING_REGENERATE formation_job_id=%s "
+                "content_job_id=%s folder_id=%s filename=%s missing_slide_ids=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                item_filename,
+                sorted(expected_ids - actual_ids)[:8],
+            )
+
     dirty_count = sum(1 for b in blocs if b["dirty"])
-    clean_count = 7 - dirty_count
-    logger.info(f"🎯 {dirty_count}/7 blocs à régénérer, {clean_count}/7 conservés")
+    clean_count = course_count - dirty_count
+    logger.info(
+        "🎯 %s/%s blocs à régénérer, %s/%s conservés",
+        dirty_count,
+        course_count,
+        clean_count,
+        course_count,
+    )
     logger.info(
         "PIPELINE_AUDIO_PLAN formation_job_id=%s content_job_id=%s folder_id=%s playlist_items=%s total_words=%s blocs=%s dirty_blocs=%s clean_blocs=%s "
         "next_folder_id=%s is_last_folder=%s",
@@ -5067,21 +15082,123 @@ def generate_audio_from_script(
         is_last_folder,
     )
 
-    _progress(0, len(playlist_items), f"{dirty_count}/7 blocs cours à régénérer ({clean_count} conservés)...")
+    _progress(
+        0,
+        len(playlist_items),
+        f"{dirty_count}/{course_count} blocs cours à régénérer "
+        f"({clean_count} conservés)…",
+    )
 
     # ── 4. Générer la playlist : cours dirty + Q&A/pauses contextuels ──
     azure_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+    existing_playlist_files = set()
+    if preserve_existing:
+        from services.audio_asset_validation_service import (
+            validate_mp3_bytes,
+        )
+        for item_filename, item_duration_sec, item_file_type, _bloc_num in playlist_items:
+            blob_path = f"{azure_prefix}{item_filename}"
+            try:
+                if not blob_exists(CONTAINER_AUDIOS, blob_path):
+                    continue
+                existing_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+                validate_mp3_bytes(
+                    item_filename,
+                    existing_bytes,
+                    expected_duration_seconds=item_duration_sec,
+                )
+                if (
+                    item_file_type == "cours"
+                    and sync_slides
+                    and item_filename not in existing_synced_courses
+                ):
+                    raise ValueError("synchronisation slides absente")
+                existing_playlist_files.add(item_filename)
+            except Exception as exc:
+                logger.warning(
+                    "PIPELINE_AUDIO_EXISTING_INVALID_REGENERATE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    item_filename,
+                    str(exc)[:220],
+                )
+        if existing_playlist_files:
+            logger.info(
+                "PIPELINE_AUDIO_PRESERVE_EXISTING formation_job_id=%s content_job_id=%s folder_id=%s existing=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                sorted(existing_playlist_files),
+            )
     generated = []
     skipped = []
+    measured_media_durations = {}
+    effective_break_durations = {}
+    adaptive_generation_manifest = None
     slide_audio_timings = []
     slide_sync_files = []
+    if sync_slides and slide_deck:
+        for existing_file in existing_audio_sync.get("generated_files") or []:
+            if existing_file and existing_file not in slide_sync_files:
+                slide_sync_files.append(existing_file)
+        for existing_timing in existing_audio_sync.get("timings") or []:
+            if isinstance(existing_timing, dict):
+                slide_audio_timings.append(dict(existing_timing))
+                existing_file = os.path.basename(str(
+                    existing_timing.get("audio_filename")
+                    or existing_timing.get("filename")
+                    or ""
+                ).split("?", 1)[0])
+                if existing_file and existing_file not in slide_sync_files:
+                    slide_sync_files.append(existing_file)
+
+    def _replace_slide_sync_for_file(filename: str, timings: list[dict] | None) -> None:
+        if not filename:
+            return
+        slide_audio_timings[:] = [
+            timing for timing in slide_audio_timings
+            if timing.get("audio_filename") != filename
+        ]
+        slide_audio_timings.extend(timings or [])
+        slide_sync_files[:] = [item for item in slide_sync_files if item != filename]
+        slide_sync_files.append(filename)
+
+    def _persist_slide_audio_sync_snapshot(reason: str) -> None:
+        if not (sync_slides and slide_deck):
+            return
+        try:
+            from services.script_slide_generation_service import update_script_slide_deck_audio_sync
+            audio_mode = "mock" if mock else "gtts" if basic_tts else "fish_audio"
+            update_script_slide_deck_audio_sync(
+                slide_deck["deck_id"],
+                {
+                    "enabled": True,
+                    "mode": audio_mode,
+                    "folder_id": folder_id,
+                    "content_job_id": job_id,
+                    "generated_files": list(slide_sync_files),
+                    "timings": list(slide_audio_timings),
+                    "partial": True,
+                    "partial_reason": reason,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "PIPELINE_AUDIO_SYNC_PARTIAL_SAVE_FAILED formation_job_id=%s content_job_id=%s folder_id=%s reason=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                reason,
+                exc_info=True,
+            )
 
     # Tampon intra-jour : chunks structurés non consommés par un bloc cours
     # précédent (runtime_fit a stoppé avant la fin) → préfixés au bloc suivant.
     # Actif pour Edge TTS, avec ou sans sync slides : Edge est plus lent que le
     # budget Fish Audio et doit être calé par durée réelle avant upload.
     intra_day_carryover_chunks = []
-    runtime_fit_enabled = bool(basic_tts and not mock)
+    runtime_fit_enabled = False
     fast_tts_pipeline = bool(fast_tts_pipeline and runtime_fit_enabled)
     if fast_tts_pipeline:
         logger.info(
@@ -5100,7 +15217,7 @@ def generate_audio_from_script(
                             skipped_reason=None, opening_rewritten=False,
                             opening_text="", opening_original_start="",
                             runtime_conclusions=None, runtime_ai_decisions=None,
-                            target_plan=None):
+                            actual_reading=None, target_plan=None):
         target = course_script_plan if target_plan is None else target_plan
         target.append(
             _serialize_course_bloc(
@@ -5115,10 +15232,398 @@ def generate_audio_from_script(
                 opening_original_start=opening_original_start,
                 runtime_conclusions=runtime_conclusions,
                 runtime_ai_decisions=runtime_ai_decisions,
+                actual_reading=actual_reading,
             )
         )
 
-    for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
+    def _parallel_fish_course_worker(item_idx, filename, duration_sec, bloc_num):
+        step = item_idx + 1
+        item_started_at = time.time()
+        bloc = blocs_by_number.get(bloc_num)
+        audio_bloc = bloc
+        opening_rewritten = False
+        opening_text = ""
+        opening_original_start = ""
+        try:
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_START formation_job_id=%s content_job_id=%s folder_id=%s item=%s/%s filename=%s type=cours bloc=%s target_sec=%s parallel_fish=true",
+                formation_job_id,
+                job_id,
+                folder_id,
+                step,
+                len(playlist_items),
+                filename,
+                bloc_num,
+                duration_sec,
+            )
+            if not bloc:
+                return {
+                    "item_idx": item_idx,
+                    "status": "skipped",
+                    "skipped_reason": "bloc_missing",
+                    "filename": filename,
+                    "bloc_num": bloc_num,
+                    "duration_ms": int((time.time() - item_started_at) * 1000),
+                }
+            if not bloc.get("dirty"):
+                return {
+                    "item_idx": item_idx,
+                    "status": "skipped",
+                    "skipped_reason": "clean_bloc",
+                    "filename": filename,
+                    "bloc": bloc,
+                    "bloc_num": bloc_num,
+                    "duration_ms": int((time.time() - item_started_at) * 1000),
+                }
+            if not (bloc.get("text") or "").strip():
+                return {
+                    "item_idx": item_idx,
+                    "status": "skipped",
+                    "skipped_reason": "empty_text",
+                    "filename": filename,
+                    "bloc": bloc,
+                    "bloc_num": bloc_num,
+                    "duration_ms": int((time.time() - item_started_at) * 1000),
+                }
+
+            if _course_opening_transitions_enabled():
+                from services.break_transition_service import nearest_course_bloc
+                prev_course = nearest_course_bloc(playlist_items, item_idx, -1)
+                prev_bloc_text = ""
+                if prev_course and prev_course in blocs_by_number:
+                    prev_data = blocs_by_number.get(prev_course) or {}
+                    prev_bloc_text = prev_data.get("text") or ""
+                _progress(
+                    step,
+                    len(playlist_items),
+                    f"Bloc {bloc['bloc_number']}/{course_count} — intro IA + Fish parallèle...",
+                )
+                rewritten_text, opening_meta = _rewrite_course_opening_for_audio(
+                    bloc,
+                    playlist_items,
+                    item_idx,
+                    model=llm_model,
+                    previous_excerpt=_tail_words(prev_bloc_text, 220),
+                )
+                if rewritten_text and rewritten_text != (bloc.get("text") or "").strip():
+                    audio_bloc = dict(bloc)
+                    audio_bloc["text"] = rewritten_text
+                    audio_bloc["word_count"] = len(rewritten_text.split())
+                    opening_rewritten = True
+                    opening_text = (opening_meta or {}).get("opening_text") or ""
+                    opening_original_start = (opening_meta or {}).get("original_start") or ""
+
+            _progress(
+                step,
+                len(playlist_items),
+                f"Bloc {bloc['bloc_number']}/{course_count} — Fish Audio parallèle ({len(audio_bloc['text'].split())} mots)...",
+            )
+            final_bytes, voice_duration, fit_method, attempts = _synthesize_fish_course_audio_observe(
+                audio_bloc,
+                convert_to_speech,
+                _measure_duration_ms_safe,
+                convert_to_speech_with_timestamps=convert_to_speech_with_timestamps,
+            )
+            actual_reading = _actual_reading_from_attempts(attempts)
+            final_duration = float(voice_duration)
+            blob_path = f"{azure_prefix}{filename}"
+            upload_blob(
+                CONTAINER_AUDIOS,
+                blob_path,
+                final_bytes,
+                metadata={
+                    "audio_validated": "1",
+                    "duration_seconds": f"{final_duration:.3f}",
+                },
+            )
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=cours bloc=%s final_duration=%.1f words=%s duration_ms=%s parallel_fish=true",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                bloc["bloc_number"],
+                final_duration,
+                len((audio_bloc.get("text") or "").split()),
+                int((time.time() - item_started_at) * 1000),
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "generated",
+                "filename": filename,
+                "bloc": bloc,
+                "audio_bloc": audio_bloc,
+                "voice_duration": voice_duration,
+                "final_duration": final_duration,
+                "fit_method": fit_method,
+                "attempts": attempts,
+                "actual_reading": actual_reading,
+                "opening_rewritten": opening_rewritten,
+                "opening_text": opening_text,
+                "opening_original_start": opening_original_start,
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+        except Exception as exc:
+            logger.exception(
+                "PIPELINE_AUDIO_ITEM_FAILED formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s parallel_fish=true",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                bloc_num,
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "error",
+                "filename": filename,
+                "bloc_num": bloc_num,
+                "error": str(exc),
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+
+    def _parallel_break_worker(item_idx, filename, duration_sec, file_type, bloc_num):
+        step = item_idx + 1
+        item_started_at = time.time()
+        try:
+            logger.info(
+                "PIPELINE_AUDIO_BREAK_PARALLEL_START formation_job_id=%s content_job_id=%s folder_id=%s item=%s/%s filename=%s type=%s bloc=%s target_sec=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                step,
+                len(playlist_items),
+                filename,
+                file_type,
+                bloc_num,
+                duration_sec,
+            )
+            _progress(step, len(playlist_items), f"{filename} — génération parallèle {file_type}...")
+            final_bytes, break_mode = _build_contextual_break_audio(
+                filename=filename,
+                duration_sec=duration_sec,
+                file_type=file_type,
+                bloc_num=bloc_num,
+                item_idx=item_idx,
+                playlist_items=playlist_items,
+                blocs_by_number=blocs_by_number,
+                mock=mock,
+                basic_tts=basic_tts,
+                llm_model=llm_model,
+                on_progress=lambda msg: _progress(step, len(playlist_items), msg),
+                use_runtime_consumed_text=runtime_fit_enabled,
+                break_overrides=saved_script_plan.get("break_overrides"),
+                temporal_outro=day_temporal_closing,
+            )
+            try:
+                final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
+            except Exception:
+                try:
+                    final_duration = _measure_duration_ms_safe(final_bytes) / 1000
+                except Exception:
+                    final_duration = (
+                        duration_sec
+                        if break_mode == "audioqapause_fallback"
+                        else len(final_bytes) / 6000
+                    )
+            _assert_audio_duration_within_slot(filename, final_duration, duration_sec)
+            upload_blob(
+                CONTAINER_AUDIOS,
+                f"{azure_prefix}{filename}",
+                final_bytes,
+                metadata={
+                    "audio_validated": "1",
+                    "duration_seconds": f"{final_duration:.3f}",
+                },
+            )
+            logger.info(
+                "PIPELINE_AUDIO_BREAK_PARALLEL_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=%s mode=%s final_duration=%.1f duration_ms=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                file_type,
+                break_mode,
+                final_duration,
+                int((time.time() - item_started_at) * 1000),
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "generated",
+                "filename": filename,
+                "file_type": file_type,
+                "break_mode": break_mode,
+                "final_duration": final_duration,
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+        except Exception as exc:
+            logger.exception(
+                "PIPELINE_AUDIO_BREAK_PARALLEL_FAILED formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                file_type,
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "error",
+                "filename": filename,
+                "file_type": file_type,
+                "error": str(exc),
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+
+    parallel_fish_course_results = {}
+    fish_course_workers = _fish_audio_course_workers()
+    parallel_fish_courses_enabled = (
+        not mock
+        and not basic_tts
+        and not sync_slides
+        and fish_course_workers > 1
+    )
+    if parallel_fish_courses_enabled:
+        dirty_course_items = [
+            (idx, filename, duration_sec, bloc_num)
+            for idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items)
+            if file_type == "cours"
+            and (not target_filename or filename == target_filename)
+            and (blocs_by_number.get(bloc_num) or {}).get("dirty")
+            and ((blocs_by_number.get(bloc_num) or {}).get("text") or "").strip()
+        ]
+        if len(dirty_course_items) > 1:
+            workers = min(fish_course_workers, len(dirty_course_items))
+            logger.info(
+                "PIPELINE_AUDIO_FISH_PARALLEL_COURSES formation_job_id=%s content_job_id=%s folder_id=%s courses=%s workers=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                len(dirty_course_items),
+                workers,
+            )
+            _progress(
+                0,
+                len(playlist_items),
+                f"Fish Audio — génération parallèle de {len(dirty_course_items)} cours ({workers} workers)...",
+            )
+            results = run_parallel_ordered(
+                dirty_course_items,
+                lambda args: _parallel_fish_course_worker(*args),
+                max_workers=workers,
+                thread_name_prefix=f"fish-course-{folder_id}",
+            )
+            for result in results:
+                parallel_fish_course_results[result["item_idx"]] = result
+        else:
+            parallel_fish_courses_enabled = False
+
+    parallel_break_results = {}
+    break_workers = _break_audio_workers()
+    parallel_breaks_enabled = (
+        bool(parallel_breaks)
+        and include_breaks
+        and force_all
+        and not mock
+        and not target_filename
+        and break_workers > 1
+    )
+    break_generation_started = False
+
+    def _measure_existing_course_files() -> None:
+        """Complete the natural-duration map before compiling break slots."""
+        for course_filename, _planned, course_type, _course_num in playlist_items:
+            if course_type != "cours" or measured_media_durations.get(course_filename):
+                continue
+            try:
+                raw = download_blob(
+                    CONTAINER_AUDIOS,
+                    f"{azure_prefix}{course_filename}",
+                )
+                measured_media_durations[course_filename] = (
+                    _mp3_duration_seconds_no_ffprobe(raw)
+                )
+            except Exception as exc:
+                logger.warning(
+                    "PIPELINE_AUDIO_COURSE_DURATION_FALLBACK "
+                    "formation_job_id=%s content_job_id=%s folder_id=%s "
+                    "filename=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    course_filename,
+                    str(exc)[:220],
+                )
+
+    def _prepare_break_generation() -> None:
+        """Stage 2: derive final slots, then generate break assets to fit them."""
+        nonlocal break_generation_started, adaptive_generation_manifest
+        if break_generation_started:
+            return
+        break_generation_started = True
+        _measure_existing_course_files()
+        from services.adaptive_playback_service import build_occurrence_playback_manifest
+
+        adaptive_generation_manifest = build_occurrence_playback_manifest(
+            playlist_items,
+            measured_media_durations,
+            folder_id=int(folder_id),
+        )
+        for segment in adaptive_generation_manifest.get("segments") or []:
+            if segment.get("type") != "cours":
+                effective_break_durations[str(segment.get("filename") or "")] = int(
+                    segment.get("effective_duration_sec") or 1
+                )
+
+        if not parallel_breaks_enabled:
+            return
+        break_items = [
+            (
+                idx,
+                item_filename,
+                effective_break_durations.get(item_filename, planned_duration),
+                item_type,
+                item_bloc_num,
+            )
+            for idx, (item_filename, planned_duration, item_type, item_bloc_num)
+            in enumerate(playlist_items)
+            if item_type != "cours"
+        ]
+        if len(break_items) <= 1:
+            return
+        workers = min(break_workers, len(break_items))
+        logger.info(
+            "PIPELINE_AUDIO_PARALLEL_BREAKS_STAGE2 formation_job_id=%s "
+            "content_job_id=%s folder_id=%s breaks=%s workers=%s",
+            formation_job_id,
+            job_id,
+            folder_id,
+            len(break_items),
+            workers,
+        )
+        _progress(
+            0,
+            len(playlist_items),
+            f"Q&R/pauses — génération finale de {len(break_items)} fichiers ({workers} workers)...",
+        )
+        results = run_parallel_ordered(
+            break_items,
+            lambda args: _parallel_break_worker(*args),
+            max_workers=workers,
+            thread_name_prefix=f"audio-break-{folder_id}",
+        )
+        for result in results:
+            parallel_break_results[result["item_idx"]] = result
+
+    # Les cours sont toujours produits et mesurés avant les Q&R/pauses. Les
+    # index originaux restent intacts pour les transitions et les slides.
+    indexed_playlist_items = list(enumerate(playlist_items))
+    generation_order = (
+        [entry for entry in indexed_playlist_items if entry[1][2] == "cours"]
+        + [entry for entry in indexed_playlist_items if entry[1][2] != "cours"]
+    )
+
+    for item_idx, (filename, duration_sec, file_type, bloc_num) in generation_order:
+        if target_filename and filename != target_filename:
+            continue
         step = item_idx + 1
         bloc = blocs_by_number.get(bloc_num)
         item_started_at = time.time()
@@ -5135,7 +15640,42 @@ def generate_audio_from_script(
             duration_sec,
         )
 
+        if preserve_existing and filename in existing_playlist_files and file_type == "cours":
+            logger.info(f"   ⏭️ {filename}: MP3 existant conservé")
+            _progress(step, len(playlist_items), f"{filename} — conservé (déjà présent)")
+            if file_type == "cours" and bloc:
+                _record_course_bloc(
+                    bloc,
+                    status="preserved",
+                    text=bloc.get("text", ""),
+                    skipped_reason="existing_audio",
+                )
+                _record_course_bloc(
+                    bloc,
+                    status="planned",
+                    text=bloc.get("text", ""),
+                    skipped_reason="existing_audio",
+                    target_plan=planned_course_script_plan,
+                )
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s reason=existing_audio duration_ms=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                int((time.time() - item_started_at) * 1000),
+            )
+            skipped.append(filename)
+            continue
+
         if file_type != "cours":
+            _prepare_break_generation()
+            duration_sec = effective_break_durations.get(filename, duration_sec)
+            if not include_breaks:
+                logger.info(f"   ⏭️ {filename}: break ignoré (génération cours uniquement)")
+                _progress(step, len(playlist_items), f"{filename} — ignoré")
+                skipped.append(filename)
+                continue
             if mock:
                 logger.info(f"   🧪 [MOCK] {filename}: skip Q&A/pause contextuel")
                 logger.info(
@@ -5148,7 +15688,11 @@ def generate_audio_from_script(
                 )
                 skipped.append(filename)
                 continue
-            if not force_all and dirty_count == 0:
+            if (
+                not force_all
+                and dirty_count == 0
+                and not (preserve_existing and filename not in existing_playlist_files)
+            ):
                 logger.info(f"   ⏭️ {filename}: break conservé (aucun bloc cours dirty)")
                 _progress(step, len(playlist_items), f"{filename} — conservé")
                 logger.info(
@@ -5160,6 +15704,19 @@ def generate_audio_from_script(
                     int((time.time() - item_started_at) * 1000),
                 )
                 skipped.append(filename)
+                continue
+
+            parallel_break_result = parallel_break_results.get(item_idx)
+            if parallel_break_result:
+                if parallel_break_result.get("status") == "error":
+                    raise RuntimeError(
+                        f"Génération parallèle échouée pour {filename}: "
+                        f"{parallel_break_result.get('error') or 'erreur inconnue'}"
+                    )
+                break_mode = parallel_break_result.get("break_mode") or "parallel_break"
+                final_duration = float(parallel_break_result.get("final_duration") or 0.0)
+                _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
+                generated.append(filename)
                 continue
 
             _progress(step, len(playlist_items), f"{filename} — génération {file_type} contextuel...")
@@ -5176,12 +15733,14 @@ def generate_audio_from_script(
                 llm_model=llm_model,
                 on_progress=lambda msg: _progress(step, len(playlist_items), msg),
                 use_runtime_consumed_text=runtime_fit_enabled,
+                break_overrides=saved_script_plan.get("break_overrides"),
+                temporal_outro=day_temporal_closing,
             )
             try:
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 try:
-                    final_duration = _measure_duration_ms(final_bytes) / 1000
+                    final_duration = _measure_duration_ms_safe(final_bytes) / 1000
                 except Exception:
                     final_duration = (
                         duration_sec
@@ -5190,7 +15749,15 @@ def generate_audio_from_script(
                     )
             _assert_audio_duration_within_slot(filename, final_duration, duration_sec)
             _progress(step, len(playlist_items), f"{filename} — upload audio ({break_mode})...")
-            upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
+            upload_blob(
+                CONTAINER_AUDIOS,
+                f"{azure_prefix}{filename}",
+                final_bytes,
+                metadata={
+                    "audio_validated": "1",
+                    "duration_seconds": f"{final_duration:.3f}",
+                },
+            )
             logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé ({break_mode})")
             _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
             logger.info(
@@ -5243,10 +15810,24 @@ def generate_audio_from_script(
 
         target_sec = bloc["target_sec"]
 
-        # Si on a un carryover intra-jour à injecter, on doit régénérer ce bloc
-        # même s'il était propre côté texte initial (sinon l'ancien MP3 ne
-        # contiendra pas le carryover qu'on doit lire au début).
-        if runtime_fit_enabled and intra_day_carryover_chunks and not bloc["dirty"]:
+        if preserve_existing and filename not in existing_playlist_files:
+            bloc["dirty"] = True
+        if (
+            sync_slides
+            and filename in expected_sync_slide_ids_by_file
+            and filename not in existing_synced_courses
+        ):
+            bloc["dirty"] = True
+
+        # Le carryover intra-jour est désactivé par défaut : un cours ne doit
+        # pas commencer en terminant le précédent.
+        intra_day_carryover_active = (
+            runtime_fit_enabled and _runtime_intra_day_carryover_enabled()
+        )
+
+        # Si le carryover intra-jour est explicitement activé, on doit
+        # régénérer ce bloc même s'il était propre côté texte initial.
+        if intra_day_carryover_active and intra_day_carryover_chunks and not bloc["dirty"]:
             bloc["dirty"] = True
             logger.info(
                 f"   🔁 Bloc {bloc['bloc_number']} ({filename}) : forcé dirty=True "
@@ -5258,7 +15839,7 @@ def generate_audio_from_script(
             if runtime_fit_enabled:
                 bloc["runtime_consumed_text"] = bloc.get("text", "")
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : non modifié, conservé")
-            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
+            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/{course_count} — conservé (non modifié)")
             _record_course_bloc(
                 bloc,
                 status="preserved",
@@ -5311,6 +15892,96 @@ def generate_audio_from_script(
             skipped.append(filename)
             continue
 
+        parallel_result = parallel_fish_course_results.get(item_idx)
+        if parallel_result:
+            if parallel_result.get("status") == "error":
+                raise RuntimeError(
+                    f"Fish Audio parallèle échoué pour {filename}: "
+                    f"{parallel_result.get('error') or 'erreur inconnue'}"
+                )
+            if parallel_result.get("status") != "generated":
+                skipped_reason = parallel_result.get("skipped_reason") or "parallel_skip"
+                logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : {skipped_reason}")
+                _record_course_bloc(
+                    bloc,
+                    status="preserved" if skipped_reason == "clean_bloc" else "skipped",
+                    text=bloc.get("text", ""),
+                    skipped_reason=skipped_reason,
+                )
+                _record_course_bloc(
+                    bloc,
+                    status="planned" if skipped_reason == "clean_bloc" else "skipped",
+                    text=bloc.get("text", ""),
+                    skipped_reason=skipped_reason,
+                    target_plan=planned_course_script_plan,
+                )
+                skipped.append(filename)
+                continue
+
+            audio_bloc = parallel_result["audio_bloc"]
+            voice_duration = float(parallel_result.get("voice_duration") or 0.0)
+            final_duration = float(parallel_result.get("final_duration") or voice_duration)
+            measured_media_durations[filename] = final_duration
+            fit_method = parallel_result.get("fit_method") or "fish_observe_parallel"
+            attempts = parallel_result.get("attempts") or []
+            actual_reading = parallel_result.get("actual_reading")
+            if actual_reading:
+                audio_bloc["actual_reading"] = actual_reading
+                bloc["actual_reading"] = actual_reading
+                logger.info(
+                    "PIPELINE_AUDIO_ACTUAL_READING formation_job_id=%s content_job_id=%s "
+                    "folder_id=%s bloc=%s input_words=%s fish_words=%s voice_duration=%.1f "
+                    "wpm=%.1f words_per_hour=%.0f",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    bloc["bloc_number"],
+                    actual_reading.get("input_spoken_word_count"),
+                    actual_reading.get("fish_segment_word_count"),
+                    float(actual_reading.get("audio_duration_sec") or 0.0),
+                    float(actual_reading.get("words_per_minute") or 0.0),
+                    float(actual_reading.get("words_per_hour") or 0.0),
+                )
+            logger.info(
+                f"   ✅ Bloc {bloc['bloc_number']} ({filename}) : Fish parallèle terminé "
+                f"({final_duration:.1f}s, {fit_method})"
+            )
+            _progress(
+                step,
+                len(playlist_items),
+                f"Bloc {bloc['bloc_number']}/{course_count} — terminé Fish parallèle ({final_duration:.1f}s)",
+            )
+            _record_course_bloc(
+                audio_bloc,
+                status="planned",
+                text=audio_bloc.get("text", ""),
+                final_duration_sec=round(final_duration, 3),
+                opening_rewritten=parallel_result.get("opening_rewritten", False),
+                opening_text=parallel_result.get("opening_text") or "",
+                opening_original_start=parallel_result.get("opening_original_start") or "",
+                actual_reading=actual_reading,
+                target_plan=planned_course_script_plan,
+            )
+            _record_course_bloc(
+                bloc,
+                status="generated",
+                text=audio_bloc.get("text", ""),
+                final_duration_sec=round(final_duration, 3),
+                opening_rewritten=parallel_result.get("opening_rewritten", False),
+                opening_text=parallel_result.get("opening_text") or "",
+                opening_original_start=parallel_result.get("opening_original_start") or "",
+                actual_reading=actual_reading,
+            )
+            generated.append(filename)
+            seg_keys = [
+                (segments[i]["sub_idx"], segments[i]["passe"])
+                for i in bloc["contributing_seg_indices"]
+                if segments[i]["dirty"]
+            ]
+            if seg_keys:
+                _mark_content_segments_clean(job_id, seg_keys)
+            continue
+
         audio_bloc = bloc
         opening_rewritten = False
         opening_text = ""
@@ -5331,7 +16002,7 @@ def generate_audio_from_script(
             _progress(
                 step,
                 len(playlist_items),
-                f"Bloc {bloc['bloc_number']}/7 — rédaction intro/amorce IA...",
+                f"Bloc {bloc['bloc_number']}/{course_count} — rédaction intro/amorce IA...",
             )
             rewritten_text, opening_meta = _rewrite_course_opening_for_audio(
                 bloc,
@@ -5353,7 +16024,7 @@ def generate_audio_from_script(
                     _progress(
                         step,
                         len(playlist_items),
-                        f"Bloc {bloc['bloc_number']}/7 — intro/amorce IA ignorée (budget TTS)",
+                        f"Bloc {bloc['bloc_number']}/{course_count} — intro/amorce IA ignorée (budget TTS)",
                     )
                 else:
                     audio_bloc = dict(bloc)
@@ -5365,7 +16036,7 @@ def generate_audio_from_script(
                     _progress(
                         step,
                         len(playlist_items),
-                        f"Bloc {bloc['bloc_number']}/7 — intro/amorce IA ajoutée avant TTS",
+                        f"Bloc {bloc['bloc_number']}/{course_count} — intro/amorce IA ajoutée avant TTS",
                     )
                     logger.info(
                         "PIPELINE_AUDIO_COURSE_OPENING_REWRITTEN formation_job_id=%s "
@@ -5384,12 +16055,12 @@ def generate_audio_from_script(
             _progress(
                 step,
                 len(playlist_items),
-                f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/7 — {mode_label} ({len(audio_bloc['text'].split())} mots)...",
+                f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/{course_count} — {mode_label} ({len(audio_bloc['text'].split())} mots)...",
             )
             logger.info(f"   🖼️ Bloc {bloc['bloc_number']} ({filename}) — TTS synchronisé slides")
-            # Runtime fit : préfixe le tampon intra-jour, capture le surplus
-            # non consommé pour cascade au bloc suivant.
-            prepended_for_call = intra_day_carryover_chunks if runtime_fit_enabled else None
+            prepended_for_call = (
+                intra_day_carryover_chunks if intra_day_carryover_active else None
+            )
             (
                 final_bytes,
                 voice_duration,
@@ -5404,6 +16075,7 @@ def generate_audio_from_script(
                 filename,
                 mock=mock,
                 basic_tts=basic_tts,
+                platform_id=platform_id,
                 progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
                 prepended_chunks=prepended_for_call,
                 runtime_fit=runtime_fit_enabled,
@@ -5425,7 +16097,22 @@ def generate_audio_from_script(
                     for c in (runtime_consumed_chunks or [])
                     if (c.get("text") or "").strip()
                 )
-                intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                if intra_day_carryover_active:
+                    intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                else:
+                    overflow_words = sum(
+                        len((c.get("text") or "").split())
+                        for c in (runtime_unconsumed_chunks or [])
+                    )
+                    if overflow_words:
+                        logger.warning(
+                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_NO_AI_REDUCE "
+                            "formation_job_id=%s content_job_id=%s folder_id=%s "
+                            "bloc=%s words=%s action=overflow_remaining_without_ai_reduction",
+                            formation_job_id, job_id, folder_id, bloc["bloc_number"],
+                            overflow_words,
+                        )
+                    intra_day_carryover_chunks = []
                 unconsumed_words = sum(
                     len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
                 )
@@ -5440,14 +16127,37 @@ def generate_audio_from_script(
                     len(intra_day_carryover_chunks), unconsumed_words,
                     fit_method,
                 )
-            slide_audio_timings.extend(bloc_timings)
-            slide_sync_files.append(filename)
+            actual_timing_slide_ids = set()
+            for timing in bloc_timings or []:
+                try:
+                    timing_start = float(timing.get("start_time"))
+                    timing_end = float(timing.get("end_time"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if (
+                    timing.get("audio_filename") == filename
+                    and timing.get("slide_id")
+                    and math.isfinite(timing_start)
+                    and math.isfinite(timing_end)
+                    and timing_end > timing_start
+                ):
+                    actual_timing_slide_ids.add(str(timing["slide_id"]))
+            missing_timing_slide_ids = (
+                expected_sync_slide_ids_by_file.get(filename, set())
+                - actual_timing_slide_ids
+            )
+            if missing_timing_slide_ids:
+                raise ValueError(
+                    f"Synchronisation incomplète pour {filename}: "
+                    f"timings absents pour {sorted(missing_timing_slide_ids)[:8]}"
+                )
+            _replace_slide_sync_for_file(filename, bloc_timings)
             logger.info(
                 f"   TTS sync voix : {voice_duration:.1f}s "
                 f"({fit_method}, chunks={len(attempts)}, cible : {target_sec}s)"
             )
         elif mock:
-            _progress(step, len(playlist_items), f"[MOCK] Bloc {bloc['bloc_number']}/7 — silence 1s...")
+            _progress(step, len(playlist_items), f"[MOCK] Bloc {bloc['bloc_number']}/{course_count} — silence 1s...")
             logger.info(f"   🧪 [MOCK] Bloc {bloc['bloc_number']} ({filename}) — silence 1s")
             from services.playlist_tts_service import _generate_silence_mp3
             final_bytes = _generate_silence_mp3(1)
@@ -5455,14 +16165,16 @@ def generate_audio_from_script(
             _progress(
                 step,
                 len(playlist_items),
-                f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts runtime fit "
+                f"[BASIC] Bloc {bloc['bloc_number']}/{course_count} — edge-tts "
                 f"({len(audio_bloc['text'].split())} mots)...",
             )
             logger.info(
                 f"   🔊 [BASIC edge-tts] Bloc {bloc['bloc_number']} ({filename}) — "
-                "génération calée sur durée réelle…"
+                "génération complète sans ajustement de durée…"
             )
-            prepended_for_call = intra_day_carryover_chunks if runtime_fit_enabled else None
+            prepended_for_call = (
+                intra_day_carryover_chunks if intra_day_carryover_active else None
+            )
             (
                 final_bytes,
                 voice_duration,
@@ -5477,6 +16189,7 @@ def generate_audio_from_script(
                 filename,
                 mock=False,
                 basic_tts=True,
+                platform_id=platform_id,
                 progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
                 prepended_chunks=prepended_for_call,
                 runtime_fit=runtime_fit_enabled,
@@ -5496,7 +16209,22 @@ def generate_audio_from_script(
                     for c in (runtime_consumed_chunks or [])
                     if (c.get("text") or "").strip()
                 )
-                intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                if intra_day_carryover_active:
+                    intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                else:
+                    overflow_words = sum(
+                        len((c.get("text") or "").split())
+                        for c in (runtime_unconsumed_chunks or [])
+                    )
+                    if overflow_words:
+                        logger.warning(
+                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_NO_AI_REDUCE "
+                            "formation_job_id=%s content_job_id=%s folder_id=%s "
+                            "bloc=%s words=%s action=overflow_remaining_without_ai_reduction",
+                            formation_job_id, job_id, folder_id, bloc["bloc_number"],
+                            overflow_words,
+                        )
+                    intra_day_carryover_chunks = []
                 unconsumed_words = sum(
                     len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
                 )
@@ -5516,49 +16244,76 @@ def generate_audio_from_script(
                 f"({fit_method}, chunks={len(attempts)}, cible : {target_sec}s)"
             )
         else:
-            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(audio_bloc['text'].split())} mots)...")
+            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/{course_count} — génération TTS ({len(audio_bloc['text'].split())} mots)...")
             logger.info(f"   🎙️ Bloc {bloc['bloc_number']} ({filename}) — TTS en cours...")
             final_bytes, voice_duration, fit_method, attempts = _synthesize_course_audio_to_fit(
                 audio_bloc,
                 convert_to_speech,
-                _measure_duration_ms,
+                _measure_duration_ms_safe,
                 _pad_audio_to_duration,
+                convert_to_speech_with_timestamps=convert_to_speech_with_timestamps,
             )
-            if len(attempts) > 1:
-                logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
-            logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
+        if len(attempts) > 1:
+            logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
+        logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
 
-        if not mock:
-            _assert_course_voice_duration_within_deadline(
-                filename,
-                voice_duration,
-                target_sec,
-                has_start_silence=not basic_tts,
+        actual_reading = _actual_reading_from_attempts(attempts)
+        if actual_reading:
+            audio_bloc["actual_reading"] = actual_reading
+            bloc["actual_reading"] = actual_reading
+            logger.info(
+                "PIPELINE_AUDIO_ACTUAL_READING formation_job_id=%s content_job_id=%s "
+                "folder_id=%s bloc=%s input_words=%s fish_words=%s voice_duration=%.1f "
+                "wpm=%.1f words_per_hour=%.0f",
+                formation_job_id,
+                job_id,
+                folder_id,
+                bloc["bloc_number"],
+                actual_reading.get("input_spoken_word_count"),
+                actual_reading.get("fish_segment_word_count"),
+                float(actual_reading.get("audio_duration_sec") or 0.0),
+                float(actual_reading.get("words_per_minute") or 0.0),
+                float(actual_reading.get("words_per_hour") or 0.0),
             )
 
         if basic_tts and runtime_fit_enabled:
             final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
-            _assert_audio_duration_fills_slot(filename, final_duration, target_sec)
         elif sync_slides:
             try:
-                final_duration = _measure_duration_ms(final_bytes) / 1000
+                final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 final_duration = target_sec
         elif mock:
             final_duration = 1.0
         elif basic_tts:
-            # gTTS produit un MP3 valide ; mesure possible via pydub si ffmpeg
-            # dispo, sinon on renvoie une estimation basée sur le volume bytes.
+            # Edge/gTTS produit un MP3 valide ; on mesure d'abord sans ffprobe.
             try:
-                final_duration = _measure_duration_ms(final_bytes) / 1000
+                final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 # Estimation fallback : ~1 KB/s pour un MP3 mono 32 kbps
                 final_duration = len(final_bytes) / 4000
         else:
-            final_duration = _measure_duration_ms(final_bytes) / 1000
-        _assert_audio_duration_within_slot(filename, final_duration, target_sec)
+            try:
+                final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
+            except Exception:
+                final_duration = target_sec
+        measured_media_durations[filename] = float(final_duration)
+        if not mock and not bloc.get("dynamic_schedule"):
+            _assert_audio_duration_within_slot(
+                filename,
+                final_duration,
+                target_sec,
+            )
         blob_path = f"{azure_prefix}{filename}"
-        upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
+        upload_blob(
+            CONTAINER_AUDIOS,
+            blob_path,
+            final_bytes,
+            metadata={
+                "audio_validated": "1",
+                "duration_seconds": f"{final_duration:.3f}",
+            },
+        )
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
         logger.info(
             "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=cours bloc=%s final_duration=%.1f "
@@ -5598,6 +16353,7 @@ def generate_audio_from_script(
             opening_rewritten=opening_rewritten,
             opening_text=opening_text,
             opening_original_start=opening_original_start,
+            actual_reading=actual_reading,
             target_plan=planned_course_script_plan,
         )
         _record_course_bloc(
@@ -5610,8 +16366,10 @@ def generate_audio_from_script(
             opening_original_start=opening_original_start,
             runtime_conclusions=runtime_conclusions,
             runtime_ai_decisions=runtime_ai_decisions,
+            actual_reading=actual_reading,
         )
         generated.append(filename)
+        _persist_slide_audio_sync_snapshot(f"generated:{filename}")
 
         # Marquer les segments contributeurs comme propres (dirty=0)
         seg_keys = [
@@ -5628,7 +16386,7 @@ def generate_audio_from_script(
     if sync_slides and slide_deck:
         from services.script_slide_generation_service import update_script_slide_deck_audio_sync
         audio_mode = "mock" if mock else "gtts" if basic_tts else "fish_audio"
-        update_script_slide_deck_audio_sync(
+        persisted_slide_deck = update_script_slide_deck_audio_sync(
             slide_deck["deck_id"],
             {
                 "enabled": True,
@@ -5639,13 +16397,30 @@ def generate_audio_from_script(
                 "timings": slide_audio_timings,
             },
         )
+        if not persisted_slide_deck:
+            raise RuntimeError(
+                f"Échec de persistance de la synchronisation du deck {slide_deck['deck_id']}"
+            )
+        from services.audio_asset_validation_service import inspect_audio_sync_payload
+
+        sync_expected_files = sorted(expected_sync_slide_ids_by_file)
+        sync_readiness = inspect_audio_sync_payload(
+            persisted_slide_deck,
+            sync_expected_files,
+            require_all_slides=not bool(target_filename),
+        )
+        if not sync_readiness.get("ready"):
+            raise RuntimeError(
+                "Synchronisation slides/audio incomplète après persistance: "
+                f"{sync_readiness}"
+            )
+        slide_deck = persisted_slide_deck
 
     # ── 5. Cascade finale : runtime carryover après le dernier bloc cours ──
-    # Si runtime_fit a stoppé un bloc avant la fin et qu'il reste du surplus
-    # après le dernier cours de la journée, on doit le reporter au folder
-    # suivant (en plus du carryover statique calculé en pré-allocation).
+    # Désactivée par défaut pour préserver les frontières pédagogiques entre
+    # cours. Elle ne s'active que via FORMATION_RUNTIME_INTRA_DAY_CARRYOVER=1.
     runtime_carryover_text = ""
-    if runtime_fit_enabled and intra_day_carryover_chunks:
+    if runtime_fit_enabled and _runtime_intra_day_carryover_enabled() and intra_day_carryover_chunks:
         runtime_carryover_text = "\n\n".join(
             (c.get("text") or "").strip()
             for c in intra_day_carryover_chunks
@@ -5678,21 +16453,35 @@ def generate_audio_from_script(
     )
 
     mode = "mock" if mock else "edge_tts_sync" if (basic_tts and sync_slides) else "edge_tts" if basic_tts else "fish_audio"
-    _save_course_script_plan(
+    audio_plan_payload = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "platform_id": platform_id,
+        "folder_id": folder_id,
+        "content_job_id": job_id,
+        "formation_job_id": formation_job_id,
+        "mode": mode,
+        "sync_slides": bool(sync_slides),
+        "basic_tts": bool(basic_tts),
+        "mock": bool(mock),
+        "course_blocs": course_script_plan,
+        "planned_course_blocs": planned_course_script_plan,
+    }
+    if adaptive_generation_manifest:
+        audio_plan_payload["adaptive_playback_manifest"] = adaptive_generation_manifest
+    if saved_script_plan.get("course_bloc_overrides"):
+        audio_plan_payload["course_bloc_overrides"] = saved_script_plan.get("course_bloc_overrides")
+    if saved_script_plan.get("break_overrides"):
+        audio_plan_payload["break_overrides"] = saved_script_plan.get("break_overrides")
+    if saved_script_plan.get("structured_course_plan"):
+        audio_plan_payload["structured_course_plan"] = saved_script_plan.get("structured_course_plan")
+    _save_course_script_plan(platform_id, folder_id, audio_plan_payload)
+    _save_content_artifact(
         platform_id,
         folder_id,
+        _CONTENT_AUDIO_PLAN_BLOB,
         {
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "platform_id": platform_id,
-            "folder_id": folder_id,
-            "content_job_id": job_id,
-            "formation_job_id": formation_job_id,
-            "mode": mode,
-            "sync_slides": bool(sync_slides),
-            "basic_tts": bool(basic_tts),
-            "mock": bool(mock),
-            "course_blocs": course_script_plan,
-            "planned_course_blocs": planned_course_script_plan,
+            "artifact_type": "content_audio_plan",
+            **audio_plan_payload,
         },
     )
 
@@ -5709,9 +16498,6 @@ def generate_audio_from_script(
         "fast_tts_pipeline": bool(fast_tts_pipeline),
         "fast_tts_workers": _edge_tts_fast_workers() if fast_tts_pipeline else 1,
     }
-
-
-_COURSE_SCRIPT_PLAN_BLOB = "content-script-plan.json"
 
 
 def _course_filename_for_bloc(playlist_spec, bloc_number: int) -> str:
@@ -5751,6 +16537,7 @@ def _serialize_course_bloc(
     opening_original_start: str = "",
     runtime_conclusions: list | None = None,
     runtime_ai_decisions: list | None = None,
+    actual_reading: dict | None = None,
 ) -> dict:
     from services.playlist_tts_service import COURS_DURATIONS_MIN
 
@@ -5762,6 +16549,7 @@ def _serialize_course_bloc(
         "bloc_number": bloc_number,
         "filename": bloc.get("filename") or _course_filename_for_bloc(playlist_spec, bloc_number),
         "duration_sec": int(bloc.get("target_sec") or _course_duration_for_bloc(playlist_spec, bloc_number)),
+        "max_playback_sec": int(bloc.get("max_playback_sec") or 0) or None,
         "duration_min": round(int(bloc.get("target_sec") or 0) / 60, 1) if bloc.get("target_sec") else COURS_DURATIONS_MIN.get(bloc_number),
         "status": status,
         "text": bloc_text,
@@ -5775,6 +16563,7 @@ def _serialize_course_bloc(
         "closing_words": int(bloc.get("closing_words") or 0),
         "runtime_conclusions": runtime_conclusions,
         "runtime_ai_decisions": runtime_ai_decisions,
+        "actual_reading": actual_reading or bloc.get("actual_reading") or None,
         "opening_rewritten": bool(opening_rewritten),
         "opening_text": opening_text or "",
         "opening_original_start": opening_original_start or "",
@@ -5786,28 +16575,19 @@ def _serialize_course_bloc(
 
 
 def _load_segments_for_course_plan(job: dict, *, sync_slides: bool = False) -> list:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, text_content, word_count, dirty
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job["id"],))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job["id"])
 
     segments = []
     for r in rows:
-        text = r[2] or ""
+        text = r.get("text_content") or ""
         if sync_slides:
             text = _strip_tts_tags_for_sync(text)
         segments.append({
-            "sub_idx": r[0],
-            "passe": r[1],
+            "sub_idx": r["sub_part_index"],
+            "passe": r["passe"],
             "text": text,
-            "word_count": len(text.split()) if sync_slides else r[3],
-            "dirty": bool(r[4]),
+            "word_count": len(text.split()) if sync_slides else r["word_count"],
+            "dirty": bool(r["dirty"]),
         })
 
     carryover_in = (job.get("carryover_in_text") or "").strip()
@@ -5820,25 +16600,33 @@ def _load_segments_for_course_plan(job: dict, *, sync_slides: bool = False) -> l
 
 
 def _build_course_blocs_preview(folder_id: int, job: dict) -> list:
-    from services.playlist_tts_service import COURS_DURATIONS_MIN, PLAYLIST_SPEC
-
     segments = _load_segments_for_course_plan(job, sync_slides=False)
     if not segments:
         return []
 
+    playlist_items = _playlist_items_for_platform(
+        int(job["platform_id"]),
+        folder_id=int(folder_id),
+    )
+    course_durations = _course_durations_min_from_playlist(playlist_items)
     next_folder_id = _find_next_folder_id(job["platform_id"], folder_id)
     blocs, _total_words, _carryover_out = _build_course_blocs_from_segments(
         segments,
-        COURS_DURATIONS_MIN,
-        PLAYLIST_SPEC,
+        course_durations,
+        playlist_items,
         force_all=False,
         source_folder_id=None,
         next_folder_id=next_folder_id,
         is_last_folder=next_folder_id is None,
         preview=True,
+        platform_id=job.get("platform_id"),
+        folder_position=job.get("folder_position"),
     )
+    course_count = sum(1 for item in playlist_items if item[2] == "cours")
+    for bloc in blocs:
+        bloc["total_courses"] = course_count
     return [
-        _serialize_course_bloc(bloc, PLAYLIST_SPEC, status="preview")
+        _serialize_course_bloc(bloc, playlist_items, status="preview")
         for bloc in blocs
     ]
 
@@ -5870,7 +16658,447 @@ def _save_course_script_plan(platform_id: int, folder_id: int, payload: dict) ->
         logger.warning(f"⚠️ Sauvegarde plan script cours impossible folder={folder_id}: {e}")
 
 
-def _build_breaks_for_ui(platform_id: int) -> list:
+def _merge_course_blocs_for_ui(generated_blocs: list | None, planned_blocs: list | None) -> list:
+    merged = {}
+    for bloc in planned_blocs or []:
+        try:
+            bloc_number = int(bloc.get("bloc_number") or 0)
+        except Exception:
+            bloc_number = 0
+        if bloc_number:
+            merged[bloc_number] = dict(bloc)
+    for bloc in generated_blocs or []:
+        try:
+            bloc_number = int(bloc.get("bloc_number") or 0)
+        except Exception:
+            bloc_number = 0
+        if bloc_number:
+            base = merged.get(bloc_number, {})
+            base.update(bloc)
+            merged[bloc_number] = base
+    return [merged[key] for key in sorted(merged.keys())]
+
+
+def update_course_script_bloc_text(folder_id: int, bloc_number: int, text: str) -> dict:
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError("Aucun job pour ce dossier")
+
+    platform_id = job["platform_id"]
+    saved = _load_saved_course_script_plan(platform_id, folder_id) or {
+        "platform_id": platform_id,
+        "folder_id": folder_id,
+        "content_job_id": job["id"],
+    }
+    planned_course_blocs = saved.get("planned_course_blocs") or _build_course_blocs_preview(folder_id, job)
+    course_blocs = _merge_course_blocs_for_ui(saved.get("course_blocs") or [], planned_course_blocs)
+    target = None
+    for bloc in course_blocs:
+        if int(bloc.get("bloc_number") or 0) == int(bloc_number):
+            target = bloc
+            break
+    if not target:
+        raise ValueError("Cours audio introuvable")
+
+    clean_text = (text or "").strip()
+    word_count = count_tts_spoken_words(clean_text)
+    target.update({
+        "text": clean_text,
+        "word_count": word_count,
+        "manual_edited": True,
+        "edited_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    saved["course_blocs"] = course_blocs
+    overrides = saved.get("course_bloc_overrides") or {}
+    overrides[str(int(bloc_number))] = {
+        "text": clean_text,
+        "word_count": word_count,
+        "edited_at": target["edited_at"],
+    }
+    saved["course_bloc_overrides"] = overrides
+    _save_course_script_plan(platform_id, folder_id, saved)
+    return {"bloc": target, "word_count": word_count}
+
+
+def update_course_script_break_text(folder_id: int, filename: str, intro: str, outro: str) -> dict:
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError("Aucun job pour ce dossier")
+
+    platform_id = job["platform_id"]
+    saved = _load_saved_course_script_plan(platform_id, folder_id) or {
+        "platform_id": platform_id,
+        "folder_id": folder_id,
+        "content_job_id": job["id"],
+    }
+    breaks = _build_breaks_for_ui(platform_id, folder_id=folder_id)
+    target = next((br for br in breaks if br.get("filename") == filename), None)
+    if not target:
+        raise ValueError("Q&A ou pause introuvable")
+
+    override = {
+        "intro": (intro or "").strip(),
+        "outro": (outro or "").strip(),
+        "edited_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    overrides = saved.get("break_overrides") or {}
+    overrides[filename] = override
+    saved["break_overrides"] = overrides
+    _save_course_script_plan(platform_id, folder_id, saved)
+    target.update(override)
+    target["manual_edited"] = True
+    return {"break": target}
+
+
+def _apply_course_bloc_overrides(blocs: list, overrides: dict | None) -> list:
+    overrides = overrides or {}
+    if not overrides:
+        return blocs
+    for bloc in blocs:
+        key = str(int(bloc.get("bloc_number") or 0))
+        override = overrides.get(key) or {}
+        text = (override.get("text") or "").strip()
+        if not text:
+            continue
+        bloc["text"] = text
+        bloc["word_count"] = count_tts_spoken_words(text)
+        bloc["dirty"] = True
+        bloc["manual_edited"] = True
+    return blocs
+
+
+def _apply_break_overrides(breaks: list, overrides: dict | None) -> list:
+    overrides = overrides or {}
+    if not overrides:
+        return breaks
+    merged = []
+    for br in breaks:
+        override = overrides.get(br.get("filename")) or {}
+        if override:
+            br = {
+                **br,
+                "intro": override.get("intro", br.get("intro") or ""),
+                "outro": override.get("outro", br.get("outro") or ""),
+                "manual_edited": True,
+                "edited_at": override.get("edited_at"),
+            }
+        merged.append(br)
+    return merged
+
+
+def _structured_plan_from_artifacts(platform_id: int, folder_id: int) -> dict:
+    saved_script_plan = _load_saved_course_script_plan(platform_id, folder_id) or {}
+    structured_plan = saved_script_plan.get("structured_course_plan") or {}
+    if isinstance(structured_plan, dict) and isinstance(structured_plan.get("courses"), list):
+        return structured_plan
+    plan_artifact = _load_content_artifact(platform_id, folder_id, _CONTENT_PLAN_BLOB) or {}
+    structured_plan = plan_artifact.get("structured_course_plan") or {}
+    if isinstance(structured_plan, dict) and isinstance(structured_plan.get("courses"), list):
+        return structured_plan
+    return {}
+
+
+def _course_plan_for_number(structured_plan: dict, course_number: int) -> dict | None:
+    for course in structured_plan.get("courses") or []:
+        try:
+            if int(course.get("course_number") or 0) == int(course_number):
+                return course
+        except Exception:
+            continue
+    return None
+
+
+def _update_segment_after_plan_adherence_repair(seg_id: int, original_text: str, final_text: str) -> int:
+    stored_text = _preserve_audio_block_marker(original_text, final_text)
+    marker_course_number = _extract_audio_block_number(original_text)
+    if marker_course_number and not _extract_audio_block_number(stored_text):
+        stored_text = f"<<<BLOC_AUDIO_{marker_course_number}>>>\n\n{stored_text}".strip()
+    word_count = count_tts_spoken_words(stored_text)
+    update_content_segment_plan_repair(
+        segment_id=seg_id,
+        text_content=stored_text,
+        word_count=word_count,
+    )
+    return word_count
+
+
+def _quality_detail_from_result(seg_id: int, sub_idx: int, passe: int, result: dict) -> dict:
+    attempts = result.get("attempts") or []
+    initial_audit = (attempts[0] or {}).get("audit") if attempts else result.get("final_audit") or {}
+    initial_issues = initial_audit.get("issues") or []
+    final_audit = result.get("final_audit") or {}
+    final_issues = [] if final_audit.get("ok") else (final_audit.get("issues") or [])
+    changed = bool(result.get("changed"))
+    issue_summary = "; ".join(
+        (issue.get("problem") or issue.get("type") or "problème de plan")
+        for issue in initial_issues[:3]
+    )
+    applied = []
+    if changed:
+        applied.append({
+            "rule_violated": "#PLAN",
+            "reason": issue_summary or "Réparation ciblée d'adhérence au plan.",
+            "original": "",
+            "replacement": "",
+        })
+    rejected = [
+        {
+            "rule_violated": "#PLAN",
+            "reason": issue.get("problem") or issue.get("type") or "Problème non résolu après réparation.",
+            "original": issue.get("evidence") or "",
+            "replacement": "",
+            "reject_reason": "encore signalé au réaudit",
+        }
+        for issue in final_issues[:5]
+    ]
+    return {
+        "segment_id": seg_id,
+        "sub_idx": sub_idx,
+        "passe": passe,
+        "proposed": max(len(initial_issues), len(applied) + len(rejected)),
+        "applied": applied,
+        "rejected": rejected,
+        "quality_result": {
+            "course_number": result.get("course_number"),
+            "changed": changed,
+            "initial_words": result.get("initial_words"),
+            "final_words": result.get("final_words"),
+            "final_audit_ok": bool(final_audit.get("ok")),
+        },
+    }
+
+
+def _compact_plan_adherence_result(result: dict | None) -> dict | None:
+    if not isinstance(result, dict):
+        return None
+    final_audit = result.get("final_audit") or {}
+    issues = final_audit.get("issues") or []
+    return {
+        "course_number": result.get("course_number"),
+        "course_title": result.get("course_title"),
+        "version": result.get("version"),
+        "changed": bool(result.get("changed")),
+        "failed": bool(result.get("failed")),
+        "initial_words": result.get("initial_words"),
+        "final_words": result.get("final_words"),
+        "delta_words": result.get("delta_words"),
+        "final_audit_ok": bool(final_audit.get("ok")),
+        "issues_count": len(issues),
+        "review_timing": result.get("review_timing"),
+        "budget_issues_included": bool(result.get("budget_issues_included")),
+        "post_calibration_allowed": bool(result.get("post_calibration_allowed")),
+    }
+
+
+def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bool = False):
+    """Review dédiée manuelle : adhérence au plan verrouillé avant budget.
+
+    La génération structurée l'exécute désormais plus tôt, juste après les
+    sections et avant le calibrage budget. Cette fonction reste disponible
+    pour relance manuelle ou ancien contenu déjà généré.
+    """
+    def _progress(step, total, msg):
+        if on_progress:
+            on_progress(step, total, msg)
+
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError(f"Aucun content_generation_job pour folder {folder_id}")
+
+    platform_id = job["platform_id"]
+    structured_plan = _structured_plan_from_artifacts(platform_id, folder_id)
+    if not structured_plan:
+        summary = {
+            "segments_reviewed": 0,
+            "segments_failed": 0,
+            "segments_total_completed": 0,
+            "segments_already_current": 0,
+            "patches_proposed": 0,
+            "patches_applied": 0,
+            "patches_rejected": 0,
+            "review_signature": _PLAN_ADHERENCE_REVIEW_VERSION,
+            "review_kind": "plan_adherence",
+            "review_label": "Adhérence au plan",
+            "force": bool(force),
+            "skipped": True,
+            "skip_reason": "structured_plan_missing",
+            "details": [],
+        }
+        return summary
+
+    existing_artifact = _load_content_artifact(platform_id, folder_id, _CONTENT_QUALITY_REVIEWS_BLOB) or {}
+    existing_by_course = {
+        int(record.get("course_number") or 0): record
+        for record in (existing_artifact.get("courses") or [])
+        if isinstance(record, dict)
+    }
+
+    rows = list_completed_content_segment_rows(job["id"])
+
+    total = len(rows)
+    planned_course_count = max(
+        1,
+        len((structured_plan or {}).get("courses") or []),
+    )
+    details = []
+    course_records = []
+    total_applied = 0
+    total_rejected = 0
+    total_proposed = 0
+    total_failed = 0
+    total_skipped = 0
+    previous_summary = ""
+    started_at = time.time()
+
+    logger.info(
+        "PIPELINE_PLAN_ADHERENCE_START formation_job_id=%s content_job_id=%s folder_id=%s segments=%s force=%s",
+        job.get("formation_job_id"),
+        job["id"],
+        folder_id,
+        total,
+        bool(force),
+    )
+
+    for step, row in enumerate(rows, start=1):
+        seg_id = row["id"]
+        sub_idx = row["sub_part_index"]
+        passe = row["passe"]
+        original_text = row.get("text_content") or ""
+        course_number = _extract_audio_block_number(original_text) or int(sub_idx or 0) + 1
+        course_plan = _course_plan_for_number(structured_plan, course_number)
+        clean_text = _strip_audio_block_markers(original_text)
+        if not course_plan:
+            previous_summary = _compact_words(clean_text, 100)
+            continue
+
+        _progress(
+            step,
+            total,
+            f"Adhérence au plan cours {course_number}/{planned_course_count}…",
+        )
+        signature = _quality_signature(course_plan, clean_text)
+        existing = existing_by_course.get(int(course_number)) or {}
+        if (
+            not force
+            and existing.get("final_signature") == signature
+            and ((existing.get("final_audit") or {}).get("ok") is True)
+        ):
+            total_skipped += 1
+            skipped_record = {**existing, "skipped": True, "skip_reason": "signature_current"}
+            course_records.append(skipped_record)
+            details.append({
+                "segment_id": seg_id,
+                "sub_idx": sub_idx,
+                "passe": passe,
+                "proposed": 0,
+                "applied": [],
+                "rejected": [],
+            })
+            previous_summary = _compact_words(clean_text, 100)
+            continue
+
+        try:
+            final_text, quality_result = _run_plan_adherence_quality_loop(
+                job=job,
+                course_plan=course_plan,
+                text=clean_text,
+                previous_course_summary=previous_summary,
+                model=model,
+            )
+            if final_text.strip() != clean_text.strip() or quality_result.get("changed"):
+                final_words = _update_segment_after_plan_adherence_repair(seg_id, original_text, final_text)
+                quality_result["changed"] = True
+                quality_result["final_words"] = final_words
+            detail = _quality_detail_from_result(seg_id, sub_idx, passe, quality_result)
+            details.append(detail)
+            total_proposed += int(detail.get("proposed") or 0)
+            total_applied += len(detail.get("applied") or [])
+            total_rejected += len(detail.get("rejected") or [])
+            course_records.append(quality_result)
+            previous_summary = _compact_words(final_text, 100)
+        except Exception as e:
+            total_failed += 1
+            logger.warning(
+                "PIPELINE_PLAN_ADHERENCE_SEGMENT_FAILED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s error=%s",
+                job.get("formation_job_id"),
+                job["id"],
+                folder_id,
+                seg_id,
+                str(e)[:300],
+            )
+            details.append({
+                "segment_id": seg_id,
+                "sub_idx": sub_idx,
+                "passe": passe,
+                "proposed": 0,
+                "applied": [],
+                "rejected": [],
+                "error": str(e)[:500],
+            })
+            previous_summary = _compact_words(clean_text, 100)
+
+        _save_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_QUALITY_REVIEWS_BLOB,
+            _artifact_payload(
+                {**job, "folder_id": folder_id},
+                "content_quality_reviews",
+                {
+                    "review_kind": "plan_adherence",
+                    "review_label": "Adhérence au plan",
+                    "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                    "courses": course_records,
+                },
+            ),
+        )
+
+    summary = {
+        "segments_reviewed": total - total_failed,
+        "segments_failed": total_failed,
+        "segments_total_completed": total,
+        "segments_already_current": total_skipped,
+        "patches_proposed": total_proposed,
+        "patches_applied": total_applied,
+        "patches_rejected": total_rejected,
+        "review_signature": _PLAN_ADHERENCE_REVIEW_VERSION,
+        "review_kind": "plan_adherence",
+        "review_label": "Adhérence au plan",
+        "force": bool(force),
+        "details": details,
+    }
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_QUALITY_REVIEWS_BLOB,
+        _artifact_payload(
+            {**job, "folder_id": folder_id},
+            "content_quality_reviews",
+            {
+                "review_summary": summary,
+                "review_kind": "plan_adherence",
+                "review_label": "Adhérence au plan",
+                "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "courses": course_records,
+            },
+        ),
+    )
+    logger.info(
+        "PIPELINE_PLAN_ADHERENCE_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=%s failed=%s applied=%s rejected=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job["id"],
+        folder_id,
+        summary["segments_reviewed"],
+        total_failed,
+        total_applied,
+        total_rejected,
+        int((time.time() - started_at) * 1000),
+    )
+    return summary
+
+
+def _build_breaks_for_ui(platform_id: int, *, folder_id: int | None = None) -> list:
     """Retourne les textes intro/outro des Q&A et pauses (variants génériques).
 
     Reflète la playlist effective de la plateforme (été/hiver). Les textes
@@ -5878,73 +17106,63 @@ def _build_breaks_for_ui(platform_id: int) -> list:
     fallback Fish Audio ; les versions LLM contextuelles ne sont pas
     persistées et ne peuvent donc pas être affichées ici.
     """
+    from services.fixed_break_scripts import get_fixed_break_script
+    from services.break_transition_service import (
+        break_intro_owned_by_previous,
+    )
     from services.playlist_tts_service import (
-        _playlist_items_for_platform,
         _get_pause_midi_text,
         _get_pause_text,
         _get_qa_text,
     )
-    from services.break_transition_service import (
-        break_intro_owned_by_previous,
-        duration_label,
-        is_schedule_neutral_break,
-        next_item_type,
-    )
 
-    items = _playlist_items_for_platform(platform_id)
+    items = _playlist_items_for_platform(platform_id, folder_id=folder_id)
     breaks = []
     for idx, (filename, duration, file_type, bloc_num) in enumerate(items):
         if file_type == "cours":
             continue
         intro_owned = break_intro_owned_by_previous(items, idx, file_type)
-        if file_type == "qa":
-            intro, outro = _get_qa_text(bloc_num)
-            ntype = next_item_type(items, idx)
-            if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
-                next_item = _next_playlist_item_after(items, idx)
-                next_intro = _break_intro_text_for_playlist_item(next_item)
-                label = duration_label(_playlist_item_duration(next_item), ntype)
-                if next_intro:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        f"{next_intro}"
-                    )
-                elif ntype == "pause_midi" or label == "pause déjeuner":
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
-                    )
-                elif label:
-                    outro = (
-                        f"Très bien, on clôt ce temps de questions. "
-                        f"On va maintenant prendre une pause de {label}."
-                    )
-                else:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant prendre une courte pause."
-                    )
-        elif file_type == "pause_midi" or filename.startswith("pause_midi_"):
-            intro, outro = _get_pause_midi_text()
-        elif file_type == "pause":
-            intro, outro = _get_pause_text(bloc_num)
+        if file_type == "jointure":
+            fixed = {
+                "intro": (
+                    "Nous allons maintenant poursuivre avec la partie suivante, "
+                    "dans le prolongement direct de ce que nous venons de voir."
+                ),
+                "outro": "",
+                "handoff": "",
+            }
         else:
-            continue
-        if intro_owned:
-            intro = ""
+            fixed = get_fixed_break_script(
+                filename,
+                intro_owned_by_previous=intro_owned,
+            )
+        if not fixed:
+            if file_type == "qa":
+                intro, outro = _get_qa_text(bloc_num)
+            elif file_type == "pause_midi":
+                intro, outro = _get_pause_midi_text()
+            else:
+                intro, outro = _get_pause_text(bloc_num)
+            fixed = {
+                "intro": "" if intro_owned else intro,
+                "outro": outro,
+                "handoff": intro,
+            }
         breaks.append({
             "filename": filename,
             "duration_sec": int(duration or 0),
             "type": file_type,
             "bloc_number": int(bloc_num or 0),
-            "intro": intro,
-            "outro": outro,
+            "intro": fixed["intro"],
+            "outro": fixed["outro"],
+            "handoff": fixed["handoff"],
+            "fixed_script": True,
         })
     return breaks
 
 
 def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> dict:
-    """Retourne les 7 textes cours affichables dans la modale Script TTS.
+    """Retourne les textes cours affichables dans la modale Script TTS.
 
     Priorité à la dernière génération audio persistée, car elle contient les
     closings et conclusions réellement envoyés au TTS. Si elle n'existe pas ou
@@ -5961,14 +17179,45 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "planned_course_blocs_source": "none",
             "planned_course_blocs_note": "Aucun job de contenu pour ce dossier.",
             "breaks": [],
+            "structured_course_plan": None,
+            "content_artifacts": [],
         }
 
-    breaks = _build_breaks_for_ui(job["platform_id"])
+    effective_playlist = _playlist_items_for_platform(
+        int(job["platform_id"]),
+        folder_id=int(folder_id),
+    )
+    expected_course_count = sum(
+        1 for item in effective_playlist if item[2] == "cours"
+    )
+    saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
+    if saved:
+        saved_course_count = len(saved.get("course_blocs") or [])
+        saved_planned_count = len(saved.get("planned_course_blocs") or [])
+        if max(saved_course_count, saved_planned_count) not in (
+            0,
+            expected_course_count,
+        ):
+            logger.warning(
+                "⚠️ Plan script cours incomplet ignoré folder=%s "
+                "course_blocs=%s planned_course_blocs=%s",
+                folder_id,
+                saved_course_count,
+                saved_planned_count,
+            )
+            saved = None
+    breaks = _apply_break_overrides(
+        _build_breaks_for_ui(job["platform_id"], folder_id=folder_id),
+        (saved or {}).get("break_overrides"),
+    )
+    content_artifacts = _content_artifacts_for_ui(job["platform_id"], folder_id)
 
     dirty_info = get_script_dirty_blocs(folder_id)
     dirty_blocs = int(dirty_info.get("dirty_blocs", 0) or 0)
-    total_blocs = int(dirty_info.get("total_blocs", 7) or 7)
-    saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
+    total_blocs = int(
+        dirty_info.get("total_blocs", expected_course_count)
+        or expected_course_count
+    )
     if saved and (saved.get("course_blocs") or saved.get("planned_course_blocs")):
         if dirty_blocs:
             note = (
@@ -5998,8 +17247,10 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
                 "L'ancienne génération TTS ne contient pas encore de plan prévu dédié."
             )
 
+        saved_course_blocs = saved.get("course_blocs") or []
+        visible_course_blocs = _merge_course_blocs_for_ui(saved_course_blocs, planned_course_blocs)
         return {
-            "course_blocs": saved.get("course_blocs") or planned_course_blocs,
+            "course_blocs": visible_course_blocs,
             "course_blocs_source": "last_audio_generation",
             "course_blocs_generated_at": saved.get("generated_at"),
             "course_blocs_mode": saved.get("mode"),
@@ -6014,15 +17265,17 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "dirty_blocs": dirty_blocs,
             "total_blocs": total_blocs,
             "breaks": breaks,
+            "structured_course_plan": saved.get("structured_course_plan"),
+            "content_artifacts": content_artifacts,
         }
 
     preview = _build_course_blocs_preview(folder_id, job)
     return {
-        "course_blocs": preview,
-        "course_blocs_source": "preview",
+        "course_blocs": [],
+        "course_blocs_source": "none",
         "course_blocs_generated_at": None,
         "course_blocs_mode": None,
-        "course_blocs_note": "Prévisualisation du découpage actuel, avant génération audio.",
+        "course_blocs_note": "Aucune génération audio n'a encore été lancée pour ce dossier.",
         "course_blocs_stale": False,
         "planned_course_blocs": preview,
         "planned_course_blocs_source": "preview",
@@ -6033,6 +17286,8 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
         "dirty_blocs": dirty_blocs,
         "total_blocs": total_blocs,
         "breaks": breaks,
+        "structured_course_plan": None,
+        "content_artifacts": content_artifacts,
     }
 
 
@@ -6041,64 +17296,79 @@ def get_script_dirty_blocs(folder_id):
     Retourne le nombre de blocs cours qui seraient régénérés si on lance la génération audio.
     Utilisé par le frontend pour afficher un indicateur.
     """
-    from services.playlist_tts_service import COURS_DURATIONS_MIN
-
     job = get_job_from_db(folder_id)
     if not job:
         return {"dirty_blocs": 0, "total_blocs": 7, "has_script": False}
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, word_count, dirty
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job["id"],))
-    rows = cursor.fetchall()
-    conn.close()
+    playlist_items = _playlist_items_for_platform(
+        int(job["platform_id"]),
+        folder_id=int(folder_id),
+    )
+    course_durations = _course_durations_min_from_playlist(playlist_items)
+    course_numbers = sorted(course_durations)
+    total_blocs = len(course_numbers)
+    rows = list_completed_content_segment_rows(job["id"])
 
     if not rows:
-        return {"dirty_blocs": 0, "total_blocs": 7, "has_script": True}
+        return {
+            "dirty_blocs": 0,
+            "total_blocs": total_blocs,
+            "has_script": True,
+        }
 
-    segments = [{"sub_idx": r[0], "passe": r[1], "wc": r[2], "dirty": bool(r[3])} for r in rows]
+    segments = [
+        {
+            "sub_idx": r["sub_part_index"],
+            "passe": r["passe"],
+            "wc": r["word_count"],
+            "dirty": bool(r["dirty"]),
+        }
+        for r in rows
+    ]
     total_words = sum(s["wc"] for s in segments)
 
     word_to_seg_idx = []
     for si, seg in enumerate(segments):
         word_to_seg_idx.extend([si] * seg["wc"])
 
-    total_duration = sum(COURS_DURATIONS_MIN.values())
+    total_duration = sum(course_durations.values())
     dirty_blocs = 0
     cursor_w = 0
 
-    for bloc_num in range(1, 8):
-        proportion = COURS_DURATIONS_MIN[bloc_num] / total_duration
+    for bloc_num in course_numbers:
+        proportion = (
+            course_durations[bloc_num] / total_duration
+            if total_duration > 0
+            else 0
+        )
         end_w = min(cursor_w + round(total_words * proportion), total_words)
         contributing = set(word_to_seg_idx[cursor_w:end_w])
         if any(segments[i]["dirty"] for i in contributing):
             dirty_blocs += 1
         cursor_w = end_w
 
-    return {"dirty_blocs": dirty_blocs, "total_blocs": 7, "has_script": True}
+    return {
+        "dirty_blocs": dirty_blocs,
+        "total_blocs": total_blocs,
+        "has_script": True,
+    }
 
 
 def _generate_segment_mini(sub_part_name, program_title, program_text):
-    """Génère un court segment via Claude (300 tokens max) pour tester l'intégration."""
+    """Génère un court segment via DeepSeek pour tester l'intégration."""
     prompts = _get_passe_prompts()
     prompt = prompts[0]  # Passe 1
     prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
     prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
     prompt = prompt.replace("{COLLER_LE_PROGRAMME_ICI}", program_text[:3000])
     prompt += "\n\nIMPORTANT : génère SEULEMENT une introduction de 150 mots maximum, c'est un test."
-    return _anthropic_post(
+    return _deepseek_post(
         messages=[{"role": "user", "content": prompt}],
         max_tokens=300,
     ).strip()
 
 
-# ─── Révision conformité (Phase 1 — API Claude) ──────────────────────────────
-# Spec : memoire/03-decisions/pipeline-dual-api-et-claude-code.md
+# ─── Révision conformité (Phase 1 — API DeepSeek) ────────────────────────────
 # Format patches : {original, replacement, rule_violated, reason} avec match
 # textuel unique. Max 5 patches par appel. Idempotent via reviewed=1.
 
@@ -6119,50 +17389,27 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
-_REVIEW_MAX_ATTEMPTS = 3
-_REVIEW_RULESET_VERSION = "2026-05-17-compliance-v3"
-_HUMANIZATION_RULESET_VERSION = "2026-05-19-humanisation-v4"
+_REVIEW_RULESET_VERSION = "2026-05-31-compliance-v8-minimal"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
     {
-        "id": "ethique_culturelle",
-        "label": "Éthique culturelle",
-        "rules": [1, 2, 3, 9, 14],
-        "description": "Spirituel/religieux, alcool/musique/banques, fêtes, humour, respect des tiers",
-    },
-    {
-        "id": "ethique_commerciale",
-        "label": "Éthique commerciale",
-        "rules": [4, 5, 6, 7, 8],
-        "description": "Manipulation, closing manipulatoire, flirt/séduction, chance/destin, célébrités",
-    },
-    {
-        "id": "legal_integrite",
-        "label": "Légal et intégrité",
-        "rules": [10, 11, 12, 13, 15, 16],
-        "description": "Cohérence interne, discrimination, RGPD, promesses irréalistes, détresse, conseils médicaux/juridiques",
+        "id": "ethique_minimale",
+        "label": "Éthique minimale",
+        "rules": [14, 15],
+        "description": "Respect des tiers et protection des publics vulnérables",
     },
     {
         "id": "anti_hallucination",
         "label": "Anti-hallucination",
-        "rules": [17, 18, 19, 20],
-        "description": "Exemples fictifs, chiffres non sourcés, expressions de prudence, posture pédagogique",
+        "rules": [17, 18],
+        "description": "Anti-hallucination générale et patterns interdits",
     },
     {
         "id": "style_oral_tts",
         "label": "Style oral TTS",
-        "rules": [21, 22, 23, 24, 25, 26, 27],
-        "description": "Fusion syntaxique, guillemets, posture dialogale, punchlines, cours à distance, énumérations, registre oral",
-    },
-]
-
-_HUMANIZATION_REVIEW_RULE_GROUPS = [
-    {
-        "id": "humanisation_rythme",
-        "label": "Humanisation et rythme pédagogique",
-        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114],
-        "description": "Intros plus douces, intro annuelle, débuts de journée, respirations, transitions, continuité pédagogique et références inter-cours non datées",
+        "rules": [22],
+        "description": "Zéro guillemet de discours direct rapporté",
     },
 ]
 
@@ -6170,103 +17417,33 @@ _REVIEW_RULE_GROUPS = _COMPLIANCE_REVIEW_RULE_GROUPS
 
 _RULES_CACHE = {"mtime": 0, "text": ""}
 
-_HUMANIZATION_REVIEW_RULES = """
-RÈGLE #101 — Éviter les débuts trop brusques ou trop conférence
-Un début de cours doit accueillir, rassurer, ralentir et installer calmement
-l'apprenant. Corrige les ouvertures trop intenses, trop abruptes ou trop
-"grand discours". Préfère une entrée progressive avec une présence humaine.
 
-RÈGLE #102 — Créer des respirations pédagogiques
-Après une idée dense, une démonstration ou un exemple important, le texte doit
-laisser une respiration : reformulation simple, phrase tampon, [pause],
-mini-synthèse ou reconnexion terrain. Corrige les blocs d'information trop
-compacts qui ne laissent pas le temps d'assimiler.
-
-RÈGLE #103 — Laisser vivre les idées importantes
-Une phrase forte ne doit pas toujours être immédiatement sur-expliquée. Ajoute
-ou conserve une respiration courte, une reformulation calme ou une phrase
-émotionnelle simple après les idées importantes.
-
-RÈGLE #104 — Humaniser le formateur
-Le formateur doit sembler humain : il accompagne, rassure, réfléchit légèrement,
-normalise les difficultés et partage des repères terrain. Corrige les passages
-qui sonnent comme une conférence mécanique ou une démonstration permanente.
-
-RÈGLE #105 — Éviter l'accumulation de punchlines
-N'enchaîne pas les phrases très fortes comme des slogans. Alterne phrases
-fortes, phrases simples, phrases neutres et formulations conversationnelles.
-
-RÈGLE #106 — Ajouter des micro-interactions sobres
-Le cours doit régulièrement s'adresser aux apprenants : "vous voyez l'idée ?",
-"essayez de vous projeter", "retenez surtout ça", "vous me suivez ?". Corrige
-les longs passages qui oublient complètement l'apprenant.
-
-RÈGLE #107 — Varier le niveau d'énergie
-Le script doit alterner phases dynamiques, moments calmes, exemples terrain,
-synthèses lentes et transitions douces. Utilise les tags [pause], [calm],
-[speaking softly], [inhale], [warm and reassuring] uniquement quand ils servent
-une respiration, une transition ou une reformulation.
-
-RÈGLE #108 — Réduire la densité cognitive des longues phrases
-Corrige les phrases longues qui contiennent plusieurs concepts ou nuances.
-Sépare les idées, ajoute des pauses et préfère des phrases plus courtes.
-
-RÈGLE #109 — Créer de vraies transitions entre grandes idées
-Une transition ne doit pas être seulement logique et rapide. Elle doit ralentir,
-reconnecter à ce qui vient d'être vu et préparer la suite avec anticipation.
-
-RÈGLE #110 — Préparer des fins de blocs conclues
-Quand un passage ressemble à une fin de séquence, il doit redescendre
-progressivement : synthèse, valorisation du chemin parcouru, projection vers la
-suite. Évite les arrêts secs du type "on continue".
-
-RÈGLE #111 — Donner l'impression d'une journée vécue
-Le cours doit former une progression continue, pas une succession de fichiers
-indépendants. Corrige les transitions qui ignorent totalement ce qui précède ou
-qui cassent le fil émotionnel et pédagogique de la journée.
-
-RÈGLE #112 — Premier cours de l'année : introduction générale obligatoire
-Quand le passage est l'ouverture absolue de la formation, il ne doit jamais
-démarrer directement par "bon, on va aborder", "on entre dans le vif du sujet",
-"nouvelle partie" ou une phrase intense. Il doit d'abord faire une vraie
-introduction annuelle, développée et chaleureuse, avant toute notion métier.
-Cette ouverture doit raconter la formation : à quoi elle sert, dans quel
-contexte professionnel elle s'inscrit, ce que les apprenants vont construire,
-les grandes familles de compétences qui seront abordées, la progression sur les
-journées, la manière de travailler, et pourquoi ce parcours va leur être utile
-concrètement. Elle doit encourager les élèves, rassurer sur le rythme, donner
-envie d'avancer, puis seulement faire une transition douce vers le premier
-sujet. Une simple intro générique de quelques phrases est insuffisante.
-
-RÈGLE #113 — Début de journée ou de bloc : amorce progressive obligatoire
-Chaque début de journée, de reprise ou de bloc audio doit avoir une vraie
-amorce orale. Interdire les démarrages mécaniques du type "Bon, on va aborder
-une nouvelle partie du cours" ou "c'est une partie absolument fondamentale".
-Le formateur doit reconnecter calmement au parcours, poser l'intention du bloc,
-accueillir l'apprenant dans le rythme, puis introduire le sujet sans brusquerie.
-
-RÈGLE #114 — Références entre cours toujours vagues, jamais datées
-Les cours ne s'enchaînent PAS au jour le jour : il y a en général un cours par
-semaine, et ce rythme peut changer. Toute référence à un cours passé ou à venir
-doit donc rester VAGUE et NON datée. Corrige systématiquement "hier", "demain",
-"la semaine dernière", "la semaine prochaine" et toute mention calendaire
-précise — y compris dans les intros de reprise ("depuis hier", "la pause
-d'hier", "hier on a vu"). Remplace par des formulations vagues : "la dernière
-fois", "lors du dernier cours", "dans la séance précédente", "au prochain
-cours", "la prochaine fois". Une intro de début de journée ne doit jamais
-supposer que le cours précédent était la veille.
-""".strip()
+def _compliance_review_groups_for_final_pass() -> list[dict]:
+    return _COMPLIANCE_REVIEW_RULE_GROUPS
 
 
 def _load_review_rules() -> str:
-    """Extrait le bloc 'RÈGLES ABSOLUES #1 à #27' de la passe 1 du prompt
-    (les règles sont identiques dans les 3 passes, une seule extraction
-    suffit). Mise en cache par mtime du fichier."""
-    path = os.path.join(
-        os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
-    )
+    """Charge les règles de review depuis les fichiers modulaires JSON.
+
+    Fallback : ancien markdown monolithique si les fichiers structurés sont
+    absents, pour ne pas casser un déploiement incomplet.
+    """
+    try:
+        compliance_text, compliance_mtime = _load_structured_rule_file("compliance-rules.json")
+        cache_key = ("modular", compliance_mtime)
+        if _RULES_CACHE["mtime"] == cache_key and _RULES_CACHE["text"]:
+            return _RULES_CACHE["text"]
+        rules_text = compliance_text.rstrip()
+        _RULES_CACHE["mtime"] = cache_key
+        _RULES_CACHE["text"] = rules_text
+        return rules_text
+    except Exception as e:
+        logger.warning("⚠️ Règles modulaires indisponibles, fallback markdown historique: %s", e)
+
+    path = _prompt_file_path("prompts-generaux-contenu-formation.md")
     mtime = os.path.getmtime(path)
-    if _RULES_CACHE["mtime"] == mtime and _RULES_CACHE["text"]:
+    cache_key = ("legacy", mtime)
+    if _RULES_CACHE["mtime"] == cache_key and _RULES_CACHE["text"]:
         return _RULES_CACHE["text"]
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -6276,8 +17453,7 @@ def _load_review_rules() -> str:
         _re.DOTALL,
     )
     rules_text = m.group(0) if m else content[:20000]
-    rules_text = rules_text.rstrip() + "\n\n" + _HUMANIZATION_REVIEW_RULES
-    _RULES_CACHE["mtime"] = mtime
+    _RULES_CACHE["mtime"] = cache_key
     _RULES_CACHE["text"] = rules_text
     return rules_text
 
@@ -6299,46 +17475,38 @@ def _review_rules_signature(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _ethical_lexical_signature_text() -> str:
+    try:
+        payload = {
+            "source": "ethical-lexical-terms.json",
+            "rule_ids": sorted(_ethical_lexical_rule_ids()),
+            "strict": _ethical_lexical_strict_enabled(),
+            "terms": _load_ethical_lexical_terms(),
+        }
+        return "\n\nSOURCE LEXICALE DÉTERMINISTE:\n" + _json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    except Exception as exc:
+        logger.warning("⚠️ Signature lexicale éthique indisponible: %s", exc)
+        return "\n\nSOURCE LEXICALE DÉTERMINISTE: unavailable"
+
+
 def _current_compliance_review_signature() -> str:
     return _review_rules_signature(
-        _load_review_rules(),
-        groups=_COMPLIANCE_REVIEW_RULE_GROUPS,
+        _load_review_rules() + _ethical_lexical_signature_text(),
+        groups=_compliance_review_groups_for_final_pass(),
         version=_REVIEW_RULESET_VERSION,
     )
 
 
-def _current_humanization_review_signature() -> str:
-    return _review_rules_signature(
-        _load_review_rules(),
-        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
-        version=_HUMANIZATION_RULESET_VERSION,
-    )
-
-
 def _ensure_review_state_columns() -> None:
-    """Migrations légères pour tracer les deux passes de review."""
+    """Migration légère pour tracer la passe de conformité."""
     global _REVIEW_SIGNATURE_COLUMNS_READY
     if _REVIEW_SIGNATURE_COLUMNS_READY:
         return
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN review_signature TEXT")
-        logger.info("✅ Colonne review_signature ajoutée à content_generation_segments")
-    except Exception:
-        pass
-    for sql, label in (
-        ("ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0", "humanized"),
-        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT", "humanization_error"),
-        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT", "humanization_signature"),
-    ):
-        try:
-            cursor.execute(sql)
-            logger.info("✅ Colonne %s ajoutée à content_generation_segments", label)
-        except Exception:
-            pass
-    conn.commit()
-    conn.close()
+    ensure_content_review_state_columns()
     _REVIEW_SIGNATURE_COLUMNS_READY = True
 
 
@@ -6362,38 +17530,15 @@ def _build_review_prompt_focused(
     chunk_index: int = 1, chunk_total: int = 1, review_context: str = "",
 ) -> str:
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
-    is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
-    review_mode = (
-        "Pour les règles #101 à #114, une intro trop brusque, un premier cours "
-        "sans introduction annuelle, un début de journée mécanique, un bloc trop dense, "
-        "une transition mécanique, une fin sèche, l'absence de respiration "
-        "pédagogique ou une référence datée entre cours (\"hier\", \"demain\") "
-        "comptent comme des non-conformités. Tu dois proposer des "
-        "corrections concrètes quand le texte sonne trop récité, trop rapide ou "
-        "pas assez accompagné."
-        if is_humanization_scope
-        else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
-    )
-    replacement_constraint = (
-        "- Pour #101 à #114, `replacement` peut ajouter une phrase orale, "
-        "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
-        "le rythme, sans changer le fond pédagogique. Pour une violation #112, "
-        "`replacement` doit remplacer l'ouverture trop courte par une vraie "
-        "introduction de formation développée : 180 à 320 mots, utilité de la "
-        "formation, contexte métier, grandes compétences abordées, progression, "
-        "encouragement et transition vers le premier sujet. Dans tous les cas, "
-        "respecte le budget audio déjà calculé : substitue et condense autant "
-        "que possible, ne gonfle pas le segment hors budget mots."
-        if is_humanization_scope
-        else "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
-    )
-    preference_constraint = (
-        "- Ne corrige QUE les non-conformités de rythme/humanisation du scope. "
-        "Pas de réécriture complète, pas de préférence personnelle hors règles."
-        if is_humanization_scope
-        else f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
-    )
+    review_contract = _load_prompt_file("reviews", "compliance-review.md")
+    max_patches = _REVIEW_MAX_PATCHES
+    review_mode = "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
+    replacement_constraint = "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
+    preference_constraint = f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
     return f"""Tu es un reviewer éditorial SPÉCIALISÉ. Tu reçois un extrait de cours oral et un sous-ensemble de règles à vérifier.
+
+CONTRAT DE REVIEW :
+{review_contract}
 
 🎯 TON SCOPE EXCLUSIF : {group_label} — {group_desc}
 Tu vérifies UNIQUEMENT les règles {rules_list}. Ignore toutes les autres règles.
@@ -6419,10 +17564,14 @@ Format de sortie strict (JSON valide, rien d'autre avant ou après) :
 }}
 
 Contraintes impératives :
-- Maximum {_REVIEW_MAX_PATCHES} patches. Si tu vois plus de violations, garde les {_REVIEW_MAX_PATCHES} pires.
+- Maximum {max_patches} patches. Si tu vois plus de violations, garde les {max_patches} pires.
 - `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, ponctuation comprise).
 {replacement_constraint}
 {preference_constraint}
+- Le plan JSON verrouillé, s'il est fourni dans le contexte, fait autorité.
+- Ne réécris jamais le cours entier. Ne change pas le nombre de parties, ne réordonne pas le plan, ne crée pas de nouveau chapitre.
+- Corrige précisément les incohérences, transitions faibles, répétitions, manque d'oralité, conclusion mal fermée, vocabulaire trop abstrait ou problème de périmètre.
+- Ne supprime jamais et ne modifie jamais les marqueurs techniques `<<<BLOC_AUDIO_N>>>`.
 - Ne gonfle pas le texte : les cours sont calibrés au mot près pour la synthèse audio. Toute correction trop longue sera rejetée par `budget_guard`.
 - `rule_violated` = numéro parmi {rules_list} (ex: "#1", "#9").
 
@@ -6434,15 +17583,6 @@ Contraintes impératives :
 
 ─── TON JSON ───
 """
-
-
-def _cooperative_sleep(seconds: float) -> None:
-    """Sleep compatible eventlet si disponible, sinon sleep standard."""
-    try:
-        import eventlet
-        eventlet.sleep(seconds)
-    except Exception:
-        time.sleep(seconds)
 
 
 def _chunk_text(text: str, max_words: int = _REVIEW_CHUNK_WORDS) -> list:
@@ -6492,41 +17632,20 @@ def _chunk_text(text: str, max_words: int = _REVIEW_CHUNK_WORDS) -> list:
     return chunks
 
 
-def _review_chunk_with_retries(prompt: str, group_label: str, chunk_index: int, model=None) -> dict:
-    """Appelle le reviewer API avec retries sur erreurs transitoires et parse JSON."""
-    last_error = None
-    for attempt in range(_REVIEW_MAX_ATTEMPTS):
-        try:
-            raw = _anthropic_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=_REVIEW_MAX_TOKENS,
-                model=model,
-            )
-            patches, parse_error = _parse_patches_response(raw)
-            if not parse_error:
-                return {"ok": True, "patches": patches}
-            last_error = f"[{group_label} chunk {chunk_index}] parse: {parse_error}"
-            wait = 15 * (attempt + 1)
-        except AnthropicRateLimitError as e:
-            last_error = f"[{group_label} chunk {chunk_index}] rate_limit: {str(e)[:200]}"
-            wait = max(float(getattr(e, "wait_seconds", 0) or 0), 15 * (attempt + 1))
-        except AnthropicAPIError as e:
-            last_error = f"[{group_label} chunk {chunk_index}] API {e.status_code}: {str(e)[:200]}"
-            if getattr(e, "is_deterministic", False):
-                return {"ok": False, "error": last_error}
-            wait = 15 * (attempt + 1)
-        except Exception as e:
-            last_error = f"[{group_label} chunk {chunk_index}] API error: {str(e)[:200]}"
-            wait = 15 * (attempt + 1)
-
-        if attempt < _REVIEW_MAX_ATTEMPTS - 1:
-            logger.warning(
-                f"    ⚠️ Salve '{group_label}' chunk {chunk_index} tentative "
-                f"{attempt + 1}/{_REVIEW_MAX_ATTEMPTS} : {last_error} — retry dans {wait:.0f}s"
-            )
-            _cooperative_sleep(wait)
-
-    return {"ok": False, "error": last_error or f"[{group_label} chunk {chunk_index}] échec inconnu"}
+def _review_chunk_once(prompt: str, group_label: str, chunk_index: int, model=None) -> dict:
+    """Un appel reviewer ; un échec est repris par la file durable."""
+    raw = _deepseek_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_REVIEW_MAX_TOKENS,
+        model=model,
+    )
+    patches, parse_error = _parse_patches_response(raw)
+    if parse_error:
+        return {
+            "ok": False,
+            "error": f"[{group_label} chunk {chunk_index}] parse: {parse_error}",
+        }
+    return {"ok": True, "patches": patches}
 
 
 def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=None) -> tuple:
@@ -6557,19 +17676,19 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
             chunk_index=chunk["index"], chunk_total=chunk["total"],
             review_context=review_context,
         )
-        result = _review_chunk_with_retries(prompt, group_label, chunk["index"], model=model)
+        result = _review_chunk_once(prompt, group_label, chunk["index"], model=model)
         result["chunk"] = chunk
         return result
 
     if len(chunks) == 1 or _REVIEW_CHUNK_CONCURRENCY <= 1:
         results = [_run_chunk(chunk) for chunk in chunks]
     else:
-        import eventlet
-        pool = eventlet.GreenPool(size=_REVIEW_CHUNK_CONCURRENCY)
-        pile = eventlet.GreenPile(pool)
-        for chunk in chunks:
-            pile.spawn(_run_chunk, chunk)
-        results = list(pile)
+        results = run_parallel_ordered(
+            chunks,
+            _run_chunk,
+            max_workers=_REVIEW_CHUNK_CONCURRENCY,
+            thread_name_prefix="content-review",
+        )
         results.sort(key=lambda r: r["chunk"]["index"])
 
     updated_text = current_text
@@ -6598,7 +17717,7 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
 
 def _build_review_prompt(segment_text: str, rules_text: str) -> str:
     return f"""Tu es un reviewer éditorial. Tu reçois un extrait de cours oral \
-généré par un autre Claude, et les règles #1 à #27 que ce cours doit \
+généré lors d'une passe précédente, et les règles actives que ce cours doit \
 respecter. Ton unique rôle : identifier les passages qui VIOLENT une règle, \
 et proposer une correction minimale.
 
@@ -6612,7 +17731,7 @@ Format de sortie strict (JSON valide, rien d'autre avant ou après) :
     {{
       "original": "phrase EXACTE à remplacer (copie verbatim, 3 à 40 mots)",
       "replacement": "phrase corrigée, même esprit, même registre oral",
-      "rule_violated": "#27",
+      "rule_violated": "#22",
       "reason": "explication brève (1 phrase)"
     }}
   ]
@@ -6627,7 +17746,7 @@ plusieurs fois.
 de contenu, sans raccourcir ni allonger au-delà du strict nécessaire.
 - Ne corrige QUE les vraies violations des règles ci-dessous. Pas de \
 préférence stylistique personnelle.
-- `rule_violated` = numéro de règle (ex: "#1", "#7", "#21", "#27").
+- `rule_violated` = numéro de règle active (ex: "#14", "#15", "#17", "#18", "#22").
 
 ─── RÈGLES À FAIRE RESPECTER ───
 {rules_text}
@@ -6690,8 +17809,16 @@ def _apply_patches(text: str, patches: list) -> tuple:
         replacement = p["replacement"]
         count = text.count(original)
         if count == 1:
-            text = text.replace(original, replacement, 1)
-            applied.append(p)
+            start = text.find(original)
+            end = start + len(original)
+            text = f"{text[:start]}{replacement}{text[end:]}"
+            applied.append({
+                **p,
+                "original_start": start,
+                "original_end": end,
+                "replacement_start": start,
+                "replacement_end": start + len(replacement),
+            })
         elif count == 0:
             rejected.append({**p, "reject_reason": "original not found"})
         else:
@@ -6707,13 +17834,8 @@ def _review_budget_guard_limit(original_word_count: int, review_kind: str) -> in
     marge, puis on rejette toute salve qui gonfle trop le segment.
     """
     original_word_count = max(0, int(original_word_count or 0))
-    is_humanization = (review_kind or "").strip().lower() == "humanization"
-    if is_humanization:
-        ratio = _env_float("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_RATIO", 0.08, min_value=0.0, max_value=0.50)
-        absolute = _env_int("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_WORDS", 320, min_value=1)
-    else:
-        ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
-        absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
+    ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
+    absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
     allowed_extra = max(absolute, int(original_word_count * ratio))
     return original_word_count + allowed_extra
 
@@ -6727,8 +17849,8 @@ def _apply_review_budget_guard(
     """Rollback des patches appliqués si la review dépasse le budget mots."""
     if not applied:
         return candidate_text, applied, []
-    original_words = len((original_text or "").split())
-    candidate_words = len((candidate_text or "").split())
+    original_words = count_tts_spoken_words(original_text)
+    candidate_words = count_tts_spoken_words(candidate_text)
     max_words = _review_budget_guard_limit(original_words, review_kind)
     if candidate_words <= max_words:
         return candidate_text, applied, []
@@ -6748,28 +17870,7 @@ def _apply_review_budget_guard(
 
 def _snapshot_pre_review_for_content_job(job_id: int) -> int:
     """Persist the exact text state before API review mutates segments."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "ALTER TABLE content_generation_segments ADD COLUMN text_content_pre_review TEXT"
-        )
-        conn.commit()
-    except Exception:
-        pass
-    cursor.execute(
-        """
-        UPDATE content_generation_segments
-        SET text_content_pre_review = text_content
-        WHERE job_id = ?
-          AND status = 'completed'
-          AND text_content_pre_review IS NULL
-        """,
-        (job_id,),
-    )
-    snapshotted = cursor.rowcount or 0
-    conn.commit()
-    conn.close()
+    snapshotted = snapshot_content_segments_pre_review(job_id)
     if snapshotted:
         logger.info(
             "PIPELINE_REVIEW_SNAPSHOT content_job_id=%s segments=%s",
@@ -6792,7 +17893,6 @@ def _run_content_review_pass(
     signature_column: str,
     review_kind: str,
     review_label: str,
-    invalidate_compliance_on_change: bool = False,
 ):
     """
     Révise les segments completed pour un dossier cours.
@@ -6813,10 +17913,7 @@ def _run_content_review_pass(
         if on_progress:
             on_progress(step, total, msg)
 
-    allowed_columns = {
-        "reviewed", "review_error", "review_signature",
-        "humanized", "humanization_error", "humanization_signature",
-    }
+    allowed_columns = {"reviewed", "review_error", "review_signature"}
     for col in (reviewed_column, error_column, signature_column):
         if col not in allowed_columns:
             raise ValueError(f"Colonne review non autorisée : {col}")
@@ -6837,6 +17934,8 @@ def _run_content_review_pass(
         bool(force),
     )
     rules_text = _load_review_rules()
+    if review_kind == "local_compliance":
+        rules_text += _ethical_lexical_signature_text()
     review_signature = _review_rules_signature(
         rules_text,
         groups=groups,
@@ -6844,51 +17943,18 @@ def _run_content_review_pass(
     )
     _ensure_review_state_columns()
     _snapshot_pre_review_for_content_job(job_id)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT COUNT(*) FROM content_generation_segments WHERE job_id = ? AND status = 'completed'",
-        (job_id,),
+    total_completed, rows = select_content_segments_for_review(
+        job_id=job_id,
+        reviewed_column=reviewed_column,
+        signature_column=signature_column,
+        review_signature=review_signature,
+        force=force,
     )
-    total_completed = int(cursor.fetchone()[0] or 0)
-    if force:
-        cursor.execute(
-            """
-            SELECT id, sub_part_index, sub_part_name, passe, text_content
-            FROM content_generation_segments
-            WHERE job_id = ? AND status = 'completed'
-            ORDER BY sub_part_index ASC, passe ASC
-            """,
-            (job_id,),
-        )
-    else:
-        cursor.execute(
-            f"""
-            SELECT id, sub_part_index, sub_part_name, passe, text_content
-            FROM content_generation_segments
-            WHERE job_id = ? AND status = 'completed'
-              AND (
-                    COALESCE({reviewed_column}, 0) = 0
-                 OR {signature_column} IS NULL
-                 OR {signature_column} != ?
-              )
-            ORDER BY sub_part_index ASC, passe ASC
-            """,
-            (job_id, review_signature),
-        )
-    rows = cursor.fetchall()
-    if rows:
-        placeholders = ",".join("?" * len(rows))
-        cursor.execute(
-            f"""
-            UPDATE content_generation_segments
-            SET {reviewed_column} = 0, {error_column} = NULL
-            WHERE id IN ({placeholders})
-            """,
-            tuple(row[0] for row in rows),
-        )
-        conn.commit()
-    conn.close()
+    reset_content_segments_review_state(
+        segment_ids=[int(row["id"]) for row in rows],
+        reviewed_column=reviewed_column,
+        error_column=error_column,
+    )
 
     total = len(rows)
     total_already_current = max(0, total_completed - total) if not force else 0
@@ -6902,7 +17968,7 @@ def _run_content_review_pass(
             int((time.time() - started_at) * 1000),
             review_signature[:12],
         )
-        return {
+        summary = {
             "segments_reviewed": 0,
             "segments_failed": 0,
             "segments_total_completed": total_completed,
@@ -6916,6 +17982,14 @@ def _run_content_review_pass(
             "force": bool(force),
             "details": [],
         }
+        _save_reviewed_scripts_artifact(
+            job,
+            folder_id,
+            review_kind=review_kind,
+            review_label=review_label,
+            summary=summary,
+        )
+        return summary
 
     logger.info(
         "PIPELINE_REVIEW_PLAN formation_job_id=%s content_job_id=%s folder_id=%s segments_to_review=%s completed=%s already_current=%s groups=%s signature=%s force=%s",
@@ -6929,6 +18003,10 @@ def _run_content_review_pass(
         review_signature[:12],
         bool(force),
     )
+    try:
+        saved_script_plan = _load_saved_course_script_plan(job["platform_id"], folder_id) or {}
+    except Exception:
+        saved_script_plan = {}
 
     total_applied = 0
     total_rejected = 0
@@ -6938,7 +18016,11 @@ def _run_content_review_pass(
 
     for step, row in enumerate(rows, start=1):
         segment_started_at = time.time()
-        seg_id, sub_idx, sub_part_name, passe, text_content = row
+        seg_id = row["id"]
+        sub_idx = row["sub_part_index"]
+        sub_part_name = row["sub_part_name"]
+        passe = row["passe"]
+        text_content = row.get("text_content") or ""
         label = f"sous-partie {sub_idx + 1} / passe {passe}"
         _progress(step, total, f"{review_label} {label} ({len(groups)} salves)…")
         logger.info(
@@ -6957,13 +18039,22 @@ def _run_content_review_pass(
         original_text = text_content or ""
         current_text = original_text
         review_context = _build_course_position_context(
+            formation_job_id=job.get("formation_job_id"),
             folder_position=job.get("folder_position"),
             nb_days=job.get("nb_days"),
             total_hours=job.get("total_hours"),
             folder_name=job.get("folder_name") or "",
             sub_part_index=sub_idx,
             passe=passe,
+            total_courses=len(job.get("sub_parts") or []) or NUM_SUB_PARTS,
         )
+        structured_review_context = _structured_review_context_for_segment(
+            saved_script_plan,
+            sub_idx,
+            original_text,
+        )
+        if structured_review_context:
+            review_context = f"{review_context}\n\n{structured_review_context}"
         all_applied = []
         all_rejected = []
         all_proposed = 0
@@ -7041,6 +18132,60 @@ def _run_content_review_pass(
                     int((time.time() - group_started_at) * 1000),
                 )
 
+        if not segment_error and review_kind == "local_compliance":
+            lexical_started_at = time.time()
+            course_number = _extract_audio_block_number(current_text) or int(sub_idx or 0) + 1
+            lexical_course_plan = {
+                "course_number": course_number,
+                "course_title": sub_part_name or f"Cours {course_number}",
+            }
+            lexical_section = {
+                "kind": "course_calibrated",
+                "title": sub_part_name or f"Segment {sub_idx + 1}",
+                "part_number": int(sub_idx or 0) + 1,
+            }
+            lexical_result = _run_ethical_lexical_rewrite_for_section(
+                job=job,
+                course_plan=lexical_course_plan,
+                section=lexical_section,
+                section_text=current_text,
+                model=model,
+            )
+            lexical_findings = lexical_result.get("findings") or []
+            lexical_residual_findings = lexical_result.get("residual_findings") or []
+            if lexical_result.get("applied"):
+                current_text = lexical_result.get("text") or current_text
+            all_applied.extend(lexical_result.get("applied") or [])
+            all_rejected.extend(lexical_result.get("rejected") or [])
+            all_proposed += len(lexical_findings)
+            if lexical_findings or lexical_residual_findings:
+                logger.info(
+                    "PIPELINE_REVIEW_LEXICAL_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s findings=%s applied=%s rejected=%s residual=%s duration_ms=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    len(lexical_findings),
+                    len(lexical_result.get("applied") or []),
+                    len(lexical_result.get("rejected") or []),
+                    len(lexical_residual_findings),
+                    int((time.time() - lexical_started_at) * 1000),
+                )
+            if lexical_residual_findings and _ethical_lexical_strict_enabled():
+                segment_error = _ethical_lexical_residual_error(
+                    lexical_residual_findings,
+                    context=f"segment_id={seg_id}",
+                )
+                logger.warning(
+                    "PIPELINE_REVIEW_LEXICAL_RESIDUAL formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s residual=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    len(lexical_residual_findings),
+                    segment_error[:300],
+                )
+
         if not segment_error and all_applied:
             guarded_text, guarded_applied, budget_rejected = _apply_review_budget_guard(
                 original_text,
@@ -7070,18 +18215,31 @@ def _run_content_review_pass(
                 all_applied = guarded_applied
                 all_rejected.extend(budget_rejected)
 
-        # Écriture finale en DB (une seule transaction par segment)
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        current_text = _preserve_audio_block_marker(original_text, current_text)
+        if not segment_error and review_kind == "local_compliance" and _ethical_lexical_strict_enabled():
+            final_lexical_residuals = _scan_ethical_lexical_findings(current_text)
+            if final_lexical_residuals:
+                segment_error = _ethical_lexical_residual_error(
+                    final_lexical_residuals,
+                    context=f"segment_id={seg_id} final_check",
+                )
+                logger.warning(
+                    "PIPELINE_REVIEW_LEXICAL_FINAL_RESIDUAL formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s residual=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    len(final_lexical_residuals),
+                    segment_error[:300],
+                )
 
         if segment_error:
             # Une salve a échoué : review_error, PAS reviewed=1
-            cursor.execute(
-                f"UPDATE content_generation_segments SET {error_column} = ? WHERE id = ?",
-                (segment_error[:500], seg_id),
+            record_content_segment_review_error(
+                segment_id=seg_id,
+                error_column=error_column,
+                error_message=segment_error,
             )
-            conn.commit()
-            conn.close()
             total_failed += 1
             details.append({
                 "segment_id": seg_id,
@@ -7106,16 +18264,15 @@ def _run_content_review_pass(
 
         # Toutes les salves ont réussi
         if all_applied:
-            new_word_count = len(current_text.split())
-            cursor.execute(
-                f"""
-                UPDATE content_generation_segments
-                SET text_content = ?, word_count = ?, dirty = 1,
-                    {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
-                    {", reviewed = 0, review_error = NULL, review_signature = NULL" if invalidate_compliance_on_change else ""}
-                WHERE id = ?
-                """,
-                (current_text, new_word_count, review_signature, seg_id),
+            new_word_count = count_tts_spoken_words(current_text)
+            mark_content_segment_review_patched(
+                segment_id=seg_id,
+                text_content=current_text,
+                word_count=new_word_count,
+                reviewed_column=reviewed_column,
+                error_column=error_column,
+                signature_column=signature_column,
+                review_signature=review_signature,
             )
             logger.info(
                 "PIPELINE_REVIEW_SEGMENT_PATCHED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s applied=%s rejected=%s new_words=%s",
@@ -7129,13 +18286,12 @@ def _run_content_review_pass(
                 new_word_count,
             )
         else:
-            cursor.execute(
-                f"""
-                UPDATE content_generation_segments
-                SET {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
-                WHERE id = ?
-                """,
-                (review_signature, seg_id),
+            mark_content_segment_review_clean(
+                segment_id=seg_id,
+                reviewed_column=reviewed_column,
+                error_column=error_column,
+                signature_column=signature_column,
+                review_signature=review_signature,
             )
             logger.info(
                 "PIPELINE_REVIEW_SEGMENT_CLEAN formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s rejected=%s",
@@ -7146,8 +18302,6 @@ def _run_content_review_pass(
                 all_proposed,
                 len(all_rejected),
             )
-        conn.commit()
-        conn.close()
 
         total_applied += len(all_applied)
         total_rejected += len(all_rejected)
@@ -7194,7 +18348,7 @@ def _run_content_review_pass(
         int((time.time() - started_at) * 1000),
         review_signature[:12],
     )
-    return {
+    summary = {
         "segments_reviewed": total - total_failed,
         "segments_failed": total_failed,
         "segments_total_completed": total_completed,
@@ -7208,38 +18362,32 @@ def _run_content_review_pass(
         "force": bool(force),
         "details": details,
     }
-
-
-def run_humanization_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Passe 1 : reformule les intros/transitions/respirations avant la conformité stricte."""
-    return _run_content_review_pass(
+    _save_reviewed_scripts_artifact(
+        job,
         folder_id,
-        on_progress=on_progress,
-        model=model,
-        force=force,
-        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
-        signature_version=_HUMANIZATION_RULESET_VERSION,
-        reviewed_column="humanized",
-        error_column="humanization_error",
-        signature_column="humanization_signature",
-        review_kind="humanization",
-        review_label="Humanisation",
-        invalidate_compliance_on_change=True,
+        review_kind=review_kind,
+        review_label=review_label,
+        summary=summary,
     )
+    return summary
 
 
 def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Passe 2 : conformité stricte #1-#27 après la reformulation humanisation."""
+    """Conformité locale par segment après calibrage budget.
+
+    Passe finale de conformité sur les règles actives minimales :
+    #14, #15, #17, #18 et #22.
+    """
     return _run_content_review_pass(
         folder_id,
         on_progress=on_progress,
         model=model,
         force=force,
-        groups=_COMPLIANCE_REVIEW_RULE_GROUPS,
+        groups=_compliance_review_groups_for_final_pass(),
         signature_version=_REVIEW_RULESET_VERSION,
         reviewed_column="reviewed",
         error_column="review_error",
         signature_column="review_signature",
-        review_kind="compliance",
-        review_label="Conformité",
+        review_kind="local_compliance",
+        review_label="Conformité locale",
     )

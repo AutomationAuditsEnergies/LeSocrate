@@ -1,0 +1,120 @@
+const normalizeText = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9\s]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+const UNCERTAIN_ANSWER = /^(je ne sais pas|j sais pas|jsp|aucune idee|n importe quoi|comme vous voulez|peu importe|a voir|autre)$/
+const GENERIC_TRAINING_WORDS = new Set([
+  'un', 'une', 'le', 'la', 'les', 'de', 'des', 'du', 'en', 'pour', 'sur',
+  'formation', 'formations', 'cours', 'programme', 'parcours',
+  'titre', 'titres', 'tp',
+  'long', 'longue', 'court', 'courte', 'general', 'generale',
+  'professionnel', 'professionnelle', 'complete', 'complet',
+  'certifiant', 'certifiante', 'qualifiant', 'qualifiante',
+])
+const GENERIC_TRAINING_LABELS = new Set([
+  'titre professionnel',
+  'un titre professionnel',
+  'le titre professionnel',
+  'tp',
+  'un tp',
+  'une certification professionnelle',
+  'formation professionnelle',
+])
+
+export const RECRUITMENT_STEPS = [
+  { id: 'rncpCode', question: 'Quel est le code RNCP de la formation que vous souhaitez dispenser ?', placeholder: 'Ex. 37099', type: 'number' },
+  { id: 'rncpConfirm', question: 'S’agit-il bien de ce titre professionnel ?', type: 'confirm' },
+  { id: 'startDate', question: 'Quand débutera la formation ?', type: 'date' },
+  { id: 'weeklyCourseCount', question: 'Combien de journées de cours souhaitez-vous prévoir chaque semaine ?', type: 'frequency' },
+  { id: 'trainingWeeks', question: 'Combien de semaines prévoyez-vous que la formation dure ?', placeholder: 'Ex. 8', type: 'number' },
+  { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous prévoir habituellement ?', type: 'days' },
+  { id: 'teacherName', question: 'Pour terminer, comment souhaitez-vous appeler ce professeur IA ?', placeholder: 'Ex. Pierre, Lina, Sofia…', type: 'text' },
+]
+
+export function calculateTrainingDays(trainingWeeks, weeklyCourseCount) {
+  const weeks = Number(trainingWeeks)
+  const daysPerWeek = Number(weeklyCourseCount)
+  if (!Number.isInteger(weeks) || weeks < 1 || !Number.isInteger(daysPerWeek) || daysPerWeek < 1) return 0
+  return weeks * daysPerWeek
+}
+
+export function validateRecruitmentAnswer(stepId, rawValue) {
+  const value = String(rawValue || '').trim().replace(/\s+/g, ' ')
+  const normalized = normalizeText(value)
+
+  if (!value) {
+    return { valid: false, message: 'J’ai besoin d’une réponse pour continuer.' }
+  }
+
+  if (stepId === 'teacherName') {
+    const isGeneric = UNCERTAIN_ANSWER.test(normalized)
+      || /\b(professeur|enseignant|formateur|robot|ia)\b/.test(normalized)
+    if (value.length < 2 || isGeneric) {
+      return {
+        valid: false,
+        message: 'Quel nom souhaitez-vous donner au professeur IA ? Par exemple : « Pierre » ou « Sofia ».',
+      }
+    }
+  }
+
+  if (stepId === 'trainingName') {
+    const specificWords = normalized
+      .split(' ')
+      .filter((word) => word.length >= 3 && !GENERIC_TRAINING_WORDS.has(word))
+    if (UNCERTAIN_ANSWER.test(normalized) || GENERIC_TRAINING_LABELS.has(normalized) || specificWords.length === 0) {
+      return {
+        valid: false,
+        message: `« ${value} » désigne une catégorie de certification, pas un intitulé précis. Indiquez le nom exact du titre professionnel, par exemple « Conseiller relation client à distance ».`,
+      }
+    }
+  }
+
+  if (stepId === 'rncpCode' && !/^\d{4,6}$/.test(normalized)) {
+    return {
+      valid: false,
+      message: 'Le code RNCP doit contenir entre 4 et 6 chiffres, par exemple « 35304 ». Vérifiez le code puis réessayez.',
+    }
+  }
+
+  if (stepId === 'trainingDays') {
+    const days = Number(normalized)
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      return {
+        valid: false,
+        message: 'Indiquez un nombre de journées compris entre 1 et 365.',
+      }
+    }
+  }
+
+  if (stepId === 'trainingWeeks') {
+    const weeks = Number(normalized)
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > 52) {
+      return {
+        valid: false,
+        message: 'Indiquez une durée comprise entre 1 et 52 semaines.',
+      }
+    }
+  }
+
+  return { valid: true, value }
+}
+
+export function applyKnownRncpTraining(draft, modules, rncpCode) {
+  const normalizedCode = String(rncpCode || '').replace(/\D/g, '')
+  const matchingModule = modules.find((module) => (
+    String(module.rncp_code || '').replace(/\D/g, '') === normalizedCode
+  ))
+
+  return {
+    draft: {
+      ...draft,
+      rncpCode: normalizedCode,
+      trainingName: matchingModule?.tp_name || draft.trainingName,
+    },
+    matchingModule,
+  }
+}

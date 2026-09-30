@@ -1,0 +1,261 @@
+name: Deploy isolated AI and audio workers
+
+on:
+  workflow_dispatch:
+    inputs:
+      cutover:
+        description: Disable the old App Service worker after both Container Apps are ready
+        required: true
+        type: boolean
+        default: true
+      ai_max_replicas:
+        description: Maximum concurrent AI worker replicas
+        required: true
+        default: '3'
+        type: string
+      audio_max_replicas:
+        description: Maximum concurrent audio worker replicas
+        required: true
+        default: '2'
+        type: string
+
+concurrency:
+  group: cadrenza-pipeline-workers
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      APP_NAME: Formation3
+      BASE_NAME: cadrenza
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_27CAD6565966460DAF8B1817C6400475 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_49A11822A72A4BAA8989303BCB6DFECD }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F503B1C3D33E465EBB0C2A66B05DE8B9 }}
+
+      - name: Resolve App Service and enable its managed identity
+        shell: bash
+        run: |
+          resource_group="$(az webapp list \
+            --query "[?name=='${APP_NAME}'].resourceGroup | [0]" \
+            -o tsv)"
+          if [ -z "${resource_group}" ] || [ "${resource_group}" = "null" ]; then
+            echo "Unable to resolve resource group for ${APP_NAME}" >&2
+            exit 1
+          fi
+          api_principal_id="$(az webapp identity assign \
+            --resource-group "${resource_group}" \
+            --name "${APP_NAME}" \
+            --query principalId \
+            -o tsv)"
+          if [ -z "${api_principal_id}" ]; then
+            echo "Unable to enable the App Service managed identity" >&2
+            exit 1
+          fi
+          {
+            echo "RESOURCE_GROUP=${resource_group}"
+            echo "API_PRINCIPAL_ID=${api_principal_id}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Deploy shared worker infrastructure and RBAC
+        shell: bash
+        run: |
+          az deployment group create \
+            --name cadrenza-pipeline-workers-infrastructure \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/azure/workers-infrastructure.bicep \
+            --parameters \
+              baseName="${BASE_NAME}" \
+              appServicePrincipalId="${API_PRINCIPAL_ID}" \
+            --output none
+
+          outputs="$(az deployment group show \
+            --name cadrenza-pipeline-workers-infrastructure \
+            --resource-group "${RESOURCE_GROUP}" \
+            --query properties.outputs \
+            -o json)"
+          {
+            echo "ACR_NAME=$(jq -r '.acrName.value' <<< "${outputs}")"
+            echo "ACR_LOGIN_SERVER=$(jq -r '.acrLoginServer.value' <<< "${outputs}")"
+            echo "CONTAINER_ENVIRONMENT_NAME=$(jq -r '.containerEnvironmentName.value' <<< "${outputs}")"
+            echo "SERVICE_BUS_NAME=$(jq -r '.serviceBusName.value' <<< "${outputs}")"
+            echo "GENERAL_QUEUE_NAME=$(jq -r '.generalQueueName.value' <<< "${outputs}")"
+            echo "AI_QUEUE_NAME=$(jq -r '.aiQueueName.value' <<< "${outputs}")"
+            echo "AUDIO_QUEUE_NAME=$(jq -r '.audioQueueName.value' <<< "${outputs}")"
+            echo "AI_IDENTITY_NAME=$(jq -r '.aiIdentityName.value' <<< "${outputs}")"
+            echo "AUDIO_IDENTITY_NAME=$(jq -r '.audioIdentityName.value' <<< "${outputs}")"
+          } >> "${GITHUB_ENV}"
+
+      - name: Build the shared worker image in Azure Container Registry
+        shell: bash
+        run: |
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "cadrenza-workers:${GITHUB_SHA}" \
+            --file backend/Dockerfile.worker \
+            backend \
+            --output none
+          echo "WORKER_IMAGE=${ACR_LOGIN_SERVER}/cadrenza-workers:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Prepare secure worker parameters from App Service
+        shell: bash
+        run: |
+          app_settings="$(az webapp config appsettings list \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            -o json)"
+
+          get_setting() {
+            local key="$1"
+            jq -r --arg key "${key}" \
+              '.[] | select(.name == $key) | .value' \
+              <<< "${app_settings}" \
+              | tail -n 1
+          }
+
+          database_url="$(get_setting DATABASE_URL)"
+          deepseek_api_key="$(get_setting DEEPSEEK_API_KEY)"
+          fish_audio_api_key="$(get_setting FISH_AUDIO_API_KEY)"
+          fish_audio_voice_id="$(get_setting FISH_AUDIO_VOICE_ID)"
+          if [ -z "${fish_audio_voice_id}" ]; then
+            fish_audio_voice_id=90a39a3f3c0a45c38502fa1d99dabf96
+          fi
+          azure_tts_storage="$(get_setting AZURE_TTS_STORAGE_CONNECTION_STRING)"
+          azure_audio_storage="$(get_setting AZURE_AUDIO_STORAGE_CONNECTION_STRING)"
+          azure_storage="$(get_setting AZURE_STORAGE_CONNECTION_STRING)"
+          if [ -z "${azure_tts_storage}" ]; then
+            azure_tts_storage="${azure_storage}"
+          fi
+
+          missing=()
+          [ -n "${database_url}" ] || missing+=(DATABASE_URL)
+          [ -n "${deepseek_api_key}" ] || missing+=(DEEPSEEK_API_KEY)
+          [ -n "${fish_audio_api_key}" ] || missing+=(FISH_AUDIO_API_KEY)
+          [ -n "${azure_tts_storage}" ] || missing+=(AZURE_TTS_STORAGE_CONNECTION_STRING)
+          [ -n "${azure_audio_storage}" ] || missing+=(AZURE_AUDIO_STORAGE_CONNECTION_STRING)
+          [ -n "${azure_storage}" ] || missing+=(AZURE_STORAGE_CONNECTION_STRING)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing Formation3 setting(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          parameter_file="${RUNNER_TEMP}/worker-apps.parameters.json"
+          jq -n \
+            --arg databaseUrl "${database_url}" \
+            --arg deepseekApiKey "${deepseek_api_key}" \
+            --arg fishAudioApiKey "${fish_audio_api_key}" \
+            --arg azureTtsStorageConnectionString "${azure_tts_storage}" \
+            --arg azureAudioStorageConnectionString "${azure_audio_storage}" \
+            --arg azureStorageConnectionString "${azure_storage}" \
+            '{
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "workerSecrets": {
+                  "value": {
+                    "databaseUrl": $databaseUrl,
+                    "deepseekApiKey": $deepseekApiKey,
+                    "fishAudioApiKey": $fishAudioApiKey,
+                    "azureTtsStorageConnectionString": $azureTtsStorageConnectionString,
+                    "azureAudioStorageConnectionString": $azureAudioStorageConnectionString,
+                    "azureStorageConnectionString": $azureStorageConnectionString
+                  }
+                }
+              }
+            }' > "${parameter_file}"
+          echo "WORKER_PARAMETER_FILE=${parameter_file}" >> "${GITHUB_ENV}"
+          echo "FISH_AUDIO_VOICE_ID=${fish_audio_voice_id}" >> "${GITHUB_ENV}"
+
+      - name: Deploy the AI and audio Container Apps
+        shell: bash
+        run: |
+          az deployment group create \
+            --name "cadrenza-pipeline-workers-${GITHUB_RUN_ID}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/azure/workers-apps.bicep \
+            --parameters "@${WORKER_PARAMETER_FILE}" \
+            --parameters \
+              baseName="${BASE_NAME}" \
+              containerEnvironmentName="${CONTAINER_ENVIRONMENT_NAME}" \
+              acrName="${ACR_NAME}" \
+              image="${WORKER_IMAGE}" \
+              serviceBusName="${SERVICE_BUS_NAME}" \
+              generalQueueName="${GENERAL_QUEUE_NAME}" \
+              aiQueueName="${AI_QUEUE_NAME}" \
+              audioQueueName="${AUDIO_QUEUE_NAME}" \
+              aiIdentityName="${AI_IDENTITY_NAME}" \
+              audioIdentityName="${AUDIO_IDENTITY_NAME}" \
+              fishAudioVoiceId="${FISH_AUDIO_VOICE_ID}" \
+              aiMaxReplicas="${{ inputs.ai_max_replicas }}" \
+              audioMaxReplicas="${{ inputs.audio_max_replicas }}" \
+            --output none
+
+      - name: Verify both Container Apps
+        shell: bash
+        run: |
+          for app in "${BASE_NAME}-ai-worker" "${BASE_NAME}-audio-worker"; do
+            state="$(az containerapp show \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${app}" \
+              --query properties.provisioningState \
+              -o tsv)"
+            if [ "${state}" != "Succeeded" ]; then
+              printf 'CONTAINER_APP_NOT_READY app=%s state=%s\n' "${app}" "${state}" >&2
+              exit 1
+            fi
+            printf 'CONTAINER_APP_READY app=%s min_replicas=0\n' "${app}"
+          done
+
+      - name: Cut over Formation3 to the isolated workers
+        if: ${{ inputs.cutover }}
+        shell: bash
+        run: |
+          az webapp config appsettings delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --setting-names PIPELINE_EXECUTION_MODE \
+            --output none
+          az webapp config appsettings set \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --settings \
+              PIPELINE_QUEUE_BACKEND=service_bus \
+              PIPELINE_EMBEDDED_WORKER=0 \
+              PIPELINE_DEDICATED_WORKER=0 \
+              PIPELINE_OUTBOX_DISPATCHER=1 \
+              PIPELINE_OUTBOX_RENOTIFY_SECONDS=600 \
+              AZURE_SERVICE_BUS_NAMESPACE="${SERVICE_BUS_NAME}" \
+              PIPELINE_SERVICE_BUS_QUEUE="${GENERAL_QUEUE_NAME}" \
+              PIPELINE_SERVICE_BUS_AI_QUEUE="${AI_QUEUE_NAME}" \
+              PIPELINE_SERVICE_BUS_AUDIO_QUEUE="${AUDIO_QUEUE_NAME}" \
+            --output none
+          az webapp restart \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --output none
+
+          app_host="$(az webapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query defaultHostName \
+            -o tsv)"
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 10 \
+              "https://${app_host}/readyz" >/dev/null; then
+              printf 'WORKER_CUTOVER_READY target=%s attempt=%s\n' "${APP_NAME}" "${attempt}"
+              exit 0
+            fi
+            sleep 10
+          done
+          printf 'WORKER_CUTOVER_NOT_READY target=%s\n' "${APP_NAME}" >&2
+          exit 1

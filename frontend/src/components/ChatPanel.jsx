@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { apiUrl } from '../api'
+import { apiFetch } from '../api'
 
 function formatMarkdown(text) {
   // Gras **texte**
@@ -71,10 +71,9 @@ export default function ChatPanel({ open, onClose }) {
     setLoading(true)
 
     try {
-      const response = await fetch(apiUrl('/api/chat'), {
+      const response = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ question: text, history }),
       })
       const data = await response.json()
@@ -104,12 +103,12 @@ export default function ChatPanel({ open, onClose }) {
   return (
     <div
       id="chat"
-      className="flex-shrink-0 h-screen flex flex-row"
-      style={{ width: open ? `${panelWidth}px` : '0px', overflow: open ? 'visible' : 'hidden' }}
+      className={`course-chat-panel flex h-screen flex-shrink-0 flex-row${open ? ' course-chat-panel--open' : ''}`}
+      style={{ '--course-chat-width': `${panelWidth}px` }}
     >
       {/* Resize handle */}
       <div
-        className="w-1.5 h-full cursor-col-resize flex items-center justify-center group hover:bg-purple-500/20 transition-colors"
+        className="course-chat-resize-handle group flex h-full w-1.5 cursor-col-resize items-center justify-center transition-colors hover:bg-purple-500/20"
         style={{ backgroundColor: 'rgba(147, 51, 234, 0.08)' }}
         onMouseDown={() => {
           isDragging.current = true
@@ -121,17 +120,25 @@ export default function ChatPanel({ open, onClose }) {
       </div>
       <div className="flex-1 flex flex-col border-l border-gray-200 overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
       {/* Header */}
-      <div className="px-6 border-b border-gray-200 flex-shrink-0 flex flex-col justify-center" style={{ height: '64px' }}>
+      <div className="relative flex h-16 flex-shrink-0 flex-col justify-center border-b border-gray-200 px-4 pr-14 sm:px-6 sm:pr-14">
         <h3 className="text-xl font-semibold text-gray-800">Messages</h3>
         <p className="text-sm text-gray-400 mt-0.5 truncate">
           Posez vos questions sur le cours, on vous répond en temps réel.
         </p>
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-1/2 -translate-y-1/2 rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+          aria-label="Fermer le chat"
+        >
+          <span className="material-icons text-xl">close</span>
+        </button>
       </div>
 
       {/* Messages */}
       <div
         id="messages"
-        className="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent min-h-0"
+        className="scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6"
         style={{ backgroundColor: '#F8F7F5' }}
       >
         {messages.length === 0 && (
@@ -178,7 +185,7 @@ export default function ChatPanel({ open, onClose }) {
       </div>
 
       {/* Input */}
-      <form className="p-6 border-t border-gray-200 flex-shrink-0 bg-white" onSubmit={handleSend}>
+      <form className="flex-shrink-0 border-t border-gray-200 bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 sm:p-6" onSubmit={handleSend}>
         <div className="flex gap-3 items-end">
           <div className="flex-1 relative">
             <textarea
@@ -202,7 +209,7 @@ export default function ChatPanel({ open, onClose }) {
           <button
             id="send-btn"
             type="submit"
-            className="w-10 h-10 bg-purple-600 hover:bg-purple-700 rounded-lg flex items-center justify-center transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed self-end mb-3"
+            className="mb-1 flex h-11 w-11 flex-shrink-0 self-end items-center justify-center rounded-lg bg-purple-600 transition-colors hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50 sm:mb-3 sm:h-10 sm:w-10"
             disabled={!question.trim() || loading}
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">

@@ -1,4 +1,4 @@
-% Template XeLaTeX d'une journée de formation Le Socrate.
+% Template XeLaTeX d'une journée de formation (marque : variable brand_name).
 % Délimiteurs Jinja2 customisés (cf. formation_pdf_service.py).
 
 \documentclass[11pt, a4paper, twoside]{article}
@@ -36,7 +36,7 @@
 \setlength{\parskip}{0.6em}
 \setlength{\parindent}{0pt}
 
-\usepackage[hidelinks, pdftitle={Programme de formation — ((( tp_name | latex_escape_meta )))}, pdfauthor={Le Socrate}]{hyperref}
+\usepackage[hidelinks, pdftitle={Programme de formation — ((( tp_name | latex_escape_meta )))}, pdfauthor={((( brand_name | latex_escape_meta )))}]{hyperref}
 
 \begin{document}
 

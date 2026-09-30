@@ -2,6 +2,7 @@
 data/
 *.db
 *.sqlite
+backend/uploads/
 
 # Fichiers système
 .DS_Store
@@ -22,12 +23,26 @@ azure-function/local.settings.json
 review_queue/
 
 # Environnements / caches locaux
+.venv/
+.venv_tts/
 venv/
 frontend/.vite/
 
 # Artefacts audio locaux
 *.mp3
+edge_calibration_report.json
+fish_wpm_report.json
+output_*/
 output_jour1/
 output_jour2/
 output_qa_pauses/
 test_tags_output/
+
+# Backups SQLite (trop volumineux pour git — 4,4 Go)
+backend/database/backups/
+
+# Artefacts de compilation LaTeX (mémoire)
+memoire/*.aux
+memoire/*.log
+memoire/*.out
+memoire/*.toc

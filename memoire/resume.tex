@@ -1,0 +1,32 @@
+\section*{Résumé}
+
+Ce mémoire présente la conception d'une plateforme de formation autonome alimentée par
+l'intelligence artificielle, développée au sein de l'entreprise Audit Énergie. Initialement
+positionnée sur le courtage en énergie, l'entreprise s'est récemment structurée comme un
+organisme de formation externe préparant des apprenants à des titres professionnels. Pour
+une petite structure, ce développement se heurte à une contrainte forte : le coût d'un
+formateur en direct rend le modèle difficilement viable, tandis que les cours simplement
+préenregistrés appauvrissent l'accompagnement pédagogique.
+
+Le travail propose de répondre à ce problème par une plateforme capable d'automatiser la
+production, la diffusion et l'accompagnement des cours. Deux contributions principales sont
+étudiées. La première est une \emph{pipeline} de génération de contenus pédagogiques, qui
+transforme un référentiel officiel en cours structurés, oralisables et calibrés en durée. Plutôt
+qu'une génération directe par un prompt unique, cette pipeline s'appuie sur un plan
+intermédiaire explicite, une génération section par section, des contrôles qualité ciblés et la
+conservation d'artefacts intermédiaires garantissant la traçabilité. La seconde contribution est
+un assistant pédagogique de type RAG (\emph{Retrieval-Augmented Generation}), fondé sur
+Azure AI Search et Azure OpenAI, qui répond aux questions des élèves à partir du contenu réel
+de la formation plutôt que d'une connaissance générale non contrôlée.
+
+Le mémoire situe ces choix dans l'état de l'art (prompt engineering, fine-tuning, RAG,
+génération structurée, reviews automatiques) et discute leurs limites. Il insiste sur une
+exigence centrale : encadrer l'IA générative pour la rendre fiable, auditable et mesurable dans
+un usage réel de production. Sont enfin présentées les conditions d'application de l'approche,
+ses limites et les indicateurs d'évaluation associés, qu'il s'agisse de l'efficacité opérationnelle,
+de la qualité pédagogique ou de la pertinence des réponses de l'assistant.
+
+\vspace{0.4cm}
+\noindent\textbf{Mots-clés :} intelligence artificielle générative, formation à distance,
+pipeline de génération de contenus, synthèse vocale, RAG, Azure AI Search, traçabilité,
+automatisation pédagogique.

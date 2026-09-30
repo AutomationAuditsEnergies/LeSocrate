@@ -2,7 +2,7 @@
 Service de santé / pre-flight de la pipeline formation.
 
 Deux fonctions principales :
-- `compute_preflight(job_id, use_claude_code, tts_mode)` : audit AVANT lancement.
+- `compute_preflight(job_id, tts_mode)` : audit AVANT lancement.
   Vérifie que la config + les dépendances externes sont OK pour que la pipeline
   ait une chance de tourner one-shot.
 - `compute_health(job_id)` : audit APRÈS lancement. Vérifie que la pipeline a
@@ -14,26 +14,142 @@ Ces deux fonctions sont appelables depuis :
 - l'auto-pilot lui-même (pre-flight bloque le run, health-check finalise)
 
 Conçu pour être bon-marché (pas de gros calls externes en pre-flight, juste des
-HEAD/test). Le coût d'un échec en pre-flight = 1 appel Anthropic (1 token) +
-quelques HEAD Azure.
+HEAD/test). Le pre-flight vérifie explicitement la configuration DeepSeek et
+les accès Azure avant tout lancement.
 """
 
+import json
 import os
-import shutil
 from typing import Optional
 
-from database.db import get_db_connection
-from utils.anthropic_client import default_model
+from repositories.pipeline_repository import (
+    count_completed_segments_for_folders,
+    count_dirty_completed_segments_for_folders,
+    count_segments_with_pre_review_snapshot_for_folders,
+    count_unreviewed_segments_without_error_for_folders,
+    get_content_job_docx_state,
+    get_formation_module_for_pipeline_job,
+    get_pipeline_job,
+    list_health_course_folder_rows,
+)
+from utils.deepseek_client import default_model
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _expected_structured_segment_contract(
+    job: dict,
+    daily_programs: list,
+) -> dict:
+    """Resolve the authoritative expected structured segment contract.
+
+    The legacy pipeline generated three passes per sub-part. The structured
+    generator persists one final segment per sub-part, so multiplying by three
+    makes successful PostgreSQL pipelines look incomplete.
+
+    V2 never infers its course count from ``nb_days * 7`` or from generated
+    pedagogical text. Its locked schedule snapshot is the source of truth.
+    """
+    try:
+        schema_version = int(job.get("schedule_schema_version") or 1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("schedule_schema_version invalide") from exc
+
+    if schema_version == 2:
+        snapshot = job.get("schedule_snapshot_json") or job.get("schedule_snapshot")
+        if isinstance(snapshot, str):
+            try:
+                snapshot = json.loads(snapshot)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Le snapshot V2 verrouillé contient un JSON invalide") from exc
+        if not isinstance(snapshot, dict):
+            raise ValueError("Le snapshot V2 verrouillé est absent")
+        if job.get("schedule_locked_at") in (None, ""):
+            raise ValueError("Le snapshot V2 n'est pas verrouillé")
+
+        from repositories.day_schedule_repository import (
+            _canonical_pipeline_snapshot,
+        )
+
+        try:
+            canonical_snapshot, expected_hash = _canonical_pipeline_snapshot(snapshot)
+        except Exception as exc:
+            raise ValueError("Le snapshot V2 verrouillé est invalide") from exc
+
+        stored_hash = str(job.get("schedule_hash") or "").strip()
+        if not stored_hash or stored_hash != expected_hash:
+            raise ValueError("Le hash du snapshot V2 verrouillé est invalide")
+        day_count = int(canonical_snapshot["day_count"])
+        declared_days = job.get("nb_days")
+        if declared_days not in (None, "") and int(declared_days) != day_count:
+            raise ValueError(
+                "Le nombre de journées du pipeline ne correspond pas au snapshot V2"
+            )
+
+        course_counts = []
+        for day_index, day in enumerate(canonical_snapshot["days"], start=1):
+            course_count = sum(
+                1
+                for block in day.get("blocks") or []
+                if block.get("block_type") == "course"
+            )
+            if not 1 <= course_count <= 10:
+                raise ValueError(
+                    f"Le manifeste V2 de la journée {day_index} contient "
+                    f"{course_count} cours au lieu de 1 à 10"
+                )
+            course_counts.append(course_count)
+        return {
+            "schema_version": 2,
+            "source": "locked_schedule_snapshot",
+            "day_count": day_count,
+            "course_counts": course_counts,
+            "expected_segments": sum(course_counts),
+            "schedule_hash": expected_hash,
+        }
+
+    if schema_version != 1:
+        raise ValueError(
+            f"schedule_schema_version non pris en charge : {schema_version}"
+        )
+
+    expected = 0
+    for day_data in daily_programs:
+        if not isinstance(day_data, dict):
+            continue
+        sub_parts = day_data.get("sub_parts")
+        expected += max(1, len(sub_parts) if sub_parts else 6)
+    if not expected:
+        expected = int(job.get("nb_days") or 0) * 7
+    return {
+        "schema_version": 1,
+        "source": (
+            "legacy_daily_programs"
+            if daily_programs
+            else "legacy_seven_courses_per_day"
+        ),
+        "day_count": int(job.get("nb_days") or 0),
+        "course_counts": [],
+        "expected_segments": expected,
+        "schedule_hash": None,
+    }
+
+
+def _expected_structured_segment_count(job: dict, daily_programs: list) -> int:
+    """Backward-compatible integer facade over the explicit contract."""
+    return int(
+        _expected_structured_segment_contract(
+            job,
+            daily_programs,
+        )["expected_segments"]
+    )
 
 
 # ─── Pre-flight ──────────────────────────────────────────────────────────────
 
 def compute_preflight(
     job_id: int,
-    use_claude_code: bool = False,
     tts_mode: str = "gtts",
 ) -> dict:
     """Audit pre-launch : valide config + connectivité externe.
@@ -44,9 +160,8 @@ def compute_preflight(
         "blocking": ["check1", "check2"],    # checks fatals (bloquent le run)
         "warnings": ["check3"],               # checks soft (run possible mais à risque)
         "checks": {
+            "llm_provider": {ok, detail},
             "llm_api_key": {ok, detail},
-            "claude_code_cli": {ok, detail, applicable},
-            "local_dev_flag": {ok, detail, applicable},
             "azure_tts_blob": {ok, detail},
             "azure_audio_blob": {ok, detail},
             "fish_audio_key": {ok, detail, applicable},
@@ -73,79 +188,29 @@ def compute_preflight(
         "detail": f"status={job['status']}, plateforme {job['platform_id']}",
     }
 
-    # Clé LLM API — requis si CC=False (étapes API) OU pour la review en
-    # mode API. Supporte Anthropic et DeepSeek via le client compatible Anthropic.
-    configured_model = default_model()
-    provider_hint = (
-        os.environ.get("FORMATION_LLM_PROVIDER")
-        or os.environ.get("LLM_PROVIDER")
-        or ""
-    ).strip().lower()
-    provider = (
-        "deepseek"
-        if provider_hint == "deepseek" or configured_model.lower().startswith("deepseek")
-        else "anthropic"
-    )
-    if provider == "deepseek":
-        api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-        ok = bool(api_key)
-        checks["llm_api_key"] = {
-            "ok": ok,
-            "detail": (
-                f"DeepSeek configuré ({configured_model})"
-                if ok
-                else "DEEPSEEK_API_KEY absente pour DeepSeek"
-            ),
-        }
+    # Fournisseur unique : la pipeline utilise l'API DeepSeek et sa clé est
+    # toujours bloquante.
+    try:
+        configured_model = default_model()
+    except ValueError as exc:
+        checks["llm_provider"] = {"ok": False, "detail": str(exc)}
+        blocking.append("llm_provider")
     else:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        ok = bool(api_key and api_key.startswith("sk-ant-"))
-        checks["llm_api_key"] = {
-            "ok": ok,
-            "detail": (
-                f"Anthropic configuré ({configured_model})"
-                if ok
-                else "ANTHROPIC_API_KEY absente ou format inattendu"
-            ),
+        checks["llm_provider"] = {
+            "ok": True,
+            "detail": f"DeepSeek uniquement ({configured_model})",
         }
-
-    if not checks["llm_api_key"]["ok"]:
-        if not use_claude_code:
-            blocking.append("llm_api_key")
-        else:
-            warnings.append("llm_api_key")
-
-    # Mode Claude Code : LOCAL_DEV + binary `claude`
-    cc_applicable = bool(use_claude_code)
-    if cc_applicable:
-        local_dev = os.getenv("LOCAL_DEV", "").lower() == "true"
-        checks["local_dev_flag"] = {
-            "ok": local_dev,
-            "applicable": True,
-            "detail": (
-                "LOCAL_DEV=true détecté"
-                if local_dev
-                else "LOCAL_DEV non set ou différent de 'true' — execute_mission_locally lèvera PermissionError"
-            ),
-        }
-        if not local_dev:
-            blocking.append("local_dev_flag")
-
-        claude_path = shutil.which("claude")
-        checks["claude_code_cli"] = {
-            "ok": bool(claude_path),
-            "applicable": True,
-            "detail": (
-                f"binary trouvé : {claude_path}"
-                if claude_path
-                else "binary `claude` introuvable dans le PATH du backend"
-            ),
-        }
-        if not claude_path:
-            blocking.append("claude_code_cli")
-    else:
-        checks["local_dev_flag"] = {"ok": True, "applicable": False, "detail": "non requis (mode API)"}
-        checks["claude_code_cli"] = {"ok": True, "applicable": False, "detail": "non requis (mode API)"}
+    api_key_ok = bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())
+    checks["llm_api_key"] = {
+        "ok": api_key_ok,
+        "detail": (
+            "DEEPSEEK_API_KEY présente"
+            if api_key_ok
+            else "DEEPSEEK_API_KEY absente"
+        ),
+    }
+    if not api_key_ok:
+        blocking.append("llm_api_key")
 
     # Azure TTS blob (DOCX + MP3 TTS Fish Audio)
     azure_tts_ok, azure_tts_detail = _check_azure_blob("AZURE_TTS_STORAGE_CONNECTION_STRING")
@@ -237,13 +302,58 @@ def compute_health(job_id: int) -> dict:
             "checks": {"job_state": {"ok": False, "detail": f"Job {job_id} introuvable"}},
         }
 
-    nb_days = job.get("nb_days") or 0
     audio_deferred = (
         job.get("status") == "text_ready"
         or not bool(job.get("auto_pilot_generate_audio", 0))
     )
-    expected_segments_per_day = 6 * 3  # 6 sous-parties × 3 passes (modèle pédagogique)
-    expected_total_segments = nb_days * expected_segments_per_day
+    try:
+        daily_programs = json.loads(job.get("daily_programs") or "[]")
+    except Exception:
+        daily_programs = []
+    try:
+        segment_contract = _expected_structured_segment_contract(
+            job,
+            daily_programs,
+        )
+    except Exception as exc:
+        detail = str(exc) or exc.__class__.__name__
+        logger.error(
+            "PIPELINE_HEALTH_SCHEDULE_CONTRACT_INVALID job_id=%s error=%s",
+            job_id,
+            detail,
+        )
+        return {
+            "ok": False,
+            "blocking": ["schedule_contract"],
+            "warnings": [],
+            "checks": {
+                "schedule_contract": {
+                    "ok": False,
+                    "detail": detail,
+                    "schema_version": job.get("schedule_schema_version"),
+                },
+            },
+        }
+
+    expected_total_segments = int(segment_contract["expected_segments"])
+    nb_days = int(segment_contract["day_count"])
+    checks["schedule_contract"] = {
+        "ok": True,
+        "detail": (
+            f"V2 verrouillé : {segment_contract['day_count']} journée(s), "
+            f"{expected_total_segments} cours "
+            f"({', '.join(str(count) for count in segment_contract['course_counts'])})"
+            if segment_contract["schema_version"] == 2
+            else
+            f"V1 historique : {expected_total_segments} cours attendus"
+        ),
+        "schema_version": segment_contract["schema_version"],
+        "source": segment_contract["source"],
+        "day_count": segment_contract["day_count"],
+        "course_counts": segment_contract["course_counts"],
+        "expected_segments": expected_total_segments,
+        "schedule_hash": segment_contract["schedule_hash"],
+    }
 
     # Inventaire des cours_folders + cg_jobs + segments. On audite uniquement
     # le folder canonique de chaque journée attendue : des doublons peuvent
@@ -265,23 +375,9 @@ def compute_health(job_id: int) -> dict:
     duplicate_folders = folder_state.get("duplicates") or []
     missing_folders = folder_state.get("missing") or []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     if canonical_folder_ids:
-        placeholders = ",".join("?" * len(canonical_folder_ids))
-        cursor.execute(
-            f"""
-            SELECT cf.id, cf.name, cf.position, cj.id, cj.status
-            FROM cours_folders cf
-            LEFT JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-            WHERE cf.id IN ({placeholders})
-            ORDER BY cf.position ASC
-            """,
-            tuple(canonical_folder_ids),
-        )
-        folders = cursor.fetchall()  # [(folder_id, name, position, cg_job_id, cg_status)]
+        folders = list_health_course_folder_rows(canonical_folder_ids)
     else:
-        placeholders = ""
         folders = []
     checks["course_folders_expected"] = {
         "ok": len(folders) == nb_days and not missing_folders,
@@ -304,15 +400,8 @@ def compute_health(job_id: int) -> dict:
     # 1. Segments completed
     n_completed = 0
     if folders:
-        folder_ids = [f[0] for f in folders]
-        placeholders = ",".join("?" * len(folder_ids))
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders}) AND s.status = 'completed'""",
-            tuple(folder_ids),
-        )
-        n_completed = cursor.fetchone()[0]
+        folder_ids = [int(f["id"]) for f in folders]
+        n_completed = count_completed_segments_for_folders(folder_ids)
 
     seg_ok = n_completed >= expected_total_segments
     checks["segments_completed"] = {
@@ -325,7 +414,11 @@ def compute_health(job_id: int) -> dict:
         blocking.append("segments_completed")
 
     # 2. cg_jobs en status='completed'
-    idle_folders = [(f[0], f[1]) for f in folders if f[4] != "completed"]
+    idle_folders = [
+        (f["id"], f["name"])
+        for f in folders
+        if f.get("content_status") != "completed"
+    ]
     cg_ok = len(idle_folders) == 0 and len(folders) == nb_days
     checks["cg_jobs_completed"] = {
         "ok": cg_ok,
@@ -355,15 +448,7 @@ def compute_health(job_id: int) -> dict:
     # 4. Snapshot pre-review présent (text_content_pre_review IS NOT NULL)
     n_snapshot = 0
     if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed'
-                AND s.text_content_pre_review IS NOT NULL""",
-            tuple(folder_ids),
-        )
-        n_snapshot = cursor.fetchone()[0]
+        n_snapshot = count_segments_with_pre_review_snapshot_for_folders(folder_ids)
     snap_ok = n_snapshot == n_completed and n_completed > 0
     checks["pre_review_snapshotted"] = {
         "ok": snap_ok,
@@ -374,45 +459,10 @@ def compute_health(job_id: int) -> dict:
     if not snap_ok:
         warnings.append("pre_review_snapshotted")
 
-    # 5. Humanisation cohérente : tous les segments completed → humanized=1 OU erreur.
-    n_unhumanized_no_error = 0
-    if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed'
-                AND COALESCE(s.humanized, 0) = 0
-                AND s.humanization_error IS NULL""",
-            tuple(folder_ids),
-        )
-        n_unhumanized_no_error = cursor.fetchone()[0]
-    humanization_ok = n_unhumanized_no_error == 0
-    checks["humanization_consistent"] = {
-        "ok": humanization_ok,
-        "detail": (
-            f"{n_unhumanized_no_error} segment(s) non passés en humanisation"
-            if not humanization_ok
-            else "tous les segments ont été tentés en humanisation"
-        ),
-        "unhumanized_segments": n_unhumanized_no_error,
-    }
-    if not humanization_ok:
-        blocking.append("humanization_consistent")
-
-    # 6. Review cohérent : tous les segments completed → reviewed=1 OU review_error
+    # 5. Review cohérent : tous les segments completed → reviewed=1 OU review_error
     n_unreviewed_no_error = 0
     if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed'
-                AND COALESCE(s.reviewed, 0) = 0
-                AND s.review_error IS NULL""",
-            tuple(folder_ids),
-        )
-        n_unreviewed_no_error = cursor.fetchone()[0]
+        n_unreviewed_no_error = count_unreviewed_segments_without_error_for_folders(folder_ids)
     review_ok = n_unreviewed_no_error == 0
     checks["review_consistent"] = {
         "ok": review_ok,
@@ -431,14 +481,7 @@ def compute_health(job_id: int) -> dict:
     # il signifie "texte prêt, audio à générer plus tard".
     n_dirty = 0
     if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed' AND s.dirty = 1""",
-            tuple(folder_ids),
-        )
-        n_dirty = cursor.fetchone()[0]
+        n_dirty = count_dirty_completed_segments_for_folders(folder_ids)
     audio_ok = (n_dirty == 0 and n_completed > 0) or audio_deferred
     checks["audio_tts_files"] = {
         "ok": audio_ok,
@@ -458,24 +501,18 @@ def compute_health(job_id: int) -> dict:
 
     # 8. Module persistant créé. En pipeline texte-only, il sera finalisé après
     # la génération audio de toutes les journées.
-    cursor.execute(
-        "SELECT id, version, status FROM formation_modules WHERE source_pipeline_job_id = ?",
-        (job_id,),
-    )
-    mod_row = cursor.fetchone()
+    mod_row = get_formation_module_for_pipeline_job(job_id)
     mod_ok = bool(mod_row)
     checks["module_persistant"] = {
         "ok": mod_ok,
         "detail": (
-            f"module {mod_row[1]} (status={mod_row[2]})"
+            f"module {mod_row['version']} (status={mod_row['status']})"
             if mod_row
             else "aucune ligne dans formation_modules pour ce job"
         ),
     }
     if not mod_ok:
         warnings.append("module_persistant")
-
-    conn.close()
 
     return {
         "ok": len(blocking) == 0,
@@ -489,16 +526,7 @@ def compute_health(job_id: int) -> dict:
 
 def _get_job(job_id: int) -> Optional[dict]:
     """Charge un formation_pipeline_jobs en dict."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(formation_pipeline_jobs)")
-    cols = [c[1] for c in cursor.fetchall()]
-    cursor.execute("SELECT * FROM formation_pipeline_jobs WHERE id = ?", (job_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return dict(zip(cols, row))
+    return get_pipeline_job(job_id)
 
 
 def _check_azure_blob(env_var: str) -> tuple:
@@ -543,26 +571,20 @@ def _check_docx_buildable(folders: list) -> tuple:
     if not folders:
         return False, "aucun folder", []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     missing = []
-    for fid, fname, _, cg_job_id, _ in folders:
+    for folder in folders:
+        fid = folder["id"]
+        fname = folder["name"]
+        cg_job_id = folder.get("content_job_id")
         if not cg_job_id:
             missing.append({"folder_id": fid, "name": fname, "reason": "pas de cg_job"})
             continue
-        cursor.execute(
-            "SELECT COUNT(*), sub_parts FROM content_generation_segments s "
-            "JOIN content_generation_jobs cj ON cj.id = s.job_id "
-            "WHERE cj.id = ? AND s.status = 'completed'",
-            (cg_job_id,),
-        )
-        row = cursor.fetchone()
-        if not row or row[0] == 0:
+        row = get_content_job_docx_state(cg_job_id)
+        if not row or int(row.get("completed_count") or 0) == 0:
             missing.append({"folder_id": fid, "name": fname, "reason": "0 segments completed"})
             continue
-        if not row[1]:
+        if not row.get("sub_parts"):
             missing.append({"folder_id": fid, "name": fname, "reason": "sub_parts vide dans cg_job"})
-    conn.close()
 
     if missing:
         return False, f"{len(missing)}/{len(folders)} DOCX non buildables", missing

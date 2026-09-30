@@ -5,15 +5,6 @@ on:
     branches:
       - staging
   workflow_dispatch:
-    inputs:
-      target:
-        description: "Environnement à déployer"
-        required: true
-        default: "staging"
-        type: choice
-        options:
-          - staging
-          - production
 
 jobs:
   build:
@@ -36,27 +27,26 @@ jobs:
           source antenv/bin/activate
           pip install -r requirements.txt
 
+      - name: Package backend
+        run: |
+          cd backend
+          zip -r ../python-app.zip . -x "antenv/*" "__pycache__/*" "*.pyc"
+
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: |
-            ./backend
-            !./backend/antenv/
+          path: python-app.zip
 
   deploy:
-    if: >
-      (github.event_name == 'push' && github.ref_name == 'staging') ||
-      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: build
     permissions:
       id-token: write
       contents: read
     env:
-      DEPLOY_SLOT: ${{ ((github.event_name == 'push' && github.ref_name == 'staging') || (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')) && 'staging' || 'Production' }}
       RESOURCE_GROUP: socrate1_group
-      STARTUP_COMMAND: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8000 --timeout 120 run:app
+      STARTUP_COMMAND: python -m gunicorn --worker-class gthread --workers 1 --threads 8 --bind 0.0.0.0:8000 --timeout 120 main_app:app
 
     steps:
       - name: Download artifact from build job
@@ -71,55 +61,30 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_41081722FD194A6DBBEE83B7861AA33F }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DD044DCD13764A6CBF8D1889CF9E5B07 }}
 
-      - name: Configure Azure App Service slot
+      - name: Configure Azure App Service production
         shell: bash
         run: |
-          if [ "${DEPLOY_SLOT}" = "staging" ]; then
-            az webapp config appsettings set \
-              --resource-group "${RESOURCE_GROUP}" \
-              --name socrate1 \
-              --slot staging \
-              --settings \
-                SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-                ENABLE_ORYX_BUILD=true \
-                DB_PATH=/home/database-staging.db \
-                FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
-                BASIC_TTS_SPEED=1.15 \
-                PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03-staging.4.azurestaticapps.net
+          az webapp config appsettings set \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name socrate1 \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              ENABLE_ORYX_BUILD=true \
+              PORT=8000 \
+              WEBSITES_PORT=8000 \
+              FORMATION_CONTENT_DAY_WORKERS=1 \
+              FORMATION_STRUCTURED_COURSE_WORKERS=7 \
+              FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
+              BASIC_TTS_SPEED=1.15 \
+              PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net
 
-            az webapp config set \
-              --resource-group "${RESOURCE_GROUP}" \
-              --name socrate1 \
-              --slot staging \
-              --startup-file "${STARTUP_COMMAND}"
-          else
-            az webapp config appsettings set \
-              --resource-group "${RESOURCE_GROUP}" \
-              --name socrate1 \
-              --settings \
-                SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-                ENABLE_ORYX_BUILD=true \
-                FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
-                BASIC_TTS_SPEED=1.15 \
-                PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net
-
-            az webapp config set \
-              --resource-group "${RESOURCE_GROUP}" \
-              --name socrate1 \
-              --startup-file "${STARTUP_COMMAND}"
-          fi
-
-      - name: Deploy to Azure Web App staging slot
-        if: env.DEPLOY_SLOT == 'staging'
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: 'socrate1'
-          slot-name: staging
-          package: .
+          az webapp config set \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name socrate1 \
+            --startup-file "${STARTUP_COMMAND}"
 
       - name: Deploy to Azure Web App production
-        if: env.DEPLOY_SLOT != 'staging'
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'socrate1'
-          package: .
+          package: python-app.zip

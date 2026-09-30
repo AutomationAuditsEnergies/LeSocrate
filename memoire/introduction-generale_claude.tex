@@ -1,0 +1,70 @@
+\section*{Introduction générale}
+
+\subsection*{Contexte}
+
+Audit Énergie est une entreprise initialement positionnée sur le courtage en énergie, dont
+le métier consiste à accompagner des professionnels dans la renégociation de leurs contrats.
+Cette activité lui a donné une connaissance fine des métiers de la vente à distance. C'est
+cette expertise qui l'a conduite, plus récemment, vers la formation professionnelle :
+d'abord pour ses propres téléprospecteurs, puis, depuis environ un an, sous la forme d'un
+organisme de formation externe préparant des apprenants à des titres professionnels reconnus
+par l'État, comme le titre de Conseiller Relation Client à Distance ou celui d'Employé
+Commercial. C'est cette activité de formation qui constitue le cœur de ce mémoire.
+
+Ce changement d'échelle a fait apparaître une contrainte forte. Pour une petite structure,
+faire appel à des formateurs en direct pour assurer les cours en ligne pèse lourdement sur
+des marges déjà limitées. Une première réponse a consisté à diffuser des cours audio préparés
+à l'avance plutôt qu'animés en direct ; mais ce modèle restait dépendant d'un travail humain
+important, et un cours préenregistré ne permet pas de répondre aux questions des élèves.
+L'idée s'est donc imposée de concevoir une plateforme de formation réellement autonome,
+capable à la fois de produire et de diffuser les contenus, et d'accompagner les apprenants.
+
+\subsection*{Problématique, objectifs et contributions}
+
+Le projet étudié dans ce mémoire est précisément cette plateforme de formation autonome
+alimentée par l'intelligence artificielle. Elle ne doit pas seulement diffuser des fichiers
+audio, mais générer les contenus, les transformer en audio, produire des supports et des
+exercices, et accompagner les élèves grâce à un assistant s'appuyant sur les documents réels
+de la formation. La problématique peut alors être formulée ainsi :
+
+\begin{quote}
+\emph{Comment concevoir une plateforme de formation autonome alimentée par
+l'intelligence artificielle, capable de produire, diffuser et accompagner des contenus
+pédagogiques, tout en garantissant leur qualité, leur traçabilité et leur pertinence pour
+les apprenants ?}
+\end{quote}
+
+Cette problématique se décline en quatre objectifs : automatiser la production des cours, en
+passant d'un référentiel officiel à des journées pédagogiques complètes ; transformer ces
+contenus en audios exploitables, à un coût inférieur à une production humaine répétée ;
+enrichir la formation par des supports visuels et des exercices générés automatiquement ;
+et permettre aux apprenants d'interroger un assistant capable de répondre à partir du contenu
+réel du cours, et non comme un chatbot généraliste.
+
+Pour y répondre, le travail apporte deux contributions principales. La première est une
+\emph{pipeline} de génération de contenus pédagogiques, qui a évolué d'une génération
+directe de texte vers une chaîne structurée, fondée sur un plan pédagogique explicite, une
+génération section par section, des contrôles qualité ciblés et la conservation d'artefacts
+intermédiaires garantissant la traçabilité. La seconde est un assistant pédagogique de type
+RAG (\emph{Retrieval-Augmented Generation}), qui ancre ses réponses dans les documents
+indexés de la formation pour dépasser les limites d'un modèle de langage utilisé seul.
+
+La méthode suivie est itérative : chaque solution essayée (intervention humaine,
+enregistrement différé, synthèse vocale, génération directe par modèle de langage, puis
+pipeline structurée) a révélé une nouvelle contrainte — coût, qualité audio, longueur des
+textes, cohérence pédagogique, conformité, accompagnement, évaluation. L'enjeu n'est pas
+seulement d'ajouter de l'intelligence artificielle à une plateforme existante, mais de
+l'encadrer pour la rendre fiable, contrôlable et mesurable. Les résultats sont donc discutés à
+l'aide d'indicateurs concrets : réduction des interventions humaines, coût et temps de
+production des contenus, et, pour l'assistant, pertinence des passages retrouvés et fidélité des
+réponses produites.
+
+\subsection*{Structure du mémoire}
+
+Ce mémoire est structuré en trois parties. La première, \emph{Position du problème}, présente
+le contexte de l'entreprise, les limites du fonctionnement initial et la problématique de la
+formation autonome. La deuxième, \emph{État de l'art}, étudie les approches existantes :
+plateformes de formation en ligne, synthèse vocale, génération de contenus par IA et systèmes
+de questions-réponses augmentés par récupération d'information. La troisième, \emph{Étude
+originale}, présente la solution développée, ses choix d'architecture, les difficultés
+rencontrées, les arbitrages réalisés et les méthodes retenues pour en évaluer les apports.

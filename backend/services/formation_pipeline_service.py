@@ -4,8 +4,8 @@ Service pipeline formation automatisé.
 Flux complet :
   1. Recherche RNCP sur France Compétences à partir du nom TP
   2. Téléchargement + extraction texte du REAC PDF
-  3. Génération programme global (Claude) → validation humaine
-  4. Découpage programme par journée (Claude) → validation humaine
+  3. Génération programme global (DeepSeek) → validation humaine
+  4. Découpage programme par journée (DeepSeek) → validation humaine
   5. Lancement génération TTS pour chaque journée (pipeline existant)
 """
 
@@ -15,28 +15,456 @@ import re
 import math
 import json
 import time
-import threading
-from urllib.parse import quote
+from html import unescape
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
+from urllib.parse import quote, urljoin
 
 import requests as _http
 
-from database.db import get_db_connection
-from utils.anthropic_client import (
-    AnthropicRateLimitError,
+from repositories.pipeline_repository import (
+    attach_course_folder_to_job,
+    course_folder_exists_for_job,
+    create_pipeline_job,
+    create_course_folder_for_job,
+    find_orphan_course_folder,
+    get_pipeline_job,
+    list_expected_course_folder_matches,
+    list_pipeline_jobs,
+    update_pipeline_job,
+)
+from utils.deepseek_client import (
+    DeepSeekAPIError,
+    DeepSeekRateLimitError,
     default_model,
-    post_message as _anthropic_post,
+    post_message as _post_deepseek_message,
 )
 from utils.logger import get_logger
+from services.dynamic_day_schedule_service import (
+    SCHEDULE_SCHEMA_VERSION,
+    build_day_audio_manifest,
+    compile_day_schedule,
+)
+from services.pipeline_queue.contracts import LeaseLostError
 
 logger = get_logger(__name__)
 
 # Modèle utilisé pour la génération du pipeline formation.
-# Configure `FORMATION_LLM_MODEL=deepseek-v4-flash` ou `deepseek-v4-pro`
-# pour passer par DeepSeek. `FORMATION_CLAUDE_MODEL` reste supporté.
-CLAUDE_MODEL = default_model()
+# Configure `FORMATION_LLM_MODEL=deepseek-v4-flash` ou `deepseek-v4-pro`.
+DEEPSEEK_MODEL = default_model()
 HOURS_PER_DAY = 7
 
-# ─── Prompts Claude ───────────────────────────────────────────────────────────
+
+class DailySplitGenerationError(RuntimeError):
+    """Le modèle n'a pas produit de programme journalier valide après les retries locaux."""
+
+
+COURSE_AUDIO_SLOTS = [
+    {"index": 0, "label": "Cours 1", "start": "9h00", "end": "9h45", "duration_min": 45, "filename": "cours_9h00_9h45.mp3"},
+    {"index": 1, "label": "Cours 2", "start": "10h05", "end": "10h50", "duration_min": 45, "filename": "cours_10h05_10h50.mp3"},
+    {"index": 2, "label": "Cours 3", "start": "11h05", "end": "12h00", "duration_min": 55, "filename": "cours_11h05_12h00.mp3"},
+    {"index": 3, "label": "Cours 4", "start": "12h20", "end": "13h05", "duration_min": 45, "filename": "cours_12h20_13h05.mp3"},
+    {"index": 4, "label": "Cours 5", "start": "14h45", "end": "15h45", "duration_min": 60, "filename": "cours_14h45_15h45.mp3"},
+    {"index": 5, "label": "Cours 6", "start": "16h00", "end": "17h00", "duration_min": 60, "filename": "cours_16h00_17h00.mp3"},
+    {"index": 6, "label": "Cours 7", "start": "17h25", "end": "18h15", "duration_min": 50, "filename": "cours_17h25_18h15.mp3"},
+]
+
+
+_INTERNAL_SCHEDULE_TIME_RANGE_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\s*"
+    r"(?:[-–—]|à|a)\s*"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\b",
+    re.IGNORECASE,
+)
+_INTERNAL_SCHEDULE_SINGLE_TIME_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*h\s*(?:[0-5]\d)?\b|"
+    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_internal_schedule_from_label(value: str | None) -> str:
+    original = str(value or "").strip()
+    if not original:
+        return ""
+    text = _INTERNAL_SCHEDULE_TIME_RANGE_RE.sub("", original)
+    text = _INTERNAL_SCHEDULE_SINGLE_TIME_RE.sub("", text)
+    text = re.sub(r"\b(?:45|50|55|60)\s*minutes\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[-–—]\s*[-–—]\s*", " — ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"\s*[-–—]\s*$", "", text).strip()
+    text = re.sub(r"^\s*[-–—]\s*", "", text).strip()
+    text = re.sub(r"^cours\s+\d+\s*[-–—:]\s*", "", text, flags=re.IGNORECASE).strip()
+    return text or original
+
+
+def _json_object(value, *, field_name: str) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field_name} contient un JSON invalide") from exc
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(f"{field_name} doit être un objet JSON")
+
+
+def _json_list(value, *, field_name: str) -> list:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field_name} contient un JSON invalide") from exc
+        if isinstance(parsed, list):
+            return parsed
+    raise ValueError(f"{field_name} doit être une liste JSON")
+
+
+def _v2_schedule_days(job: dict) -> list[dict] | None:
+    """Return validated immutable V2 days, or ``None`` for a legacy job."""
+
+    try:
+        schema_version = int(job.get("schedule_schema_version") or 1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("schedule_schema_version invalide") from exc
+    if schema_version != SCHEDULE_SCHEMA_VERSION:
+        return None
+
+    snapshot = _json_object(
+        job.get("schedule_snapshot_json") or job.get("schedule_snapshot"),
+        field_name="schedule_snapshot_json",
+    )
+    snapshot_version = int(
+        snapshot.get("schema_version") or schema_version
+    )
+    if snapshot_version != SCHEDULE_SCHEMA_VERSION:
+        raise ValueError(
+            "Le snapshot ne correspond pas à schedule_schema_version=2"
+        )
+
+    raw_days = snapshot.get("days")
+    if not isinstance(raw_days, list) or not raw_days:
+        raise ValueError("Le snapshot V2 doit contenir au moins une journée")
+
+    numbered_days = []
+    for fallback_index, raw_day in enumerate(raw_days, start=1):
+        if not isinstance(raw_day, dict):
+            raise ValueError(f"Journée V2 {fallback_index} invalide")
+        try:
+            day_index = int(
+                raw_day.get("day_index")
+                or raw_day.get("day_number")
+                or fallback_index
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Numéro de journée V2 invalide à la position {fallback_index}"
+            ) from exc
+        raw_blocks = (
+            raw_day.get("blocks")
+            or raw_day.get("schedule_blocks")
+            or raw_day.get("blocks_snapshot_json")
+            or []
+        )
+        canonical = compile_day_schedule(
+            _json_list(
+                raw_blocks,
+                field_name=f"schedule_snapshot_json.days[{fallback_index - 1}].blocks",
+            )
+        )
+        numbered_days.append(
+            {
+                **raw_day,
+                **canonical,
+                "day_index": day_index,
+                "day_number": day_index,
+            }
+        )
+
+    numbered_days.sort(key=lambda day: day["day_index"])
+    actual_indexes = [day["day_index"] for day in numbered_days]
+    expected_indexes = list(range(1, len(numbered_days) + 1))
+    if actual_indexes != expected_indexes:
+        raise ValueError(
+            "Les journées du snapshot V2 doivent être numérotées "
+            f"sans interruption : attendu {expected_indexes}, reçu {actual_indexes}"
+        )
+    return numbered_days
+
+
+def _schedule_day(
+    schedule_days: list[dict] | None,
+    day_number: int,
+) -> dict | None:
+    if not schedule_days:
+        return None
+    return next(
+        (
+            day
+            for day in schedule_days
+            if int(day.get("day_index") or day.get("day_number") or 0)
+            == int(day_number)
+        ),
+        None,
+    )
+
+
+def _minute_label(value: int) -> str:
+    hours, minutes = divmod(int(value), 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def _v2_course_slots(schedule_day: dict) -> list[dict]:
+    canonical = compile_day_schedule(schedule_day)
+    manifest_by_key = {
+        item["block_key"]: item
+        for item in build_day_audio_manifest(canonical)
+    }
+    slots = []
+    for block in canonical["blocks"]:
+        if block["block_type"] != "course":
+            continue
+        manifest_item = manifest_by_key[block["block_key"]]
+        slots.append(
+            {
+                "index": len(slots),
+                "course_index": int(block["course_index"]),
+                "label": f"Cours {block['course_index']}",
+                "block_key": block["block_key"],
+                "start": _minute_label(block["start_minute"]),
+                "end": _minute_label(block["end_minute"]),
+                "start_minute": block["start_minute"],
+                "end_minute": block["end_minute"],
+                "duration_min": block["duration_minutes"],
+                "target_words": block["target_words"],
+                "filename": manifest_item["filename"],
+            }
+        )
+    return slots
+
+
+def _course_audio_slots_prompt(
+    schedule_days: list[dict] | None = None,
+) -> str:
+    if schedule_days is not None:
+        day_lines = []
+        for day in schedule_days:
+            slots = _v2_course_slots(day)
+            canonical_day = compile_day_schedule(day)
+            day_number = int(
+                day.get("day_index") or day.get("day_number") or 0
+            )
+            day_lines.append(
+                f"Journée {day_number} : {len(slots)} cours vocaux, "
+                f"{sum(slot['duration_min'] for slot in slots)} minutes "
+                "de cours au total. "
+                f"Enchaînement planifié : {' → '.join(block['block_type'] for block in canonical_day['blocks'])}. "
+                f"Clôture de journée portée par : {canonical_day['ending_block_type']}."
+            )
+            day_lines.extend(
+                (
+                    f"- Cours {slot['course_index']}/{len(slots)} · "
+                    f"{slot['duration_min']} min · cible "
+                    f"{slot['target_words']} mots · identifiant "
+                    f"{slot['block_key']} · fichier {slot['filename']}."
+                )
+                for slot in slots
+            )
+        return "\n".join(day_lines)
+
+    return "\n".join(
+        f"- {slot['label']} · données internes: {slot['start']}-{slot['end']}, "
+        f"{slot['duration_min']} min, fichier {slot['filename']}. "
+        "Le nom pédagogique ne doit jamais reprendre ces données."
+        for slot in COURSE_AUDIO_SLOTS
+    )
+
+
+def _normalize_v2_day_audio_slots(
+    day_data: dict,
+    schedule_day: dict,
+) -> dict:
+    """Overlay generated pedagogy on the exact immutable V2 course slots."""
+
+    canonical_day = compile_day_schedule(schedule_day)
+    slots = _v2_course_slots(canonical_day)
+    raw_sub_parts = list(day_data.get("sub_parts") or [])
+    normalized = []
+    for idx, slot in enumerate(slots):
+        raw = raw_sub_parts[idx] if idx < len(raw_sub_parts) else {}
+        src = raw if isinstance(raw, dict) else {}
+        name = (src.get("name") or "").strip()
+        if not name and isinstance(raw, str):
+            name = raw.strip()
+        name = _strip_internal_schedule_from_label(name)
+        if not name:
+            name = f"{slot['label']} — Sujet à préciser"
+        elif not name.lower().startswith("cours"):
+            name = f"{slot['label']} — {name}"
+        module_content = (src.get("module_content") or "").strip()
+        if not module_content:
+            module_content = (
+                "Développer le contenu prévu pour ce chapitre en respectant "
+                "son budget de mots interne, sans mentionner le planning."
+            )
+        normalized.append(
+            {
+                **src,
+                "index": idx,
+                "course_index": slot["course_index"],
+                "course_count": len(slots),
+                "is_last_course": idx == len(slots) - 1,
+                "closes_day": (
+                    idx == len(slots) - 1
+                    and canonical_day["ending_block_type"] == "course"
+                ),
+                "audio_slot": slot["label"],
+                "block_key": slot["block_key"],
+                "start_time": slot["start"],
+                "end_time": slot["end"],
+                "start_minute": slot["start_minute"],
+                "end_minute": slot["end_minute"],
+                "duration_min": slot["duration_min"],
+                "duration_minutes": slot["duration_min"],
+                "target_words": slot["target_words"],
+                "filename": slot["filename"],
+                "name": name,
+                "module_content": module_content,
+            }
+        )
+
+    day_data["sub_parts"] = normalized
+    day_data["audio_slots"] = slots
+    day_data["audio_manifest"] = build_day_audio_manifest(canonical_day)
+    day_data["audio_file_count"] = canonical_day["audio_file_count"]
+    day_data["schedule_blocks"] = canonical_day["blocks"]
+    day_data["schedule_schema_version"] = SCHEDULE_SCHEMA_VERSION
+    day_data["schedule_hash"] = canonical_day["schedule_hash"]
+    day_data["day_index"] = int(
+        schedule_day.get("day_index")
+        or schedule_day.get("day_number")
+        or day_data.get("day_number")
+        or 0
+    )
+    day_data["hours"] = canonical_day["total_course_minutes"] / 60
+    day_data["course_minutes"] = canonical_day["total_course_minutes"]
+    day_data["amplitude_minutes"] = canonical_day["amplitude_minutes"]
+    return day_data
+
+
+def _normalize_day_audio_slots(
+    day_data: dict,
+    schedule_day: dict | None = None,
+) -> dict:
+    """Normalize one day, dynamically for V2 and identically to legacy V1."""
+
+    if (
+        schedule_day is None
+        and str(day_data.get("schedule_schema_version") or "1")
+        == str(SCHEDULE_SCHEMA_VERSION)
+    ):
+        embedded_blocks = day_data.get("schedule_blocks")
+        if embedded_blocks:
+            schedule_day = {
+                "day_index": (
+                    day_data.get("day_index") or day_data.get("day_number")
+                ),
+                "blocks": embedded_blocks,
+            }
+    if schedule_day is not None:
+        return _normalize_v2_day_audio_slots(day_data, schedule_day)
+
+    sub_parts = list(day_data.get("sub_parts") or [])
+    normalized = []
+    for idx, slot in enumerate(COURSE_AUDIO_SLOTS):
+        raw = sub_parts[idx] if idx < len(sub_parts) else {}
+        src = raw if isinstance(raw, dict) else {}
+        name = (src.get("name") or "").strip()
+        if not name and isinstance(raw, str):
+            name = raw.strip()
+        name = _strip_internal_schedule_from_label(name)
+        if not name:
+            name = f"{slot['label']} — Sujet à préciser"
+        elif not name.lower().startswith("cours"):
+            name = f"{slot['label']} — {name}"
+        module_content = (src.get("module_content") or "").strip()
+        if not module_content:
+            module_content = (
+                "Développer le contenu prévu pour cette partie de la journée "
+                "en respectant le budget interne du cours, sans mentionner le planning."
+            )
+        normalized.append({
+            **src,
+            "index": idx,
+            "audio_slot": slot["label"],
+            "start_time": slot["start"],
+            "end_time": slot["end"],
+            "duration_min": slot["duration_min"],
+            "filename": slot["filename"],
+            "name": name,
+            "module_content": module_content,
+        })
+    day_data["sub_parts"] = normalized
+    day_data["audio_slots"] = COURSE_AUDIO_SLOTS
+    day_data["hours"] = HOURS_PER_DAY
+    return day_data
+
+
+def _format_slot_generation_source(slot_data: dict) -> str:
+    """Texte source injecté dans le prompt TTS pour un cours interne."""
+    brief = slot_data.get("generation_brief") or {}
+    course_count = int(slot_data.get("course_count") or 0)
+    course_index = int(
+        slot_data.get("course_index") or slot_data.get("index") or 0
+    )
+    if course_count:
+        internal_label = (
+            f"Cours {course_index} sur {course_count}"
+            + (" (clôture la journée)" if slot_data.get("closes_day") else "")
+        )
+    else:
+        internal_label = slot_data.get("audio_slot")
+    lines = [
+        f"COURS AUDIO INTERNE : {internal_label}.",
+        "Les horaires, durées et fichiers associés à ce cours sont internes et ne doivent jamais être verbalisés.",
+        f"OBJECTIF DU COURS : {_strip_internal_schedule_from_label(slot_data.get('name') or '')}",
+        "",
+        "CONTENU PRIORITAIRE :",
+        slot_data.get("module_content", "") or "",
+    ]
+    if course_count:
+        lines.extend(
+            [
+                "",
+                (
+                    "CONTRAINTE DE VOLUME INTERNE : "
+                    f"{slot_data.get('duration_min')} minutes, cible "
+                    f"{slot_data.get('target_words')} mots après la marge "
+                    "technique de 30 secondes."
+                ),
+            ]
+        )
+    if isinstance(brief, dict) and brief:
+        lines.extend(["", "BRIEF DE GÉNÉRATION DU COURS :"])
+        for key, label in (
+            ("must_cover", "À couvrir"),
+            ("examples", "Exemples à intégrer"),
+            ("finish", "Fin attendue"),
+            ("avoid", "À éviter / ne pas répéter"),
+            ("handoff", "Transition"),
+        ):
+            value = brief.get(key)
+            if isinstance(value, list):
+                value = "; ".join(str(item).strip() for item in value if str(item).strip())
+            if value:
+                lines.append(f"- {label} : {value}")
+    return "\n".join(lines).strip()
+
+# ─── Prompts DeepSeek ─────────────────────────────────────────────────────────
 
 _GLOBAL_PROGRAM_PROMPT = """Tu es un expert en ingénierie pédagogique spécialisé dans les titres professionnels du Ministère du Travail.
 
@@ -51,6 +479,8 @@ RÉFÉRENTIEL REAC :
 CONSIGNE :
 Crée un programme de formation détaillé et pédagogiquement structuré, orienté cours magistral TTS.
 Le programme doit couvrir 100% des compétences du REAC.
+La formation est composée exclusivement de cours expliqués oralement par le professeur.
+Les savoir-faire du REAC doivent être enseignés, démontrés et commentés, jamais transformés en activité à réaliser par l'apprenant.
 
 STRUCTURE ATTENDUE (suis ce format précisément) :
 
@@ -80,24 +510,26 @@ Durée : Xh | Compétences REAC couvertes : CP1, CP2...
    - [Sous-thème B]
 [... autant de sections que nécessaire]
 
-**Cas pratiques suggérés :**
-- [Cas pratique 1]
-- [Cas pratique 2]
+**Exemples professionnels commentés à intégrer au cours :**
+- [Situation fictive racontée puis expliquée par le professeur]
+- [Autre exemple professionnel analysé oralement]
 
 [Répéter pour chaque module et chaque bloc]
 
 ## MODULES TRANSVERSAUX
 [Communication professionnelle, outils numériques, etc.]
 
-## PRÉPARATION À LA CERTIFICATION [hors TTS]
-[Méthodologie examen, entraînements, dossier professionnel]
+## REPÈRES SUR LA CERTIFICATION [hors TTS]
+[Présentation informative des attendus et du dossier professionnel]
 
 RÈGLES :
 - Chaque module doit avoir une durée réaliste (entre 5h et 25h maximum)
 - La somme des durées hors [hors TTS] doit être égale à {TOTAL_HOURS}h
 - Chaque sous-thème doit être assez précis pour générer 15 minutes de cours oral
 - Évite les répétitions entre modules
-- Intègre les savoir-faire et savoirs du REAC dans les sous-thèmes"""
+- Intègre les savoir-faire et savoirs du REAC dans les sous-thèmes
+- 100% du volume pédagogique est du cours magistral audio : aucune séance d'exercice, cas pratique, étude de cas, atelier, mise en situation, simulation, jeu de rôle, QCM ou quiz
+- Un exemple professionnel est uniquement raconté et commenté par le professeur à l'intérieur d'un cours ; il ne devient jamais un module, une séance ou une consigne apprenant"""
 
 _DAILY_SPLIT_PROMPT = """Tu es un expert en ingénierie pédagogique.
 
@@ -114,12 +546,23 @@ Génère uniquement les journées {DAY_START} à {DAY_END}, en répartissant le 
 
 RÈGLES :
 - Chaque journée = exactement 7 heures de contenu
-- Chaque journée a EXACTEMENT 6 sous-parties dans "sub_parts"
-- Ne coupe pas un module au milieu sauf si sa durée dépasse 7h
+- Chaque journée a EXACTEMENT 7 cours dans "sub_parts", alignés sur la playlist audio interne ci-dessous.
+- Chaque entrée de "sub_parts" est exclusivement un cours magistral expliqué par le professeur.
+- Ne crée jamais de séance d'exercice, cas pratique, étude de cas, atelier, mise en situation, simulation, jeu de rôle, QCM ou quiz.
+- Les exemples métier sont racontés et commentés par le professeur à l'intérieur du cours ; l'apprenant n'a aucune activité à réaliser.
+- Les durées pédagogiques du programme global doivent être redistribuées sur ces cours internes.
+- Un module peut occuper plusieurs cours, ou plusieurs petits modules peuvent partager un cours si c'est pédagogiquement cohérent.
+- Ne coupe jamais une idée au hasard : chaque cours doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
 - Jour 1 : pas de rappel. Autres jours : bref rappel de la séance précédente.
 - "day_recap" : commence par "Lors de la dernière séance, nous avons vu…" (sauf jour 1)
 - "day_transition" : commence par "À la prochaine séance, nous aborderons…" (jamais "demain" ni "la semaine prochaine")
-- "module_content" : 5-6 phrases détaillées (100-150 mots) : compétences visées, notions clés, exemples concrets, points de vigilance. Ce contenu sera la base directe de la génération TTS.
+- "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance, progression interne du cours. Ce contenu sera la base directe de la génération TTS.
+- "generation_brief" : objet opérationnel qui servira au prompt TTS du cours. Il doit dire quoi couvrir, quels exemples intégrer, comment finir, quoi éviter pour ne pas répéter les autres cours.
+- Les horaires, durées et fichiers sont strictement internes. Ils peuvent rester dans les champs techniques start_time/end_time/duration_min/filename, mais ne doivent jamais apparaître dans "name", "module_content" ou "generation_brief".
+- "name" doit contenir seulement "Cours N — thème pédagogique précis", sans heure, sans durée, sans mot "créneau" et sans planning.
+
+COURS AUDIO INTERNES À RESPECTER STRICTEMENT :
+{COURSE_AUDIO_SLOTS}
 
 FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
 
@@ -132,8 +575,21 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
       "modules_covered": ["MODULE 1.1 : Nom"],
       "sub_parts": [
         {{
-          "name": "Nom précis de la sous-partie",
-          "module_content": "2-3 phrases décrivant les compétences et contenus clés de cette sous-partie."
+          "index": 0,
+          "audio_slot": "Cours 1",
+          "start_time": "9h00",
+          "end_time": "9h45",
+          "duration_min": 45,
+          "filename": "cours_9h00_9h45.mp3",
+          "name": "Cours 1 — Nom précis du thème",
+          "module_content": "Contenu condensé et structuré de ce cours, sans mentionner l'horaire ni la durée.",
+          "generation_brief": {{
+            "must_cover": ["notion prioritaire 1", "notion prioritaire 2"],
+            "examples": ["exemple métier à développer"],
+            "finish": "Type de chute ou synthèse attendue à la fin du cours",
+            "avoid": ["notion réservée à un autre cours", "redite à éviter"],
+            "handoff": "Lien naturel avec le Q&A, la pause ou le cours suivant"
+          }}
         }}
       ],
       "day_recap": "Rappel de la veille (vide pour le jour 1)",
@@ -143,12 +599,229 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
 }}"""
 
 
+_DAILY_SPLIT_PROMPT_V2 = """Tu es un expert en ingénierie pédagogique.
+
+Tu vas découper ce programme de formation en fiches journée pour les jours {DAY_START} à {DAY_END} (sur {NB_DAYS} journées au total).
+
+TITRE PROFESSIONNEL : {TP_NAME}
+JOURNÉES À GÉNÉRER : jours {DAY_START} à {DAY_END}
+
+PROGRAMME GLOBAL :
+{GLOBAL_PROGRAM}
+
+PLANNING PÉDAGOGIQUE IMMUABLE :
+{COURSE_AUDIO_SLOTS}
+
+CONSIGNE :
+Génère uniquement les journées {DAY_START} à {DAY_END}, en répartissant le programme de façon cohérente.
+
+RÈGLES :
+- Pour chaque journée, crée exactement le nombre de cours vocaux indiqué dans le planning ci-dessus.
+- Respecte la durée et le budget de mots propres à chaque cours. Ne fusionne, ne supprime et n'ajoute aucun cours.
+- Un cours correspond à un chapitre pédagogique autonome.
+- Chaque chapitre est exclusivement un cours magistral expliqué par le professeur.
+- Ne crée jamais de séance d'exercice, cas pratique, étude de cas, atelier, mise en situation, simulation, jeu de rôle, QCM ou quiz.
+- Les exemples métier sont racontés et commentés par le professeur à l'intérieur du cours ; l'apprenant n'a aucune activité à réaliser.
+- Un module peut occuper plusieurs cours, ou plusieurs petits modules peuvent partager un cours si c'est pédagogiquement cohérent.
+- Ne coupe jamais une idée au hasard : chaque cours doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
+- Les Q&R et pauses sont facultatifs et sont produits plus tard comme audios génériques. Un cours ne les annonce jamais.
+- Si la journée se termine par un Q&R, son outro clôt la journée : le dernier cours conclut seulement son chapitre.
+- Si la journée se termine par un cours, ce dernier cours conclut pédagogiquement la journée, sans dater ni annoncer le prochain rendez-vous. La clôture temporelle exacte sera ajoutée lors de l'audio.
+- Deux cours contigus sont reliés plus tard par une jointure générique invisible ; ne verbalise pas cette mécanique dans le contenu des cours.
+- Jour 1 : pas de rappel. Autres jours : bref rappel de la séance précédente.
+- "day_recap" : commence par "Lors de la dernière séance, nous avons vu…" (sauf jour 1).
+- "day_transition" : décrit seulement le thème qui prolongera la progression, sans date, sans rendez-vous et sans formule "à la prochaine séance".
+- "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance et progression du chapitre.
+- "generation_brief" : précise quoi couvrir, quels exemples intégrer, comment finir et quelles redites éviter.
+- Les horaires, durées, budgets, identifiants et fichiers sont strictement internes : ne les mentionne jamais dans le texte pédagogique.
+- "name" doit contenir seulement "Cours N — thème pédagogique précis", sans heure, durée, budget, mot "créneau" ou planning.
+
+FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
+
+{{
+  "days": [
+    {{
+      "day_number": {DAY_START},
+      "title": "Titre descriptif de la journée",
+      "modules_covered": ["MODULE 1.1 : Nom"],
+      "sub_parts": [
+        {{
+          "course_index": 1,
+          "name": "Cours 1 — Nom précis du thème",
+          "module_content": "Contenu condensé et structuré de ce chapitre.",
+          "generation_brief": {{
+            "must_cover": ["notion prioritaire 1", "notion prioritaire 2"],
+            "examples": ["exemple métier à développer"],
+            "finish": "Type de chute ou synthèse attendue",
+            "avoid": ["notion réservée à un autre cours", "redite à éviter"],
+            "handoff": "Conclusion du chapitre sans annoncer le bloc suivant"
+          }}
+        }}
+      ],
+      "day_recap": "Rappel de la séance précédente (vide pour le jour 1)",
+      "day_transition": "Projection thématique durable vers la suite, sans date"
+    }}
+  ]
+}}"""
+
+
+def _build_global_program_prompt(
+    job: dict,
+    sources: str,
+    schedule_days: list[dict] | None = None,
+) -> str:
+    """Build a dynamic V2 prompt while preserving the legacy prompt verbatim."""
+
+    nb_days = len(schedule_days) if schedule_days else int(job["nb_days"])
+    if not schedule_days:
+        return (
+            _GLOBAL_PROGRAM_PROMPT
+            .replace("{TP_NAME}", job["tp_name"])
+            .replace("{TOTAL_HOURS}", str(job["total_hours"]))
+            .replace("{NB_DAYS}", str(nb_days))
+            .replace("{REAC_TEXT}", sources)
+        )
+
+    total_course_minutes = sum(
+        int(day["total_course_minutes"]) for day in schedule_days
+    )
+    schedule_summary = "\n".join(
+        (
+            f"- Journée {day['day_index']} : {day['course_count']} cours, "
+            f"{day['total_course_minutes']} minutes de cours vocal, "
+            f"amplitude {day['amplitude_minutes']} minutes."
+        )
+        for day in schedule_days
+    )
+    prompt = _GLOBAL_PROGRAM_PROMPT
+    prompt = prompt.replace(
+        "DURÉE TOTALE : {TOTAL_HOURS} heures ({NB_DAYS} journées de 7h)",
+        (
+            "VOLUME TOTAL DE COURS VOCAL : "
+            f"{total_course_minutes} minutes sur {nb_days} journées\n"
+            "ORGANISATION DES JOURNÉES :\n"
+            f"{schedule_summary}"
+        ),
+    )
+    prompt = prompt.replace(
+        "Durée totale : {TOTAL_HOURS} heures | {NB_DAYS} journées",
+        (
+            f"Volume total de cours vocal : {total_course_minutes} minutes "
+            f"| {nb_days} journées"
+        ),
+    )
+    prompt = prompt.replace(
+        "Durée : Xh | Compétences REAC couvertes : CP1, CP2...",
+        "Volume de cours vocal : X minutes | Compétences REAC couvertes : CP1, CP2...",
+    )
+    prompt = prompt.replace(
+        "### MODULE 1.1 : [Nom précis du module] (Xh)",
+        "### MODULE 1.1 : [Nom précis du module] (X minutes de cours vocal)",
+    )
+    prompt = prompt.replace(
+        "- La somme des durées hors [hors TTS] doit être égale à {TOTAL_HOURS}h",
+        (
+            "- La somme des volumes hors [hors TTS] doit être égale à "
+            f"{total_course_minutes} minutes de cours vocal"
+        ),
+    )
+    return (
+        prompt
+        .replace("{TP_NAME}", job["tp_name"])
+        .replace("{NB_DAYS}", str(nb_days))
+        .replace("{REAC_TEXT}", sources)
+    )
+
+
 # ─── France Compétences ───────────────────────────────────────────────────────
 
 _FC_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
+
+
+def get_rncp_certification(rncp_code: str) -> dict | None:
+    """Return the exact France Compétences record for one RNCP code."""
+    code = re.sub(r"^RNCP", "", str(rncp_code or "").strip(), flags=re.IGNORECASE)
+    if not re.fullmatch(r"\d{4,6}", code):
+        raise ValueError("Le code RNCP doit contenir entre 4 et 6 chiffres")
+
+    source_url = f"https://www.francecompetences.fr/recherche/rncp/{code}/"
+    response = _http.get(source_url, headers=_FC_HEADERS, timeout=20)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    page = response.text
+
+    title_match = re.search(
+        r'<h2[^>]*class="[^"]*title--page--generic[^"]*"[^>]*>(.*?)</h2>',
+        page,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    code_match = re.search(
+        r'tag--fcpt-certification__status[^>]*>\s*RNCP\s*(\d{4,6})\s*<',
+        page,
+        flags=re.IGNORECASE,
+    )
+    status_match = re.search(
+        r'Etat\s*:</span>\s*<span[^>]*tag--fcpt-certification__status[^>]*>(.*?)</span>',
+        page,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    reac_match = re.search(
+        r'<a[^>]+href="([^"]+)"[^>]+title="Référentiel d[’\'’]activité[^\"]*"',
+        page,
+        flags=re.IGNORECASE,
+    )
+
+    if not title_match or not code_match or code_match.group(1) != code:
+        return None
+
+    clean_html = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", unescape(value))).strip()
+    title = clean_html(title_match.group(1))
+    status = clean_html(status_match.group(1)) if status_match else ""
+    reac_url = urljoin(source_url, unescape(reac_match.group(1))) if reac_match else None
+
+    replacement_certifications = []
+    replacement_table_match = re.search(
+        r'<caption>\s*Nouvelle\(s\) Certification\(s\)\s*</caption>(.*?)</table>',
+        page,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if replacement_table_match:
+        for row in re.findall(
+            r'<tr[^>]*>(.*?)</tr>',
+            replacement_table_match.group(1),
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            replacement_code_match = re.search(
+                r'<a[^>]+title="RNCP\s*(\d{4,6})"[^>]*>',
+                row,
+                flags=re.IGNORECASE,
+            )
+            cells = re.findall(
+                r'<td[^>]*>(.*?)</td>',
+                row,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if not replacement_code_match or len(cells) < 2:
+                continue
+            replacement_certifications.append({
+                "rncp_code": replacement_code_match.group(1),
+                "title": clean_html(cells[1]),
+            })
+
+    return {
+        "rncp_code": code,
+        "title": title,
+        "status": status,
+        "active": status.casefold() == "active",
+        "reac_available": bool(reac_url),
+        "reac_url": reac_url,
+        "replacement_certifications": replacement_certifications,
+        "source_url": source_url,
+    }
 
 
 def search_rncp(query: str) -> list:
@@ -278,11 +951,7 @@ def download_reac_text(rncp_code: str) -> str:
 
 
 def _cooperative_sleep(seconds: float) -> None:
-    try:
-        import eventlet
-        eventlet.sleep(seconds)
-    except Exception:
-        time.sleep(seconds)
+    time.sleep(seconds)
 
 
 def _reac_retry_delays(attempts: int) -> list[float]:
@@ -513,27 +1182,44 @@ def fetch_rome_data(rncp_code: str) -> str:
     return combined
 
 
-# ─── Appel Claude ─────────────────────────────────────────────────────────────
+# ─── Appel DeepSeek ───────────────────────────────────────────────────────────
 
-def _claude_post(messages, max_tokens=16000, model=None):
-    """Wrapper local qui injecte le modèle par défaut du service pipeline."""
-    return _anthropic_post(messages, max_tokens=max_tokens, model=model or CLAUDE_MODEL)
+def _deepseek_post(
+    messages,
+    max_tokens=16000,
+    model=None,
+    http_max_attempts: int = 1,
+):
+    """Appel DeepSeek avec retry HTTP borné, puis retry durable au-dessus."""
+    return _post_deepseek_message(
+        messages,
+        max_tokens=max_tokens,
+        model=model or DEEPSEEK_MODEL,
+        http_max_attempts=http_max_attempts,
+    )
 
 
 # ─── Génération programme global ──────────────────────────────────────────────
 
-def _generate_global_program_thread(job_id: int, model: str = None):
-    """Thread : génère le programme global et met à jour le job."""
+def generate_global_program(
+    job_id: int,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> None:
+    """Génère le programme global dans le work-item durable courant."""
     try:
+        if checkpoint:
+            checkpoint()
         job = get_job(job_id)
         if not job:
-            return
+            raise RuntimeError(f"Job {job_id} introuvable")
 
         update_job(job_id, status="global_generating")
-        used_model = model or CLAUDE_MODEL
+        used_model = model or DEEPSEEK_MODEL
         logger.info(f"🔄 Job {job_id} : génération programme global (modèle: {used_model})...")
 
-        nb_days = job["nb_days"]
+        schedule_days = _v2_schedule_days(job)
+        nb_days = len(schedule_days) if schedule_days else job["nb_days"]
 
         # ── Couche 1 : prioriser la Knowledge Base enrichie si dispo ──
         # Si l'utilisateur a lancé l'enrichissement (status kb_ready), on
@@ -561,95 +1247,406 @@ def _generate_global_program_thread(job_id: int, model: str = None):
                 sources += f"\n\n=== FICHES ROME (France Travail) ===\n{job['rome_text'][:5000]}"
             logger.info(f"📄 Job {job_id} : programme global généré depuis REAC brut (KB non disponible)")
 
-        prompt = (
-            _GLOBAL_PROGRAM_PROMPT
-            .replace("{TP_NAME}", job["tp_name"])
-            .replace("{TOTAL_HOURS}", str(job["total_hours"]))
-            .replace("{NB_DAYS}", str(nb_days))
-            .replace("{REAC_TEXT}", sources)
+        prompt = _build_global_program_prompt(
+            job,
+            sources,
+            schedule_days=schedule_days,
         )
+        transport_attempts = _env_int(
+            "FORMATION_FOUNDATION_HTTP_ATTEMPTS",
+            2,
+            min_value=1,
+            max_value=3,
+        )
+        if checkpoint:
+            checkpoint()
+        program = _deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=16000,
+            model=used_model,
+            http_max_attempts=transport_attempts,
+        )
+        if checkpoint:
+            checkpoint()
+        update_job(
+            job_id,
+            status="global_ready",
+            global_program=program,
+            global_program_generated_via="api",
+        )
+        logger.info(f"✅ Job {job_id} : programme global généré ({len(program)} chars)")
 
-        for attempt in range(5):
-            try:
-                program = _claude_post(
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=16000,
-                    model=used_model,
-                )
-                update_job(
-                    job_id,
-                    status="global_ready",
-                    global_program=program,
-                    global_program_generated_via="api",
-                )
-                logger.info(f"✅ Job {job_id} : programme global généré ({len(program)} chars)")
-                return
-            except AnthropicRateLimitError as e:
-                if attempt < 4:
-                    logger.warning(f"⏳ Retry {attempt+1}/5 génération global (429, sleep {e.wait_seconds:.0f}s)")
-                    time.sleep(e.wait_seconds)
-                else:
-                    raise
-            except Exception as e:
-                if attempt < 4:
-                    logger.warning(f"⚠️ Retry {attempt+1}/5 génération global : {e}")
-                    time.sleep(15)
-                else:
-                    raise
-
+    except LeaseLostError:
+        logger.warning("PIPELINE_GLOBAL_PROGRAM_LEASE_LOST job=%s", job_id)
+        raise
     except Exception as e:
         logger.error(f"❌ Job {job_id} génération global échouée : {e}")
         update_job(job_id, status="error", error_message=str(e))
-
-
-def launch_global_program_generation(job_id: int, model: str = None):
-    """Lance la génération du programme global dans un thread."""
-    thread = threading.Thread(
-        target=_generate_global_program_thread,
-        args=(job_id, model),
-        daemon=True,
-    )
-    thread.start()
-    logger.info(f"🚀 Job {job_id} : thread génération programme global démarré")
+        raise
 
 
 # ─── Découpage en journées ────────────────────────────────────────────────────
 
-BATCH_SIZE = 5  # jours par appel Claude
-
-
-def _clean_json(raw: str) -> str:
-    """Nettoie une réponse Claude pour extraire du JSON valide."""
-    # Supprimer les blocs markdown ```json ... ```
-    raw = re.sub(r'```(?:json)?\s*', '', raw).strip()
-    # Extraire le premier objet JSON { ... }
-    match = re.search(r'\{[\s\S]*\}', raw)
-    if not match:
-        raise ValueError("Pas de JSON valide dans la réponse")
-    text = match.group()
-    # Tenter de réparer un JSON tronqué en fermant les structures ouvertes
+def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Compter les accolades/crochets ouverts pour tenter une réparation
-        opens = text.count('{') - text.count('}')
-        arr_opens = text.count('[') - text.count(']')
-        # Fermer proprement en remontant jusqu'au dernier objet complet
-        # Trouver la dernière virgule + objet complet avant la troncature
-        last_complete = text.rfind('},')
-        if last_complete > 0:
-            text = text[:last_complete + 1]
-            # Refermer les structures
-            text += ']' * max(0, arr_opens - 1) + '}' * max(0, opens)
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+# Le daily split était historiquement batché par 5 jours. C'est rapide, mais une
+# seule réponse JSON longue et mal fermée bloque toute la pipeline. Par défaut on
+# privilégie donc la robustesse : 1 jour par réponse, avec concurrence bornée.
+BATCH_SIZE = _env_int("FORMATION_DAILY_BATCH_SIZE", 1, min_value=1, max_value=5)
+DAILY_SPLIT_WORKERS = _env_int("FORMATION_DAILY_SPLIT_WORKERS", 3, min_value=1, max_value=6)
+DAILY_SPLIT_MAX_TOKENS = _env_int("FORMATION_DAILY_SPLIT_MAX_TOKENS", 12000, min_value=4000, max_value=24000)
+
+
+def _escape_control_chars_in_strings(text: str) -> str:
+    result = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif ch == "\\" and in_string:
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch in "\n\r\t":
+            result.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[ch])
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def _balanced_json_slice(text: str) -> str:
+    """Retourne le premier objet/array JSON complet, en ignorant les accolades en string."""
+    text = str(text or "").strip()
+    starts = [(idx, ch) for idx, ch in ((text.find("{"), "{"), (text.find("["), "[")) if idx >= 0]
+    if not starts:
+        raise ValueError("Aucun début JSON détectable")
+    start, _ = min(starts, key=lambda item: item[0])
+
+    stack = []
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text[start:], start=start):
+        if escaped:
+            escaped = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in ("}", "]"):
+            if stack and stack[-1] == ch:
+                stack.pop()
+                if not stack:
+                    return text[start:i + 1]
+
+    # JSON tronqué : on garde la zone JSON la plus probable pour json_repair.
+    end = max(text.rfind("}"), text.rfind("]"))
+    if end > start:
+        return text[start:end + 1]
+    return text[start:]
+
+
+def _json_candidates(raw: str) -> list[str]:
+    raw = str(raw or "").strip()
+    candidates = []
+    for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", raw, re.IGNORECASE):
+        candidates.append(match.group(1).strip())
+    candidates.append(raw)
+
+    expanded = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        expanded.append(candidate)
+        try:
+            expanded.append(_balanced_json_slice(candidate))
+        except ValueError:
+            pass
+
+    seen = set()
+    unique = []
+    for candidate in expanded:
+        candidate = candidate.strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _loads_lenient_json(candidate: str):
+    errors = []
+    for text in (candidate, _escape_control_chars_in_strings(candidate)):
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"JSON invalide même après réparation : {e}")
+            errors.append(str(e))
+
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(candidate)
+        return json.loads(repaired)
+    except Exception as e:
+        errors.append(str(e))
+
+    raise ValueError(errors[-1] if errors else "JSON invalide")
+
+
+def _clean_json(raw: str):
+    """Extrait et répare une réponse LLM JSON avec plusieurs stratégies."""
+    errors = []
+    for candidate in _json_candidates(raw):
+        try:
+            return _loads_lenient_json(candidate)
+        except Exception as e:
+            errors.append(str(e))
+    raise ValueError(
+        "JSON invalide même après réparation : "
+        + (errors[-1] if errors else "aucun JSON détectable")
+    )
+
+
+def _coerce_day_number(value) -> int | None:
+    if isinstance(value, int):
+        return value
+    match = re.search(r"\d+", str(value or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return None
+
+
+def _ensure_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def _normalize_daily_payload(
+    data,
+    day_start: int,
+    day_end: int,
+    tp_name: str,
+    schedule_days: list[dict] | None = None,
+) -> list[dict]:
+    expected = list(range(day_start, day_end + 1))
+    if isinstance(data, dict):
+        raw_days = data.get("days")
+        if raw_days is None and "day_number" in data:
+            raw_days = [data]
+    elif isinstance(data, list):
+        raw_days = data
+    else:
+        raise ValueError("Le JSON daily doit être un objet {days:[...]} ou une liste")
+
+    days = [dict(day) for day in _ensure_list(raw_days) if isinstance(day, dict)]
+    if len(days) == len(expected):
+        for idx, day in enumerate(days):
+            if _coerce_day_number(day.get("day_number")) is None:
+                day["day_number"] = expected[idx]
+
+    by_number = {}
+    for day in days:
+        number = _coerce_day_number(day.get("day_number"))
+        if number is not None:
+            day["day_number"] = number
+            by_number[number] = day
+
+    selected = []
+    missing = []
+    for number in expected:
+        day = by_number.get(number)
+        if not day:
+            missing.append(number)
+            continue
+        schedule_day = _schedule_day(schedule_days, number)
+        if schedule_days and schedule_day is None:
+            raise ValueError(
+                f"Planning V2 introuvable pour la journée {number}"
+            )
+        selected.append(
+            _complete_day_program_shape(
+                day,
+                number,
+                tp_name,
+                schedule_day=schedule_day,
+            )
+        )
+
+    if missing:
+        raise ValueError(f"Journée(s) manquante(s) dans le JSON : {missing}")
+    return selected
+
+
+def _complete_day_program_shape(
+    day: dict,
+    day_number: int,
+    tp_name: str,
+    schedule_day: dict | None = None,
+) -> dict:
+    day = dict(day or {})
+    day["day_number"] = day_number
+    if schedule_day is None:
+        day["hours"] = HOURS_PER_DAY
+    title = _strip_internal_schedule_from_label(day.get("title") or "")
+    day["title"] = title or f"Journée {day_number} — Progression {tp_name}"
+    modules = day.get("modules_covered")
+    if not isinstance(modules, list):
+        day["modules_covered"] = [str(modules).strip()] if modules else []
+    if day_number == 1 and not str(day.get("day_recap") or "").strip():
+        day["day_recap"] = ""
+    elif not str(day.get("day_recap") or "").strip():
+        day["day_recap"] = "Lors de la dernière séance, nous avons vu les bases nécessaires pour aborder cette nouvelle étape."
+    if not str(day.get("day_transition") or "").strip():
+        day["day_transition"] = (
+            "La suite de cette progression approfondira les notions qui viennent "
+            "d'être posées."
+            if schedule_day is not None
+            else "À la prochaine séance, nous aborderons la suite logique de cette progression."
+        )
+    return _normalize_day_audio_slots(day, schedule_day=schedule_day)
+
+
+def daily_programs_checkpoint_state(job: dict) -> dict:
+    """Retourne les journées valides déjà persistées pour ce job immuable."""
+    schedule_days = _v2_schedule_days(job)
+    try:
+        expected_count = (
+            len(schedule_days)
+            if schedule_days
+            else int(job.get("nb_days") or 0)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Nombre de journées invalide") from exc
+    if expected_count <= 0:
+        raise ValueError("Le pipeline doit contenir au moins une journée")
+
+    raw_value = job.get("daily_programs")
+    if isinstance(raw_value, list):
+        raw_days = raw_value
+        invalid_count = 0
+    else:
+        try:
+            raw_days = json.loads(raw_value or "[]")
+            invalid_count = 0
+        except (TypeError, json.JSONDecodeError):
+            raw_days = []
+            invalid_count = 1
+    if not isinstance(raw_days, list):
+        raw_days = []
+        invalid_count += 1
+
+    expected_numbers = list(range(1, expected_count + 1))
+    by_number = {}
+    for raw_day in raw_days:
+        if not isinstance(raw_day, dict):
+            invalid_count += 1
+            continue
+        number = _coerce_day_number(
+            raw_day.get("day_number") or raw_day.get("day_index")
+        )
+        if number not in expected_numbers or number in by_number:
+            invalid_count += 1
+            continue
+
+        schedule_day = _schedule_day(schedule_days, number)
+        expected_course_count = (
+            len(_v2_course_slots(schedule_day))
+            if schedule_day
+            else len(COURSE_AUDIO_SLOTS)
+        )
+        sub_parts = raw_day.get("sub_parts")
+        if (
+            not isinstance(sub_parts, list)
+            or len(sub_parts) != expected_course_count
+            or any(not isinstance(part, dict) for part in sub_parts)
+        ):
+            invalid_count += 1
+            continue
+
+        try:
+            day = _complete_day_program_shape(
+                raw_day,
+                number,
+                job.get("tp_name") or "Formation",
+                schedule_day=schedule_day,
+            )
+        except Exception:
+            invalid_count += 1
+            continue
+        by_number[number] = day
+
+    days = [by_number[number] for number in expected_numbers if number in by_number]
+    missing_numbers = [
+        number for number in expected_numbers if number not in by_number
+    ]
+    return {
+        "days": days,
+        "by_number": by_number,
+        "expected_count": expected_count,
+        "expected_numbers": expected_numbers,
+        "missing_numbers": missing_numbers,
+        "invalid_count": invalid_count,
+        "complete": not missing_numbers and invalid_count == 0,
+        "schedule_days": schedule_days,
+    }
+
+
+def daily_programs_are_complete(job: dict) -> bool:
+    """Indique si toutes les journées attendues sont présentes et valides."""
+    try:
+        return bool(daily_programs_checkpoint_state(job)["complete"])
+    except (TypeError, ValueError):
+        return False
+
+
+def _missing_day_batches(
+    missing_numbers: list[int],
+    batch_size: int,
+) -> list[tuple[int, int]]:
+    """Regroupe uniquement les journées manquantes, sans englober un checkpoint."""
+    numbers = sorted({int(number) for number in missing_numbers})
+    if not numbers:
+        return []
+    size = max(1, int(batch_size or 1))
+    batches = []
+    batch_start = numbers[0]
+    batch_end = numbers[0]
+    for number in numbers[1:]:
+        if number == batch_end + 1 and number - batch_start + 1 <= size:
+            batch_end = number
+            continue
+        batches.append((batch_start, batch_end))
+        batch_start = batch_end = number
+    batches.append((batch_start, batch_end))
+    return batches
 
 
 def _split_batch(tp_name: str, nb_days: int, global_program: str,
                  day_start: int, day_end: int, model: str,
-                 reac_text: str = "", rc_text: str = "", rome_text: str = "") -> list:
+                 reac_text: str = "", rc_text: str = "", rome_text: str = "",
+                 schedule_days: list[dict] | None = None) -> list:
     """Génère un batch de journées (day_start à day_end inclus)."""
     # Bloc sources enrichies pour le module_content
     enrichment = ""
@@ -660,117 +1657,237 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
     if rome_text:
         enrichment += f"\n\n=== FICHES ROME ===\n{rome_text[:3000]}"
 
+    prompt_template = (
+        _DAILY_SPLIT_PROMPT_V2 if schedule_days else _DAILY_SPLIT_PROMPT
+    )
+    prompt_schedule_days = (
+        [
+            day
+            for day in schedule_days
+            if day_start
+            <= int(day.get("day_index") or day.get("day_number") or 0)
+            <= day_end
+        ]
+        if schedule_days
+        else None
+    )
     prompt = (
-        _DAILY_SPLIT_PROMPT
+        prompt_template
         .replace("{TP_NAME}", tp_name)
         .replace("{NB_DAYS}", str(nb_days))
         .replace("{DAY_START}", str(day_start))
         .replace("{DAY_END}", str(day_end))
+        .replace(
+            "{COURSE_AUDIO_SLOTS}",
+            _course_audio_slots_prompt(prompt_schedule_days),
+        )
         .replace("{GLOBAL_PROGRAM}", global_program[:20000] + enrichment)
     )
-    for attempt in range(5):
-        try:
-            raw = _claude_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=8000,
-                model=model,
-            )
-            data = _clean_json(raw)
-            return data.get("days", [])
-        except AnthropicRateLimitError as e:
-            if attempt < 4:
-                logger.warning(
-                    f"⏳ Retry {attempt+1}/5 batch jours {day_start}-{day_end} "
-                    f"(429, sleep {e.wait_seconds:.0f}s)"
-                )
-                time.sleep(e.wait_seconds)
-            else:
-                raise
-        except Exception as e:
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 batch jours {day_start}-{day_end} : {e}")
-                time.sleep(10)
-            else:
-                raise
-
-
-def _split_daily_programs_thread(job_id: int, model: str = None):
-    """Thread : découpe le programme global en N journées par batches parallèles."""
+    transport_attempts = _env_int(
+        "FORMATION_FOUNDATION_HTTP_ATTEMPTS",
+        2,
+        min_value=1,
+        max_value=3,
+    )
     try:
+        raw = _deepseek_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=DAILY_SPLIT_MAX_TOKENS,
+            model=model,
+            http_max_attempts=transport_attempts,
+        )
+        data = _clean_json(raw)
+        return _normalize_daily_payload(
+            data,
+            day_start,
+            day_end,
+            tp_name,
+            schedule_days=schedule_days,
+        )
+    except (LeaseLostError, DeepSeekRateLimitError, DeepSeekAPIError):
+        raise
+    except Exception as exc:
+        label = (
+            f"Journée {day_start}"
+            if day_start == day_end
+            else f"Journées {day_start}-{day_end}"
+        )
+        message = f"{label} impossible à générer correctement : {exc}"
+        logger.error("❌ %s", message)
+        raise DailySplitGenerationError(message) from exc
+
+
+def run_daily_split(
+    job_id: int,
+    model: str = None,
+    checkpoint: Callable[[], None] | None = None,
+) -> dict:
+    """Reprend les journées persistées et sauvegarde chaque nouveau batch valide."""
+    try:
+        if checkpoint:
+            checkpoint()
         job = get_job(job_id)
         if not job:
-            return
+            raise ValueError(f"Job {job_id} introuvable")
 
-        update_job(job_id, status="daily_splitting")
-        used_model = model or CLAUDE_MODEL
-        nb_days = job["nb_days"]
-        logger.info(f"🔄 Job {job_id} : découpage en {nb_days} journées par batches de {BATCH_SIZE} (modèle: {used_model})...")
+        used_model = model or DEEPSEEK_MODEL
+        state = daily_programs_checkpoint_state(job)
+        schedule_days = state["schedule_days"]
+        nb_days = state["expected_count"]
+        days_by_number = dict(state["by_number"])
+        resumed_count = len(days_by_number)
+        update_job(
+            job_id,
+            status="daily_splitting",
+            daily_programs=json.dumps(state["days"], ensure_ascii=False),
+            daily_programs_validated=0,
+            error_message=None,
+        )
+        if checkpoint:
+            checkpoint()
+        logger.info(
+            "🔄 Job %s : découpage en %s journée(s), reprises=%s, "
+            "batch=%s, workers=%s (modèle: %s)...",
+            job_id,
+            nb_days,
+            resumed_count,
+            BATCH_SIZE,
+            DAILY_SPLIT_WORKERS,
+            used_model,
+        )
 
-        # Découper en batches
-        batches = []
-        for start in range(1, nb_days + 1, BATCH_SIZE):
-            end = min(start + BATCH_SIZE - 1, nb_days)
-            batches.append((start, end))
-
-        results = [None] * len(batches)
+        batches = _missing_day_batches(
+            state["missing_numbers"],
+            BATCH_SIZE,
+        )
         errors = []
 
-        def run_batch(idx, day_start, day_end):
-            try:
-                days = _split_batch(
-                    tp_name=job["tp_name"],
-                    nb_days=nb_days,
-                    global_program=job["global_program"],
-                    day_start=day_start,
-                    day_end=day_end,
-                    model=used_model,
-                    reac_text=job.get("reac_text") or "",
-                    rc_text=job.get("rc_text") or "",
-                    rome_text=job.get("rome_text") or "",
-                )
-                results[idx] = days
-                logger.info(f"✅ Batch {day_start}-{day_end} : {len(days)} journées")
-            except Exception as e:
-                errors.append(f"Batch {day_start}-{day_end} : {e}")
-                results[idx] = []
+        def run_batch(day_start, day_end):
+            return _split_batch(
+                tp_name=job["tp_name"],
+                nb_days=nb_days,
+                global_program=job["global_program"],
+                day_start=day_start,
+                day_end=day_end,
+                model=used_model,
+                reac_text=job.get("reac_text") or "",
+                rc_text=job.get("rc_text") or "",
+                rome_text=job.get("rome_text") or "",
+                schedule_days=schedule_days,
+            )
 
-        threads = []
-        for i, (start, end) in enumerate(batches):
-            t = threading.Thread(target=run_batch, args=(i, start, end), daemon=True)
-            threads.append(t)
-            t.start()
+        if batches:
+            workers = min(max(1, DAILY_SPLIT_WORKERS), len(batches))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                future_map = {
+                    pool.submit(run_batch, start, end): (start, end)
+                    for start, end in batches
+                }
+                for future in as_completed(future_map):
+                    start, end = future_map[future]
+                    try:
+                        days = future.result()
+                        for day in sorted(
+                            days,
+                            key=lambda item: _coerce_day_number(
+                                item.get("day_number")
+                            ) or 0,
+                        ):
+                            number = _coerce_day_number(day.get("day_number"))
+                            if (
+                                number not in state["expected_numbers"]
+                                or not start <= number <= end
+                            ):
+                                raise ValueError(
+                                    f"Journée inattendue {number} pour le batch "
+                                    f"{start}-{end}"
+                                )
+                            days_by_number[number] = day
 
-        for t in threads:
-            t.join()
+                            partial_days = [
+                                days_by_number[expected_number]
+                                for expected_number in state["expected_numbers"]
+                                if expected_number in days_by_number
+                            ]
+                            if checkpoint:
+                                checkpoint()
+                            update_job(
+                                job_id,
+                                status="daily_splitting",
+                                daily_programs=json.dumps(
+                                    partial_days,
+                                    ensure_ascii=False,
+                                ),
+                                daily_programs_validated=0,
+                                error_message=None,
+                            )
+                            if checkpoint:
+                                checkpoint()
+                            logger.info(
+                                "✅ Job %s : checkpoint journée %s (%s/%s)",
+                                job_id,
+                                number,
+                                len(partial_days),
+                                nb_days,
+                            )
+                    except LeaseLostError:
+                        raise
+                    except Exception as e:
+                        errors.append((start, end, e))
 
         if errors:
-            raise ValueError("; ".join(errors))
+            for _start, _end, exc in errors:
+                if isinstance(
+                    exc,
+                    (DeepSeekRateLimitError, DeepSeekAPIError),
+                ):
+                    raise exc
+            raise DailySplitGenerationError(
+                "; ".join(
+                    f"Batch {start}-{end} : {exc}"
+                    for start, end, exc in errors
+                )
+            )
 
-        # Fusionner et trier par day_number
-        all_days = []
-        for batch_days in results:
-            all_days.extend(batch_days or [])
-        all_days.sort(key=lambda d: d.get("day_number", 0))
-
+        all_days = [
+            days_by_number[number]
+            for number in state["expected_numbers"]
+            if number in days_by_number
+        ]
+        actual_numbers = [_coerce_day_number(day.get("day_number")) for day in all_days]
+        if actual_numbers != state["expected_numbers"]:
+            raise ValueError(
+                "Daily split incohérent : attendu jours "
+                f"{state['expected_numbers']}, reçu {actual_numbers}"
+            )
+        if checkpoint:
+            checkpoint()
         logger.info(f"✅ Job {job_id} : {len(all_days)} journées générées au total")
-        update_job(job_id, status="daily_ready",
-                   daily_programs=json.dumps(all_days, ensure_ascii=False),
-                   daily_programs_generated_via="api")
+        update_job(
+            job_id,
+            status="daily_validated",
+            daily_programs=json.dumps(all_days, ensure_ascii=False),
+            daily_programs_validated=1,
+            daily_programs_generated_via="api",
+            error_message=None,
+        )
+        if checkpoint:
+            checkpoint()
+        return {
+            "ok": True,
+            "days": len(all_days),
+            "resumed_days": resumed_count,
+            "generated_days": len(all_days) - resumed_count,
+            "generated_via": "api",
+        }
 
+    except LeaseLostError:
+        logger.warning("PIPELINE_DAILY_SPLIT_LEASE_LOST job=%s", job_id)
+        raise
     except Exception as e:
         logger.error(f"❌ Job {job_id} découpage journées échoué : {e}")
         update_job(job_id, status="error", error_message=str(e))
-
-
-def launch_daily_split(job_id: int, model: str = None):
-    """Lance le découpage en journées dans un thread."""
-    thread = threading.Thread(
-        target=_split_daily_programs_thread,
-        args=(job_id, model),
-        daemon=True,
-    )
-    thread.start()
-    logger.info(f"🚀 Job {job_id} : thread découpage journées démarré")
+        raise
 
 
 # ─── Affinage IA (refine) ─────────────────────────────────────────────────────
@@ -811,9 +1928,9 @@ def refine_content(
         .replace("{CURRENT_CONTENT}", current_content[:30000])
         .replace("{INSTRUCTION}", instruction)
     )
-    used_model = model or CLAUDE_MODEL
+    used_model = model or DEEPSEEK_MODEL
     logger.info(f"🔧 Affinage contenu ({content_type}) avec {used_model} : '{instruction[:80]}'")
-    return _claude_post(
+    return _deepseek_post(
         messages=[{"role": "user", "content": prompt}],
         max_tokens=16000,
         model=used_model,
@@ -832,17 +1949,17 @@ def expected_course_folder_name(day_data: dict, fallback_day_number: int) -> str
 
 def _folder_row_to_dict(row, day_data: dict, day_index: int, duplicate_of: int = None) -> dict:
     return {
-        "folder_id": row[0],
-        "name": row[1],
-        "position": row[2],
-        "platform_id": row[3],
-        "formation_job_id": row[4],
-        "content_job_id": row[5],
-        "content_status": row[6],
-        "total_words": row[7] or 0,
-        "segments_completed": row[8] or 0,
+        "folder_id": row["id"],
+        "name": row["name"],
+        "position": row["position"],
+        "platform_id": row["platform_id"],
+        "formation_job_id": row["formation_job_id"],
+        "content_job_id": row.get("content_job_id"),
+        "content_status": row.get("content_status"),
+        "total_words": row.get("total_words") or 0,
+        "segments_completed": row.get("segments_completed") or 0,
         "day_number": (day_data or {}).get("day_number") or day_index + 1,
-        "day_title": (day_data or {}).get("title") or row[1],
+        "day_title": (day_data or {}).get("title") or row["name"],
         "expected_name": expected_course_folder_name(day_data, day_index + 1),
         "duplicate_of": duplicate_of,
     }
@@ -871,94 +1988,37 @@ def get_expected_course_folders(
     missing = []
     created = []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        for idx, day_data in enumerate(daily_programs):
-            folder_name = expected_course_folder_name(day_data, idx + 1)
-            cursor.execute(
-                """
-                SELECT
-                    cf.id,
-                    cf.name,
-                    cf.position,
-                    cf.platform_id,
-                    cf.formation_job_id,
-                    cgj.id,
-                    cgj.status,
-                    COALESCE(cgj.total_words, 0),
-                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-                FROM cours_folders cf
-                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-                WHERE cf.formation_job_id = ? AND cf.name = ?
-                GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
-                         cgj.id, cgj.status, cgj.total_words
-                ORDER BY
-                    CASE
-                        WHEN cgj.status = 'completed' THEN 0
-                        WHEN COALESCE(cgj.total_words, 0) > 0 THEN 1
-                        WHEN cgj.status = 'running' THEN 2
-                        WHEN cgj.status = 'idle' THEN 3
-                        WHEN cgj.id IS NULL THEN 5
-                        ELSE 4
-                    END,
-                    COALESCE(cgj.total_words, 0) DESC,
-                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) DESC,
-                    cf.position ASC,
-                    cf.id ASC
-                """,
-                (job_id, folder_name),
+    for idx, day_data in enumerate(daily_programs):
+        folder_name = expected_course_folder_name(day_data, idx + 1)
+        matches = list_expected_course_folder_matches(job_id, folder_name)
+
+        if not matches and create_missing:
+            created_row = create_course_folder_for_job(
+                platform_id=resolved_platform_id,
+                folder_name=folder_name,
+                formation_job_id=job_id,
             )
-            matches = cursor.fetchall()
+            created.append({"folder_id": created_row["id"], "name": folder_name})
+            matches = [created_row]
 
-            if not matches and create_missing:
-                cursor.execute(
-                    "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
-                    (resolved_platform_id,),
+        if not matches:
+            missing.append({
+                "day_number": (day_data or {}).get("day_number") or idx + 1,
+                "name": folder_name,
+            })
+            continue
+
+        canonical = _folder_row_to_dict(matches[0], day_data, idx)
+        folders.append(canonical)
+        for duplicate in matches[1:]:
+            duplicates.append(
+                _folder_row_to_dict(
+                    duplicate,
+                    day_data,
+                    idx,
+                    duplicate_of=canonical["folder_id"],
                 )
-                position = cursor.fetchone()[0]
-                cursor.execute(
-                    "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
-                    (resolved_platform_id, folder_name, position, job_id),
-                )
-                folder_id = cursor.lastrowid
-                created.append({"folder_id": folder_id, "name": folder_name})
-                matches = [(
-                    folder_id,
-                    folder_name,
-                    position,
-                    resolved_platform_id,
-                    job_id,
-                    None,
-                    None,
-                    0,
-                    0,
-                )]
-
-            if not matches:
-                missing.append({
-                    "day_number": (day_data or {}).get("day_number") or idx + 1,
-                    "name": folder_name,
-                })
-                continue
-
-            canonical = _folder_row_to_dict(matches[0], day_data, idx)
-            folders.append(canonical)
-            for duplicate in matches[1:]:
-                duplicates.append(
-                    _folder_row_to_dict(
-                        duplicate,
-                        day_data,
-                        idx,
-                        duplicate_of=canonical["folder_id"],
-                    )
-                )
-
-        if created:
-            conn.commit()
-    finally:
-        conn.close()
+            )
 
     return {
         "expected_count": len(daily_programs),
@@ -986,85 +2046,6 @@ def is_expected_course_folder(job_id: int, folder_id: int) -> bool:
     return not expected_ids or folder_id in expected_ids
 
 
-def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
-    """
-    Crée un dossier cours par journée et lance la génération TTS (from scratch).
-    Appelle content_generation_service en mode from_scratch.
-    """
-    from services.content_generation_service import (
-        get_job_from_db,
-        run_content_generation,
-        start_generation_job,
-    )
-
-    job = get_job(job_id)
-    if not job:
-        raise ValueError(f"Job {job_id} introuvable")
-
-    daily_programs = json.loads(job["daily_programs"] or "[]")
-    if not daily_programs:
-        raise ValueError("Aucun programme journée disponible")
-
-    folder_state = get_expected_course_folders(
-        job_id,
-        create_missing=True,
-        platform_id=platform_id,
-    )
-    folder_ids = folder_state["folder_ids"]
-    folders_by_name = {
-        f["expected_name"]: f
-        for f in folder_state["folders"]
-    }
-
-    # Lancer génération TTS pour chaque journée
-    for i, day_data in enumerate(daily_programs):
-        folder_name = expected_course_folder_name(day_data, i + 1)
-        folder_info = folders_by_name.get(folder_name)
-        if not folder_info:
-            raise RuntimeError(f"Folder attendu introuvable : {folder_name}")
-        folder_id = folder_info["folder_id"]
-        day_program_text = _format_day_program_text(day_data, job["tp_name"])
-        sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
-        module_contents = {
-            sp["name"]: sp.get("module_content", "")
-            for sp in day_data.get("sub_parts", [])
-        }
-
-        existing_job = get_job_from_db(folder_id)
-        if existing_job:
-            status = existing_job.get("status")
-            if status == "completed":
-                logger.info(f"⏭ Texte déjà complet pour dossier {folder_id} (Jour {i+1})")
-                continue
-            if status == "running":
-                logger.info(f"⏭ Texte déjà en cours pour dossier {folder_id} (Jour {i+1})")
-                continue
-
-            def _resume_existing(fid=folder_id):
-                try:
-                    run_content_generation(fid, mode="normal", model=model)
-                except Exception as e:
-                    logger.error(f"❌ Reprise génération dossier {fid} : {e}")
-
-            threading.Thread(target=_resume_existing, daemon=True).start()
-            logger.info(f"♻️ Reprise génération pour dossier {folder_id} (Jour {i+1})")
-        else:
-            start_generation_job(
-                folder_id=folder_id,
-                platform_id=platform_id,
-                program_text=day_program_text,
-                program_title=job["tp_name"],
-                sub_parts_override=sub_parts,
-                module_contents=module_contents,
-                from_scratch=True,
-                model=model,
-            )
-            logger.info(f"🚀 TTS lancé pour dossier {folder_id} (Jour {i+1})")
-
-    update_job(job_id, status="tts_launched")
-    return folder_ids
-
-
 def repair_orphan_content_folders(job_id: int) -> dict:
     """Rattache les dossiers cours créés par l'ancien launch-tts sans job_id.
 
@@ -1080,62 +2061,23 @@ def repair_orphan_content_folders(job_id: int) -> dict:
     if not daily_programs:
         return {"repaired": 0, "missing": 0, "folders": []}
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     repaired = []
     missing = 0
-    try:
-        for day_data in daily_programs:
-            day_num = day_data.get("day_number", len(repaired) + missing + 1)
-            day_title = day_data.get("title", f"Jour {day_num}")
-            folder_name = f"Jour {day_num} — {day_title}"
+    for day_data in daily_programs:
+        day_num = day_data.get("day_number", len(repaired) + missing + 1)
+        day_title = day_data.get("title", f"Jour {day_num}")
+        folder_name = f"Jour {day_num} — {day_title}"
 
-            cursor.execute(
-                """
-                SELECT id FROM cours_folders
-                WHERE formation_job_id = ? AND name = ?
-                LIMIT 1
-                """,
-                (job_id, folder_name),
-            )
-            if cursor.fetchone():
-                continue
+        if course_folder_exists_for_job(job_id, folder_name):
+            continue
 
-            cursor.execute(
-                """
-                SELECT cf.id
-                FROM cours_folders cf
-                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                WHERE cf.platform_id = ?
-                  AND cf.name = ?
-                  AND cf.formation_job_id IS NULL
-                ORDER BY CASE WHEN cgj.id IS NULL THEN 1 ELSE 0 END,
-                         cf.created_at DESC,
-                         cf.id DESC
-                LIMIT 1
-                """,
-                (job["platform_id"], folder_name),
-            )
-            row = cursor.fetchone()
-            if not row:
-                missing += 1
-                continue
+        folder_id = find_orphan_course_folder(job["platform_id"], folder_name)
+        if not folder_id:
+            missing += 1
+            continue
 
-            folder_id = row[0]
-            cursor.execute(
-                """
-                UPDATE cours_folders
-                SET formation_job_id = ?
-                WHERE id = ? AND formation_job_id IS NULL
-                """,
-                (job_id, folder_id),
-            )
-            if cursor.rowcount:
-                repaired.append({"folder_id": folder_id, "name": folder_name})
-
-        conn.commit()
-    finally:
-        conn.close()
+        if attach_course_folder_to_job(job_id, folder_id):
+            repaired.append({"folder_id": folder_id, "name": folder_name})
 
     if repaired:
         logger.warning(
@@ -1148,8 +2090,16 @@ def repair_orphan_content_folders(job_id: int) -> dict:
     return {"repaired": len(repaired), "missing": missing, "folders": repaired}
 
 
-def _format_day_program_text(day_data: dict, tp_name: str) -> str:
+def _format_day_program_text(
+    day_data: dict,
+    tp_name: str,
+    schedule_day: dict | None = None,
+) -> str:
     """Formate le programme d'une journée en texte pour le job TTS."""
+    day_data = _normalize_day_audio_slots(
+        day_data,
+        schedule_day=schedule_day,
+    )
     lines = [
         f"TITRE PROFESSIONNEL : {tp_name}",
         f"JOURNÉE {day_data.get('day_number', '?')} : {day_data.get('title', '')}",
@@ -1160,8 +2110,7 @@ def _format_day_program_text(day_data: dict, tp_name: str) -> str:
         lines.append("")
 
     for sp in day_data.get("sub_parts", []):
-        lines.append(f"MODULE : {sp['name']}")
-        lines.append(sp.get("module_content", ""))
+        lines.append(_format_slot_generation_source(sp))
         lines.append("")
 
     if day_data.get("day_transition"):
@@ -1175,159 +2124,25 @@ def _format_day_program_text(day_data: dict, tp_name: str) -> str:
 def create_job(platform_id: int, tp_name: str, rncp_code: str,
                total_hours: int, nb_days: int) -> int:
     """Crée un job pipeline formation en DB. Retourne l'id."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO formation_pipeline_jobs
-            (platform_id, tp_name, rncp_code, total_hours, nb_days, status)
-        VALUES (?, ?, ?, ?, ?, 'init')
-    """, (platform_id, tp_name, rncp_code, total_hours, nb_days))
-    job_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return job_id
+    return create_pipeline_job(
+        platform_id=platform_id,
+        tp_name=tp_name,
+        rncp_code=rncp_code,
+        total_hours=total_hours,
+        nb_days=nb_days,
+    )
 
 
 def update_job(job_id: int, **kwargs):
     """Met à jour les champs d'un job."""
-    if not kwargs:
-        return
-    allowed = {
-        "status", "rncp_code", "reac_text", "rc_text", "rome_text",
-        "global_program", "global_program_validated",
-        "daily_programs", "daily_programs_validated",
-        "error_message",
-        # Origine de chaque artefact (audit fix #5) — 'api' / 'claude_code_haiku' / 'claude_code_sonnet'
-        "kb_generated_via", "global_program_generated_via", "daily_programs_generated_via",
-        # State machine auto-pilot persistée (résiste aux restarts Azure)
-        "auto_pilot_enabled", "auto_pilot_step", "auto_pilot_model",
-        "auto_pilot_tts_mode", "auto_pilot_use_cc", "auto_pilot_skip_vs",
-        "auto_pilot_generate_audio",
-        "auto_pilot_volume_done", "auto_pilot_post_review_docs_done", "auto_pilot_error",
-        "auto_pilot_locked_at", "auto_pilot_lock_owner",
-    }
-    fields = {k: v for k, v in kwargs.items() if k in allowed}
-    # Effacer automatiquement error_message quand on passe à un statut non-erreur
-    if "status" in fields and fields["status"] != "error" and "error_message" not in fields:
-        fields["error_message"] = None
-    if not fields:
-        return
-
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [job_id]
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"UPDATE formation_pipeline_jobs SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        values,
-    )
-    conn.commit()
-    conn.close()
+    update_pipeline_job(job_id, **kwargs)
 
 
 def get_job(job_id: int) -> dict | None:
     """Retourne le job ou None."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT j.id, j.platform_id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days,
-               j.reac_text, j.rc_text, j.rome_text, j.global_program, j.global_program_validated,
-               j.daily_programs, j.daily_programs_validated, j.status, j.error_message,
-               j.created_at, j.updated_at,
-               j.kb_generated_via, j.global_program_generated_via, j.daily_programs_generated_via,
-               p.name AS platform_name,
-               j.auto_pilot_enabled, j.auto_pilot_step, j.auto_pilot_model,
-               j.auto_pilot_tts_mode, j.auto_pilot_use_cc, j.auto_pilot_skip_vs,
-               COALESCE(j.auto_pilot_generate_audio, 0),
-               j.auto_pilot_volume_done, j.auto_pilot_post_review_docs_done,
-               j.auto_pilot_error,
-               j.auto_pilot_locked_at, j.auto_pilot_lock_owner
-        FROM formation_pipeline_jobs j
-        LEFT JOIN platform_config p ON p.id = j.platform_id
-        WHERE j.id = ?
-    """, (job_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "id": row[0], "job_label": f"Job #{row[0]}",
-        "platform_id": row[1],
-        "platform_label": f"P{row[1]}" if row[1] is not None else None,
-        "tp_name": row[2],
-        "rncp_code": row[3], "total_hours": row[4], "nb_days": row[5],
-        "reac_text": row[6], "rc_text": row[7], "rome_text": row[8],
-        "global_program": row[9],
-        "global_program_validated": bool(row[10]),
-        "daily_programs": row[11], "daily_programs_validated": bool(row[12]),
-        "status": row[13], "error_message": row[14],
-        "created_at": row[15], "updated_at": row[16],
-        "kb_generated_via": row[17],
-        "global_program_generated_via": row[18],
-        "daily_programs_generated_via": row[19],
-        "platform_name": row[20],
-        # State machine auto-pilot persistée
-        "auto_pilot_enabled": bool(row[21]),
-        "auto_pilot_step": row[22],
-        "auto_pilot_model": row[23],
-        "auto_pilot_tts_mode": row[24],
-        "auto_pilot_use_cc": bool(row[25]),
-        "auto_pilot_skip_vs": bool(row[26]),
-        "auto_pilot_generate_audio": bool(row[27]),
-        "auto_pilot_volume_done": bool(row[28]),
-        "auto_pilot_post_review_docs_done": bool(row[29]),
-        "auto_pilot_error": row[30],
-        "auto_pilot_locked_at": row[31],
-        "auto_pilot_lock_owner": row[32],
-    }
-
-
-def get_auto_pilot_jobs_to_resume() -> list:
-    """Retourne les job_ids auto-pilot interrompus : activés, pas terminés, lock absent ou périmé."""
-    import time as _time
-    stale_cutoff = int(_time.time()) - 300  # lock > 5 min = périmé
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id FROM formation_pipeline_jobs
-        WHERE auto_pilot_enabled = 1
-          AND (auto_pilot_step IS NULL OR auto_pilot_step != 'done')
-          AND auto_pilot_error IS NULL
-          AND (auto_pilot_locked_at IS NULL
-               OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
-    """, (stale_cutoff,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+    return get_pipeline_job(job_id)
 
 
 def list_jobs(platform_id: int = None) -> list:
     """Liste tous les jobs (toutes plateformes), avec le nom de la plateforme."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT j.id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days, j.status,
-               j.global_program_validated, j.daily_programs_validated,
-               j.created_at, j.updated_at, j.platform_id,
-               p.name AS platform_name
-        FROM formation_pipeline_jobs j
-        LEFT JOIN platform_config p ON p.id = j.platform_id
-        ORDER BY j.created_at DESC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        {
-            "id": r[0], "tp_name": r[1], "rncp_code": r[2],
-            "job_label": f"Job #{r[0]}",
-            "total_hours": r[3], "nb_days": r[4], "status": r[5],
-            "global_program_validated": bool(r[6]),
-            "daily_programs_validated": bool(r[7]),
-            "created_at": r[8], "updated_at": r[9],
-            "platform_id": r[10],
-            "platform_label": f"P{r[10]}" if r[10] is not None else None,
-            "platform_name": r[11],
-        }
-        for r in rows
-    ]
+    return list_pipeline_jobs(platform_id)

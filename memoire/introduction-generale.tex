@@ -1,0 +1,120 @@
+\section*{Introduction générale}
+
+Audit Énergie est une entreprise initialement positionnée sur le courtage en énergie.
+Son activité historique consiste à accompagner des professionnels dans la renégociation
+de leurs contrats, dans un marché devenu progressivement plus concurrentiel et plus
+complexe. Cette activité a permis à l'entreprise de développer une connaissance fine de
+la relation client, de la prospection commerciale et des compétences nécessaires aux
+métiers de la vente à distance.
+
+Depuis plusieurs années, cette expérience métier a progressivement conduit l'entreprise
+à se tourner vers la formation professionnelle. Dans un premier temps, cette activité
+répondait principalement à un besoin interne : former des profils capables d'intégrer les
+équipes commerciales ou de téléprospection. Plus récemment, Audit Énergie a cherché à
+structurer cette activité comme un véritable organisme de formation externe, capable
+d'accompagner des apprenants dans la préparation de titres professionnels, notamment
+dans les domaines de la relation client à distance ou de l'employé commercial.
+
+Ce changement d'échelle a fait apparaître une contrainte centrale. Pour une petite
+structure, la formation représente une opportunité de développement, mais aussi un coût
+important. Le modèle le plus naturel aurait été de faire intervenir des formateurs
+freelance pour dispenser les cours en ligne. Cette solution présente des avantages
+évidents : elle repose sur une interaction humaine directe, permet de répondre aux
+questions des élèves en temps réel et garantit une certaine souplesse pédagogique.
+Cependant, son coût rendait les marges trop faibles pour que le modèle soit réellement
+rentable à grande échelle.
+
+Une première solution a donc été de remplacer le cours en direct par un cours audio
+préparé à l'avance. Pour répondre à ce besoin, j'ai développé une plateforme capable
+d'héberger ces audios et de les diffuser automatiquement le jour de la formation. Le
+travail était alors séparé en deux tâches : la rédaction du contenu, éventuellement aidée
+par l'intelligence artificielle, puis l'enregistrement de sa lecture. Cette organisation
+réduisait le coût par rapport à l'intervention d'un formateur freelance en direct, tout en
+permettant aux élèves de suivre la formation selon le calendrier prévu.
+
+Cette approche constituait une première forme d'optimisation, mais elle ne réglait pas
+tous les problèmes. La production des cours restait manuelle, chronophage et dépendante
+de plusieurs personnes. Des essais de synthèse vocale ont ensuite été réalisés pour
+automatiser la lecture des cours. L'idée était simple : si le contenu pouvait être écrit à
+l'avance, alors une voix générée par IA pouvait peut-être remplacer l'enregistrement
+humain. Mais les premières solutions testées présentaient elles aussi des limites. Les
+outils les plus qualitatifs étaient coûteux lorsqu'il fallait produire plusieurs heures
+d'audio, tandis que les solutions plus économiques donnaient parfois un résultat moins
+adapté à une formation longue.
+
+Cette étape a été importante, car elle a déplacé la réflexion. Le problème n'était pas
+seulement de trouver une voix artificielle capable de lire un texte. Il fallait concevoir une
+chaîne complète capable de produire un cours exploitable : un texte structuré, oral,
+calibré en durée, conforme au programme, suffisamment naturel pour être écouté
+plusieurs heures, puis transformé en audio et intégré à la plateforme. Une bonne voix ne
+suffit pas si le texte lu est répétitif, mal construit ou trop long pour le temps disponible.
+
+Une autre limite est rapidement apparue : un cours enregistré, même de bonne qualité,
+ne remplace pas entièrement un formateur. Lorsqu'un apprenant ne comprend pas un
+passage, il doit pouvoir poser une question. Or, dans un modèle fondé uniquement sur
+des audios préenregistrés, aucun humain n'est disponible pour répondre en direct. Si
+l'objectif était réellement de construire une plateforme de formation autonome, il fallait
+donc traiter deux dimensions complémentaires : automatiser la production et la diffusion
+des contenus, mais aussi fournir un accompagnement pédagogique capable de répondre
+aux questions des élèves de manière contextualisée.
+
+C'est dans ce contexte qu'a émergé le projet étudié dans ce mémoire : concevoir une
+plateforme de formation autonome alimentée par l'intelligence artificielle. Cette
+plateforme ne devait pas seulement diffuser des fichiers audio. Elle devait être capable de
+générer des contenus de formation, de les transformer en audio, de produire des supports
+visuels, de proposer des exercices et d'accompagner les élèves grâce à un assistant
+conversationnel s'appuyant sur les documents pédagogiques.
+
+La problématique de ce mémoire peut donc être formulée ainsi :
+
+\begin{quote}
+Comment concevoir une plateforme de formation autonome alimentée par
+l'intelligence artificielle, capable de produire, diffuser et accompagner des contenus
+pédagogiques, tout en garantissant leur qualité, leur traçabilité et leur pertinence pour
+les apprenants ?
+\end{quote}
+
+Cette problématique soulève plusieurs objectifs. Le premier est d'automatiser la
+production des cours, en passant d'un référentiel ou d'un programme de formation à des
+journées pédagogiques complètes. Le deuxième est de transformer ces contenus en
+audios exploitables, avec un coût inférieur à une production humaine répétée et une
+qualité suffisante pour un usage prolongé. Le troisième est d'enrichir l'expérience de
+formation par des supports visuels et des exercices générés automatiquement. Le
+quatrième est de permettre aux apprenants de poser des questions à un assistant
+pédagogique capable de répondre à partir du contenu réel de la formation, et non comme
+un chatbot généraliste.
+
+Les contributions de ce travail s'organisent donc autour de deux axes principaux. Le
+premier concerne la conception d'une pipeline de génération de contenus pédagogiques.
+Cette pipeline a progressivement évolué d'une génération directe de texte vers une
+chaîne plus structurée, fondée sur un plan pédagogique, des étapes de contrôle qualité,
+des artefacts intermédiaires et une meilleure traçabilité des corrections. Le second axe
+concerne l'accompagnement des apprenants, notamment par la mise en place d'un
+système de questions-réponses contextualisé de type RAG, destiné à réduire les limites
+d'un modèle de langage utilisé seul.
+
+La méthode suivie repose sur une démarche itérative. Plusieurs solutions ont été
+comparées ou testées : intervention humaine, enregistrement différé, synthèse vocale
+externe, génération directe par modèle de langage, puis pipeline plus structurée. Chaque
+étape a permis d'identifier de nouvelles contraintes : coût, qualité audio, longueur des
+textes, cohérence pédagogique, conformité, capacité à répondre aux élèves et besoin
+d'évaluer les résultats. Cette progression constitue le fil conducteur du mémoire : il ne
+s'agit pas seulement d'ajouter de l'intelligence artificielle à une plateforme existante,
+mais de comprendre comment encadrer cette automatisation pour la rendre fiable,
+contrôlable et mesurable.
+
+Enfin, ce travail ne peut pas être évalué uniquement par le fait que la plateforme
+fonctionne techniquement. Il doit aussi montrer ce que l'automatisation apporte. Les
+résultats seront donc discutés à travers plusieurs types de métriques : réduction des
+interventions humaines, coût et temps de production des contenus, qualité des audios,
+cohérence pédagogique, satisfaction des apprenants, résultats aux exercices, ainsi que
+métriques propres à l'assistant RAG, comme la pertinence des passages retrouvés et la
+fidélité des réponses produites.
+
+Ce mémoire est structuré en trois parties. La première présente le contexte de
+l'entreprise, les limites du fonctionnement initial et la problématique générale de la
+formation autonome. La deuxième étudie les approches existantes : plateformes de
+formation en ligne, synthèse vocale, génération de contenus pédagogiques par IA et
+systèmes de questions-réponses augmentés par récupération d'information. La troisième
+partie présente la solution développée, ses choix d'architecture, les difficultés rencontrées,
+les arbitrages réalisés et les méthodes envisagées pour évaluer ses apports.

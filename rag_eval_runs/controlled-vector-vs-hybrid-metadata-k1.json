@@ -1,0 +1,945 @@
+{
+  "summary": {
+    "simple": {
+      "recall@1": 0.9285714285714286,
+      "precision@1": 0.9285714285714286,
+      "mrr": 0.9285714285714286
+    },
+    "vector": {
+      "recall@1": 0.8571428571428571,
+      "precision@1": 0.8571428571428571,
+      "mrr": 0.8571428571428571
+    },
+    "hybrid": {
+      "recall@1": 0.9285714285714286,
+      "precision@1": 0.9285714285714286,
+      "mrr": 0.9285714285714286
+    }
+  },
+  "rows": [
+    {
+      "id": "q_sem_1",
+      "context": "Question reformulée: le chunk pertinent parle de prosodie stable et de co-régulation, tandis qu'un distracteur contient les mots exacts ton posé.",
+      "question": "Comment un ton calme peut-il apaiser un client stressé pendant un appel ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-voice-regulation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-voice-regulation",
+          "title": "Module contrôlé - Régulation vocale",
+          "score": 26.946846,
+          "chunk": "Lorsqu'un conseiller parle avec une prosodie stable, un rythme lent et une voix posée, il favorise la co-régulation émotionnelle. Cette présence vocale aide le client tendu à retrouver un état plus calme pendant l'appel, même si le texte n'utilise pas les mots stressé, apaiser ou ton calme."
+        }
+      ]
+    },
+    {
+      "id": "q_sem_1",
+      "context": "Question reformulée: le chunk pertinent parle de prosodie stable et de co-régulation, tandis qu'un distracteur contient les mots exacts ton posé.",
+      "question": "Comment un ton calme peut-il apaiser un client stressé pendant un appel ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-voice-regulation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-voice-regulation",
+          "title": "Module contrôlé - Régulation vocale",
+          "score": 0.7944726,
+          "chunk": "Lorsqu'un conseiller parle avec une prosodie stable, un rythme lent et une voix posée, il favorise la co-régulation émotionnelle. Cette présence vocale aide le client tendu à retrouver un état plus calme pendant l'appel, même si le texte n'utilise pas les mots stressé, apaiser ou ton calme."
+        }
+      ]
+    },
+    {
+      "id": "q_sem_1",
+      "context": "Question reformulée: le chunk pertinent parle de prosodie stable et de co-régulation, tandis qu'un distracteur contient les mots exacts ton posé.",
+      "question": "Comment un ton calme peut-il apaiser un client stressé pendant un appel ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-voice-regulation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-voice-regulation",
+          "title": "Module contrôlé - Régulation vocale",
+          "score": 0.03333333507180214,
+          "chunk": "Lorsqu'un conseiller parle avec une prosodie stable, un rythme lent et une voix posée, il favorise la co-régulation émotionnelle. Cette présence vocale aide le client tendu à retrouver un état plus calme pendant l'appel, même si le texte n'utilise pas les mots stressé, apaiser ou ton calme."
+        }
+      ]
+    },
+    {
+      "id": "q_sem_2",
+      "context": "Question reformulée: le chunk pertinent traite du client vulnérable sans reprendre exactement tous les mots de la question.",
+      "question": "Que faire pour aider une personne qui comprend difficilement les consignes ?",
+      "mode": "simple",
+      "recall_at_k": 0.0,
+      "precision_at_k": 0.0,
+      "mrr": 0,
+      "first_relevant_rank": null,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-slow-pace-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-slow-pace-distractor",
+          "title": "Module contrôlé - Rythme lent hors sujet",
+          "score": 3.7139163,
+          "chunk": "Un rythme lent est utile dans une vidéo de méditation, dans un podcast de relaxation ou dans une ambiance sonore. Ce passage ne concerne ni la relation client ni l'adaptation à une personne vulnérable."
+        }
+      ]
+    },
+    {
+      "id": "q_sem_2",
+      "context": "Question reformulée: le chunk pertinent traite du client vulnérable sans reprendre exactement tous les mots de la question.",
+      "question": "Que faire pour aider une personne qui comprend difficilement les consignes ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-vulnerability"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-vulnerability",
+          "title": "Module contrôlé - Client vulnérable",
+          "score": 0.72224635,
+          "chunk": "Face à une personne en difficulté de compréhension, le conseiller ralentit le rythme, emploie des phrases courtes, vérifie chaque étape et laisse au client le temps de répondre. L'objectif est de rendre l'échange accessible sans infantiliser l'interlocuteur."
+        }
+      ]
+    },
+    {
+      "id": "q_sem_2",
+      "context": "Question reformulée: le chunk pertinent traite du client vulnérable sans reprendre exactement tous les mots de la question.",
+      "question": "Que faire pour aider une personne qui comprend difficilement les consignes ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-vulnerability"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-vulnerability",
+          "title": "Module contrôlé - Client vulnérable",
+          "score": 0.03306011110544205,
+          "chunk": "Face à une personne en difficulté de compréhension, le conseiller ralentit le rythme, emploie des phrases courtes, vérifie chaque étape et laisse au client le temps de répondre. L'objectif est de rendre l'échange accessible sans infantiliser l'interlocuteur."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_1",
+      "context": "Question lexicale: le code rare QSAT-5 doit favoriser la recherche textuelle et l'hybride.",
+      "question": "Que signifie la procédure QSAT-5 avant la clôture ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code",
+          "title": "Module contrôlé - Code procédure",
+          "score": 22.976778,
+          "chunk": "La procédure QSAT-5 impose de vérifier la satisfaction du client avant la clôture. Le conseiller reformule la solution, demande une validation explicite, puis note le résultat dans le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_1",
+      "context": "Question lexicale: le code rare QSAT-5 doit favoriser la recherche textuelle et l'hybride.",
+      "question": "Que signifie la procédure QSAT-5 avant la clôture ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code",
+          "title": "Module contrôlé - Code procédure",
+          "score": 0.7895296,
+          "chunk": "La procédure QSAT-5 impose de vérifier la satisfaction du client avant la clôture. Le conseiller reformule la solution, demande une validation explicite, puis note le résultat dans le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_1",
+      "context": "Question lexicale: le code rare QSAT-5 doit favoriser la recherche textuelle et l'hybride.",
+      "question": "Que signifie la procédure QSAT-5 avant la clôture ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code",
+          "title": "Module contrôlé - Code procédure",
+          "score": 0.03333333507180214,
+          "chunk": "La procédure QSAT-5 impose de vérifier la satisfaction du client avant la clôture. Le conseiller reformule la solution, demande une validation explicite, puis note le résultat dans le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_2",
+      "context": "Question lexicale avec code rare: la recherche hybride doit bénéficier du signal BM25 sur RGPD-MIN-12.",
+      "question": "Que demande exactement la règle RGPD-MIN-12 ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd",
+          "title": "Module contrôlé - Code RGPD",
+          "score": 32.709126,
+          "chunk": "La règle RGPD-MIN-12 impose de ne collecter que les informations strictement nécessaires au traitement de la demande. Le conseiller ne doit pas demander de justificatif ou de détail personnel sans lien direct avec le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_2",
+      "context": "Question lexicale avec code rare: la recherche hybride doit bénéficier du signal BM25 sur RGPD-MIN-12.",
+      "question": "Que demande exactement la règle RGPD-MIN-12 ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd",
+          "title": "Module contrôlé - Code RGPD",
+          "score": 0.7674626,
+          "chunk": "La règle RGPD-MIN-12 impose de ne collecter que les informations strictement nécessaires au traitement de la demande. Le conseiller ne doit pas demander de justificatif ou de détail personnel sans lien direct avec le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_2",
+      "context": "Question lexicale avec code rare: la recherche hybride doit bénéficier du signal BM25 sur RGPD-MIN-12.",
+      "question": "Que demande exactement la règle RGPD-MIN-12 ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd",
+          "title": "Module contrôlé - Code RGPD",
+          "score": 0.03333333507180214,
+          "chunk": "La règle RGPD-MIN-12 impose de ne collecter que les informations strictement nécessaires au traitement de la demande. Le conseiller ne doit pas demander de justificatif ou de détail personnel sans lien direct avec le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_code_only_1",
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal lexical exact devrait avantager l'hybride par rapport au vectoriel seul.",
+      "question": "RGPD-MIN-12",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd",
+          "title": "Module contrôlé - Code RGPD",
+          "score": 23.353706,
+          "chunk": "La règle RGPD-MIN-12 impose de ne collecter que les informations strictement nécessaires au traitement de la demande. Le conseiller ne doit pas demander de justificatif ou de détail personnel sans lien direct avec le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_code_only_1",
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal lexical exact devrait avantager l'hybride par rapport au vectoriel seul.",
+      "question": "RGPD-MIN-12",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd",
+          "title": "Module contrôlé - Code RGPD",
+          "score": 0.66478246,
+          "chunk": "La règle RGPD-MIN-12 impose de ne collecter que les informations strictement nécessaires au traitement de la demande. Le conseiller ne doit pas demander de justificatif ou de détail personnel sans lien direct avec le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_code_only_1",
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal lexical exact devrait avantager l'hybride par rapport au vectoriel seul.",
+      "question": "RGPD-MIN-12",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-rgpd",
+          "title": "Module contrôlé - Code RGPD",
+          "score": 0.03333333507180214,
+          "chunk": "La règle RGPD-MIN-12 impose de ne collecter que les informations strictement nécessaires au traitement de la demande. Le conseiller ne doit pas demander de justificatif ou de détail personnel sans lien direct avec le dossier."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_3",
+      "context": "Question lexicale avec code rare: le code exact ECH-3X-45 doit aider l'hybride lorsque le vectoriel hésite entre passages d'escalade.",
+      "question": "À quoi correspond le repère ECH-3X-45 dans une situation hors périmètre ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation",
+          "title": "Module contrôlé - Code escalade",
+          "score": 31.679379,
+          "chunk": "Le repère ECH-3X-45 désigne une escalade en trois temps : reconnaître la difficulté, orienter vers le bon interlocuteur, puis confirmer au client le suivi prévu. Ce code est utilisé uniquement pour les situations qui dépassent le périmètre du conseiller."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_3",
+      "context": "Question lexicale avec code rare: le code exact ECH-3X-45 doit aider l'hybride lorsque le vectoriel hésite entre passages d'escalade.",
+      "question": "À quoi correspond le repère ECH-3X-45 dans une situation hors périmètre ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation",
+          "title": "Module contrôlé - Code escalade",
+          "score": 0.7696615,
+          "chunk": "Le repère ECH-3X-45 désigne une escalade en trois temps : reconnaître la difficulté, orienter vers le bon interlocuteur, puis confirmer au client le suivi prévu. Ce code est utilisé uniquement pour les situations qui dépassent le périmètre du conseiller."
+        }
+      ]
+    },
+    {
+      "id": "q_lex_3",
+      "context": "Question lexicale avec code rare: le code exact ECH-3X-45 doit aider l'hybride lorsque le vectoriel hésite entre passages d'escalade.",
+      "question": "À quoi correspond le repère ECH-3X-45 dans une situation hors périmètre ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation",
+          "title": "Module contrôlé - Code escalade",
+          "score": 0.03333333507180214,
+          "chunk": "Le repère ECH-3X-45 désigne une escalade en trois temps : reconnaître la difficulté, orienter vers le bon interlocuteur, puis confirmer au client le suivi prévu. Ce code est utilisé uniquement pour les situations qui dépassent le périmètre du conseiller."
+        }
+      ]
+    },
+    {
+      "id": "q_code_only_2",
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal BM25 exact devrait être utile.",
+      "question": "ECH-3X-45",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation",
+          "title": "Module contrôlé - Code escalade",
+          "score": 20.243118,
+          "chunk": "Le repère ECH-3X-45 désigne une escalade en trois temps : reconnaître la difficulté, orienter vers le bon interlocuteur, puis confirmer au client le suivi prévu. Ce code est utilisé uniquement pour les situations qui dépassent le périmètre du conseiller."
+        }
+      ]
+    },
+    {
+      "id": "q_code_only_2",
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal BM25 exact devrait être utile.",
+      "question": "ECH-3X-45",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation",
+          "title": "Module contrôlé - Code escalade",
+          "score": 0.6257841,
+          "chunk": "Le repère ECH-3X-45 désigne une escalade en trois temps : reconnaître la difficulté, orienter vers le bon interlocuteur, puis confirmer au client le suivi prévu. Ce code est utilisé uniquement pour les situations qui dépassent le périmètre du conseiller."
+        }
+      ]
+    },
+    {
+      "id": "q_code_only_2",
+      "context": "Requête volontairement minimale: seul le code est fourni. Le signal BM25 exact devrait être utile.",
+      "question": "ECH-3X-45",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-rare-code-escalation",
+          "title": "Module contrôlé - Code escalade",
+          "score": 0.03333333507180214,
+          "chunk": "Le repère ECH-3X-45 désigne une escalade en trois temps : reconnaître la difficulté, orienter vers le bon interlocuteur, puis confirmer au client le suivi prévu. Ce code est utilisé uniquement pour les situations qui dépassent le périmètre du conseiller."
+        }
+      ]
+    },
+    {
+      "id": "q_mix_1",
+      "context": "Question mixte: CRM est lexical, mais le sens attendu porte sur la traçabilité d'une réclamation.",
+      "question": "Pourquoi faut-il garder une trace dans le CRM quand une réclamation passe entre plusieurs équipes ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-traceability"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-traceability",
+          "title": "Module contrôlé - Traçabilité CRM",
+          "score": 31.025099,
+          "chunk": "Après chaque échange sensible, le conseiller doit documenter l'action dans le CRM. La note doit préciser la demande, l'engagement pris, le délai annoncé et le service responsable. Cette trace évite qu'une réclamation soit perdue entre plusieurs équipes."
+        }
+      ]
+    },
+    {
+      "id": "q_mix_1",
+      "context": "Question mixte: CRM est lexical, mais le sens attendu porte sur la traçabilité d'une réclamation.",
+      "question": "Pourquoi faut-il garder une trace dans le CRM quand une réclamation passe entre plusieurs équipes ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-traceability"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-traceability",
+          "title": "Module contrôlé - Traçabilité CRM",
+          "score": 0.7698857,
+          "chunk": "Après chaque échange sensible, le conseiller doit documenter l'action dans le CRM. La note doit préciser la demande, l'engagement pris, le délai annoncé et le service responsable. Cette trace évite qu'une réclamation soit perdue entre plusieurs équipes."
+        }
+      ]
+    },
+    {
+      "id": "q_mix_1",
+      "context": "Question mixte: CRM est lexical, mais le sens attendu porte sur la traçabilité d'une réclamation.",
+      "question": "Pourquoi faut-il garder une trace dans le CRM quand une réclamation passe entre plusieurs équipes ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-traceability"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-traceability",
+          "title": "Module contrôlé - Traçabilité CRM",
+          "score": 0.03333333507180214,
+          "chunk": "Après chaque échange sensible, le conseiller doit documenter l'action dans le CRM. La note doit préciser la demande, l'engagement pris, le délai annoncé et le service responsable. Cette trace évite qu'une réclamation soit perdue entre plusieurs équipes."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_1",
+      "context": "Cas adversarial: de nombreux chunks sont quasi identiques et ne diffèrent que par le code. Le signal lexical exact devrait avantager l'hybride.",
+      "question": "Que faut-il faire pour la procédure ZXQ-914-BETA ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta",
+          "title": "Module contrôlé - Procédure ZXQ-914-BETA",
+          "score": 24.588501,
+          "chunk": "La procédure interne ZXQ-914-BETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir un dossier de médiation prioritaire sous vingt-quatre heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_1",
+      "context": "Cas adversarial: de nombreux chunks sont quasi identiques et ne diffèrent que par le code. Le signal lexical exact devrait avantager l'hybride.",
+      "question": "Que faut-il faire pour la procédure ZXQ-914-BETA ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta",
+          "title": "Module contrôlé - Procédure ZXQ-914-BETA",
+          "score": 0.7742362,
+          "chunk": "La procédure interne ZXQ-914-BETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir un dossier de médiation prioritaire sous vingt-quatre heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_1",
+      "context": "Cas adversarial: de nombreux chunks sont quasi identiques et ne diffèrent que par le code. Le signal lexical exact devrait avantager l'hybride.",
+      "question": "Que faut-il faire pour la procédure ZXQ-914-BETA ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta",
+          "title": "Module contrôlé - Procédure ZXQ-914-BETA",
+          "score": 0.03333333507180214,
+          "chunk": "La procédure interne ZXQ-914-BETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir un dossier de médiation prioritaire sous vingt-quatre heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_2",
+      "context": "Cas adversarial: le sens général est commun à tous les chunks, seul le code exact identifie le bon passage.",
+      "question": "Quelle action est associée au repère MND-772-ORANGE ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-orange"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-orange",
+          "title": "Module contrôlé - Procédure MND-772-ORANGE",
+          "score": 26.499762,
+          "chunk": "La procédure interne MND-772-ORANGE concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir une alerte qualité auprès de l'équipe formation. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_2",
+      "context": "Cas adversarial: le sens général est commun à tous les chunks, seul le code exact identifie le bon passage.",
+      "question": "Quelle action est associée au repère MND-772-ORANGE ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-orange"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-orange",
+          "title": "Module contrôlé - Procédure MND-772-ORANGE",
+          "score": 0.7433997,
+          "chunk": "La procédure interne MND-772-ORANGE concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir une alerte qualité auprès de l'équipe formation. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_2",
+      "context": "Cas adversarial: le sens général est commun à tous les chunks, seul le code exact identifie le bon passage.",
+      "question": "Quelle action est associée au repère MND-772-ORANGE ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-orange"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-orange",
+          "title": "Module contrôlé - Procédure MND-772-ORANGE",
+          "score": 0.03333333507180214,
+          "chunk": "La procédure interne MND-772-ORANGE concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir une alerte qualité auprès de l'équipe formation. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_only",
+      "context": "Requête composée uniquement d'un identifiant arbitraire: le vectoriel seul peut perdre le signal exact, l'hybride conserve BM25.",
+      "question": "ZXQ-914-BETA",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta",
+          "title": "Module contrôlé - Procédure ZXQ-914-BETA",
+          "score": 20.378603,
+          "chunk": "La procédure interne ZXQ-914-BETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir un dossier de médiation prioritaire sous vingt-quatre heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_only",
+      "context": "Requête composée uniquement d'un identifiant arbitraire: le vectoriel seul peut perdre le signal exact, l'hybride conserve BM25.",
+      "question": "ZXQ-914-BETA",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta",
+          "title": "Module contrôlé - Procédure ZXQ-914-BETA",
+          "score": 0.6535748,
+          "chunk": "La procédure interne ZXQ-914-BETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir un dossier de médiation prioritaire sous vingt-quatre heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_adversarial_code_only",
+      "context": "Requête composée uniquement d'un identifiant arbitraire: le vectoriel seul peut perdre le signal exact, l'hybride conserve BM25.",
+      "question": "ZXQ-914-BETA",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-zxq-914-beta",
+          "title": "Module contrôlé - Procédure ZXQ-914-BETA",
+          "score": 0.03333333507180214,
+          "chunk": "La procédure interne ZXQ-914-BETA concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit ouvrir un dossier de médiation prioritaire sous vingt-quatre heures. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_1",
+      "context": "Cas métadonnée: l'identifiant exact est dans le titre searchable, mais pas dans le chunk vectorisé. L'hybride peut exploiter BM25 sur le titre.",
+      "question": "Que prévoit la fiche META-AX7-PRIORITE ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ax7-priorite"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ax7-priorite",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 15.911897,
+          "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit ouvrir une médiation prioritaire sous vingt-quatre heures. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_1",
+      "context": "Cas métadonnée: l'identifiant exact est dans le titre searchable, mais pas dans le chunk vectorisé. L'hybride peut exploiter BM25 sur le titre.",
+      "question": "Que prévoit la fiche META-AX7-PRIORITE ?",
+      "mode": "vector",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ax7-priorite"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ax7-priorite",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.66506994,
+          "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit ouvrir une médiation prioritaire sous vingt-quatre heures. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_1",
+      "context": "Cas métadonnée: l'identifiant exact est dans le titre searchable, mais pas dans le chunk vectorisé. L'hybride peut exploiter BM25 sur le titre.",
+      "question": "Que prévoit la fiche META-AX7-PRIORITE ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ax7-priorite"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ax7-priorite",
+          "title": "Fiche procédure META-AX7-PRIORITE",
+          "score": 0.03333333507180214,
+          "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit ouvrir une médiation prioritaire sous vingt-quatre heures. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_2",
+      "context": "Cas métadonnée: le vector-only ne voit pas l'identifiant dans text_vector, l'hybride le retrouve via la recherche textuelle.",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-meta-meta-bq9-qualite"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-meta-meta-bq9-qualite",
+          "title": "Fiche procédure META-BQ9-QUALITE",
+          "score": 7.1410027,
+          "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit transmettre une alerte qualité au responsable de plateau. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_2",
+      "context": "Cas métadonnée: le vector-only ne voit pas l'identifiant dans text_vector, l'hybride le retrouve via la recherche textuelle.",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "mode": "vector",
+      "recall_at_k": 0.0,
+      "precision_at_k": 0.0,
+      "mrr": 0,
+      "first_relevant_rank": null,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-satisfaction-distractor"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-satisfaction-distractor",
+          "title": "Module contrôlé - Satisfaction générale",
+          "score": 0.70662534,
+          "chunk": "La satisfaction client peut être mesurée avec des enquêtes, des étoiles, des verbatims et des tableaux de bord. Ce passage parle de pilotage qualité global sans décrire la procédure QSAT-5."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_2",
+      "context": "Cas métadonnée: le vector-only ne voit pas l'identifiant dans text_vector, l'hybride le retrouve via la recherche textuelle.",
+      "question": "Quelle action correspond à META-BQ9-QUALITE ?",
+      "mode": "hybrid",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-meta-meta-bq9-qualite"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-meta-meta-bq9-qualite",
+          "title": "Fiche procédure META-BQ9-QUALITE",
+          "score": 0.01666666753590107,
+          "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit transmettre une alerte qualité au responsable de plateau. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_only",
+      "context": "Requête identifiant seul, présent uniquement dans le titre du document.",
+      "question": "META-EP8-TRANSFERT",
+      "mode": "simple",
+      "recall_at_k": 1.0,
+      "precision_at_k": 1.0,
+      "mrr": 1.0,
+      "first_relevant_rank": 1,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ep8-transfert"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-meta-meta-ep8-transfert",
+          "title": "Fiche procédure META-EP8-TRANSFERT",
+          "score": 7.1410027,
+          "chunk": "Cette fiche décrit une procédure interne de relation client. Lorsque la fiche est sélectionnée, le conseiller doit transférer la demande vers le service expert. Le texte de la fiche ne répète pas l'identifiant exact, qui est porté uniquement par le titre du document. Ce cas teste l'intérêt d'un signal lexical sur les métadonnées en complément d'une recherche vectorielle sur le contenu."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_only",
+      "context": "Requête identifiant seul, présent uniquement dans le titre du document.",
+      "question": "META-EP8-TRANSFERT",
+      "mode": "vector",
+      "recall_at_k": 0.0,
+      "precision_at_k": 0.0,
+      "mrr": 0,
+      "first_relevant_rank": null,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-vert"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-vert",
+          "title": "Module contrôlé - Procédure MND-772-VERT",
+          "score": 0.5901422,
+          "chunk": "La procédure interne MND-772-VERT concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit convertir la demande en opportunité commerciale. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    },
+    {
+      "id": "q_metadata_code_only",
+      "context": "Requête identifiant seul, présent uniquement dans le titre du document.",
+      "question": "META-EP8-TRANSFERT",
+      "mode": "hybrid",
+      "recall_at_k": 0.0,
+      "precision_at_k": 0.0,
+      "mrr": 0,
+      "first_relevant_rank": null,
+      "returned_ids": [
+        "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-vert"
+      ],
+      "results": [
+        {
+          "rank": 1,
+          "chunk_id": "ctrl-hybrid-20260617-1781690666-17775-code-mnd-772-vert",
+          "title": "Module contrôlé - Procédure MND-772-VERT",
+          "score": 0.01666666753590107,
+          "chunk": "La procédure interne MND-772-VERT concerne une demande client sensible. Lorsque ce repère est mentionné, le conseiller doit convertir la demande en opportunité commerciale. Le reste du traitement est volontairement formulé comme les autres procédures afin de tester la capacité du moteur à distinguer des codes exacts dans des passages presque identiques."
+        }
+      ]
+    }
+  ]
+}

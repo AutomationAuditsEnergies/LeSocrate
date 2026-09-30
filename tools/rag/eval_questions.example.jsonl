@@ -1,0 +1,3 @@
+{"id":"q001","question":"Quels sont les trois piliers de la posture professionnelle du conseiller client ?","expected_terms":["neutralité bienveillante","courtoisie professionnelle","représentation de l'entreprise"],"out_of_scope":false}
+{"id":"q002","question":"Que faut-il éviter de dire quand une réclamation concerne un autre service ?","expected_terms":["ce n'est pas mon service","je vais contacter le service concerné","tracer"],"out_of_scope":false}
+{"id":"q003","question":"Comment soigner une conjonctivite chez un chat ?","expected_terms":[],"out_of_scope":true}
