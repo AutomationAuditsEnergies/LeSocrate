@@ -2,6 +2,20 @@
 
 ## 2026-09-29
 
+### fix(pipeline): deux tâches d'un même dossier ne peuvent plus démarrer en même temps
+
+Dans la file d'attente Postgres (`WorkItemRepository._claim`), la vérification
+« aucune autre tâche du dossier en cours » lisait une photo de la base prise
+avant le verrou du dossier. Un worker pouvait donc ne pas voir la tâche qu'un
+autre venait de réserver et démarrer une seconde tâche du même dossier (test
+`test_competing_workers_serialize_different_items_for_same_folder` instable en
+CI). La réservation se fait maintenant en trois requêtes dans la même
+transaction : choix de la candidate avec le verrou du dossier, nouvelle
+vérification du dossier après le verrou, puis réservation. Si le dossier est
+déjà occupé, rien n'est réservé et le worker réessaie au tour suivant. En local,
+sur 200 tours de 8 workers concurrents : 39 doublons avant, 0 après. La
+branche SQLite est inchangée.
+
 ### fix(sécurité): plus de détail d'exception dans les réponses formation, slides, admin, debug et billing
 
 Les réponses d'erreur inattendue de `formation_routes.py`, `slides_routes.py`,

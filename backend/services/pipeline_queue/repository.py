@@ -702,13 +702,19 @@ class WorkItemRepository:
             if work_item_id:
                 params.append(work_item_id)
             params.extend(normalized_task_types)
-            params.extend([now, owner, token, expires, now, now])
+            params.append(now)
+            # Trois requêtes dans UNE transaction (connexion sans autocommit,
+            # validée à la sortie du bloc), verrou dossier au niveau transaction :
+            #   a. choisir la candidate et prendre le verrou du dossier ;
+            #   b. revérifier le dossier dans une NOUVELLE requête : en READ
+            #      COMMITTED, elle voit les réservations validées pendant (a),
+            #      que la photo de (a) — prise avant le verrou — ne voyait pas ;
+            #   c. réserver la candidate.
             with self._connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""
-                        WITH candidate AS (
-                            SELECT candidate_item.id
+                            SELECT candidate_item.id, candidate_item.folder_id
                             FROM pipeline_work_items AS candidate_item
                             WHERE candidate_item.attempt_count < candidate_item.max_attempts
                               AND (
@@ -742,7 +748,33 @@ class WorkItemRepository:
                                      candidate_item.created_at
                             FOR UPDATE SKIP LOCKED
                             LIMIT 1
+                        """,
+                        params,
+                    )
+                    candidate = _row_dict(cur.fetchone(), cur)
+                    if not candidate:
+                        return None
+
+                    if candidate["folder_id"] is not None:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM pipeline_work_items
+                            WHERE folder_id = %s
+                              AND id <> %s
+                              AND status = 'running'
+                              AND lease_expires_at >= %s
+                            LIMIT 1
+                            """,
+                            (candidate["folder_id"], candidate["id"], now),
                         )
+                        if cur.fetchone() is not None:
+                            # Une autre tâche du dossier vient d'être réservée :
+                            # rien n'est écrit ; le worker réessaiera plus tard.
+                            return None
+
+                    cur.execute(
+                        """
                         UPDATE pipeline_work_items AS item
                         SET status = 'running',
                             attempt_count = item.attempt_count + 1,
@@ -752,11 +784,10 @@ class WorkItemRepository:
                             lease_expires_at = %s,
                             first_started_at = COALESCE(item.first_started_at, %s),
                             updated_at = %s
-                        FROM candidate
-                        WHERE item.id = candidate.id
+                        WHERE item.id = %s
                         RETURNING item.*
                         """,
-                        params,
+                        (owner, token, expires, now, now, candidate["id"]),
                     )
                     row = _row_dict(cur.fetchone(), cur)
                     return _to_work_item(row) if row else None
