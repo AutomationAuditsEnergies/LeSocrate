@@ -95,6 +95,7 @@ from services.teacher_preparation_service import build_teacher_preparation_state
 from services.recruitment_conversation_service import interpret_recruitment_answer
 from services.teacher_asset_service import resolve_folder_blob_path
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
+from utils.errors import internal_error_response, log_item_error
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 import state
@@ -318,7 +319,8 @@ def _inspect_generated_audio_assets(folder_id, folder, playlist_contract):
                 "ready": False,
                 "physical_ready": False,
                 "reason": "audio_inspection_failed",
-                "detail": str(exc)[:240],
+                "detail": "Analyse du fichier audio impossible",
+                "error_id": log_item_error(exc, context=f"audio_inspection {name}"),
                 "size_bytes": int(getattr(listed_blob, "size", 0) or 0),
             }
 
@@ -422,10 +424,27 @@ def _call_platform(pid, path, method="POST", json_data=None):
             headers={"X-Platform-Key": api_key},
             timeout=10,
         )
-        return resp.json(), None
+        payload = resp.json()
+        if resp.status_code >= 500:
+            # Erreur interne de la plateforme distante : son texte (qui peut
+            # contenir un détail d'exception) reste dans nos logs. Le résultat
+            # garde la même forme qu'avant (relayé tel quel par les appelants,
+            # donc même code HTTP) ; seul le message devient neutre. Les 4xx
+            # sont relayés : ce sont ses messages de validation.
+            error_id = log_item_error(
+                RuntimeError(f"HTTP {resp.status_code} : {resp.text[:500]}"),
+                context=f"call_platform P{pid} {path}",
+            )
+            return {
+                "success": False,
+                "error": f"Erreur interne sur la plateforme P{pid} (réf. {error_id})",
+                "error_id": error_id,
+            }, None
+        return payload, None
     except Exception as e:
-        logger.warning(f"⚠️ Erreur appel P{pid} {path}: {e}")
-        return None, str(e)
+        # Le détail (URL interne, erreur réseau) reste dans les logs.
+        error_id = log_item_error(e, context=f"call_platform P{pid} {path}")
+        return None, f"Plateforme P{pid} injoignable (réf. {error_id})"
 
 
 def create_hr_blueprint():
@@ -1511,8 +1530,7 @@ def create_hr_blueprint():
                 module["reusable"] = _formation_module_is_reusable(module)
             return jsonify({"success": True, "modules": modules}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur list formation-modules: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="list_formation_modules")
 
     # ─── DELETE /api/hr/formation-modules/<id> ────────────────────────────
     # Suppression d'un module catalogue. Refuse si une plateforme l'utilise
@@ -1571,8 +1589,7 @@ def create_hr_blueprint():
                 "version": mod_version,
             }), 200
         except Exception as e:
-            logger.error(f"❌ Erreur delete formation-module {module_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_formation_module module_id={module_id}")
 
     # ─── GET /api/hr/formations ──────────────────────────────────────────
     # Legacy : liste des jobs pipeline (kept pour compat backward si autre code
@@ -1640,8 +1657,7 @@ def create_hr_blueprint():
             } for r in rows]
             return jsonify({"success": True, "formations": formations}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur list formations: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="list_formations")
 
     # ─── GET /api/hr/platforms ────────────────────────────────────────────
     @hr_bp.route("/api/hr/platforms", methods=["GET"])
@@ -2117,8 +2133,7 @@ def create_hr_blueprint():
             return jsonify({"success": True, "platforms": platforms}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur get platforms: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="get_platforms")
 
     def _mirror_clone_status_sqlite(target_platform_id, status):
         """Best-effort compatibility mirror; PostgreSQL stays authoritative."""
@@ -2914,8 +2929,7 @@ def create_hr_blueprint():
             }), 201
 
         except Exception as e:
-            logger.error(f"❌ Erreur création plateforme: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="create_platform")
 
     # ─── POST /api/hr/platforms/<id>/toggle-lock ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/toggle-lock", methods=["POST"])
@@ -2960,8 +2974,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur toggle lock: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"toggle_lock platform_id={platform_id}")
 
     # ─── PATCH /api/hr/platforms/<id>/lifecycle ───────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/lifecycle", methods=["PATCH"])
@@ -3098,8 +3111,7 @@ def create_hr_blueprint():
                 "warning": "Blobs Azure (PDF/audios/archives) non supprimés — nettoyage manuel.",
             }), 200
         except Exception as e:
-            logger.error(f"❌ Erreur delete platform {platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_platform platform_id={platform_id}")
 
     # ─── GET /api/hr/platforms/<id>/audios ────────────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/audios", methods=["GET"])
@@ -3145,8 +3157,7 @@ def create_hr_blueprint():
             return jsonify({"success": True, "audios": audios}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur liste audios HR P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_platform_audios platform_id={platform_id}")
 
     # ─── DELETE /api/hr/platforms/<id>/audios/<filename> ──────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/audios/<path:filename>", methods=["DELETE"])
@@ -3171,8 +3182,7 @@ def create_hr_blueprint():
             return jsonify({"success": True, "message": f"'{filename}' supprimé"}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur suppression audio P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_audio platform_id={platform_id} filename={filename}")
 
     # ─── POST /api/hr/platforms/<id>/upload-pdf ──────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/upload-pdf", methods=["POST"])
@@ -3224,8 +3234,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur upload PDF HR: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"upload_platform_pdf platform_id={platform_id}")
 
     # ─── POST /api/hr/platforms/<id>/set-pdf-name ────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/set-pdf-name", methods=["POST"])
@@ -3254,8 +3263,7 @@ def create_hr_blueprint():
             return jsonify({"success": True}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur set-pdf-name: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"set_pdf_name platform_id={platform_id}")
 
     # ─── DELETE /api/hr/platforms/<id>/pdf ────────────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/pdf", methods=["DELETE"])
@@ -3288,8 +3296,7 @@ def create_hr_blueprint():
             return jsonify({"success": True, "message": "PDF supprimé"}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur suppression PDF HR: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_platform_pdf platform_id={platform_id}")
 
     # ─── POST /api/hr/platforms/<id>/backup-and-unlock ───────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/backup-and-unlock", methods=["POST"])
@@ -3392,8 +3399,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur upload PDF RAG P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"upload_pdf_rag platform_id={platform_id}")
 
     # ─── GET /api/hr/platforms/<id>/course-time ───────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/course-time", methods=["GET"])
@@ -3425,7 +3431,7 @@ def create_hr_blueprint():
                     })
                 return jsonify(payload), 200
             except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
+                return internal_error_response(e, context=f"get_platform_course_time platform_id={platform_id}")
         else:
             result, error = _call_platform(platform_id, f"/api/internal/course-time?platform_id={platform_id}", method="GET")
             if error:
@@ -3657,8 +3663,7 @@ def create_hr_blueprint():
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur get attendance P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_platform_attendance platform_id={platform_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/<int:student_id>", methods=["POST"])
     def save_student_attendance(platform_id, student_id):
@@ -3739,8 +3744,7 @@ def create_hr_blueprint():
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur save attendance P{platform_id} S{student_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"save_student_attendance platform_id={platform_id} student_id={student_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/export", methods=["GET"])
     def export_platform_attendance(platform_id):
@@ -3831,8 +3835,7 @@ def create_hr_blueprint():
                 mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         except Exception as e:
-            logger.error(f"❌ Erreur export attendance P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"export_platform_attendance platform_id={platform_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/exports/<int:export_id>", methods=["GET"])
     def download_platform_attendance_export(platform_id, export_id):
@@ -3878,8 +3881,7 @@ def create_hr_blueprint():
             recipients = list_explicit_course_reminder_recipients(platform_id)
             return jsonify({"success": True, "recipients": recipients}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get student emails P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_platform_student_emails platform_id={platform_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails", methods=["POST"])
     def add_platform_student_emails(platform_id):
@@ -3927,8 +3929,7 @@ def create_hr_blueprint():
                 )
                 return jsonify({"success": True, "recipients": recipients}), 201
             except Exception as e:
-                logger.error(f"❌ Erreur add students P{platform_id}: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                return internal_error_response(e, context=f"add_platform_student_emails platform_id={platform_id}")
 
         raw_emails = data.get("emails")
         if raw_emails is None:
@@ -3966,8 +3967,7 @@ def create_hr_blueprint():
             )
             return jsonify({"success": True, "recipients": recipients}), 201
         except Exception as e:
-            logger.error(f"❌ Erreur add student emails P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"add_platform_student_emails platform_id={platform_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails/<int:recipient_id>", methods=["DELETE"])
     def delete_platform_student_email(platform_id, recipient_id):
@@ -3983,8 +3983,7 @@ def create_hr_blueprint():
                 return jsonify({"success": False, "error": "Email introuvable"}), 404
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur delete student email P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_platform_student_email platform_id={platform_id} recipient_id={recipient_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/reminder-rules", methods=["GET"])
     def get_platform_reminder_rules(platform_id):
@@ -3995,8 +3994,7 @@ def create_hr_blueprint():
             rules = get_course_reminder_rules(platform_id)
             return jsonify({"success": True, "rules": rules}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get reminder rules P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_platform_reminder_rules platform_id={platform_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/reminder-rules", methods=["POST"])
     def create_platform_reminder_rule(platform_id):
@@ -4012,8 +4010,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur create reminder rule P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"create_platform_reminder_rule platform_id={platform_id}")
 
     @hr_bp.route(
         "/api/hr/platforms/<int:platform_id>/reminder-rules/<int:rule_id>",
@@ -4035,8 +4032,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur update reminder rule P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"update_platform_reminder_rule platform_id={platform_id} rule_id={rule_id}")
 
     @hr_bp.route(
         "/api/hr/platforms/<int:platform_id>/reminder-rules/<int:rule_id>",
@@ -4054,8 +4050,7 @@ def create_hr_blueprint():
                 }), 404
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur delete reminder rule P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_platform_reminder_rule platform_id={platform_id} rule_id={rule_id}")
 
     # ─── POST /api/hr/platforms/<id>/config-cours ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/config-cours", methods=["POST"])
@@ -4161,8 +4156,7 @@ def create_hr_blueprint():
             except Exception as e:
                 if conn:
                     conn.close()
-                logger.error(f"❌ Erreur config-cours P{platform_id}: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                return internal_error_response(e, context=f"proxy_config_cours platform_id={platform_id}")
         else:
             # Ajouter platform_id au payload pour que le backend distant sache quelle plateforme mettre à jour
             payload = {**data, "platform_id": platform_id}
@@ -4392,8 +4386,7 @@ def create_hr_blueprint():
                     "audio_results": audio_results,
                 }), 200
             except Exception as e:
-                logger.error(f"❌ Auto-schedule course_sessions : {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                return internal_error_response(e, context="auto_schedule")
 
         schedule = data.get("schedule", DEFAULT_SCHEDULE)
 
@@ -4426,8 +4419,12 @@ def create_hr_blueprint():
                     results.append({"platform_id": platform_id, "success": True, "scheduled": f"{date_str} {heure_str}"})
                     logger.info(f"📅 Auto-schedule P{platform_id} : {date_str} {heure_str}")
                 except Exception as e:
-                    results.append({"platform_id": platform_id, "success": False, "error": str(e)})
-                    logger.error(f"❌ Auto-schedule P{platform_id} : {e}")
+                    results.append({
+                        "platform_id": platform_id,
+                        "success": False,
+                        "error": "Échec de la programmation du cours",
+                        "error_id": log_item_error(e, context=f"auto_schedule platform_id={platform_id}"),
+                    })
             else:
                 result, error = _call_platform(
                     platform_id,
@@ -4476,8 +4473,7 @@ def create_hr_blueprint():
             all_ok = all(item.get("success") for item in results)
             return jsonify({"success": all_ok, "results": results}), 200
         except Exception as e:
-            logger.error(f"❌ Reminders tick : {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="reminders_tick")
 
     # ─── GET /api/hr/platforms/<id>/backup-status ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/backup-status", methods=["GET"])
@@ -4516,8 +4512,7 @@ def create_hr_blueprint():
                 "source_platform_id": result["source_platform_id"],
             }), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get_cours_folders: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_cours_folders platform_id={platform_id}")
 
     @hr_bp.route(
         "/api/hr/platforms/<int:platform_id>/next-course-selection",
@@ -4650,8 +4645,7 @@ def create_hr_blueprint():
             conn.close()
             return jsonify({"success": True, "id": folder_id, "name": name, "position": new_position}), 201
         except Exception as e:
-            logger.error(f"❌ Erreur create_cours_folder: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"create_cours_folder platform_id={platform_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>", methods=["DELETE"])
     def delete_cours_folder(folder_id):
@@ -4685,8 +4679,7 @@ def create_hr_blueprint():
 
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur delete_cours_folder: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_cours_folder folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>", methods=["PATCH"])
     def rename_cours_folder(folder_id):
@@ -4708,8 +4701,7 @@ def create_hr_blueprint():
             conn.close()
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur rename_cours_folder: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"rename_cours_folder folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/cours-folders/reorder", methods=["PUT"])
     def reorder_cours_folders(platform_id):
@@ -4736,8 +4728,7 @@ def create_hr_blueprint():
             logger.info(f"✅ Dossiers plateforme {platform_id} réordonnés: {[i['id'] for i in order]}")
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur reorder_cours_folders: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"reorder_cours_folders platform_id={platform_id}")
 
     # ─── Routes Cours Documents ─────────────────────────────────────────────
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/documents", methods=["GET"])
@@ -4776,8 +4767,7 @@ def create_hr_blueprint():
             conn.close()
             return jsonify({"success": True, "documents": docs}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get_cours_documents: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_cours_documents folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/upload", methods=["POST"])
     def upload_cours_documents(folder_id):
@@ -4834,8 +4824,7 @@ def create_hr_blueprint():
 
             return jsonify({"success": True, "uploaded": uploaded}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur upload_cours_documents: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"upload_cours_documents folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-documents/<int:document_id>", methods=["DELETE"])
     def delete_cours_document(document_id):
@@ -4870,8 +4859,7 @@ def create_hr_blueprint():
 
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur delete_cours_document: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_cours_document document_id={document_id}")
 
     @hr_bp.route("/api/hr/cours-documents/<int:document_id>/download", methods=["GET"])
     def download_cours_document(document_id):
@@ -4902,8 +4890,7 @@ def create_hr_blueprint():
                 mimetype="application/pdf"
             )
         except Exception as e:
-            logger.error(f"❌ Erreur download_cours_document: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"download_cours_document document_id={document_id}")
 
     @hr_bp.route("/api/hr/cours-documents/<int:document_id>/audio", methods=["GET"])
     def download_cours_audio(document_id):
@@ -4937,8 +4924,7 @@ def create_hr_blueprint():
                 mimetype="audio/mpeg"
             )
         except Exception as e:
-            logger.error(f"❌ Erreur download_cours_audio: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"download_cours_audio document_id={document_id}")
 
     # ─── Routes Pipeline TTS ────────────────────────────────────────────────
     @hr_bp.route("/api/hr/cours-documents/<int:document_id>/generate-audio", methods=["POST"])
@@ -5000,8 +4986,7 @@ def create_hr_blueprint():
 
             return jsonify({"success": True, "documents": docs, "counts": status_counts}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get_folder_tts_status: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_folder_tts_status folder_id={folder_id}")
 
     # ─── Consultation et correction du contenu généré ───────────────────
 
@@ -5081,7 +5066,7 @@ def create_hr_blueprint():
             preview = preview.replace("{COLLER_LE_PROGRAMME_ICI}", job["program_text"][:3000] + "...")
             return jsonify({"success": True, "prompt_preview": preview, "sub_part": first_sub}), 200
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"preview_content_prompt folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/dirty-blocs", methods=["GET"])
     def get_dirty_blocs(folder_id):
@@ -5174,8 +5159,7 @@ def create_hr_blueprint():
                 "markdown_path": data["markdown_path"],
             }), 200
         except Exception as e:
-            logger.error(f"❌ Erreur list annotations script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"list_content_script_annotations folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations", methods=["POST"])
     def create_content_script_annotation(folder_id):
@@ -5197,8 +5181,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur create annotation script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"create_content_script_annotation folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/<int:annotation_id>", methods=["DELETE"])
     def delete_content_script_annotation(folder_id, annotation_id):
@@ -5219,8 +5202,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 404
         except Exception as e:
-            logger.error(f"❌ Erreur delete annotation script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_content_script_annotation folder_id={folder_id} annotation_id={annotation_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/<int:annotation_id>/apply", methods=["POST"])
     def apply_content_script_annotation(folder_id, annotation_id):
@@ -5241,8 +5223,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur apply annotation script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"apply_content_script_annotation folder_id={folder_id} annotation_id={annotation_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/<int:annotation_id>/reject", methods=["POST"])
     def reject_content_script_annotation(folder_id, annotation_id):
@@ -5263,8 +5244,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 404
         except Exception as e:
-            logger.error(f"❌ Erreur reject annotation script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"reject_content_script_annotation folder_id={folder_id} annotation_id={annotation_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules", methods=["GET"])
     def get_content_script_rules(folder_id):
@@ -5288,8 +5268,7 @@ def create_hr_blueprint():
                 "markdown_path": data["markdown_path"],
             }), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get rules: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_content_script_rules folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/extract", methods=["POST"])
     def extract_content_script_rules(folder_id):
@@ -5313,8 +5292,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur extract rules: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"extract_content_script_rules folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules", methods=["PUT"])
     def update_content_script_rules(folder_id):
@@ -5335,8 +5313,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur update rules: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"update_content_script_rules folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text", methods=["POST"])
     def review_text_with_rules(folder_id):
@@ -5391,8 +5368,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur review post-tts: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"review_post_tts_with_rules folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/markdown", methods=["GET"])
     def download_content_script_rules_markdown(folder_id):
@@ -5413,8 +5389,7 @@ def create_hr_blueprint():
                 headers={"Content-Disposition": f'attachment; filename="{filename}"'},
             )
         except Exception as e:
-            logger.error(f"❌ Erreur download rules markdown: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"download_content_script_rules_markdown folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/markdown", methods=["GET"])
     def download_content_script_annotations_markdown(folder_id):
@@ -5436,8 +5411,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 404
         except Exception as e:
-            logger.error(f"❌ Erreur markdown annotations script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"download_content_script_annotations_markdown folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/segment", methods=["PATCH"])
     def patch_content_segment(folder_id):
@@ -5516,8 +5490,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur update course bloc script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"patch_content_course_bloc folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/break", methods=["PATCH"])
     def patch_content_break_text(folder_id):
@@ -5544,8 +5517,7 @@ def create_hr_blueprint():
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            logger.error(f"❌ Erreur update break script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"patch_content_break_text folder_id={folder_id}")
 
     # ─── Pipeline playlist complète (manifeste V1 ou V2) ──────────────────
 
@@ -5734,12 +5706,7 @@ def create_hr_blueprint():
             }), 202
 
         except Exception as e:
-            logger.exception(
-                "HR_PLAYLIST_QUEUE_ENQUEUE_FAILED folder_id=%s error=%s",
-                folder_id,
-                str(e),
-            )
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"generate_playlist folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-playlist-item", methods=["POST"])
     def generate_playlist_item(folder_id):
@@ -5828,12 +5795,7 @@ def create_hr_blueprint():
             }), 202
 
         except Exception as e:
-            logger.exception(
-                "HR_PLAYLIST_ITEM_QUEUE_ENQUEUE_FAILED folder_id=%s error=%s",
-                folder_id,
-                str(e),
-            )
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"generate_playlist_item folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/repair-audio-sync", methods=["POST"])
     def repair_audio_sync(folder_id):
@@ -5863,8 +5825,7 @@ def create_hr_blueprint():
             return jsonify(result), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur repair_audio_sync: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"repair_audio_sync folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-script", methods=["GET"])
     def get_playlist_script(folder_id):
@@ -5897,8 +5858,7 @@ def create_hr_blueprint():
         except Exception as e:
             if "BlobNotFound" in str(e) or "The specified blob does not exist" in str(e):
                 return jsonify({"success": False, "error": "Aucun script généré pour ce dossier"}), 404
-            logger.error(f"❌ Erreur get_playlist_script: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_playlist_script folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-status", methods=["GET"])
     def get_playlist_status(folder_id):
@@ -5942,8 +5902,7 @@ def create_hr_blueprint():
                 "last_error": job.last_error,
             }), 200
         except Exception as e:
-            logger.exception("HR_PLAYLIST_QUEUE_STATUS_FAILED folder_id=%s", folder_id)
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_playlist_status folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generated-audios", methods=["GET"])
     def get_generated_audios(folder_id):
@@ -5977,8 +5936,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur get_generated_audios: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_generated_audios folder_id={folder_id}")
 
     @hr_bp.route(
         "/api/hr/cours-folders/<int:folder_id>/cleanup-invalid-audios",
@@ -6059,7 +6017,11 @@ def create_hr_blueprint():
                         "recoverable": True,
                     })
                 except Exception as exc:
-                    failures.append({"filename": filename, "error": str(exc)[:240]})
+                    failures.append({
+                        "filename": filename,
+                        "error": "Échec de la mise en quarantaine",
+                        "error_id": log_item_error(exc, context=f"cleanup_invalid_audios {filename}"),
+                    })
 
             return jsonify({
                 "success": not failures,
@@ -6068,8 +6030,7 @@ def create_hr_blueprint():
                 "failures": failures,
             }), 200 if not failures else 500
         except Exception as exc:
-            logger.exception("cleanup_invalid_audios folder_id=%s", folder_id)
-            return jsonify({"success": False, "error": str(exc)}), 500
+            return internal_error_response(exc, context=f"cleanup_invalid_audios folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>", methods=["DELETE"])
     def delete_generated_audio(folder_id, filename):
@@ -6112,7 +6073,11 @@ def create_hr_blueprint():
                 if "BlobNotFound" in str(e) or "The specified blob does not exist" in str(e):
                     logger.info(f"ℹ️ Audio généré déjà absent: audiostts/{blob_path}")
                 else:
-                    errors.append({"target": f"audiostts/{blob_path}", "error": str(e)})
+                    errors.append({
+                        "target": f"audiostts/{blob_path}",
+                        "error": "Échec de la suppression",
+                        "error_id": log_item_error(e, context=f"delete_generated_audio audiostts/{blob_path}"),
+                    })
 
             if audio_conn:
                 try:
@@ -6126,7 +6091,11 @@ def create_hr_blueprint():
                     if "BlobNotFound" in str(e) or "The specified blob does not exist" in str(e):
                         logger.info(f"ℹ️ Audio publié déjà absent: {safe_filename}")
                     else:
-                        errors.append({"target": safe_filename, "error": str(e)})
+                        errors.append({
+                            "target": safe_filename,
+                            "error": "Échec de la suppression",
+                            "error_id": log_item_error(e, context=f"delete_generated_audio {safe_filename}"),
+                        })
 
             if errors:
                 return jsonify({
@@ -6144,8 +6113,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ delete_generated_audio: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"delete_generated_audio folder_id={folder_id} filename={filename}")
 
     # ─── Éditeur audio ───────────────────────────────────────────────────────
 
@@ -6264,8 +6232,7 @@ def create_hr_blueprint():
                 "content_disposition": props.content_settings.content_disposition,
             })
         except Exception as e:
-            logger.error(f"❌ get_audio_sas_url: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_audio_sas_url folder_id={folder_id} filename={filename}")
 
     @hr_bp.route(
         "/api/hr/cours-folders/<int:folder_id>/audio-playback-manifest/<path:filename>",
@@ -6392,8 +6359,7 @@ def create_hr_blueprint():
                 "warning": waveform_warning,
             })
         except Exception as e:
-            logger.error(f"❌ get_audio_playback_manifest: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"get_audio_playback_manifest folder_id={folder_id} filename={filename}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-stream/<path:filename>", methods=["GET"])
     def stream_audio_file(folder_id, filename):
@@ -6504,8 +6470,7 @@ def create_hr_blueprint():
                 },
             )
         except Exception as e:
-            logger.error(f"❌ stream_audio_file: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"stream_audio_file folder_id={folder_id} filename={filename}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/mock-upload-local", methods=["POST"])
     def mock_upload_local(folder_id):
@@ -6552,8 +6517,11 @@ def create_hr_blueprint():
                     uploaded.append({"filename": name, "size_mb": size_mb})
                     logger.info(f"🧪 Mock local upload: {name} ({size_mb} Mo) → {blob_path}")
                 except Exception as fe:
-                    logger.error(f"❌ Mock local upload {name}: {fe}")
-                    failed.append({"filename": name, "error": str(fe)})
+                    failed.append({
+                        "filename": name,
+                        "error": "Échec de l'envoi du fichier",
+                        "error_id": log_item_error(fe, context=f"mock_upload_local {name}"),
+                    })
 
             return jsonify({
                 "success": True,
@@ -6564,8 +6532,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ mock_upload_local: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"mock_upload_local folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/mock-upload-audio", methods=["POST"])
     def mock_upload_audio(folder_id):
@@ -6609,8 +6576,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ mock_upload_audio: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"mock_upload_audio folder_id={folder_id}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/cut", methods=["POST"])
     def cut_audio_region(folder_id, filename):
@@ -6661,8 +6627,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ cut_audio_region: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"cut_audio_region folder_id={folder_id} filename={filename}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/replace-preview", methods=["POST"])
     def replace_audio_preview(folder_id, filename):
@@ -6691,8 +6656,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ replace_audio_preview: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"replace_audio_preview folder_id={folder_id} filename={filename}")
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/replace-confirm", methods=["POST"])
     def replace_audio_confirm(folder_id, filename):
@@ -6742,8 +6706,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ replace_audio_confirm: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"replace_audio_confirm folder_id={folder_id} filename={filename}")
 
     # ─── Détection anomalies audio ───────────────────────────────────────────
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/detect-bugs", methods=["POST"])
@@ -6879,8 +6842,7 @@ def create_hr_blueprint():
             return jsonify({"success": True, "bugs": bugs, "total": len(bugs)}), 200
 
         except Exception as e:
-            logger.error(f"❌ detect_audio_bugs: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"detect_audio_bugs folder_id={folder_id} filename={filename}")
 
     # ─── Analyse mots d'un dossier ───────────────────────────────────────────
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/analyse", methods=["GET"])
@@ -6903,8 +6865,7 @@ def create_hr_blueprint():
             return jsonify({"success": True, **result}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur analyse_folder_words: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"analyse_folder_words folder_id={folder_id}")
 
     # ─── Remplir plateforme depuis un dossier ────────────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/fill-from-folder", methods=["POST"])
@@ -7134,7 +7095,7 @@ def create_hr_blueprint():
                 except Exception as exc:
                     source_error = exc
                 if audio_bytes is not None and not audio_bytes:
-                    source_error = ValueError("fichier audio vide")
+                    source_error = "fichier audio vide"
                     audio_bytes = None
 
                 # Compatibilité V1 uniquement : les Q&R et pauses historiques
@@ -7155,16 +7116,26 @@ def create_hr_blueprint():
                     except Exception as exc:
                         source_error = exc
                     if audio_bytes is not None and not audio_bytes:
-                        source_error = ValueError("fichier audio statique vide")
+                        source_error = "fichier audio statique vide"
                         audio_bytes = None
 
                 if audio_bytes is None:
                     if source_error is None:
                         missing_required_files.append(filename)
+                    elif isinstance(source_error, str):
+                        # Message écrit ici pour l'utilisateur (fichier vide).
+                        unreadable_required_files.append({
+                            "filename": filename,
+                            "error": source_error,
+                        })
                     else:
                         unreadable_required_files.append({
                             "filename": filename,
-                            "error": str(source_error),
+                            "error": "Fichier audio illisible",
+                            "error_id": log_item_error(
+                                source_error,
+                                context=f"fill_from_folder read {filename}",
+                            ),
                         })
                     continue
                 prepared_files.append({
@@ -7210,8 +7181,11 @@ def create_hr_blueprint():
                     else:
                         logger.info(f"   ✅ Playlist générée copiée : {filename}")
                 except Exception as e:
-                    logger.error(f"   ❌ Échec copie playlist {filename}: {e}")
-                    errors.append({"filename": filename, "error": str(e)})
+                    errors.append({
+                        "filename": filename,
+                        "error": "Échec de la copie",
+                        "error_id": log_item_error(e, context=f"fill_from_folder copy {filename}"),
+                    })
 
             logger.info(f"✅ fill-from-folder P{platform_id}/F{folder_id}: {len(copied_files)} fichiers copiés, {len(errors)} erreur(s)")
 
@@ -7227,8 +7201,7 @@ def create_hr_blueprint():
             }), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur fill_from_folder: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context=f"fill_from_folder platform_id={platform_id}")
 
     # ─── Routes Config Planning Été/Hiver ──────────────────────────────────
     @hr_bp.route("/api/hr/schedule-config", methods=["GET"])
@@ -7261,8 +7234,7 @@ def create_hr_blueprint():
             conn.close()
             return jsonify({"success": True, "platforms": platforms}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get_schedule_config: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="get_schedule_config")
 
     @hr_bp.route("/api/hr/schedule-config", methods=["POST"])
     def set_schedule_config():
@@ -7332,8 +7304,7 @@ def create_hr_blueprint():
             logger.info(f"✅ Schedule config: mode={mode}, plateformes={platform_ids}")
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur set_schedule_config: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="set_schedule_config")
 
     # ─── Routes Prompt TTS ─────────────────────────────────────────────────
     # Édite le prompt général de génération du contenu de formation.
@@ -7356,8 +7327,7 @@ def create_hr_blueprint():
                 content = f.read()
             return jsonify({"success": True, "content": content, "exists": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur get_tts_prompt: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="get_tts_prompt")
 
     @hr_bp.route("/api/hr/tts-prompt", methods=["POST"])
     def set_tts_prompt():
@@ -7385,7 +7355,6 @@ def create_hr_blueprint():
             logger.info(f"✅ Prompt TTS (scratch) mis à jour ({len(content)} caractères)")
             return jsonify({"success": True}), 200
         except Exception as e:
-            logger.error(f"❌ Erreur set_tts_prompt: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return internal_error_response(e, context="set_tts_prompt")
 
     return hr_bp

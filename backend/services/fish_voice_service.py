@@ -12,6 +12,9 @@ from typing import Any
 import requests as http_requests
 from pydub import AudioSegment
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 FISH_MODEL_URL = "https://api.fish.audio/model"
 FISH_ASR_URL = "https://api.fish.audio/v1/asr"
@@ -65,9 +68,16 @@ def _raise_for_fish(response, action: str) -> None:
         code = "fish_audio_rate_limited"
     else:
         code = "fish_audio_request_failed"
+    # Le détail renvoyé par Fish Audio reste dans les logs : il n'est pas
+    # destiné au navigateur.
+    logger.warning(
+        "FISH_AUDIO_REQUEST_FAILED action=%s status=%s detail=%s",
+        action,
+        response.status_code,
+        str(detail)[:500] if detail else "-",
+    )
     raise FishVoiceError(
-        f"{action} impossible via Fish Audio ({response.status_code})"
-        + (f" : {str(detail)[:300]}" if detail else "."),
+        f"{action} impossible via Fish Audio ({response.status_code}).",
         status_code=502,
         code=code,
     )

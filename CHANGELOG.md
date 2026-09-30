@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-30
+
+### fix(sécurité): plus de détail d'exception dans la partie RH
+
+Les 76 réponses d'erreur inattendue de `hr_routes.py` passent par
+`internal_error_response` : message neutre avec une référence, détail dans les
+logs. Les erreurs par élément (suppression d'audio, copie d'un dossier,
+quarantaine, envoi de fichiers, programmation automatique, analyse d'un audio)
+gardent leur structure (fichier, cible, plateforme) mais remplacent le texte de
+l'exception par un message court et une référence `error_id`, grâce au nouveau
+helper `log_item_error`. Le pilotage d'une autre plateforme ne relaie plus
+l'erreur réseau ni une erreur interne (5xx) de la plateforme distante :
+« Plateforme P… injoignable » ou « Erreur interne sur la plateforme P… »,
+avec une référence ; ses messages de validation (4xx) restent relayés. Trois
+fuites sont aussi corrigées à la source : le détail des réponses Fish Audio,
+les erreurs DeepSeek de l'extraction et de la relecture des règles, et le
+message technique d'un JSON invalide dans le recrutement. Les erreurs de saisie
+(4xx) écrites par notre code pour l'utilisateur gardent leur message.
+
 ## 2026-09-29
 
 ### fix(pipeline): deux tâches d'un même dossier ne peuvent plus démarrer en même temps

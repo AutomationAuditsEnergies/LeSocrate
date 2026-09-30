@@ -15,14 +15,29 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def internal_error_response(exc, context=""):
+def _log_with_reference(kind, exc, context):
     error_id = uuid4().hex[:8]
-    logger.exception(
-        "INTERNAL_ERROR error_id=%s context=%s",
+    logger.error(
+        "%s error_id=%s context=%s",
+        kind,
         error_id,
         context or "-",
-        exc_info=exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
     )
+    return error_id
+
+
+def log_item_error(exc, context=""):
+    """Erreur d'un élément dans une liste (fichier, plateforme, cible…).
+
+    Écrit le détail complet dans les logs et renvoie la référence courte à
+    placer dans l'élément à la place du texte de l'exception.
+    """
+    return _log_with_reference("ITEM_ERROR", exc, context)
+
+
+def internal_error_response(exc, context=""):
+    error_id = _log_with_reference("INTERNAL_ERROR", exc, context)
     return jsonify({
         "success": False,
         "error": (

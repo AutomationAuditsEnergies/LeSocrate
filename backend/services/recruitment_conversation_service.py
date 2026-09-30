@@ -217,7 +217,12 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     end = clean.rfind("}")
     if start < 0 or end <= start:
         raise ValueError("Réponse NLP sans objet JSON")
-    parsed = json.loads(clean[start : end + 1])
+    try:
+        parsed = json.loads(clean[start : end + 1])
+    except json.JSONDecodeError as exc:
+        # JSONDecodeError est une ValueError au message technique : la route
+        # renvoie les ValueError telles quelles, on garde donc le nôtre.
+        raise ValueError("Réponse NLP invalide") from exc
     if not isinstance(parsed, dict):
         raise ValueError("Réponse NLP invalide")
     return parsed

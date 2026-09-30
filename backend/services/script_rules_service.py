@@ -30,6 +30,7 @@ from utils.deepseek_client import (
     DeepSeekRateLimitError,
     post_message,
 )
+from utils.errors import log_item_error
 
 
 logger = logging.getLogger(__name__)
@@ -171,8 +172,12 @@ def extract_rules_from_annotations(folder_id: int) -> dict:
             timeout=240,
         )
     except (DeepSeekAPIError, DeepSeekRateLimitError) as exc:
+        # Le détail DeepSeek reste dans les logs ; l'utilisateur reçoit un
+        # message neutre (renvoyé tel quel en 400 par la route).
         logger.warning(f"⚠️ Extraction règles DeepSeek échouée folder={folder_id}: {exc}")
-        raise ValueError(f"Erreur DeepSeek : {exc}")
+        raise ValueError(
+            "DeepSeek n'a pas pu extraire les règles. Réessayez dans quelques minutes."
+        ) from exc
 
     markdown = (markdown or "").strip()
     if not markdown:
@@ -499,7 +504,10 @@ def review_chunks_with_rules(
                     "bloc_number": bloc_num,
                     "audio_filename": t.get("audio_filename"),
                     "status": "failed",
-                    "reason": f"DeepSeek: {exc}",
+                    "reason": "Relecture DeepSeek indisponible",
+                    "error_id": log_item_error(
+                        exc, context=f"review_chunks_with_rules bloc={bloc_num}"
+                    ),
                 })
                 continue
 
