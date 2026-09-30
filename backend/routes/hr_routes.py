@@ -93,7 +93,7 @@ from services.scheduled_audio_service import (
 )
 from services.teacher_preparation_service import build_teacher_preparation_state
 from services.recruitment_conversation_service import interpret_recruitment_answer
-from services.teacher_asset_service import resolve_folder_blob_path
+from services.teacher_asset_service import ensure_module_asset_manifest, resolve_folder_blob_path
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.errors import internal_error_response, log_item_error
 from utils.logger import get_logger

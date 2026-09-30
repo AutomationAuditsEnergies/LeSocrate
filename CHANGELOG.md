@@ -2,6 +2,14 @@
 
 ## 2026-09-30
 
+### fix(rh): le clonage d'un module Postgres n'échoue plus
+
+`hr_routes.py` appelait `ensure_module_asset_manifest` sans l'importer. Le
+clonage d'un module réutilisé (Postgres) levait donc une `NameError` dans le
+thread de clonage, et la nouvelle plateforme passait au statut « error ».
+L'import manquant (depuis `services.teacher_asset_service`) est ajouté, avec un
+test qui exécute le clonage jusqu'au statut « ready ».
+
 ### fix(sécurité): plus de détail d'exception dans la partie RH
 
 Les 76 réponses d'erreur inattendue de `hr_routes.py` passent par
