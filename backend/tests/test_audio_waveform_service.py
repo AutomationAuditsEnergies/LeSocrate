@@ -1,6 +1,7 @@
 import io
 import json
 import math
+import os
 import tempfile
 import unittest
 import wave
@@ -34,10 +35,13 @@ def _wav_bytes(duration_seconds=0.25, sample_rate=8000):
 class AudioWaveformServiceTest(unittest.TestCase):
     def test_extract_waveform_returns_bounded_normalised_peaks(self):
         payload = _wav_bytes()
-        with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
-            audio_file.write(payload)
-            audio_file.flush()
-            result = extract_waveform(audio_file.name, points=256)
+        # Fichier fermé avant la lecture : sous Windows, un NamedTemporaryFile
+        # encore ouvert ne peut pas être rouvert par son nom (Linux le permet).
+        with tempfile.TemporaryDirectory() as folder:
+            audio_path = os.path.join(folder, "audio.wav")
+            with open(audio_path, "wb") as audio_file:
+                audio_file.write(payload)
+            result = extract_waveform(audio_path, points=256)
 
         self.assertAlmostEqual(result["duration"], 0.25, places=2)
         self.assertLessEqual(result["points"], 256)

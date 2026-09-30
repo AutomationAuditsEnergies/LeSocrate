@@ -2,6 +2,18 @@
 
 ## 2026-09-30
 
+### test: la suite backend repasse à 0 échec (Linux et Windows)
+
+Les 4 échecs connus venaient des tests, restés en retard sur le code, et non
+d'un bug de l'application. Deux tests audio ne simulaient pas le marquage des
+segments « propres », fait directement quand le runtime fit est désactivé : ils
+ouvraient une vraie base SQLite. Le test du PDF quotidien ne simulait ni la
+lecture des fichiers requis avant publication ni l'enregistrement des audios
+dans le manifeste du module. Le test de la forme d'onde rouvrait un fichier
+temporaire encore ouvert, ce que Windows refuse. Les mocks manquants sont
+ajoutés avec des vérifications en plus (appels attendus) ; aucun test n'est
+ignoré ni affaibli.
+
 ### fix(rh): le clonage d'un module Postgres n'échoue plus
 
 `hr_routes.py` appelait `ensure_module_asset_manifest` sans l'importer. Le

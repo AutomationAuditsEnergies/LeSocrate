@@ -178,6 +178,11 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
             patch.object(formation_routes, "_count_dirty_segments_for_job", return_value=0),
             patch.object(
                 formation_routes,
+                "_persist_daily_teacher_audio_assets",
+                return_value={"persisted": True, "registered": len(PLAYLIST_SPEC)},
+            ) as persist_assets,
+            patch.object(
+                formation_routes,
                 "_finalize_scheduled_audio_module_if_ready",
                 return_value={"finalized": False},
             ),
@@ -199,9 +204,13 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
                 return_value=True,
             ),
             patch(
+                "services.day_playlist_service.required_audio_filenames",
+                return_value=set(published_audio),
+            ) as required_files,
+            patch(
                 "services.audio_publish_service.publish_playlist_audio_to_platform",
                 return_value={"published": published_audio, "publish_errors": []},
-            ),
+            ) as publish_audio,
             patch(
                 "services.daily_course_pdf_service.build_daily_course_pdf",
             ) as build_pdf,
@@ -222,6 +231,10 @@ class DailyCoursePdfServiceTest(unittest.TestCase):
 
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["status"], "audio_completed")
+        required_files.assert_called_once_with(55)
+        publish_audio.assert_called_once()
+        persist_assets.assert_called_once_with(8, 55)
+        # La publication planifiée ne doit jamais reconstruire le PDF du pipeline.
         build_pdf.assert_not_called()
         publish_pdf.assert_not_called()
 

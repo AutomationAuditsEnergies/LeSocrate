@@ -1423,7 +1423,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         )
         patches = self._patch_common(synth_result, uploaded)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patch.object(cgs, "_mp3_duration_seconds_no_ffprobe", return_value=2700.0):
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patch.object(cgs, "_mp3_duration_seconds_no_ffprobe", return_value=2700.0), patch.object(cgs, "_mark_content_segments_clean") as mark_clean:
             result = cgs.generate_audio_from_script(
                 123,
                 force_all=True,
@@ -1439,6 +1439,9 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         self.assertEqual(len(uploaded), 1)
         synth.assert_called_once()
         self.assertEqual(synth.call_args.kwargs["runtime_fit"], False)
+        # Runtime fit désactivé : les segments sont marqués propres immédiatement,
+        # sans passer par la finalisation du runtime fit.
+        mark_clean.assert_called_once_with(42, [(0, 1)])
         self.assertEqual(synth.call_args.args[1], [], "Le mode non-sync doit utiliser des chunks sans slides")
 
     def test_pre_upload_guard_rejects_overlong_basic_tts_audio(self):

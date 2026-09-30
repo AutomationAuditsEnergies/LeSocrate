@@ -361,6 +361,9 @@ class AudioPreserveExistingTest(unittest.TestCase):
             ),
             patch("services.azure_blob_service.upload_blob") as upload_blob,
             patch.object(cgs, "_finalize_runtime_fit_carryover_and_clean", return_value=""),
+            # Sans runtime fit, les segments sont marqués propres tout de suite
+            # (en base) : le test ne doit jamais ouvrir une vraie base.
+            patch.object(cgs, "_mark_content_segments_clean") as mark_clean,
             patch.object(cgs, "_save_course_script_plan"),
             patch.object(cgs, "_save_content_artifact"),
             patch.object(cgs, "assert_course_day_word_budget", return_value={"ok": True}),
@@ -378,6 +381,7 @@ class AudioPreserveExistingTest(unittest.TestCase):
             )
 
         self.assertEqual(result["generated"], 1)
+        mark_clean.assert_called_once_with(42, [(0, 1)])
         self.assertEqual(result["skipped"], 0)
         synth.assert_called_once()
         upload_blob.assert_called_once()
