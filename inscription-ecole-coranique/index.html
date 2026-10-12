@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>تسجيل الطلبة | المدرسة القرآنية محمد الشريف ڨاهر</title>
+  <link rel="icon" href="logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #0d5c3d;
+      --primary-dark: #08402a;
+      --primary-light: #1a7a52;
+      --gold: #c9a227;
+      --gold-light: #e8c547;
+      --bg: #f7f4ef;
+      --card: #ffffff;
+      --text: #1a1a1a;
+      --muted: #5a5a5a;
+      --border: #e0d9cf;
+      --success: #0d5c3d;
+      --error: #b33a3a;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Tajawal', 'Amiri', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 50%, var(--primary-light) 100%);
+      color: white;
+      padding: 1.75rem 1.5rem 2.75rem;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      opacity: 0.4;
+    }
+
+    .header-content {
+      position: relative;
+      z-index: 1;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .logo-wrap {
+      margin-bottom: 1rem;
+    }
+
+    .logo {
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 4px solid rgba(255, 255, 255, 0.85);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+      background: #fff;
+      display: block;
+      margin: 0 auto;
+    }
+
+    @media (min-width: 480px) {
+      .logo {
+        width: 160px;
+        height: 160px;
+      }
+    }
+
+    .bismillah {
+      font-family: 'Amiri', serif;
+      font-size: 1.25rem;
+      margin-bottom: 0.5rem;
+      opacity: 0.95;
+    }
+
+    .school-name {
+      font-family: 'Amiri', serif;
+      font-size: clamp(1.35rem, 3.5vw, 1.85rem);
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+      letter-spacing: 0.5px;
+    }
+
+    .mosque-name {
+      font-size: 1rem;
+      opacity: 0.9;
+      margin-bottom: 1rem;
+    }
+
+    .page-title {
+      display: inline-block;
+      background: rgba(255,255,255,0.15);
+      backdrop-filter: blur(4px);
+      padding: 0.45rem 1.4rem;
+      border-radius: 50px;
+      font-size: 1.1rem;
+      font-weight: 500;
+      border: 1px solid rgba(255,255,255,0.25);
+    }
+
+    /* Main */
+    .container {
+      max-width: 720px;
+      margin: -1.5rem auto 3rem;
+      padding: 0 1rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 16px;
+      box-shadow: 0 10px 40px rgba(13, 92, 61, 0.12);
+      padding: 2rem 1.75rem;
+      border: 1px solid var(--border);
+    }
+
+    .section-title {
+      font-family: 'Amiri', serif;
+      font-size: 1.35rem;
+      color: var(--primary);
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 2px solid var(--gold);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .section-title span {
+      font-size: 1.2rem;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.25rem;
+    }
+
+    @media (min-width: 560px) {
+      .form-grid.two-cols {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .form-group.full {
+      grid-column: 1 / -1;
+    }
+
+    label {
+      font-weight: 500;
+      font-size: 0.95rem;
+      color: var(--text);
+    }
+
+    label .required {
+      color: var(--error);
+      margin-right: 2px;
+    }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="tel"],
+    input[type="date"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 1rem;
+      background: #fafafa;
+      transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+      direction: rtl;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(13, 92, 61, 0.15);
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+      color: #999;
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 1rem;
+      background: #f0f7f3;
+      border-radius: 10px;
+      border: 1.5px solid #c8e0d4;
+    }
+
+    .checkbox-group input[type="checkbox"] {
+      width: 1.25rem;
+      height: 1.25rem;
+      margin-top: 0.2rem;
+      accent-color: var(--primary);
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
+    .checkbox-group label {
+      font-size: 0.95rem;
+      cursor: pointer;
+      line-height: 1.5;
+    }
+
+    .checkbox-group a {
+      color: var(--primary);
+      font-weight: 600;
+      text-decoration: underline;
+    }
+
+    .radio-group {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      padding: 0.5rem 0;
+    }
+
+    .radio-option {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      cursor: pointer;
+    }
+
+    .radio-option input[type="radio"] {
+      width: 1.15rem;
+      height: 1.15rem;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+
+    .radio-option label {
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+
+    .health-details {
+      display: none;
+      margin-top: 0.75rem;
+    }
+
+    .health-details.show {
+      display: block;
+    }
+
+    .submit-btn {
+      width: 100%;
+      padding: 1rem;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-family: inherit;
+      font-size: 1.15rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      margin-top: 0.5rem;
+      box-shadow: 0 4px 15px rgba(13, 92, 61, 0.3);
+    }
+
+    .submit-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(13, 92, 61, 0.4);
+    }
+
+    .submit-btn:active {
+      transform: translateY(0);
+    }
+
+    .submit-btn:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Success message */
+    .success-box {
+      display: none;
+      text-align: center;
+      padding: 2.5rem 1.5rem;
+    }
+
+    .success-box.show {
+      display: block;
+    }
+
+    .success-icon {
+      width: 70px;
+      height: 70px;
+      background: #e8f5ee;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.25rem;
+      font-size: 2.2rem;
+      color: var(--success);
+    }
+
+    .success-box h2 {
+      font-family: 'Amiri', serif;
+      color: var(--primary);
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .success-box p {
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .form-content.hide {
+      display: none;
+    }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 1.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .footer .mosque {
+      color: var(--primary);
+      font-weight: 500;
+    }
+
+    /* Note */
+    .note {
+      background: #fff8e6;
+      border: 1px solid #f0d78c;
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+      font-size: 0.9rem;
+      color: #6b5a1e;
+      margin-bottom: 1.5rem;
+    }
+
+    .note strong {
+      color: #5a4a10;
+    }
+
+    /* Regulations Section */
+    .regulations-box {
+      background: #f8faf9;
+      border: 1.5px solid #c8e0d4;
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+
+    .regulations-box h3 {
+      font-family: 'Amiri', serif;
+      color: var(--primary);
+      font-size: 1.3rem;
+      text-align: center;
+      margin-bottom: 0.6rem;
+    }
+
+    .regulations-box .intro {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      text-align: justify;
+      line-height: 1.6;
+    }
+
+    .regulations-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .regulations-list li {
+      display: flex;
+      gap: 0.65rem;
+      margin-bottom: 0.65rem;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      padding-bottom: 0.55rem;
+      border-bottom: 1px dashed #d4e5db;
+    }
+
+    .regulations-list li:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .reg-num {
+      background: var(--primary);
+      color: white;
+      min-width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .view-full-reg {
+      display: block;
+      text-align: center;
+      margin-top: 0.9rem;
+      color: var(--primary);
+      font-weight: 600;
+      font-size: 0.92rem;
+      text-decoration: underline;
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-family: inherit;
+      width: 100%;
+    }
+
+    .view-full-reg:hover {
+      color: var(--primary-dark);
+    }
+
+    /* Modal for full regulations */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.8);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .modal-content {
+      background: white;
+      border-radius: 14px;
+      max-width: 480px;
+      width: 100%;
+      max-height: 92vh;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .modal-content img {
+      width: 100%;
+      display: block;
+      border-radius: 14px;
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      font-size: 1.25rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      line-height: 1;
+    }
+    .file-input {
+      padding: 0.6rem;
+      border: 1.5px dashed var(--border);
+      border-radius: 10px;
+      background: #fafafa;
+      font-family: inherit;
+    }
+
+    .photo-preview {
+      display: none;
+      width: 90px;
+      height: 115px;
+      object-fit: cover;
+      border: 2px solid var(--gold);
+      border-radius: 8px;
+      margin-top: 0.4rem;
+    }
+
+    .photo-preview.show {
+      display: block;
+    }
+
+    #santeDetails {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 0.95rem;
+      resize: vertical;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-content">
+      <div class="logo-wrap">
+        <img src="logo.png" alt="شعار المدرسة القرآنية محمد الشريف ڨاهر - مسجد سلمان الفارسي" class="logo">
+      </div>
+      <p class="bismillah">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</p>
+      <h1 class="school-name">المدرسة القرآنية محمد الشريف ڨاهر</h1>
+      <p class="mosque-name">التابعة لمسجد سلمان الفارسي — باب الزوار</p>
+      <div class="page-title">استمارة التسجيل الإلكتروني</div>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="card">
+      <div id="successBox" class="success-box">
+        <div class="success-icon">✓</div>
+        <h2>تم تسجيل الطلب بنجاح</h2>
+        <p>رقم التسجيل: <strong id="numeroInscription"></strong></p>
+        <p>شكراً لكم. سيتم التواصل معكم قريباً لتأكيد التسجيل في الحلقة.</p>
+        <p style="margin-top: 1rem; font-size: 0.95rem;">جزاكم الله خيراً</p>
+      </div>
+
+      <div id="formContent" class="form-content">
+        <div class="note">
+          <strong>ملاحظة:</strong> يرجى ملء جميع الحقول بدقة. الحقول المميزة بـ <span style="color:#b33a3a">*</span> إلزامية.
+        </div>
+
+        <form id="registrationForm" novalidate>
+          <input type="checkbox" name="botcheck" id="botcheck" style="display:none" tabindex="-1" autocomplete="off">
+
+          <h2 class="section-title"><span>📖</span> معلومات خاصة بالطالب</h2>
+          <div class="form-grid two-cols">
+            <div class="form-group full">
+              <label for="nomEleve">إسم ولقب الطالب <span class="required">*</span></label>
+              <input type="text" id="nomEleve" required placeholder="مثال: أحمد بن محمد">
+            </div>
+
+            <div class="form-group">
+              <label for="dateNaissance">تاريخ الميلاد <span class="required">*</span></label>
+              <input type="date" id="dateNaissance" required>
+            </div>
+
+            <div class="form-group">
+              <label for="niveau">المستوى التعليمي <span class="required">*</span></label>
+              <select id="niveau" required>
+                <option value="" disabled selected>اختر المستوى</option>
+                <option>تحضيري</option>
+                <option>السنة الأولى ابتدائي</option>
+                <option>السنة الثانية ابتدائي</option>
+                <option>السنة الثالثة ابتدائي</option>
+                <option>السنة الرابعة ابتدائي</option>
+                <option>السنة الخامسة ابتدائي</option>
+                <option>السنة الأولى متوسط</option>
+                <option>السنة الثانية متوسط</option>
+                <option>السنة الثالثة متوسط</option>
+                <option>السنة الرابعة متوسط</option>
+                <option>السنة الأولى ثانوي</option>
+                <option>السنة الثانية ثانوي</option>
+                <option>السنة الثالثة ثانوي</option>
+                <option>جامعي / أخرى</option>
+              </select>
+            </div>
+
+            <div class="form-group full">
+              <label for="adresse">عنوان الإقامة <span class="required">*</span></label>
+              <input type="text" id="adresse" required placeholder="الحي، البلدية، الولاية">
+            </div>
+
+            <div class="form-group">
+              <label for="telEleve">رقم هاتف الطالب</label>
+              <input type="tel" id="telEleve" placeholder="05XXXXXXXX" dir="ltr" style="text-align: right;">
+            </div>
+
+            <div class="form-group">
+              <label for="photo">صورة شمسية (اختياري)</label>
+              <input type="file" id="photo" accept="image/*" class="file-input">
+              <img id="photoPreview" class="photo-preview" alt="">
+            </div>
+
+            <div class="form-group full">
+              <label>هل يعاني الطالب من مشاكل صحية؟ <span class="required">*</span></label>
+              <div class="radio-group">
+                <div class="radio-option">
+                  <input type="radio" id="healthNo" name="sante" value="لا" checked>
+                  <label for="healthNo">لا</label>
+                </div>
+                <div class="radio-option">
+                  <input type="radio" id="healthYes" name="sante" value="نعم">
+                  <label for="healthYes">نعم</label>
+                </div>
+              </div>
+              <div class="health-details" id="healthDetailsBox">
+                <label for="santeDetails">حددها <span class="required">*</span></label>
+                <textarea id="santeDetails" rows="3" placeholder="مثال: حساسية، ربو، مرض مزمن..."></textarea>
+              </div>
+            </div>
+          </div>
+
+          <h2 class="section-title" style="margin-top: 2rem;"><span>👤</span> معلومات خاصة بولي أمر الطالب</h2>
+          <div class="form-grid two-cols">
+            <div class="form-group full">
+              <label for="nomTuteur">إسم ولي أمر الطالب <span class="required">*</span></label>
+              <input type="text" id="nomTuteur" required placeholder="الاسم الكامل لولي الأمر">
+            </div>
+
+            <div class="form-group">
+              <label for="telTuteur">رقم الهاتف <span class="required">*</span></label>
+              <input type="tel" id="telTuteur" required placeholder="05XXXXXXXX" dir="ltr" style="text-align: right;">
+            </div>
+
+            <div class="form-group">
+              <label for="cniTuteur">رقم بطاقة تعريف ولي أمر الطالب <span class="required">*</span></label>
+              <input type="text" id="cniTuteur" required maxlength="20" placeholder="XXXXXXXXXXXXXXXXXX" dir="ltr" style="text-align: right;">
+            </div>
+
+            <div class="form-group full">
+              <label for="email">البريد الإلكتروني (لاستلام نسخة من الاستمارة)</label>
+              <input type="email" id="email" placeholder="example@email.com" dir="ltr" style="text-align: right;">
+            </div>
+          </div>
+
+          <h2 class="section-title" style="margin-top: 2rem;"><span>📜</span> النظام الداخلي للمدرسة</h2>
+          <div class="regulations-box">
+            <h3>النظام الداخلي للمدرسة القرآنية</h3>
+            <p class="intro">
+              السلام عليكم ورحمة الله وبركاته<br>
+              نضع بين أيديكم نظامنا الداخلي المتضمن جملة من الإجراءات العملية التي تتناسب قدر المستطاع مع الواقع لتسيير هذا المشروع القرآني المبارك، وفيما يلي بعضاً منها:
+            </p>
+            <ul class="regulations-list">
+              <li><span class="reg-num">01</span> التحلي بحسن الخلق والإحترام داخل المدرسة.</li>
+              <li><span class="reg-num">02</span> الإلتزام بالآداب الإسلامية في المظهر والملبس.</li>
+              <li><span class="reg-num">03</span> الإلتزام بالحضور والإنصراف حسب التوقيت المحدد.</li>
+              <li><span class="reg-num">04</span> يمنع دخول أي طالب تغيب عن حلقة واحدة إلا بعد تبرير كتابي من طرف ولي الأمر.</li>
+              <li><span class="reg-num">05</span> في حالة غياب غير مبرر أو سلوك غير مقبول، يوجه للطالب إنذار ويستدعى ولي أمره.</li>
+              <li><span class="reg-num">06</span> في حالة الغياب المتكرر أو الإنقطاع لفترة طويلة، يحق للمدرس فصل الطالب من قوائم المدرسة القرآنية وذلك بعد قرار المجلس التأديبي.</li>
+              <li><span class="reg-num">07</span> يلتزم الطالب بالمحافظة على كل المرافق والتجهيزات التابعة للمدرسة.</li>
+              <li><span class="reg-num">08</span> يلتزم الطالب بحفظ الورد المحدد له في كل حلقة ومراجعته بعد تنسيق على المدرس.</li>
+              <li><span class="reg-num">09</span> تتم مراقبة درجة تقدم أو تأخر الطالب في الحفظ بصفة دائمة عبر دفتر المتابعة الذي يصل بين المدرس وولي أمر الطالب.</li>
+              <li><span class="reg-num">10</span> يلتزم ولي أمر الطالب بكل تغيير يطرأ على عنوانه أو رقم هاتفه.</li>
+              <li><span class="reg-num">11</span> تلتزم المدرسة بإشعار أولياء الطلبة عن كل تغيير يطرأ على برامجها عبر الصفحة الفايسبوكية للحلقة.</li>
+              <li><span class="reg-num">12</span> تمثل المهمة الأساسية للمدرسة هي تحفيظ القرآن الكريم والأحاديث النبوية إلى جانب تعليم الصلوات الدينية.</li>
+            </ul>
+            <button type="button" class="view-full-reg" id="viewRegBtn">عرض الصورة الكاملة للنظام الداخلي</button>
+          </div>
+
+          <h2 class="section-title" style="margin-top: 1.5rem;"><span>🤝</span> تعهّد و إلتزام</h2>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="dateInscription">تاريخ التسجيل <span class="required">*</span></label>
+              <input type="date" id="dateInscription" required>
+            </div>
+
+            <div class="form-group full">
+              <div class="checkbox-group">
+                <input type="checkbox" id="accord" required>
+                <label for="accord">
+                  أنا ولي أمر الطالب (المذكور أعلاه)، أوافق على <strong>النظام الداخلي للمدرسة القرآنية</strong>
+                  وأتعهد بالالتزام به ومتعاوناً معكم في كل ما يخص إبني، دراسةً وسلوكاً وانتظاماً.
+                  <span class="required">*</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" class="submit-btn" id="submitBtn">تأكيد التسجيل</button>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal-overlay" id="regModal">
+    <div class="modal-content">
+      <button class="modal-close" id="closeModal" aria-label="إغلاق">×</button>
+      <img src="regulations.jpg" alt="النظام الداخلي للمدرسة القرآنية محمد الشريف ڨاهر">
+    </div>
+  </div>
+
+  <footer class="footer">
+    <p class="mosque">مسجد سلمان الفارسي — باب الزوار</p>
+    <p>المدرسة القرآنية محمد الشريف ڨاهر © <span id="year"></span></p>
+  </footer>
+
+  <script>
+    // ⚠️ Coller ici l'URL du déploiement Google Apps Script (se termine par /exec) — voir README.md étape 5
+    const SCRIPT_URL = 'COLLER_ICI_URL_APPS_SCRIPT';
+
+    const $ = (id) => document.getElementById(id);
+    const pad = (n) => String(n).padStart(2, '0');
+    const now = new Date();
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+    $('year').textContent = now.getFullYear();
+    $('dateInscription').value = today;
+
+    // Problème de santé : détails obligatoires seulement si "نعم"
+    function toggleHealth() {
+      const yes = $('healthYes').checked;
+      $('healthDetailsBox').classList.toggle('show', yes);
+      $('santeDetails').required = yes;
+      if (!yes) $('santeDetails').value = '';
+    }
+    $('healthYes').addEventListener('change', toggleHealth);
+    $('healthNo').addEventListener('change', toggleHealth);
+
+    // Règlement en image
+    $('viewRegBtn').addEventListener('click', () => $('regModal').classList.add('show'));
+    $('closeModal').addEventListener('click', () => $('regModal').classList.remove('show'));
+    $('regModal').addEventListener('click', (e) => { if (e.target === $('regModal')) $('regModal').classList.remove('show'); });
+
+    // Photo : redimensionnée côté navigateur (max 600 px, JPEG) pour un envoi léger
+    let photo = null;
+    $('photo').addEventListener('change', async () => {
+      photo = null;
+      $('photoPreview').classList.remove('show');
+      const file = $('photo').files[0];
+      if (!file) return;
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const i = new Image();
+          i.onload = () => resolve(i);
+          i.onerror = reject;
+          i.src = URL.createObjectURL(file);
+        });
+        const scale = Math.min(1, 600 / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        photo = { type: 'image/jpeg', data: dataUrl.split(',')[1] };
+        $('photoPreview').src = dataUrl;
+        $('photoPreview').classList.add('show');
+      } catch (err) {
+        alert('تعذر قراءة الصورة، يرجى اختيار صورة أخرى.');
+        $('photo').value = '';
+      }
+    });
+
+    $('registrationForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      const data = {
+        botcheck: $('botcheck').checked,
+        nomEleve: $('nomEleve').value,
+        dateNaissance: $('dateNaissance').value,
+        niveau: $('niveau').value,
+        adresse: $('adresse').value,
+        telEleve: $('telEleve').value,
+        sante: $('healthYes').checked ? 'نعم' : 'لا',
+        santeDetails: $('santeDetails').value,
+        nomTuteur: $('nomTuteur').value,
+        telTuteur: $('telTuteur').value,
+        cniTuteur: $('cniTuteur').value,
+        email: $('email').value,
+        dateInscription: $('dateInscription').value,
+        accord: $('accord').checked,
+        photo,
+      };
+
+      const btn = $('submitBtn');
+      btn.disabled = true;
+      btn.textContent = 'جاري إرسال التسجيل...';
+      try {
+        // Corps en text/plain : requête "simple", pas de pré-vérification CORS bloquée par Google
+        const res = await fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(data) });
+        const result = await res.json();
+        if (!result.ok) throw new Error(result.error || 'تعذر إرسال التسجيل');
+
+        $('numeroInscription').textContent = result.numero || '';
+        $('formContent').classList.add('hide');
+        $('successBox').classList.add('show');
+        document.querySelector('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (err) {
+        console.error(err);
+        alert('تعذر إرسال التسجيل. يرجى المحاولة مرة أخرى.\n\n' + (err && err.message ? err.message : err));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'تأكيد التسجيل';
+      }
+    });
+  </script>
+</body>
+</html>

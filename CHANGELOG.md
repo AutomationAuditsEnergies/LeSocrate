@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-12
+
+### feat(inscription-ecole-coranique): formulaire d'inscription autonome
+
+Nouveau dossier `inscription-ecole-coranique/`, indépendant de la plateforme
+(aucun impact backend/frontend) : refonte du formulaire d'inscription de
+l'école coranique محمد الشريف ڨاهر. Backend Google Apps Script : ajout de
+l'élève dans un Google Sheet, génération du PDF depuis un modèle Google Docs
+(`modele-inscription.docx`), envoi du PDF par e-mail. Guide dans
+`inscription-ecole-coranique/README.md`.
+
 ## 2026-05-20
 
 ### fix(audio-editor): seek arbitraire cassé sur la waveform
