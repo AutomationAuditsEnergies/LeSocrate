@@ -11,6 +11,12 @@ l'élève dans un Google Sheet, génération du PDF depuis un modèle Google Doc
 (`modele-inscription.docx`), envoi du PDF par e-mail. Guide dans
 `inscription-ecole-coranique/README.md`.
 
+### fix(inscription-ecole-coranique): fiche PDF de droite à gauche (RTL)
+
+Le modèle `.docx` n'impose plus d'alignement "right" (ambigu en RTL selon
+Word / Google Docs) : les paragraphes RTL s'alignent à droite par défaut.
+`Code.gs` force en plus `setLeftToRight(false)` sur chaque paragraphe du PDF.
+
 ## 2026-05-20
 
 ### fix(audio-editor): seek arbitraire cassé sur la waveform

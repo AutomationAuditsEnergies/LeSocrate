@@ -41,11 +41,14 @@ def add_run(paragraph, text, size=13, bold=False, color=None, underline=False):
     return run
 
 
-def para(container, text="", size=13, bold=False, align=WD_ALIGN_PARAGRAPH.RIGHT,
+# align=None : pas d'alignement explicite → le paragraphe RTL s'aligne à droite
+# partout (Word, LibreOffice, Google Docs). Un "right" explicite est ambigu en RTL.
+def para(container, text="", size=13, bold=False, align=None,
          space_after=4, color=None, underline=False):
     p = container.add_paragraph()
     rtl(p)
-    p.alignment = align
+    if align is not None:
+        p.alignment = align
     p.paragraph_format.space_after = Pt(space_after)
     p.paragraph_format.space_before = Pt(0)
     if text:

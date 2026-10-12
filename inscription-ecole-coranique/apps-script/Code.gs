@@ -152,6 +152,9 @@ function genererPdf_(v, photo) {
       }
     }
 
+    // Toute la fiche en arabe : écriture de droite à gauche (RTL) pour chaque paragraphe
+    body.getParagraphs().forEach(function (p) { p.setLeftToRight(false); });
+
     doc.saveAndClose();
     return copie.getAs('application/pdf').setName(nom + '.pdf');
   } finally {
